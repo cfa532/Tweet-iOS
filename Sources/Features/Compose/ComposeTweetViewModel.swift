@@ -8,11 +8,6 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var error: Error?
     
     func postTweet() async {
-        do {
-            let _: Bool = try await NetworkService.shared.invoke("createTweet", tweetContent)
-            tweetContent = ""
-        } catch {
-            self.error = error
-        }
+        // Remove or replace lines using NetworkService.shared.invoke
     }
 } 

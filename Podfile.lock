@@ -1,24 +1,16 @@
 PODS:
-  - PromiseKit (6.18.1):
-    - PromiseKit/CorePromise (= 6.18.1)
-    - PromiseKit/Foundation (= 6.18.1)
-    - PromiseKit/UIKit (= 6.18.1)
-  - PromiseKit/CorePromise (6.18.1)
-  - PromiseKit/Foundation (6.18.1):
-    - PromiseKit/CorePromise
-  - PromiseKit/UIKit (6.18.1):
-    - PromiseKit/CorePromise
+  - hprose (2.0.3)
 
 DEPENDENCIES:
-  - PromiseKit (~> 6.8)
+  - hprose (= 2.0.3)
 
 SPEC REPOS:
   trunk:
-    - PromiseKit
+    - hprose
 
 SPEC CHECKSUMS:
-  PromiseKit: 49d70c53d5d20e346beaea4b276b5dd2ab446bb4
+  hprose: 8b021625ba6ce9e4e2ae8eeb7170be89bf5ffc1a
 
-PODFILE CHECKSUM: 2c2159adf5d57be3c531d670cf67331901308f9e
+PODFILE CHECKSUM: c740f00d35b79cf068a791750d52e5c4ad6468bd
 
 COCOAPODS: 1.16.2

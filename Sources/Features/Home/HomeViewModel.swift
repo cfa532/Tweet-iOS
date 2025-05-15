@@ -11,7 +11,7 @@ class HomeViewModel: ObservableObject {
         error = nil
         
         do {
-            let fetchedTweets: [Tweet] = try await NetworkService.shared.invoke("getTweets")
+            let fetchedTweets: [Tweet] = try await HproseService.shared.invoke("getTweets")
             tweets = fetchedTweets
         } catch {
             self.error = error
@@ -22,7 +22,7 @@ class HomeViewModel: ObservableObject {
     
     func likeTweet(_ tweet: Tweet) async {
         do {
-            let _: Bool = try await NetworkService.shared.invoke("likeTweet", tweet.id)
+            let _: Bool = try await HproseService.shared.invoke("likeTweet", tweet.id)
             if let index = tweets.firstIndex(where: { $0.id == tweet.id }) {
                 var updatedTweet = tweet
                 updatedTweet.isLiked.toggle()
@@ -35,7 +35,7 @@ class HomeViewModel: ObservableObject {
     
     func retweet(_ tweet: Tweet) async {
         do {
-            let _: Bool = try await NetworkService.shared.invoke("retweet", tweet.id)
+            let _: Bool = try await HproseService.shared.invoke("retweet", tweet.id)
             if let index = tweets.firstIndex(where: { $0.id == tweet.id }) {
                 var updatedTweet = tweet
                 updatedTweet.isRetweeted.toggle()

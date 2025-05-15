@@ -1,0 +1,6 @@
+framework module hprose {
+  umbrella header "hprose-umbrella.h"
+
+  export *
+  module * { export * }
+}

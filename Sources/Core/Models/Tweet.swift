@@ -1,39 +1,176 @@
 import Foundation
 
 struct Tweet: Identifiable, Codable {
-    let id: String
-    let content: String
-    let author: User
-    let createdAt: Date
-    let likes: Int
-    let retweets: Int
-    let comments: Int
-    var isLiked: Bool
-    var isRetweeted: Bool
+    let id: String // mid
+    let authorId: String // mid of the author
+    var content: String?
+    var timestamp: Date
+    var title: String?
+    
+    var originalTweetId: String? // retweet id of the original tweet
+    var originalAuthorId: String? // authorId of the forwarded tweet
+    
+    // Display only properties
+    var author: User?
+    var originalTweet: Tweet? { nil } // Computed property to avoid recursive reference
+    
+    // User interaction flags
+    var favorites: [Bool]? // [liked, bookmarked, retweeted]
+    var favoriteCount: Int
+    var bookmarkCount: Int
+    var retweetCount: Int
+    var commentCount: Int
+    
+    // Media attachments
+    var attachments: [MediaItem]?
+    var isPrivate: Bool
+    var downloadable: Bool?
+    
+    // Computed properties for user interaction states
+    var isLiked: Bool {
+        get { favorites?[0] ?? false }
+        set {
+            if favorites == nil {
+                favorites = [false, false, false]
+            }
+            favorites?[0] = newValue
+        }
+    }
+    
+    var isBookmarked: Bool {
+        get { favorites?[1] ?? false }
+        set {
+            if favorites == nil {
+                favorites = [false, false, false]
+            }
+            favorites?[1] = newValue
+        }
+    }
+    
+    var isRetweeted: Bool {
+        get { favorites?[2] ?? false }
+        set {
+            if favorites == nil {
+                favorites = [false, false, false]
+            }
+            favorites?[2] = newValue
+        }
+    }
     
     enum CodingKeys: String, CodingKey {
-        case id
+        case id = "mid"
+        case authorId
         case content
+        case timestamp
+        case title
+        case originalTweetId
+        case originalAuthorId
         case author
-        case createdAt = "created_at"
-        case likes
-        case retweets
-        case comments
-        case isLiked = "is_liked"
-        case isRetweeted = "is_retweeted"
+        case originalTweet
+        case favorites
+        case favoriteCount
+        case bookmarkCount
+        case retweetCount
+        case commentCount
+        case attachments
+        case isPrivate
+        case downloadable
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        authorId = try container.decode(String.self, forKey: .authorId)
+        content = try container.decodeIfPresent(String.self, forKey: .content)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        originalTweetId = try container.decodeIfPresent(String.self, forKey: .originalTweetId)
+        originalAuthorId = try container.decodeIfPresent(String.self, forKey: .originalAuthorId)
+        author = try container.decodeIfPresent(User.self, forKey: .author)
+        favorites = try container.decodeIfPresent([Bool].self, forKey: .favorites)
+        favoriteCount = try container.decode(Int.self, forKey: .favoriteCount)
+        bookmarkCount = try container.decode(Int.self, forKey: .bookmarkCount)
+        retweetCount = try container.decode(Int.self, forKey: .retweetCount)
+        commentCount = try container.decode(Int.self, forKey: .commentCount)
+        attachments = try container.decodeIfPresent([MediaItem].self, forKey: .attachments)
+        isPrivate = try container.decode(Bool.self, forKey: .isPrivate)
+        downloadable = try container.decodeIfPresent(Bool.self, forKey: .downloadable)
+    }
+    
+    init(id: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
+         originalTweetId: String? = nil, originalAuthorId: String? = nil, author: User? = nil,
+         favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
+         commentCount: Int = 0, attachments: [MediaItem]? = nil, isPrivate: Bool = false,
+         downloadable: Bool? = false) {
+        self.id = id
+        self.authorId = authorId
+        self.content = content
+        self.timestamp = timestamp
+        self.title = title
+        self.originalTweetId = originalTweetId
+        self.originalAuthorId = originalAuthorId
+        self.author = author
+        self.favorites = favorites
+        self.favoriteCount = favoriteCount
+        self.bookmarkCount = bookmarkCount
+        self.retweetCount = retweetCount
+        self.commentCount = commentCount
+        self.attachments = attachments
+        self.isPrivate = isPrivate
+        self.downloadable = downloadable
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(authorId, forKey: .authorId)
+        try container.encodeIfPresent(content, forKey: .content)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encodeIfPresent(originalTweetId, forKey: .originalTweetId)
+        try container.encodeIfPresent(originalAuthorId, forKey: .originalAuthorId)
+        try container.encodeIfPresent(author, forKey: .author)
+        try container.encodeIfPresent(favorites, forKey: .favorites)
+        try container.encode(favoriteCount, forKey: .favoriteCount)
+        try container.encode(bookmarkCount, forKey: .bookmarkCount)
+        try container.encode(retweetCount, forKey: .retweetCount)
+        try container.encode(commentCount, forKey: .commentCount)
+        try container.encodeIfPresent(attachments, forKey: .attachments)
+        try container.encode(isPrivate, forKey: .isPrivate)
+        try container.encodeIfPresent(downloadable, forKey: .downloadable)
     }
 }
 
-struct User: Identifiable, Codable {
-    let id: String
-    let username: String
-    let displayName: String
-    let avatarUrl: String?
+struct MediaItem: Codable {
+    let id: String // mid
+    var type: MediaType
+    let size: Int64?
+    let fileName: String?
+    let timestamp: Date
+    let aspectRatio: Float?
+    var url: String?
     
     enum CodingKeys: String, CodingKey {
-        case id
-        case username
-        case displayName = "display_name"
-        case avatarUrl = "avatar_url"
+        case id = "mid"
+        case type
+        case size
+        case fileName
+        case timestamp
+        case aspectRatio
+        case url
     }
+}
+
+enum MediaType: String, Codable {
+    case image = "Image"
+    case video = "Video"
+    case audio = "Audio"
+    case pdf = "PDF"
+    case word = "Word"
+    case excel = "Excel"
+    case ppt = "PPT"
+    case zip = "Zip"
+    case txt = "Txt"
+    case html = "Html"
+    case unknown = "Unknown"
 } 

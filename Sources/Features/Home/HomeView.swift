@@ -25,7 +25,7 @@ struct TweetRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                if let avatarUrl = tweet.author.avatarUrl {
+                if let avatarUrl = tweet.author?.avatar {
                     AsyncImage(url: URL(string: avatarUrl)) { image in
                         image.resizable()
                     } placeholder: {
