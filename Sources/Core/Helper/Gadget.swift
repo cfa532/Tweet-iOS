@@ -186,4 +186,41 @@ class Gadget {
             .map { $0.trimmingCharacters(in: .whitespaces) } // Remove whitespace if needed
             .map { String($0) }
     }
-} 
+    
+    func extractParamMap(from html: String) -> [String: Any] {
+        var result: [String: Any] = [:]
+        
+        // Find the window.setParam section
+        let startText = "window.setParam({"
+        let endText = "})\nwindow.request()"
+        
+        guard let startRange = html.range(of: startText),
+              let endRange = html.range(of: endText, options: .backwards) else {
+            return result
+        }
+        
+        // Extract the parameter text
+        let startIndex = startRange.upperBound
+        let endIndex = endRange.lowerBound
+        let paramText = html[startIndex..<endIndex]
+        
+        // Extract addrs (complex array)
+        if let addrsStartRange = paramText.range(of: "addrs: "),
+           let bracketStart = paramText[addrsStartRange.upperBound...].firstIndex(of: "["),
+           let lastBracketRange = paramText[bracketStart...].range(of: "]]]", options: .backwards) {
+            let addrsValue = paramText[bracketStart...lastBracketRange.upperBound]
+            result["addrs"] = String(addrsValue)
+        }
+        
+        // Extract mid (string) - using double quotes
+        if let midStartRange = paramText.range(of: "mid:\""),
+           let midEndRange = paramText[midStartRange.upperBound...].range(of: "\"") {
+            let midValue = paramText[midStartRange.upperBound..<midEndRange.lowerBound]
+            result["mid"] = String(midValue)
+        }
+        
+        return result
+    }
+    
+
+}

@@ -21,7 +21,7 @@ final class HproseInstance {
         //        }
         //        return service
         return client
-    }()
+    }()!
     private var hproseClient: AnyObject?
     
     // MARK: - Initialization
@@ -42,6 +42,42 @@ final class HproseInstance {
         try await initAppEntry()
     }
     
+    private func initAppEntry() async throws {
+        // Clear cached users during retry init
+        cachedUsers.removeAll()
+        
+        for url in preferenceHelper?.getAppUrls() ?? [] {
+            do {
+                let html = try await fetchHTML(from: url)
+                let paramData = Gadget.shared.extractParamMap(from: html)
+                appId = paramData["mid"] as? String ?? ""
+                guard let addrs = paramData["addrs"] as? String else {return}
+                print(addrs)
+                if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
+                    appUser = appUser.copy(baseUrl: "http://\(firstIp)")
+                    client.uri = appUser.baseUrl
+//                    HproseClassManager.registerClass(HproseService.self, withAlias: "HproseService")
+                    hproseClient = client.useService(HproseService.self) as AnyObject
+                    
+                    if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID {
+                        let providers = try await getProviders(userId, baseUrl: "http://\(firstIp)")
+                        if let accessibleUser = getAccessibleUser(providers, userId: userId) {
+                            appUser = accessibleUser
+                            cachedUsers.insert(appUser)
+                        }
+                        
+                    } else {
+                        appUser.followingList = Gadget.shared.getAlphaIds()
+                        cachedUsers.insert(appUser)
+                    }
+                    return
+                }
+            } catch {
+                print("Error initializing app entry: \(error)")
+            }
+        }
+    }
+    
     // MARK: - Tweet Operations
     func fetchTweets(
         user: User,
@@ -53,14 +89,13 @@ final class HproseInstance {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "entry": entry,
-                "userid": appUser.id,
+                "userid": appUser.isGuest ? "iFG4GC9r0fF22jYBCkuPThybzwO" : appUser.mid,
                 "start": 0,  // startRank
                 "end": 20,  // count
                 "gid": appUser.mid,
                 "hostid": user.hostIds?.first as Any
             ]
-            let response = hproseClient?.runMApp(entry, params, []) as? [[String: Any]]
+            let response = hproseClient?.runMApp("test", params, []) as? [[String: Any]]
             return try response?.compactMap { dict in
                 let data = try JSONSerialization.data(withJSONObject: dict)
                 return try JSONDecoder().decode(Tweet.self, from: data)
@@ -130,77 +165,6 @@ final class HproseInstance {
             throw URLError(.cannotDecodeContentData)
         }
         return htmlString
-    }
-    
-    func extractParamMap(from html: String) -> [String: Any] {
-        var result: [String: Any] = [:]
-        
-        // Find the window.setParam section
-        let startText = "window.setParam({"
-        let endText = "})\nwindow.request()"
-        
-        guard let startRange = html.range(of: startText),
-              let endRange = html.range(of: endText, options: .backwards) else {
-            return result
-        }
-        
-        // Extract the parameter text
-        let startIndex = startRange.upperBound
-        let endIndex = endRange.lowerBound
-        let paramText = html[startIndex..<endIndex]
-        
-        // Extract addrs (complex array)
-        if let addrsStartRange = paramText.range(of: "addrs: "),
-           let bracketStart = paramText[addrsStartRange.upperBound...].firstIndex(of: "["),
-           let lastBracketRange = paramText[bracketStart...].range(of: "]]]", options: .backwards) {
-            let addrsValue = paramText[bracketStart...lastBracketRange.upperBound]
-            result["addrs"] = String(addrsValue)
-        }
-        
-        // Extract mid (string) - using double quotes
-        if let midStartRange = paramText.range(of: "mid:\""),
-           let midEndRange = paramText[midStartRange.upperBound...].range(of: "\"") {
-            let midValue = paramText[midStartRange.upperBound..<midEndRange.lowerBound]
-            result["mid"] = String(midValue)
-        }
-        
-        return result
-    }
-    
-    private func initAppEntry() async throws {
-        // Clear cached users during retry init
-        cachedUsers.removeAll()
-        
-        for url in preferenceHelper?.getAppUrls() ?? [] {
-            do {
-                let html = try await fetchHTML(from: url)
-                let paramData = extractParamMap(from: html)
-                appId = paramData["mid"] as? String ?? ""
-                guard let addrs = paramData["addrs"] as? String else {return}
-                print(addrs)
-                if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
-                    appUser = appUser.copy(baseUrl: "http://\(firstIp)")
-                    client.uri = appUser.baseUrl
-//                    HproseClassManager.registerClass(HproseService.self, withAlias: "HproseService")
-                    hproseClient = client.useService(HproseService.self) as AnyObject
-                    
-                    if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID {
-                        let providers = try await getProviders(userId, baseUrl: "http://\(firstIp)")
-                        if let accessibleUser = getAccessibleUser(providers, userId: userId) {
-                            appUser = accessibleUser
-                            cachedUsers.insert(appUser)
-                        }
-                        
-                    } else {
-                        appUser.followingList = Gadget.shared.getAlphaIds()
-                        cachedUsers.insert(appUser)
-                    }
-                    return
-                }
-            } catch {
-                print("Error initializing app entry: \(error)")
-            }
-        }
     }
     
     private func getProviders(_ mid: String, baseUrl: String) async throws -> [String] {
