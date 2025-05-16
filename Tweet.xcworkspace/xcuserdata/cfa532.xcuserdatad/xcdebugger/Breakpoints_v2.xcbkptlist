@@ -30,8 +30,8 @@
             filePath = "Sources/Core/Network/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "94"
-            endingLineNumber = "94"
+            startingLineNumber = "98"
+            endingLineNumber = "98"
             landmarkName = "fetchTweets(user:startRank:endRank:entry:)"
             landmarkType = "7">
          </BreakpointContent>
