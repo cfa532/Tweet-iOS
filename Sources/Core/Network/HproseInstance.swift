@@ -16,6 +16,12 @@ final class HproseInstance {
     private var preferenceHelper: PreferenceHelper?
     private var chatDatabase: ChatDatabase?
     private var tweetDao: CachedTweetDao?
+    
+    private lazy var client: HproseClient = {
+        let client = HproseHttpClient()
+        client.timeout = 60
+        return client
+    }()
     private var hproseClient: AnyObject?
     
     // MARK: - Initialization
@@ -49,12 +55,8 @@ final class HproseInstance {
                 print(addrs)
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     appUser = appUser.copy(baseUrl: "http://\(firstIp)")
-                    let client: HproseClient? = {
-                        let client = HproseHttpClient(appUser.baseUrl)
-                        client?.timeout = 60
-                        return client
-                    }()
-                    hproseClient = client?.useService(HproseService.self) as AnyObject
+                    client.uri = appUser.baseUrl
+                    hproseClient = client.useService(HproseService.self) as AnyObject
                     
                     if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID {
                         let providers = try await getProviders(userId, baseUrl: "http://\(firstIp)")
@@ -86,13 +88,14 @@ final class HproseInstance {
             let params = [
                 "aid": appId,
                 "ver": "last",
+                "entry": entry,
                 "userid": appUser.isGuest ? "iFG4GC9r0fF22jYBCkuPThybzwO" : appUser.mid,
-                "start": 0,  // startRank
-                "end": 20,  // count
+                "start": startRank,
+                "end": endRank,
                 "gid": appUser.mid,
                 "hostid": user.hostIds?.first as Any
             ]
-            let response = hproseClient?.runMApp("test", params, []) as? [[String: Any]]
+            let response = hproseClient?.runMApp(entry, params, []) as? [[String: Any]]
             return try response?.compactMap { dict in
                 let data = try JSONSerialization.data(withJSONObject: dict)
                 return try JSONDecoder().decode(Tweet.self, from: data)
