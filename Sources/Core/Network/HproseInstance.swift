@@ -16,12 +16,6 @@ final class HproseInstance {
     private var preferenceHelper: PreferenceHelper?
     private var chatDatabase: ChatDatabase?
     private var tweetDao: CachedTweetDao?
-    
-    private lazy var client: HproseClient = {
-        let client = HproseHttpClient()
-        client.timeout = 60
-        return client
-    }()!
     private var hproseClient: AnyObject?
     
     // MARK: - Initialization
@@ -55,9 +49,12 @@ final class HproseInstance {
                 print(addrs)
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     appUser = appUser.copy(baseUrl: "http://\(firstIp)")
-                    client.uri = appUser.baseUrl
-//                    HproseClassManager.registerClass(HproseService.self, withAlias: "HproseService")
-                    hproseClient = client.useService(HproseService.self) as AnyObject
+                    let client: HproseClient? = {
+                        let client = HproseHttpClient(appUser.baseUrl)
+                        client?.timeout = 60
+                        return client
+                    }()
+                    hproseClient = client?.useService(HproseService.self) as AnyObject
                     
                     if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID {
                         let providers = try await getProviders(userId, baseUrl: "http://\(firstIp)")
