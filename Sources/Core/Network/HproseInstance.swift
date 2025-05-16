@@ -14,7 +14,7 @@ final class HproseInstance {
     private var tweetDao: CachedTweetDao?
     
     private lazy var client: HproseClient = {
-        let client = HproseClient()
+        let client = HproseHttpClient()
         client.timeout = 60
         //        guard let service = client.useService(HproseService.self as Protocol) as? HproseService else {
         //            fatalError("Could not cast service to HproseService")
@@ -22,7 +22,7 @@ final class HproseInstance {
         //        return service
         return client
     }()
-    private var hproseClient: HproseService?
+    private var hproseClient: AnyObject?
     
     // MARK: - Initialization
     private init() {}
@@ -181,10 +181,8 @@ final class HproseInstance {
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     appUser = appUser.copy(baseUrl: "http://\(firstIp)")
                     client.uri = appUser.baseUrl
-                    guard let service = client.useService(HproseService.self as Protocol) as? HproseService else {
-                        fatalError("Could not cast service to HproseService")
-                    }
-                    hproseClient = service
+//                    HproseClassManager.registerClass(HproseService.self, withAlias: "HproseService")
+                    hproseClient = client.useService(HproseService.self) as AnyObject
                     
                     if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID {
                         let providers = try await getProviders(userId, baseUrl: "http://\(firstIp)")
@@ -329,6 +327,6 @@ class CachedTweetDao {
     }
 }
 
-@objc protocol HproseService: AnyObject {
-    func runMApp(_ entry: String, _ request: [AnyHashable: Any], _ args: [NSData]) -> Any?
+@objc protocol HproseService {
+    func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]) -> Any?
 }
