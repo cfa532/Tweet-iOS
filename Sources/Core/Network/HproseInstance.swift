@@ -155,6 +155,7 @@ final class HproseInstance {
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
                 let html = try await fetchHTML(from: url)
+                print(html)
                 if let paramData = extractParamMap(from: html) {
                     appId = paramData["mid"] as? String ?? ""
                     
