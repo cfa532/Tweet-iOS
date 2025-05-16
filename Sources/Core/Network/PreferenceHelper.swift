@@ -15,7 +15,7 @@ class PreferenceHelper {
             return Set(urlsString.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
         } else {
             // Replace with your default base URL if needed
-            return ["http://t1.fireshare.store"]
+            return [AppConfig.baseUrl]
         }
     }
     

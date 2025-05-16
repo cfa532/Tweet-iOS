@@ -50,7 +50,7 @@ struct AppConfig {
         }
     }()
     
-    static let entryUrls: String = {
+    static let entryMimeiId: String = {
         switch BuildConfiguration.current {
         case .debug:
             return "1x7Dh9mJfN5zSyPM5TRX3Sro_wQna"

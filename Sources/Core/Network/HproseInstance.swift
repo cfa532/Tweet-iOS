@@ -132,20 +132,39 @@ final class HproseInstance {
         return htmlString
     }
     
-    func extractParamMap(from html: String) -> [String: Any]? {
-        let pattern = #"window\.setParam\((\{.*?\})\)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
-            return nil
+    func extractParamMap(from html: String) -> [String: Any] {
+        var result: [String: Any] = [:]
+        
+        // Find the window.setParam section
+        let startText = "window.setParam({"
+        let endText = "})\nwindow.request()"
+        
+        guard let startRange = html.range(of: startText),
+              let endRange = html.range(of: endText, options: .backwards) else {
+            return result
         }
-        let range = NSRange(html.startIndex..<html.endIndex, in: html)
-        if let match = regex.firstMatch(in: html, options: [], range: range),
-           let jsonRange = Range(match.range(at: 1), in: html) {
-            let jsonString = String(html[jsonRange])
-            if let data = jsonString.data(using: .utf8) {
-                return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            }
+        
+        // Extract the parameter text
+        let startIndex = startRange.upperBound
+        let endIndex = endRange.lowerBound
+        let paramText = html[startIndex..<endIndex]
+        
+        // Extract addrs (complex array)
+        if let addrsStartRange = paramText.range(of: "addrs: "),
+           let bracketStart = paramText[addrsStartRange.upperBound...].firstIndex(of: "["),
+           let lastBracketRange = paramText[bracketStart...].range(of: "]]]", options: .backwards) {
+            let addrsValue = paramText[bracketStart...lastBracketRange.upperBound]
+            result["addrs"] = String(addrsValue)
         }
-        return nil
+        
+        // Extract mid (string) - using double quotes
+        if let midStartRange = paramText.range(of: "mid:\""),
+           let midEndRange = paramText[midStartRange.upperBound...].range(of: "\"") {
+            let midValue = paramText[midStartRange.upperBound..<midEndRange.lowerBound]
+            result["mid"] = String(midValue)
+        }
+        
+        return result
     }
     
     private func initAppEntry() async throws {
@@ -155,31 +174,29 @@ final class HproseInstance {
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
                 let html = try await fetchHTML(from: url)
-                print(html)
-                if let paramData = extractParamMap(from: html) {
-                    appId = paramData["mid"] as? String ?? ""
+                let paramData = extractParamMap(from: html)
+                appId = paramData["mid"] as? String ?? ""
+                print(paramData["addrs"] as Any)
+                if let firstIp = Gadget.shared.filterIpAddresses(paramData["addrs"] as Any) {
+                    appUser = appUser.copy(baseUrl: "http://\(firstIp)")
+                    client.uri = appUser.baseUrl
+                    guard let service = client.useService(HproseService.self as Protocol) as? HproseService else {
+                        fatalError("Could not cast service to HproseService")
+                    }
+                    hproseClient = service
                     
-                    if let firstIp = Gadget.shared.filterIpAddresses(paramData["addrs"] as Any) {
-                        appUser = appUser.copy(baseUrl: "http://\(firstIp)")
-                        client.uri = appUser.baseUrl
-                        guard let service = client.useService(HproseService.self as Protocol) as? HproseService else {
-                            fatalError("Could not cast service to HproseService")
-                        }
-                        hproseClient = service
-                        
-                        if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID {
-                            let providers = try await getProviders(userId, baseUrl: "http://\(firstIp)")
-                            if let accessibleUser = getAccessibleUser(providers, userId: userId) {
-                                appUser = accessibleUser
-                                cachedUsers.insert(appUser)
-                            }
-                            
-                        } else {
-                            appUser.followingList = Gadget.shared.getAlphaIds()
+                    if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID {
+                        let providers = try await getProviders(userId, baseUrl: "http://\(firstIp)")
+                        if let accessibleUser = getAccessibleUser(providers, userId: userId) {
+                            appUser = accessibleUser
                             cachedUsers.insert(appUser)
                         }
-                        return
+                        
+                    } else {
+                        appUser.followingList = Gadget.shared.getAlphaIds()
+                        cachedUsers.insert(appUser)
                     }
+                    return
                 }
             } catch {
                 print("Error initializing app entry: \(error)")
