@@ -16,10 +16,6 @@ final class HproseInstance {
     private lazy var client: HproseClient = {
         let client = HproseHttpClient()
         client.timeout = 60
-        //        guard let service = client.useService(HproseService.self as Protocol) as? HproseService else {
-        //            fatalError("Could not cast service to HproseService")
-        //        }
-        //        return service
         return client
     }()!
     private var hproseClient: AnyObject?

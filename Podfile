@@ -2,8 +2,7 @@ platform :ios, '15.0'
 
 target 'Tweet' do
   use_frameworks!  # Use dynamic frameworks
-
-  pod 'hprose', '2.0.3'  # Add hprose-objc package
+  pod 'hprose', '2.0.3'
 end
 
 post_install do |installer|
