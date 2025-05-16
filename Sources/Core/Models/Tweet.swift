@@ -2,6 +2,7 @@ import Foundation
 
 struct Tweet: Identifiable, Codable {
     let id: String // mid
+    var mid: String
     let authorId: String // mid of the author
     var content: String?
     var timestamp: Date
@@ -22,7 +23,7 @@ struct Tweet: Identifiable, Codable {
     var commentCount: Int
     
     // Media attachments
-    var attachments: [MediaItem]?
+    var attachments: [MimeiFileType]?
     var isPrivate: Bool
     var downloadable: Bool?
     
@@ -58,7 +59,8 @@ struct Tweet: Identifiable, Codable {
     }
     
     enum CodingKeys: String, CodingKey {
-        case id = "mid"
+        case id = "000000000000000000000000000"
+        case mid
         case authorId
         case content
         case timestamp
@@ -80,6 +82,7 @@ struct Tweet: Identifiable, Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
+        mid = try container.decode(String.self, forKey: .mid)
         authorId = try container.decode(String.self, forKey: .authorId)
         content = try container.decodeIfPresent(String.self, forKey: .content)
         timestamp = try container.decode(Date.self, forKey: .timestamp)
@@ -92,17 +95,18 @@ struct Tweet: Identifiable, Codable {
         bookmarkCount = try container.decode(Int.self, forKey: .bookmarkCount)
         retweetCount = try container.decode(Int.self, forKey: .retweetCount)
         commentCount = try container.decode(Int.self, forKey: .commentCount)
-        attachments = try container.decodeIfPresent([MediaItem].self, forKey: .attachments)
+        attachments = try container.decodeIfPresent([MimeiFileType].self, forKey: .attachments)
         isPrivate = try container.decode(Bool.self, forKey: .isPrivate)
         downloadable = try container.decodeIfPresent(Bool.self, forKey: .downloadable)
     }
     
-    init(id: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
+    init(id: String, mid: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
          originalTweetId: String? = nil, originalAuthorId: String? = nil, author: User? = nil,
          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
-         commentCount: Int = 0, attachments: [MediaItem]? = nil, isPrivate: Bool = false,
+         commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool = false,
          downloadable: Bool? = false) {
         self.id = id
+        self.mid = mid
         self.authorId = authorId
         self.content = content
         self.timestamp = timestamp
@@ -123,6 +127,7 @@ struct Tweet: Identifiable, Codable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
+        try container.encode(mid, forKey: .mid)
         try container.encode(authorId, forKey: .authorId)
         try container.encodeIfPresent(content, forKey: .content)
         try container.encode(timestamp, forKey: .timestamp)
@@ -138,26 +143,6 @@ struct Tweet: Identifiable, Codable {
         try container.encodeIfPresent(attachments, forKey: .attachments)
         try container.encode(isPrivate, forKey: .isPrivate)
         try container.encodeIfPresent(downloadable, forKey: .downloadable)
-    }
-}
-
-struct MediaItem: Codable {
-    let id: String // mid
-    var type: MediaType
-    let size: Int64?
-    let fileName: String?
-    let timestamp: Date
-    let aspectRatio: Float?
-    var url: String?
-    
-    enum CodingKeys: String, CodingKey {
-        case id = "mid"
-        case type
-        case size
-        case fileName
-        case timestamp
-        case aspectRatio
-        case url
     }
 }
 

@@ -2,6 +2,7 @@ import Foundation
 
 struct User: Codable, Identifiable, Hashable {
     let id: String // mid
+    var mid: String
     var baseUrl: String?
     var writableUrl: String?
     var name: String?
@@ -34,13 +35,14 @@ struct User: Codable, Identifiable, Hashable {
     
     init(id: String = Constants.GUEST_ID, baseUrl: String? = nil) {
         self.id = id
+        self.mid = id
         self.baseUrl = baseUrl
         self.timestamp = Date()
         self.tweetCount = 0
     }
     
     var isGuest: Bool {
-        return id == Constants.GUEST_ID
+        return mid == Constants.GUEST_ID
     }
     
     func copy(baseUrl: String? = nil, followingList: [String]? = nil) -> User {
