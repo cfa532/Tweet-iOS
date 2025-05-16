@@ -29,26 +29,35 @@ class Gadget {
     
     // Filter IP addresses from a nested array structure
     func filterIpAddresses(_ nodeList: Any) -> String? {
-        guard let nodes = nodeList as? [[[Any]]] else {
-            return nil
-        }
+        let cleanedInput = (nodeList as? String)?.replacingOccurrences(of: "\"", with: "") ?? ""
+        
+        // Split the input into groups
+        let groups = cleanedInput.components(separatedBy: "],[")
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "[]")) }
+            .filter { !$0.isEmpty }
         
         var fastestIP: String? = nil
         var fastestResponseTime: UInt64 = UInt64.max
         
-        for nodeGroup in nodes {
-            for ipData in nodeGroup {
-                guard ipData.count >= 2,
-                      let ipWithPort = ipData[0] as? String,
-                      let responseTime = ipData[1] as? UInt64 else {
+        for group in groups {
+            let pairs = group.components(separatedBy: "],[")
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "[]")) }
+                .filter { !$0.isEmpty }
+            
+            for pair in pairs {
+                let components = pair.components(separatedBy: ",")
+                guard components.count >= 2,
+                      let responseTime = UInt64(components[1].trimmingCharacters(in: .whitespaces)) else {
                     continue
                 }
                 
-                // Extract IP and port
-                let components = ipWithPort.split(separator: ":")
-                guard components.count >= 2 else { continue }
+                let ipWithPort = components[0].trimmingCharacters(in: .whitespaces)
                 
-                let port = String(components.last!)
+                // Extract IP and port
+                let ipComponents = ipWithPort.split(separator: ":")
+                guard ipComponents.count >= 2 else { continue }
+                
+                let port = String(ipComponents.last!)
                 guard let portNumber = Int(port), (8000...9000).contains(portNumber) else {
                     continue
                 }

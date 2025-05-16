@@ -23,15 +23,15 @@
       <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "C9761A1E-FEFE-42ED-BEBF-8D2C15A86681"
-            shouldBeEnabled = "Yes"
+            uuid = "2DD4AE05-D342-420D-B0D4-7F7529D9BF23"
+            shouldBeEnabled = "No"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
             filePath = "Sources/Core/Network/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "180"
-            endingLineNumber = "180"
+            startingLineNumber = "181"
+            endingLineNumber = "181"
             landmarkName = "initAppEntry()"
             landmarkType = "7">
          </BreakpointContent>

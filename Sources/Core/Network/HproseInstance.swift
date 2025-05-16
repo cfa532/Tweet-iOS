@@ -176,8 +176,9 @@ final class HproseInstance {
                 let html = try await fetchHTML(from: url)
                 let paramData = extractParamMap(from: html)
                 appId = paramData["mid"] as? String ?? ""
-                print(paramData["addrs"] as Any)
-                if let firstIp = Gadget.shared.filterIpAddresses(paramData["addrs"] as Any) {
+                guard let addrs = paramData["addrs"] as? String else {return}
+                print(addrs)
+                if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     appUser = appUser.copy(baseUrl: "http://\(firstIp)")
                     client.uri = appUser.baseUrl
                     guard let service = client.useService(HproseService.self as Protocol) as? HproseService else {
