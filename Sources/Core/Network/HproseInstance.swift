@@ -1,6 +1,10 @@
 import Foundation
 import hprose
 
+@objc protocol HproseService {
+    func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]) -> Any?
+}
+
 // MARK: - HproseService
 final class HproseInstance {
     // MARK: - Properties
@@ -285,8 +289,4 @@ class CachedTweetDao {
         // TODO: Implement last tweet rank retrieval
         return 0
     }
-}
-
-@objc protocol HproseService {
-    func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]) -> Any?
 }
