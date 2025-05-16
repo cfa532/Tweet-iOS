@@ -23,8 +23,12 @@ extension String {
 
 // MARK: - Gadget Utility
 class Gadget {
+    static let shared = Gadget()
+    
+    private init() {}
+    
     // Filter IP addresses from a nested array structure
-    static func filterIpAddresses(_ nodeList: Any) -> String? {
+    func filterIpAddresses(_ nodeList: Any) -> String? {
         guard let nodes = nodeList as? [[[Any]]] else {
             return nil
         }
@@ -56,7 +60,7 @@ class Gadget {
                 }
                 
                 // Check if it's a private IP
-                if isPrivateIP(ipAddress) {
+                if Gadget.isPrivateIP(ipAddress) {
                     continue
                 }
                 
@@ -143,14 +147,14 @@ class Gadget {
     }
 
     // Get accessible IP (prefer IPv4, fallback to IPv6)
-    static func getAccessibleIP2(_ ipList: [String]) -> String? {
+    func getAccessibleIP2(_ ipList: [String]) -> String? {
         var ip4: String? = nil
         var ip6: String? = nil
         for it in ipList {
             let i = it.split(separator: ":").dropLast().joined(separator: ":").trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
             guard let p = Int(it.split(separator: ":").last ?? "") else { continue }
             if !(8000...8999).contains(p) { continue }
-            if isIPv6Address(i) {
+            if Gadget.isIPv6Address(i) {
                 ip6 = "[i]:\(p)"
             } else {
                 let ipv4Regex = "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
@@ -164,5 +168,13 @@ class Gadget {
             }
         }
         return ip4 ?? ip6
+    }
+
+    func getAlphaIds() -> [String] {
+        let alphaIdString = AppConfig.alphaId
+        return alphaIdString
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) } // Remove whitespace if needed
+            .map { String($0) }
     }
 } 

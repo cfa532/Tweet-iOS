@@ -79,7 +79,7 @@
 		41ACAAC876EF7F0E867591D2662CCC04 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		435C04DACF9A36E956C5CEC524F9CEEC /* hprose-prefix.pch */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = "hprose-prefix.pch"; sourceTree = "<group>"; };
 		47CA08E76A0D0147345B2A15D3A8C53A /* Pods-Tweet-frameworks.sh */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.script.sh; path = "Pods-Tweet-frameworks.sh"; sourceTree = "<group>"; };
-		4AE3236C21F10F982E06FBFA1E513F0F /* hprose */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; name = hprose; path = hprose.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		4AE3236C21F10F982E06FBFA1E513F0F /* hprose.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = hprose.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		4CCF03CB9C53DDE8CC185270E8A9748A /* hprose-dummy.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = "hprose-dummy.m"; sourceTree = "<group>"; };
 		4D0AB513A0CB5B6AE441DAF5C3EA027B /* HproseHttpClient.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = HproseHttpClient.m; path = src/HproseHttpClient.m; sourceTree = "<group>"; };
 		4FBE94CDB4B4F4CB55643EDD6A08DA8C /* HproseProperty.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = HproseProperty.m; path = src/HproseProperty.m; sourceTree = "<group>"; };
@@ -101,7 +101,7 @@
 		989BBA5E9C6D392F80FFB3686AC841EA /* HproseHttpClient.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; name = HproseHttpClient.h; path = src/HproseHttpClient.h; sourceTree = "<group>"; };
 		996BC73EC2753CCD70B9BB0A92D84527 /* HproseException.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; name = HproseException.h; path = src/HproseException.h; sourceTree = "<group>"; };
 		9D4D21C99272793AE67967CED206D2FF /* hprose-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = "hprose-Info.plist"; sourceTree = "<group>"; };
-		9D940727FF8FB9C785EB98E56350EF41 /* Podfile */ = {isa = PBXFileReference; explicitFileType = text.script.ruby; includeInIndex = 1; indentWidth = 2; lastKnownFileType = text; name = Podfile; path = ../Podfile; sourceTree = SOURCE_ROOT; tabWidth = 2; xcLanguageSpecificationIdentifier = xcode.lang.ruby; };
+		9D940727FF8FB9C785EB98E56350EF41 /* Podfile */ = {isa = PBXFileReference; explicitFileType = text.script.ruby; includeInIndex = 1; indentWidth = 2; name = Podfile; path = ../Podfile; sourceTree = SOURCE_ROOT; tabWidth = 2; xcLanguageSpecificationIdentifier = xcode.lang.ruby; };
 		9E8287FEB8C582DE1D827BDF90EC350B /* HproseTags.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; name = HproseTags.h; path = src/HproseTags.h; sourceTree = "<group>"; };
 		A93AE1E0C8326EBBD92BF454A7D18536 /* Pods-Tweet-umbrella.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = "Pods-Tweet-umbrella.h"; sourceTree = "<group>"; };
 		AAFBA963ACBB1F2612778E151204D189 /* HproseClientProxy.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = HproseClientProxy.m; path = src/HproseClientProxy.m; sourceTree = "<group>"; };
@@ -116,7 +116,7 @@
 		D326EF5E0EBD3DA4F2B6DB4F0990F560 /* CFNetwork.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CFNetwork.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/CFNetwork.framework; sourceTree = DEVELOPER_DIR; };
 		D4A13EDE9C36F8A536072D1FDB6F4BAF /* Pods-Tweet-dummy.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = "Pods-Tweet-dummy.m"; sourceTree = "<group>"; };
 		E0F4FDBD50187A2B566F4E4D6D5DD465 /* HproseClient.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; name = HproseClient.h; path = src/HproseClient.h; sourceTree = "<group>"; };
-		E4AFD27E5425CCC8DC88DCF62A659C56 /* Pods-Tweet */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; name = "Pods-Tweet"; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		E4AFD27E5425CCC8DC88DCF62A659C56 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		E5F2EC4845289D8B42B18D5A9AA0E07C /* HproseInvoker.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; name = HproseInvoker.h; path = src/HproseInvoker.h; sourceTree = "<group>"; };
 		ED9F827E663B17A30B3AF0F9BE8669C5 /* Promise.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; name = Promise.h; path = src/Promise.h; sourceTree = "<group>"; };
 		F5EC74FE52ACD4BC03F70BD61410C752 /* Pods-Tweet-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = "Pods-Tweet-Info.plist"; sourceTree = "<group>"; };
@@ -187,7 +187,6 @@
 				5CE78D9142F45548CE8D8E77DF3918D3 /* Promise.m */,
 				E0E202F43C29F6D54FF2CEAB9361F413 /* Support Files */,
 			);
-			name = hprose;
 			path = hprose;
 			sourceTree = "<group>";
 		};
@@ -210,8 +209,8 @@
 		8657E6D8433543D332352AFF914D38FF /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				4AE3236C21F10F982E06FBFA1E513F0F /* hprose */,
-				E4AFD27E5425CCC8DC88DCF62A659C56 /* Pods-Tweet */,
+				4AE3236C21F10F982E06FBFA1E513F0F /* hprose.framework */,
+				E4AFD27E5425CCC8DC88DCF62A659C56 /* Pods_Tweet.framework */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -336,7 +335,7 @@
 			);
 			name = "Pods-Tweet";
 			productName = Pods_Tweet;
-			productReference = E4AFD27E5425CCC8DC88DCF62A659C56 /* Pods-Tweet */;
+			productReference = E4AFD27E5425CCC8DC88DCF62A659C56 /* Pods_Tweet.framework */;
 			productType = "com.apple.product-type.framework";
 		};
 		3ED7BAAE3CBC4592258C82DD28EA9E0F /* hprose */ = {
@@ -354,7 +353,7 @@
 			);
 			name = hprose;
 			productName = hprose;
-			productReference = 4AE3236C21F10F982E06FBFA1E513F0F /* hprose */;
+			productReference = 4AE3236C21F10F982E06FBFA1E513F0F /* hprose.framework */;
 			productType = "com.apple.product-type.framework";
 		};
 /* End PBXNativeTarget section */
@@ -375,8 +374,6 @@
 				en,
 			);
 			mainGroup = CF1408CF629C7361332E53B88F7BD30C;
-			minimizedProjectReferenceProxies = 0;
-			preferredProjectObjectVersion = 77;
 			productRefGroup = 8657E6D8433543D332352AFF914D38FF /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -452,11 +449,11 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 40E6E19414D4F96297CFE8992B48CD0F /* hprose.release.xcconfig */;
 			buildSettings = {
-				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";
-				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = "";
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
@@ -475,6 +472,7 @@
 				MODULEMAP_FILE = "Target Support Files/hprose/hprose.modulemap";
 				PRODUCT_MODULE_NAME = hprose;
 				PRODUCT_NAME = hprose;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ";
@@ -491,11 +489,11 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = AC0A12A3E6BAA2D8ADB4F9C16484A7FE /* hprose.debug.xcconfig */;
 			buildSettings = {
-				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";
-				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = "";
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
@@ -514,6 +512,7 @@
 				MODULEMAP_FILE = "Target Support Files/hprose/hprose.modulemap";
 				PRODUCT_MODULE_NAME = hprose;
 				PRODUCT_NAME = hprose;
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ";

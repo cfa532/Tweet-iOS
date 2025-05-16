@@ -20,6 +20,7 @@
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
 		4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DC2DD62CCB00A20E19 /* Gadget.swift */; };
+		4684EA4D2DD72AA700CACE55 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4684EA4C2DD72AA700CACE55 /* AppConfig.swift */; };
 		9FE38979B071C6A3D6DEF9D7 /* Pods_Tweet.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 319FA23B691E0BF5F75CB547 /* Pods_Tweet.framework */; };
 /* End PBXBuildFile section */
 
@@ -40,6 +41,7 @@
 		4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiFileType.swift; sourceTree = "<group>"; };
 		4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHelper.swift; sourceTree = "<group>"; };
 		4642A1DC2DD62CCB00A20E19 /* Gadget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gadget.swift; sourceTree = "<group>"; };
+		4684EA4C2DD72AA700CACE55 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		65C5B3D3668B849F9F7C6294 /* Pods-Tweet.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.debug.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -103,6 +105,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				4684EA4B2DD72A8600CACE55 /* Helper */,
 				1A1A1A1A1A1A1A1A1A1A1A0B /* Models */,
 				1A1A1A1A1A1A1A1A1A1A1A0C /* Network */,
 			);
@@ -131,7 +134,6 @@
 		1A1A1A1A1A1A1A1A1A1A1A0C /* Network */ = {
 			isa = PBXGroup;
 			children = (
-				4642A1DC2DD62CCB00A20E19 /* Gadget.swift */,
 				4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */,
 				4608E2D72DD5CA640051A92D /* HproseInstance.swift */,
 			);
@@ -164,6 +166,15 @@
 				3FAFC9DDEF21D330EA8C64D9 /* Pods-Tweet.release.xcconfig */,
 			);
 			path = Pods;
+			sourceTree = "<group>";
+		};
+		4684EA4B2DD72A8600CACE55 /* Helper */ = {
+			isa = PBXGroup;
+			children = (
+				4642A1DC2DD62CCB00A20E19 /* Gadget.swift */,
+				4684EA4C2DD72AA700CACE55 /* AppConfig.swift */,
+			);
+			path = Helper;
 			sourceTree = "<group>";
 		};
 		81D68A12530713606C68BEA6 /* Frameworks */ = {
@@ -293,6 +304,7 @@
 				1A1A1A1A1A1A1A1A1A1A1A1A /* TweetApp.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1E /* Tweet.swift in Sources */,
+				4684EA4D2DD72AA700CACE55 /* AppConfig.swift in Sources */,
 				4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */,
 				4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */,

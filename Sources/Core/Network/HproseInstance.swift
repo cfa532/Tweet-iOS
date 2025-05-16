@@ -37,7 +37,7 @@ final class HproseInstance {
             id: Constants.GUEST_ID,
             baseUrl: preferenceHelper?.getAppUrls().first ?? "",
         )
-        appUser.followingList = getAlphaIds()
+        appUser.followingList = Gadget.shared.getAlphaIds()
         
         try await initAppEntry()
     }
@@ -121,14 +121,6 @@ final class HproseInstance {
     }
     
     // MARK: - Private Methods
-    private func getAlphaIds() -> [String] {
-        let alphaIdString = Bundle.main.infoDictionary?["ALPHA_ID"] as? String ?? ""
-        return alphaIdString
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) } // Remove whitespace if needed
-            .map { String($0) }
-    }
-    
     private func fetchHTML(from urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else {
             throw URLError(.badURL)
@@ -166,7 +158,7 @@ final class HproseInstance {
                 if let paramData = extractParamMap(from: html) {
                     appId = paramData["mid"] as? String ?? ""
                     
-                    if let firstIp = Gadget.filterIpAddresses(paramData["addrs"] as Any) {
+                    if let firstIp = Gadget.shared.filterIpAddresses(paramData["addrs"] as Any) {
                         appUser = appUser.copy(baseUrl: "http://\(firstIp)")
                         client.uri = appUser.baseUrl
                         guard let service = client.useService(HproseService.self as Protocol) as? HproseService else {
@@ -182,7 +174,7 @@ final class HproseInstance {
                             }
                             
                         } else {
-                            appUser.followingList = getAlphaIds()
+                            appUser.followingList = Gadget.shared.getAlphaIds()
                             cachedUsers.insert(appUser)
                         }
                         return
