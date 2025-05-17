@@ -99,7 +99,7 @@ final class HproseInstance {
                 "hostid": user.hostIds?.first as Any
             ]
             let response = service.runMApp(entry, params, nil)
-            print(response)
+            print(response as Any)
             return []
 //            return try await callService(service, entry: entry, params: params) { response in
 //                guard let response = response as? [[String: Any]] else { return [] }
