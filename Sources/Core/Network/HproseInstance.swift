@@ -55,7 +55,7 @@ final class HproseInstance {
                 print(addrs)
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     appUser = appUser.copy(baseUrl: "http://\(firstIp)")
-                    client.uri = appUser.baseUrl
+                    client.uri = appUser.baseUrl!+"/webapi/"
                     hproseClient = client.useService(HproseService.self) as AnyObject
                     
                     if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID {
@@ -82,7 +82,7 @@ final class HproseInstance {
         user: User,
         startRank: UInt,
         endRank: UInt,
-        entry: String = "test"
+        entry: String = "get_tweet_feed"
     ) async throws -> [Tweet] {
         try await withRetry {
             guard let service = hproseClient else {
