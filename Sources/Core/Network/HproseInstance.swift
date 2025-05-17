@@ -2,7 +2,7 @@ import Foundation
 import hprose
 
 @objc protocol HproseService {
-    @objc func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]) -> Any?
+    func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]) -> Any?
 }
 
 // MARK: - HproseService
@@ -82,7 +82,7 @@ final class HproseInstance {
         user: User,
         startRank: UInt,
         endRank: UInt,
-        entry: String = "get_tweet_feed"
+        entry: String = "test"
     ) async throws -> [Tweet] {
         try await withRetry {
             guard let service = hproseClient else {
