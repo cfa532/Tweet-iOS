@@ -2,7 +2,7 @@ import Foundation
 import hprose
 
 @objc protocol HproseService {
-    func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]) -> Any?
+    func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
 }
 
 // MARK: - HproseService
@@ -98,14 +98,16 @@ final class HproseInstance {
                 "gid": appUser.mid,
                 "hostid": user.hostIds?.first as Any
             ]
-            
-            return try await callService(service, entry: entry, params: params) { response in
-                guard let response = response as? [[String: Any]] else { return [] }
-                return try response.compactMap { dict -> Tweet? in
-                    let data = try JSONSerialization.data(withJSONObject: dict)
-                    return try JSONDecoder().decode(Tweet.self, from: data)
-                }
-            }
+            let response = service.runMApp(entry, params, nil)
+            print(response)
+            return []
+//            return try await callService(service, entry: entry, params: params) { response in
+//                guard let response = response as? [[String: Any]] else { return [] }
+//                return try response.compactMap { dict -> Tweet? in
+//                    let data = try JSONSerialization.data(withJSONObject: dict)
+//                    return try JSONDecoder().decode(Tweet.self, from: data)
+//                }
+//            }
         }
     }
     
