@@ -140,4 +140,49 @@ struct Tweet: Identifiable, Codable {
         try container.encode(isPrivate, forKey: .isPrivate)
         try container.encodeIfPresent(downloadable, forKey: .downloadable)
     }
+    
+    // MARK: - Factory Methods
+    
+    /// Creates a Tweet from a dictionary returned by the network call
+    /// - Parameter dict: Dictionary containing tweet data
+    /// - Returns: A Tweet object if successful, nil if conversion fails
+    static func from(dict: [String: Any]) -> Tweet? {
+        do {
+            // Create a new dictionary with validated fields and proper mapping
+            var validatedDict = dict
+            
+            // Convert timestamp from string to Date
+            if let timestampStr = dict["timestamp"] as? String,
+               let timestampMillis = Double(timestampStr) {
+                // Update the dictionary with the timestamp in milliseconds
+                validatedDict["timestamp"] = timestampMillis
+            }
+            
+            // Convert dictionary to JSON data
+            let jsonData = try JSONSerialization.data(withJSONObject: validatedDict, options: [])
+            
+            // Decode the JSON data into a Tweet object
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            
+            return try decoder.decode(Tweet.self, from: jsonData)
+        } catch {
+            print("Error converting dictionary to Tweet: \(error)")
+            if let decodingError = error as? DecodingError {
+                switch decodingError {
+                case .keyNotFound(let key, let context):
+                    print("Missing key: \(key.stringValue), context: \(context.debugDescription)")
+                case .typeMismatch(let type, let context):
+                    print("Type mismatch: expected \(type), context: \(context.debugDescription)")
+                case .valueNotFound(let type, let context):
+                    print("Value not found: expected \(type), context: \(context.debugDescription)")
+                case .dataCorrupted(let context):
+                    print("Data corrupted: \(context.debugDescription)")
+                @unknown default:
+                    print("Unknown decoding error")
+                }
+            }
+            return nil
+        }
+    }
 }

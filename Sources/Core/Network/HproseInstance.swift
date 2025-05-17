@@ -82,7 +82,7 @@ final class HproseInstance {
         user: User,
         startRank: UInt,
         endRank: UInt,
-        entry: String = "test"
+        entry: String = "get_tweet_feed"
     ) async throws -> [Tweet] {
         try await withRetry {
             guard let service = hproseClient else {
@@ -98,16 +98,16 @@ final class HproseInstance {
                 "gid": appUser.mid,
                 "hostid": user.hostIds?.first as Any
             ]
-            let response = service.runMApp(entry, params, nil)
-            print(response as Any)
-            return []
-//            return try await callService(service, entry: entry, params: params) { response in
-//                guard let response = response as? [[String: Any]] else { return [] }
-//                return try response.compactMap { dict -> Tweet? in
-//                    let data = try JSONSerialization.data(withJSONObject: dict)
-//                    return try JSONDecoder().decode(Tweet.self, from: data)
-//                }
-//            }
+            
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+                print("Invalid response format from server")
+                return []
+            }
+            
+            return response.compactMap { dict -> Tweet? in
+                print("Processing tweet dictionary: \(dict)")
+                return Tweet.from(dict: dict)
+            }
         }
     }
     
