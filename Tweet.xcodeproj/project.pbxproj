@@ -21,6 +21,7 @@
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
 		4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DC2DD62CCB00A20E19 /* Gadget.swift */; };
+		46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46704DE12DD8CEF7001D69B9 /* MediaType.swift */; };
 		4684EA4D2DD72AA700CACE55 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4684EA4C2DD72AA700CACE55 /* AppConfig.swift */; };
 /* End PBXBuildFile section */
 
@@ -40,6 +41,7 @@
 		4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHelper.swift; sourceTree = "<group>"; };
 		4642A1DC2DD62CCB00A20E19 /* Gadget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gadget.swift; sourceTree = "<group>"; };
 		46704DDD2DD72E58001D69B9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Tweet/Info.plist; sourceTree = "<group>"; };
+		46704DE12DD8CEF7001D69B9 /* MediaType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaType.swift; sourceTree = "<group>"; };
 		4684EA4C2DD72AA700CACE55 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		83423F5E23BD65E924B7AD86 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D424303A66FF70A9FBF5540E /* Pods-Tweet.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.release.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.release.xcconfig"; sourceTree = "<group>"; };
@@ -134,6 +136,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A0B /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				46704DE12DD8CEF7001D69B9 /* MediaType.swift */,
 				4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */,
 				4608E2D92DD5CD920051A92D /* User.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1F /* Tweet.swift */,
@@ -283,9 +286,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -299,6 +306,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1A /* TweetApp.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1E /* Tweet.swift in Sources */,

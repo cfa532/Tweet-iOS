@@ -1,7 +1,7 @@
 import Foundation
 
 struct User: Codable, Identifiable, Hashable {
-    let id: String // mid
+    var id: String { mid }  // Computed property that returns mid
     var mid: String
     var baseUrl: String?
     var writableUrl: String?
@@ -33,9 +33,8 @@ struct User: Codable, Identifiable, Hashable {
     var commentsList: [String]? // List of MimeiId
     var topTweets: [String]? // List of MimeiId
     
-    init(id: String = Constants.GUEST_ID, baseUrl: String? = nil) {
-        self.id = id
-        self.mid = id
+    init(mid: String = Constants.GUEST_ID, baseUrl: String? = nil) {
+        self.mid = mid
         self.baseUrl = baseUrl
         self.timestamp = Date()
         self.tweetCount = 0

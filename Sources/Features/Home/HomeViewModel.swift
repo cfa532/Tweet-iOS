@@ -240,7 +240,6 @@ struct TweetItemView: View {
             if let attachments = tweet.attachments {
                 let mimeiAttachments = attachments.map { media in
                     MimeiFileType(
-                        id: media.id,
                         mid: media.mid,
                         type: media.type,
                         size: media.size,

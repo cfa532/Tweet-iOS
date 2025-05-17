@@ -9,7 +9,7 @@ import hprose
 final class HproseInstance {
     // MARK: - Properties
     static let shared = HproseInstance()
-    var appUser: User = User(id: Constants.GUEST_ID)
+    var appUser: User = User(mid: Constants.GUEST_ID)
     
     private var appId: String = Bundle.main.bundleIdentifier ?? ""
     private var cachedUsers: Set<User> = []
@@ -34,7 +34,7 @@ final class HproseInstance {
         self.tweetDao = TweetCacheDatabase.shared.tweetDao()
         
         appUser = User(
-            id: Constants.GUEST_ID,
+            mid: Constants.GUEST_ID,
             baseUrl: preferenceHelper?.getAppUrls().first ?? "",
         )
         appUser.followingList = Gadget.shared.getAlphaIds()

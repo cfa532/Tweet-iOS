@@ -1,7 +1,7 @@
 import Foundation
 
 struct MimeiFileType: Identifiable, Codable {
-    let id: String // mid
+    var id: String { mid }  // Computed property that returns mid
     var mid: String
     var type: MediaType
     let size: Int64?
@@ -11,7 +11,6 @@ struct MimeiFileType: Identifiable, Codable {
     var url: String?
     
     enum CodingKeys: String, CodingKey {
-        case id = "000000000000000000000000000"
         case mid
         case type
         case size
@@ -21,8 +20,7 @@ struct MimeiFileType: Identifiable, Codable {
         case url
     }
     
-    init(id: String, mid: String, type: MediaType, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(), aspectRatio: Float? = nil, url: String? = nil) {
-        self.id = id
+    init(mid: String, type: MediaType, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(), aspectRatio: Float? = nil, url: String? = nil) {
         self.mid = mid
         self.type = type
         self.size = size
