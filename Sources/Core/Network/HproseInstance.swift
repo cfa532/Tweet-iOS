@@ -105,7 +105,7 @@ final class HproseInstance {
             }
             
             return response.compactMap { dict -> Tweet? in
-                print("Processing tweet dictionary: \(dict)")
+//                print("Processing tweet dictionary: \(dict)")
                 return Tweet.from(dict: dict)
             }
         }

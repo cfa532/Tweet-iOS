@@ -15,6 +15,7 @@ class AppState: ObservableObject {
     }
 }
 
+@available(iOS 16.0, *)
 @main
 struct TweetApp: App {
     @StateObject private var appState = AppState()
