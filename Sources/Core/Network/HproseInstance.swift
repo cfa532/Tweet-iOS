@@ -2,7 +2,7 @@ import Foundation
 import hprose
 
 @objc protocol HproseService {
-    func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]) -> Any?
+    @objc func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]) -> Any?
 }
 
 // MARK: - HproseService
@@ -82,24 +82,66 @@ final class HproseInstance {
         user: User,
         startRank: UInt,
         endRank: UInt,
-        entry: String = "get_tweet_feed"
+        entry: String = "test"
     ) async throws -> [Tweet] {
         try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "entry": entry,
                 "userid": appUser.isGuest ? "iFG4GC9r0fF22jYBCkuPThybzwO" : appUser.mid,
                 "start": startRank,
                 "end": endRank,
                 "gid": appUser.mid,
                 "hostid": user.hostIds?.first as Any
             ]
-            let response = hproseClient?.runMApp(entry, params, []) as? [[String: Any]]
-            return try response?.compactMap { dict in
-                let data = try JSONSerialization.data(withJSONObject: dict)
-                return try JSONDecoder().decode(Tweet.self, from: data)
-            } ?? []
+            
+            return try await callService(service, entry: entry, params: params) { response in
+                guard let response = response as? [[String: Any]] else { return [] }
+                return try response.compactMap { dict -> Tweet? in
+                    let data = try JSONSerialization.data(withJSONObject: dict)
+                    return try JSONDecoder().decode(Tweet.self, from: data)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Hprose Service Wrapper
+    private func callService<T>(_ service: AnyObject?, entry: String, params: [String: Any], transform: @escaping ((Any?) throws -> T)) async throws -> T {
+        guard let service = service else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                do {
+                    let response = service.runMApp(entry, params, [])
+                    let result = try transform(response)
+                    continuation.resume(returning: result)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+    
+    private func callService(_ service: AnyObject?, entry: String, params: [String: Any]) async throws {
+        guard let service = service else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                do {
+                    _ = service.runMApp(entry, params, [])
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
         }
     }
     
