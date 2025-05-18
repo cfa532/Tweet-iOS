@@ -56,7 +56,6 @@ class ComposeTweetViewModel: ObservableObject {
                 authorId: HproseInstance.shared.appUser.mid,
                 content: trimmedContent,
                 timestamp: Date(),
-                author: HproseInstance.shared.appUser,
             )
             
             print("DEBUG: Preparing item data for \(selectedItems.count) items")
