@@ -66,6 +66,9 @@ final class HproseInstance {
                 guard let addrs = paramData["addrs"] as? String else {return}
                 print(addrs)
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
+                    #if DEBUG
+                        let firstIp = "125.118.43.78:8002"  // for testing
+                    #endif
                     appUser = appUser.copy(baseUrl: "http://\(firstIp)")
                     client.uri = appUser.baseUrl!+"/webapi/"
                     hproseClient = client.useService(HproseService.self) as AnyObject
@@ -442,22 +445,46 @@ final class HproseInstance {
         }
     }
     
-    func scheduleTweetUpload(tweet: Tweet, itemData: [PendingUpload.ItemData]) {
-        let task = BGProcessingTaskRequest(identifier: "com.tweet.upload")
-        task.requiresNetworkConnectivity = true
-        task.requiresExternalPower = false
-        
+    // MARK: - Background Task Registration
+    static func registerBackgroundTasks() {
         do {
+            try BGTaskScheduler.shared.register(
+                forTaskWithIdentifier: "com.tweet.upload",
+                using: nil
+            ) { task in
+                self.handleBackgroundTask(task: task as! BGProcessingTask)
+            }
+            print("Successfully registered background task")
+        } catch {
+            print("Could not register background task: \(error)")
+        }
+    }
+    
+    func scheduleTweetUpload(tweet: Tweet, itemData: [PendingUpload.ItemData]) {
+        do {
+            // Create a background task request
+            let request = BGProcessingTaskRequest(identifier: "com.tweet.upload")
+            request.requiresNetworkConnectivity = true
+            request.requiresExternalPower = false
+            request.earliestBeginDate = Date(timeIntervalSinceNow: 1) // Start after 1 second
+            
+            // Store the upload data
             let pendingUpload = PendingUpload(
                 tweet: tweet,
                 selectedItemData: itemData
             )
-            
-            try BGTaskScheduler.shared.submit(task)
             let data = try JSONEncoder().encode(pendingUpload)
             UserDefaults.standard.set(data, forKey: "pendingTweetUpload")
+            
+            // Schedule the task
+            try BGTaskScheduler.shared.submit(request)
+            print("Successfully scheduled background task")
         } catch {
             print("Could not schedule tweet upload: \(error)")
+            // Fallback to immediate upload if background task fails
+            Task {
+                await handleBackgroundTweetUpload()
+            }
         }
     }
     
@@ -560,13 +587,6 @@ final class HproseInstance {
         }
     }
     
-    // MARK: - Background Task Registration
-    static func registerBackgroundTasks() {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.tweet.upload", using: nil) { task in
-            self.handleBackgroundTask(task: task as! BGProcessingTask)
-        }
-    }
-    
     private static func handleBackgroundTask(task: BGProcessingTask) {
         // Schedule the next background task
         scheduleNextBackgroundTask()
@@ -583,8 +603,12 @@ final class HproseInstance {
         
         // Set up the task completion handler
         Task {
-            await uploadTask.value
-            task.setTaskCompleted(success: true)
+            do {
+                await uploadTask.value
+                task.setTaskCompleted(success: true)
+            } catch {
+                task.setTaskCompleted(success: false)
+            }
         }
     }
     
@@ -592,9 +616,11 @@ final class HproseInstance {
         let request = BGProcessingTaskRequest(identifier: "com.tweet.upload")
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 3600) // Schedule next task in 1 hour
         
         do {
             try BGTaskScheduler.shared.submit(request)
+            print("Successfully scheduled next background task")
         } catch {
             print("Could not schedule next background task: \(error)")
         }

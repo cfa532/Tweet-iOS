@@ -1,4 +1,5 @@
 import SwiftUI
+import BackgroundTasks
 
 @MainActor
 class AppState: ObservableObject {
@@ -7,6 +8,9 @@ class AppState: ObservableObject {
     
     func initialize() async {
         do {
+            // Register background tasks
+            HproseInstance.registerBackgroundTasks()
+            
             try await HproseInstance.shared.initialize()
             isInitialized = true
         } catch {
