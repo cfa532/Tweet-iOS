@@ -27,6 +27,10 @@
 		46E5B32D2DDA045B00AEF31F /* HeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32C2DDA045B00AEF31F /* HeaderView.swift */; };
 		46E5B3302DDA048500AEF31F /* UserViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32E2DDA048500AEF31F /* UserViewModel.swift */; };
 		46E5B3322DDA1AF500AEF31F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 46E5B3312DDA1AF500AEF31F /* Assets.xcassets */; };
+		46E5B33A2DDA315700AEF31F /* RecommendedTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3362DDA315700AEF31F /* RecommendedTweetView.swift */; };
+		46E5B33B2DDA315700AEF31F /* TweetItemView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3382DDA315700AEF31F /* TweetItemView.swift */; };
+		46E5B33C2DDA315700AEF31F /* FollowingsTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3352DDA315700AEF31F /* FollowingsTweetView.swift */; };
+		46E5B33D2DDA315700AEF31F /* TabButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3372DDA315700AEF31F /* TabButton.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -51,6 +55,10 @@
 		46E5B32C2DDA045B00AEF31F /* HeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeaderView.swift; sourceTree = "<group>"; };
 		46E5B32E2DDA048500AEF31F /* UserViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserViewModel.swift; sourceTree = "<group>"; };
 		46E5B3312DDA1AF500AEF31F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Tweet/Assets.xcassets; sourceTree = SOURCE_ROOT; };
+		46E5B3352DDA315700AEF31F /* FollowingsTweetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingsTweetView.swift; sourceTree = "<group>"; };
+		46E5B3362DDA315700AEF31F /* RecommendedTweetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecommendedTweetView.swift; sourceTree = "<group>"; };
+		46E5B3372DDA315700AEF31F /* TabButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabButton.swift; sourceTree = "<group>"; };
+		46E5B3382DDA315700AEF31F /* TweetItemView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetItemView.swift; sourceTree = "<group>"; };
 		83423F5E23BD65E924B7AD86 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D424303A66FF70A9FBF5540E /* Pods-Tweet.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.release.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.release.xcconfig"; sourceTree = "<group>"; };
 		FFC29454DC8954BB0F934F77 /* Pods-Tweet.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.debug.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.debug.xcconfig"; sourceTree = "<group>"; };
@@ -85,6 +93,7 @@
 				1689CEFF4B5CD06197813A90 /* Frameworks */,
 				46E5B3312DDA1AF500AEF31F /* Assets.xcassets */,
 				46704DDD2DD72E58001D69B9 /* Info.plist */,
+				46E5B3342DDA1E8100AEF31F /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -140,7 +149,6 @@
 			isa = PBXGroup;
 			children = (
 				46E5B3282DDA02E200AEF31F /* Profile */,
-				46E5B3262DDA02D400AEF31F /* Feed */,
 				1A1A1A1A1A1A1A1A1A1A1A0D /* Home */,
 				1A1A1A1A1A1A1A1A1A1A1A0E /* Compose */,
 			);
@@ -170,7 +178,11 @@
 		1A1A1A1A1A1A1A1A1A1A1A0D /* Home */ = {
 			isa = PBXGroup;
 			children = (
+				46E5B3392DDA315700AEF31F /* Views */,
 				1A1A1A1A1A1A1A1A1A1A1A25 /* HomeViewModel.swift */,
+				46E5B3352DDA315700AEF31F /* FollowingsTweetView.swift */,
+				46E5B3362DDA315700AEF31F /* RecommendedTweetView.swift */,
+				46E5B3382DDA315700AEF31F /* TweetItemView.swift */,
 			);
 			path = Home;
 			sourceTree = "<group>";
@@ -203,36 +215,6 @@
 			path = Helper;
 			sourceTree = "<group>";
 		};
-		46E5B3232DDA023A00AEF31F /* Recovered References */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			name = "Recovered References";
-			sourceTree = "<group>";
-		};
-		46E5B3242DDA02D400AEF31F /* ViewModels */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = ViewModels;
-			sourceTree = "<group>";
-		};
-		46E5B3252DDA02D400AEF31F /* Views */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Views;
-			sourceTree = "<group>";
-		};
-		46E5B3262DDA02D400AEF31F /* Feed */ = {
-			isa = PBXGroup;
-			children = (
-				46E5B3242DDA02D400AEF31F /* ViewModels */,
-				46E5B3252DDA02D400AEF31F /* Views */,
-			);
-			path = Feed;
-			sourceTree = "<group>";
-		};
 		46E5B3282DDA02E200AEF31F /* Profile */ = {
 			isa = PBXGroup;
 			children = (
@@ -246,6 +228,22 @@
 				46E5B32E2DDA048500AEF31F /* UserViewModel.swift */,
 			);
 			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		46E5B3342DDA1E8100AEF31F /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
+		46E5B3392DDA315700AEF31F /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				46E5B3372DDA315700AEF31F /* TabButton.swift */,
+			);
+			path = Views;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -374,7 +372,6 @@
 				4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */,
 				46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */,
-				46E5B3172DD9FCCC00AEF31F /* ProfileView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */,
 				46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */,
 				4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */,
@@ -384,6 +381,10 @@
 				1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A2A /* PollCreationView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A2C /* LocationPickerView.swift in Sources */,
+				46E5B33A2DDA315700AEF31F /* RecommendedTweetView.swift in Sources */,
+				46E5B33B2DDA315700AEF31F /* TweetItemView.swift in Sources */,
+				46E5B33C2DDA315700AEF31F /* FollowingsTweetView.swift in Sources */,
+				46E5B33D2DDA315700AEF31F /* TabButton.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

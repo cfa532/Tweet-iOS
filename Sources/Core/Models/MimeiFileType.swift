@@ -29,4 +29,9 @@ struct MimeiFileType: Identifiable, Codable {
         self.aspectRatio = aspectRatio
         self.url = url
     }
-} 
+    
+    func getUrl(_ baseUrl: String) -> URL? {
+        let path = mid.count > 27 ? "\(baseUrl)/ipfs/\(mid)" : "\(baseUrl)/mm/\(mid)"
+        return URL(string: path)
+    }
+}
