@@ -110,6 +110,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A07 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				46E5B32A2DDA038E00AEF31F /* AppConfig.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */,
 			);
 			path = App;
@@ -198,7 +199,6 @@
 			isa = PBXGroup;
 			children = (
 				4642A1DC2DD62CCB00A20E19 /* Gadget.swift */,
-				46E5B32A2DDA038E00AEF31F /* AppConfig.swift */,
 			);
 			path = Helper;
 			sourceTree = "<group>";
