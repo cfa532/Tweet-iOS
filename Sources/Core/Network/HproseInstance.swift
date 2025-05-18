@@ -560,14 +560,11 @@ final class HproseInstance {
     }
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
-        print("DEBUG: Starting uploadTweet")
         return try await withRetry {
             guard let service = hproseClient else {
-                print("DEBUG: Service not initialized")
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             
-            print("DEBUG: Preparing tweet data for upload")
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
@@ -575,15 +572,11 @@ final class HproseInstance {
                 "tweet": String(data: try JSONEncoder().encode(tweet), encoding: .utf8) ?? ""
             ]
             
-            print("DEBUG: Calling upload_tweet service")
             let rawResponse = service.runMApp("add_tweet", params, nil)
-            print("DEBUG: Raw response from add_tweet: \(String(describing: rawResponse))")
             guard let newTweetId = rawResponse as? String else {
                 return Tweet?.none
             }
             
-            print("DEBUG: Successfully created tweet with ID: \(newTweetId)")
-            // Create a new tweet with the returned ID
             var uploadedTweet = tweet
             uploadedTweet.mid = newTweetId
             return uploadedTweet
@@ -591,11 +584,8 @@ final class HproseInstance {
     }
     
     private func uploadItemPair(_ pair: [PendingUpload.ItemData]) async throws -> [MimeiFileType] {
-        print("DEBUG: Starting uploadItemPair with \(pair.count) items")
-        // Create async tasks for each item in the pair
         let uploadTasks = pair.map { itemData in
             Task {
-                print("DEBUG: Creating upload task for item: \(itemData.identifier)")
                 return try await uploadToIPFS(
                     data: itemData.data,
                     typeIdentifier: itemData.typeIdentifier,
@@ -604,88 +594,64 @@ final class HproseInstance {
             }
         }
         
-        // Process uploads in a task group
         return try await withThrowingTaskGroup(of: MimeiFileType?.self) { group in
-            // Add all upload tasks to the group
             for task in uploadTasks {
                 group.addTask {
-                    print("DEBUG: Adding upload task to group")
                     return try await task.value
                 }
             }
             
-            // Collect results
             var uploadResults: [MimeiFileType?] = []
             for try await result in group {
-                print("DEBUG: Received upload result: \(result != nil ? "success" : "nil")")
                 uploadResults.append(result)
             }
             
-            // Validate results
             if uploadResults.contains(where: { $0 == nil }) {
-                print("DEBUG: Some uploads failed in pair")
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment upload failure in pair"])
             }
             
-            print("DEBUG: All uploads in pair successful")
             return uploadResults.compactMap { $0 }
         }
     }
     
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingUpload.ItemData]) {
-        print("DEBUG: scheduleTweetUpload called with \(itemData.count) items")
-        
-        // Start upload in background task
         Task.detached(priority: .background) {
             do {
                 var tweet = tweet
                 var uploadedAttachments: [MimeiFileType] = []
                 
-                // Process items in pairs
                 let itemPairs = itemData.chunked(into: 2)
-                print("DEBUG: Processing \(itemPairs.count) item pairs")
                 
                 for (index, pair) in itemPairs.enumerated() {
-                    print("DEBUG: Processing pair \(index + 1)")
                     do {
                         let pairAttachments = try await self.uploadItemPair(pair)
-                        print("DEBUG: Successfully uploaded pair \(index + 1)")
                         uploadedAttachments.append(contentsOf: pairAttachments)
                     } catch {
-                        print("DEBUG: Error uploading pair \(index + 1): \(error)")
+                        print("Error uploading pair \(index + 1): \(error)")
                         return
                     }
                 }
                 
                 if itemData.count != uploadedAttachments.count {
-                    print("DEBUG: Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)")
+                    print("Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)")
                     return
                 }
                 
-                // Update tweet with uploaded attachments
                 tweet.attachments = uploadedAttachments
                 
-                // Upload the tweet
-                print("DEBUG: Uploading final tweet")
                 if let uploadedTweet = try await self.uploadTweet(tweet) {
-                    print("DEBUG: Successfully uploaded tweet: \(uploadedTweet)")
-                    // Notify main thread of success
                     await MainActor.run {
-                        // TODO: Show success message to user
-                        print("DEBUG: Tweet published successfully")
+                        print("Tweet published successfully \(uploadedTweet)")
                     }
                 } else {
-                    print("DEBUG: Failed to upload tweet")
                     await MainActor.run {
-                        // TODO: Show error message to user
-                        print("DEBUG: Failed to publish tweet")
+                        print("Failed to publish tweet")
                     }
                 }
             } catch {
-                print("DEBUG: Error in background upload: \(error)")
+                print("Error in background upload: \(error)")
                 await MainActor.run {
-                    // TODO: Show error message to user
-                    print("DEBUG: Error during upload: \(error.localizedDescription)")
+                    print("Error during upload: \(error.localizedDescription)")
                 }
             }
         }
