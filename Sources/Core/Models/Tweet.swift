@@ -24,7 +24,7 @@ struct Tweet: Identifiable, Codable {
     
     // Media attachments
     var attachments: [MimeiFileType]?
-    var isPrivate: Bool
+    var isPrivate: Bool?
     var downloadable: Bool?
     
     // Computed properties for user interaction states
@@ -94,15 +94,15 @@ struct Tweet: Identifiable, Codable {
         retweetCount = try container.decode(Int.self, forKey: .retweetCount)
         commentCount = try container.decode(Int.self, forKey: .commentCount)
         attachments = try container.decodeIfPresent([MimeiFileType].self, forKey: .attachments)
-        isPrivate = try container.decode(Bool.self, forKey: .isPrivate)
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate)
         downloadable = try container.decodeIfPresent(Bool.self, forKey: .downloadable)
     }
     
     init(mid: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
          originalTweetId: String? = nil, originalAuthorId: String? = nil, author: User? = nil,
          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
-         commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool = false,
-         downloadable: Bool? = false) {
+         commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
+         downloadable: Bool? = nil) {
         self.mid = mid
         self.authorId = authorId
         self.content = content
@@ -137,7 +137,7 @@ struct Tweet: Identifiable, Codable {
         try container.encode(retweetCount, forKey: .retweetCount)
         try container.encode(commentCount, forKey: .commentCount)
         try container.encodeIfPresent(attachments, forKey: .attachments)
-        try container.encode(isPrivate, forKey: .isPrivate)
+        try container.encodeIfPresent(isPrivate, forKey: .isPrivate)
         try container.encodeIfPresent(downloadable, forKey: .downloadable)
     }
     

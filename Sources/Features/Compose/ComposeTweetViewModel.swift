@@ -47,13 +47,14 @@ class ComposeTweetViewModel: ObservableObject {
         
         isUploading = true
         uploadProgress = 0.0
+        let currentUser = HproseInstance.shared.appUser
         
         do {
             print("DEBUG: Creating tweet object")
             // Create tweet with empty attachments initially
             let tweet = Tweet(
                 mid: UUID().uuidString,
-                authorId: HproseInstance.shared.appUser.mid,
+                authorId: currentUser.isGuest ? "iFG4GC9r0fF22jYBCkuPThybzwO" : currentUser.mid,
                 content: trimmedContent,
                 timestamp: Date(),
             )

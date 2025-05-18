@@ -528,28 +528,21 @@ final class HproseInstance {
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
+                "hostid": "ReyCUFHHZmk0N5w_wxUeEuoY5Xr",
                 "tweet": String(data: try JSONEncoder().encode(tweet), encoding: .utf8) ?? ""
             ]
             
             print("DEBUG: Calling upload_tweet service")
-            guard let response = service.runMApp("upload_tweet", params, nil) as? [String: Any] else {
-                print("DEBUG: Invalid response format from server")
+            let rawResponse = service.runMApp("add_tweet", params, nil)
+            print("DEBUG: Raw response from add_tweet: \(String(describing: rawResponse))")
+            guard let newTweetId = rawResponse as? String else {
                 return Tweet?.none
             }
             
-            print("DEBUG: Processing server response")
-            guard let responseData = Data(base64Encoded: response["tweet"] as? String ?? "") else {
-                print("DEBUG: Failed to decode response data")
-                return nil
-            }
-            
-            print("DEBUG: Decoding uploaded tweet")
-            guard let uploadedTweet = try? JSONDecoder().decode(Tweet.self, from: responseData) else {
-                print("DEBUG: Failed to decode tweet from response")
-                return nil
-            }
-            
-            print("DEBUG: Successfully uploaded and decoded tweet")
+            print("DEBUG: Successfully created tweet with ID: \(newTweetId)")
+            // Create a new tweet with the returned ID
+            var uploadedTweet = tweet
+            uploadedTweet.mid = newTweetId
             return uploadedTweet
         }
     }
