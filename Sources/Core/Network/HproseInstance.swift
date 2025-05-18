@@ -517,23 +517,39 @@ final class HproseInstance {
     }
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
-        try await withRetry {
+        print("DEBUG: Starting uploadTweet")
+        return try await withRetry {
             guard let service = hproseClient else {
+                print("DEBUG: Service not initialized")
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             
+            print("DEBUG: Preparing tweet data for upload")
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
-                "tweet": try JSONEncoder().encode(tweet).base64EncodedString()
+                "tweet": String(data: try JSONEncoder().encode(tweet), encoding: .utf8) ?? ""
             ]
             
-            guard let response = service.runMApp("upload_tweet", params, nil) as? [String: Any],
-                  let responseData = Data(base64Encoded: response["tweet"] as? String ?? ""),
-                  let uploadedTweet = try? JSONDecoder().decode(Tweet.self, from: responseData) else {
+            print("DEBUG: Calling upload_tweet service")
+            guard let response = service.runMApp("upload_tweet", params, nil) as? [String: Any] else {
+                print("DEBUG: Invalid response format from server")
+                return Tweet?.none
+            }
+            
+            print("DEBUG: Processing server response")
+            guard let responseData = Data(base64Encoded: response["tweet"] as? String ?? "") else {
+                print("DEBUG: Failed to decode response data")
                 return nil
             }
             
+            print("DEBUG: Decoding uploaded tweet")
+            guard let uploadedTweet = try? JSONDecoder().decode(Tweet.self, from: responseData) else {
+                print("DEBUG: Failed to decode tweet from response")
+                return nil
+            }
+            
+            print("DEBUG: Successfully uploaded and decoded tweet")
             return uploadedTweet
         }
     }
