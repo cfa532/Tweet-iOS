@@ -80,10 +80,40 @@ class ComposeTweetViewModel: ObservableObject {
             do {
                 if let data = try await item.loadTransferable(type: Data.self) {
                     print("DEBUG: Successfully loaded image data: \(data.count) bytes")
+                    
+                    // Get the type identifier and determine file extension
+                    let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+                    let fileExtension: String
+                    
+                    if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
+                        fileExtension = "jpg"
+                    } else if typeIdentifier.contains("png") {
+                        fileExtension = "png"
+                    } else if typeIdentifier.contains("gif") {
+                        fileExtension = "gif"
+                    } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+                        fileExtension = "heic"
+                    } else if typeIdentifier.contains("mp4") {
+                        fileExtension = "mp4"
+                    } else if typeIdentifier.contains("mov") {
+                        fileExtension = "mov"
+                    } else if typeIdentifier.contains("m4v") {
+                        fileExtension = "m4v"
+                    } else if typeIdentifier.contains("mkv") {
+                        fileExtension = "mkv"
+                    } else {
+                        fileExtension = "file"
+                    }
+                    
+                    // Create a unique filename with timestamp
+                    let timestamp = Int(Date().timeIntervalSince1970)
+                    let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
+                    
                     itemData.append(HproseInstance.PendingUpload.ItemData(
                         identifier: item.itemIdentifier ?? UUID().uuidString,
-                        typeIdentifier: item.supportedContentTypes.first?.identifier ?? "public.image",
-                        data: data
+                        typeIdentifier: typeIdentifier,
+                        data: data,
+                        fileName: filename
                     ))
                 }
             } catch {

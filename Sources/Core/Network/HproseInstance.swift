@@ -218,6 +218,7 @@ final class HproseInstance {
     func uploadToIPFS(
         data: Data,
         typeIdentifier: String,
+        fileName: String? = nil,
         referenceId: String? = nil
     ) async throws -> MimeiFileType? {
         try await withRetry {
@@ -314,9 +315,6 @@ final class HproseInstance {
                 let fileAttributes = try FileManager.default.attributesOfItem(atPath: tempURL.path)
                 let fileSize = fileAttributes[.size] as? UInt64 ?? 0
                 let fileTimestamp = fileAttributes[.modificationDate] as? Date ?? Date()
-                
-                // Get file name from type identifier
-                let fileName = typeIdentifier.components(separatedBy: ".").last ?? "file"
                 
                 // Get aspect ratio for videos
                 var aspectRatio: Float?
@@ -470,6 +468,7 @@ final class HproseInstance {
             let identifier: String
             let typeIdentifier: String
             let data: Data
+            let fileName: String
         }
     }
     
@@ -597,7 +596,11 @@ final class HproseInstance {
         let uploadTasks = pair.map { itemData in
             Task {
                 print("DEBUG: Creating upload task for item: \(itemData.identifier)")
-                return try await uploadToIPFS(data: itemData.data, typeIdentifier: itemData.typeIdentifier)
+                return try await uploadToIPFS(
+                    data: itemData.data,
+                    typeIdentifier: itemData.typeIdentifier,
+                    fileName: itemData.fileName
+                )
             }
         }
         
