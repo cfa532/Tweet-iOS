@@ -1,8 +1,20 @@
 import Foundation
 import hprose
+import PhotosUI
+import AVFoundation
+import BackgroundTasks
 
 @objc protocol HproseService {
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
+}
+
+// MARK: - Array Extension
+extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0 ..< Swift.min($0 + size, count)])
+        }
+    }
 }
 
 // MARK: - HproseService
@@ -199,6 +211,116 @@ final class HproseInstance {
         }
     }
     
+    // MARK: - File Upload
+    func uploadToIPFS(
+        data: Data,
+        typeIdentifier: String,
+        referenceId: String? = nil
+    ) async throws -> MimeiFileType? {
+        try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            
+            // Create temporary file
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try data.write(to: tempURL)
+            defer { try? FileManager.default.removeItem(at: tempURL) }
+            
+            var offset: Int64 = 0
+            let chunkSize = 1024 * 1024 // 1MB chunks
+            var request: [String: Any] = [
+                "aid": appId,
+                "ver": "last",
+                "offset": offset
+            ]
+            
+            do {
+                let fileHandle = try FileHandle(forReadingFrom: tempURL)
+                defer { try? fileHandle.close() }
+                
+                while true {
+                    let data = fileHandle.readData(ofLength: chunkSize)
+                    if data.isEmpty { break }
+                    
+                    let nsData = data as NSData
+                    if let fsid = service.runMApp("upload_ipfs", request, [nsData]) as? String {
+                        offset += Int64(data.count)
+                        request["offset"] = offset
+                        request["fsid"] = fsid
+                    }
+                }
+                
+                // Mark upload as finished
+                request["finished"] = "true"
+                if let referenceId = referenceId {
+                    request["referenceid"] = referenceId
+                }
+                
+                guard let cid = service.runMApp("upload_ipfs", request, nil) as? String else {
+                    return nil
+                }
+                
+                // Determine media type
+                let mediaType: MediaType
+                if typeIdentifier.hasPrefix("public.image") {
+                    mediaType = .image
+                } else if typeIdentifier.hasPrefix("public.movie") {
+                    mediaType = .video
+                } else if typeIdentifier.hasPrefix("public.audio") {
+                    mediaType = .audio
+                } else if typeIdentifier == "public.composite-content" {
+                    mediaType = .pdf
+                } else if typeIdentifier == "public.zip-archive" {
+                    mediaType = .zip
+                } else if typeIdentifier == "public.composite-content" {
+                    mediaType = .word
+                } else {
+                    mediaType = .unknown
+                }
+                
+                // Get file attributes
+                let fileAttributes = try FileManager.default.attributesOfItem(atPath: tempURL.path)
+                let fileSize = fileAttributes[.size] as? UInt64 ?? 0
+                let fileTimestamp = fileAttributes[.modificationDate] as? Date ?? Date()
+                
+                // Get file name from type identifier
+                let fileName = typeIdentifier.components(separatedBy: ".").last ?? "file"
+                
+                // Get aspect ratio for videos
+                var aspectRatio: Float?
+                if mediaType == .video {
+                    aspectRatio = try await getVideoAspectRatio(url: tempURL)
+                }
+                
+                // Create MimeiFileType with the CID
+                return MimeiFileType(
+                    mid: cid,
+                    type: mediaType,
+                    size: Int64(fileSize),
+                    fileName: fileName,
+                    timestamp: fileTimestamp,
+                    aspectRatio: aspectRatio,
+                    url: nil
+                )
+            } catch {
+                print("Error uploading file: \(error)")
+                throw error
+            }
+        }
+    }
+    
+    private func getVideoAspectRatio(url: URL) async throws -> Float? {
+        let asset = AVAsset(url: url)
+        let tracks = try await asset.load(.tracks)
+        guard let videoTrack = tracks.first(where: { $0.mediaType == .video }) else {
+            return nil
+        }
+        
+        let size = try await videoTrack.load(.naturalSize)
+        return Float(size.width / size.height)
+    }
+    
     // MARK: - Private Methods
     private func fetchHTML(from urlString: String) async throws -> String {
         guard let url = URL(string: urlString) else {
@@ -307,6 +429,176 @@ final class HproseInstance {
 //        let data = try JSONSerialization.data(withJSONObject: response)
 //        return try JSONDecoder().decode(User.self, from: data)
 //    }
+    
+    // MARK: - Background Upload
+    struct PendingUpload: Codable {
+        let tweet: Tweet
+        let selectedItemData: [ItemData]
+        
+        struct ItemData: Codable {
+            let identifier: String
+            let typeIdentifier: String
+            let data: Data
+        }
+    }
+    
+    func scheduleTweetUpload(tweet: Tweet, itemData: [PendingUpload.ItemData]) {
+        let task = BGProcessingTaskRequest(identifier: "com.tweet.upload")
+        task.requiresNetworkConnectivity = true
+        task.requiresExternalPower = false
+        
+        do {
+            let pendingUpload = PendingUpload(
+                tweet: tweet,
+                selectedItemData: itemData
+            )
+            
+            try BGTaskScheduler.shared.submit(task)
+            let data = try JSONEncoder().encode(pendingUpload)
+            UserDefaults.standard.set(data, forKey: "pendingTweetUpload")
+        } catch {
+            print("Could not schedule tweet upload: \(error)")
+        }
+    }
+    
+    func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
+        try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            
+            let params: [String: Any] = [
+                "aid": appId,
+                "ver": "last",
+                "tweet": try JSONEncoder().encode(tweet).base64EncodedString()
+            ]
+            
+            guard let response = service.runMApp("upload_tweet", params, nil) as? [String: Any],
+                  let responseData = Data(base64Encoded: response["tweet"] as? String ?? ""),
+                  let uploadedTweet = try? JSONDecoder().decode(Tweet.self, from: responseData) else {
+                return nil
+            }
+            
+            return uploadedTweet
+        }
+    }
+    
+    func handleBackgroundTweetUpload() async {
+        guard let data = UserDefaults.standard.data(forKey: "pendingTweetUpload"),
+              let pendingUpload = try? JSONDecoder().decode(PendingUpload.self, from: data) else {
+            return
+        }
+        
+        // Clear the stored data immediately to prevent duplicate uploads
+        UserDefaults.standard.removeObject(forKey: "pendingTweetUpload")
+        
+        do {
+            var tweet = pendingUpload.tweet
+            var uploadedAttachments: [MimeiFileType] = []
+            
+            // Process items in pairs
+            let itemPairs = pendingUpload.selectedItemData.chunked(into: 2)
+            
+            for pair in itemPairs {
+                do {
+                    let pairAttachments = try await uploadItemPair(pair)
+                    uploadedAttachments.append(contentsOf: pairAttachments)
+                } catch {
+                    print("Error uploading pair: \(error)")
+                    return
+                }
+            }
+            
+            if pendingUpload.selectedItemData.count != uploadedAttachments.count {
+                print("Attachments upload failure")
+                return
+            }
+            
+            // Update tweet with uploaded attachments
+            tweet.attachments = uploadedAttachments
+            
+            // Upload the tweet
+            if let uploadedTweet = try await uploadTweet(tweet) {
+                print("Successfully uploaded tweet: \(uploadedTweet)")
+            } else {
+                print("Failed to upload tweet")
+            }
+        } catch {
+            print("Error in background tweet upload: \(error)")
+        }
+    }
+    
+    private func uploadItemPair(_ pair: [PendingUpload.ItemData]) async throws -> [MimeiFileType] {
+        // Create async tasks for each item in the pair
+        let uploadTasks = pair.map { itemData in
+            Task {
+                try await uploadToIPFS(data: itemData.data, typeIdentifier: itemData.typeIdentifier)
+            }
+        }
+        
+        // Process uploads in a task group
+        return try await withThrowingTaskGroup(of: MimeiFileType?.self) { group in
+            // Add all upload tasks to the group
+            for task in uploadTasks {
+                group.addTask {
+                    try await task.value
+                }
+            }
+            
+            // Collect results
+            var uploadResults: [MimeiFileType?] = []
+            for try await result in group {
+                uploadResults.append(result)
+            }
+            
+            // Validate results
+            if uploadResults.contains(where: { $0 == nil }) {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment upload failure in pair"])
+            }
+            
+            return uploadResults.compactMap { $0 }
+        }
+    }
+    
+    // MARK: - Background Task Registration
+    static func registerBackgroundTasks() {
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.tweet.upload", using: nil) { task in
+            self.handleBackgroundTask(task: task as! BGProcessingTask)
+        }
+    }
+    
+    private static func handleBackgroundTask(task: BGProcessingTask) {
+        // Schedule the next background task
+        scheduleNextBackgroundTask()
+        
+        // Create a task to handle the upload
+        let uploadTask = Task {
+            await HproseInstance.shared.handleBackgroundTweetUpload()
+        }
+        
+        // Set up the task expiration handler
+        task.expirationHandler = {
+            uploadTask.cancel()
+        }
+        
+        // Set up the task completion handler
+        Task {
+            await uploadTask.value
+            task.setTaskCompleted(success: true)
+        }
+    }
+    
+    private static func scheduleNextBackgroundTask() {
+        let request = BGProcessingTaskRequest(identifier: "com.tweet.upload")
+        request.requiresNetworkConnectivity = true
+        request.requiresExternalPower = false
+        
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            print("Could not schedule next background task: \(error)")
+        }
+    }
 }
 
 struct ChatMessage: Codable {
