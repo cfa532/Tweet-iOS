@@ -31,22 +31,25 @@ struct ComposeTweetView: View {
                             .font(.system(size: 20))
                             .foregroundColor(.blue)
                     }
+                    .buttonStyle(.plain)
                     
                     Button(action: { /* TODO: Add poll */ }) {
                         Image(systemName: "chart.bar")
                             .font(.system(size: 20))
                             .foregroundColor(.blue)
                     }
+                    .buttonStyle(.plain)
                     
                     Button(action: { /* TODO: Add location */ }) {
                         Image(systemName: "location")
                             .font(.system(size: 20))
                             .foregroundColor(.blue)
                     }
+                    .buttonStyle(.plain)
                     
                     Spacer()
                     
-                    Text("\(280 - viewModel.tweetContent.count)")
+                    Text("\(max(0, 280 - viewModel.tweetContent.count))")
                         .foregroundColor(viewModel.tweetContent.count > 280 ? .red : .gray)
                 }
                 .padding(.horizontal)
@@ -75,7 +78,7 @@ struct ComposeTweetView: View {
                             dismiss()
                         }
                     }
-                    .disabled(viewModel.tweetContent.isEmpty || viewModel.tweetContent.count > 280)
+                    .disabled(viewModel.tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.tweetContent.count > 280)
                 }
             }
             .onAppear {
@@ -87,6 +90,7 @@ struct ComposeTweetView: View {
                     isEditorFocused = true
                 }
             }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
         }
     }
 }

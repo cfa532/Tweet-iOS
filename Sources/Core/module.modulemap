@@ -1,5 +1,6 @@
 module Core {
     header "Config/AppConfig.swift"
     header "Network/Gadget.swift"
+    framework module PhotosUI
     export *
 } 
