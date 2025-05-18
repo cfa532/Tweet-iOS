@@ -267,7 +267,18 @@ final class HproseInstance {
                 // Determine media type
                 let mediaType: MediaType
                 if typeIdentifier.hasPrefix("public.image") {
-                    mediaType = .image
+                    // Check for specific image types
+                    if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
+                        mediaType = .image
+                    } else if typeIdentifier.contains("png") {
+                        mediaType = .image
+                    } else if typeIdentifier.contains("gif") {
+                        mediaType = .image
+                    } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+                        mediaType = .image
+                    } else {
+                        mediaType = .image // Default to image for any public.image type
+                    }
                 } else if typeIdentifier.hasPrefix("public.movie") {
                     mediaType = .video
                 } else if typeIdentifier.hasPrefix("public.audio") {
@@ -279,7 +290,24 @@ final class HproseInstance {
                 } else if typeIdentifier == "public.composite-content" {
                     mediaType = .word
                 } else {
-                    mediaType = .unknown
+                    // Try to determine type from file extension
+                    let fileExtension = typeIdentifier.components(separatedBy: ".").last?.lowercased()
+                    switch fileExtension {
+                    case "jpg", "jpeg", "png", "gif", "heic", "heif":
+                        mediaType = .image
+                    case "mp4", "mov", "m4v", "mkv":
+                        mediaType = .video
+                    case "mp3", "m4a", "wav":
+                        mediaType = .audio
+                    case "pdf":
+                        mediaType = .pdf
+                    case "zip":
+                        mediaType = .zip
+                    case "doc", "docx":
+                        mediaType = .word
+                    default:
+                        mediaType = .unknown
+                    }
                 }
                 
                 // Get file attributes
@@ -452,22 +480,69 @@ final class HproseInstance {
         
         // Create a task to handle the upload
         let uploadTask = Task {
-            await HproseInstance.shared.handleBackgroundTweetUpload()
+            // Look for the temporary file
+            let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
+            
+            do {
+                let data = try Data(contentsOf: tempFileURL)
+                guard let pendingUpload = try? JSONDecoder().decode(PendingUpload.self, from: data) else {
+                    print("DEBUG: Failed to decode pending upload data")
+                    task.setTaskCompleted(success: false)
+                    return
+                }
+                
+                print("DEBUG: Found pending upload with \(pendingUpload.selectedItemData.count) items")
+                
+                // Clean up the temporary file immediately after reading
+                try? FileManager.default.removeItem(at: tempFileURL)
+                
+                var tweet = pendingUpload.tweet
+                var uploadedAttachments: [MimeiFileType] = []
+                
+                // Process items in pairs
+                let itemPairs = pendingUpload.selectedItemData.chunked(into: 2)
+                print("DEBUG: Processing \(itemPairs.count) item pairs")
+                
+                for (index, pair) in itemPairs.enumerated() {
+                    print("DEBUG: Processing pair \(index + 1)")
+                    do {
+                        let pairAttachments = try await shared.uploadItemPair(pair)
+                        print("DEBUG: Successfully uploaded pair \(index + 1)")
+                        uploadedAttachments.append(contentsOf: pairAttachments)
+                    } catch {
+                        print("DEBUG: Error uploading pair \(index + 1): \(error)")
+                        task.setTaskCompleted(success: false)
+                        return
+                    }
+                }
+                
+                if pendingUpload.selectedItemData.count != uploadedAttachments.count {
+                    print("DEBUG: Attachment count mismatch. Expected: \(pendingUpload.selectedItemData.count), Got: \(uploadedAttachments.count)")
+                    task.setTaskCompleted(success: false)
+                    return
+                }
+                
+                // Update tweet with uploaded attachments
+                tweet.attachments = uploadedAttachments
+                
+                // Upload the tweet
+                print("DEBUG: Uploading final tweet")
+                if let uploadedTweet = try await shared.uploadTweet(tweet) {
+                    print("DEBUG: Successfully uploaded tweet: \(uploadedTweet)")
+                    task.setTaskCompleted(success: true)
+                } else {
+                    print("DEBUG: Failed to upload tweet")
+                    task.setTaskCompleted(success: false)
+                }
+            } catch {
+                print("DEBUG: Error in background task: \(error)")
+                task.setTaskCompleted(success: false)
+            }
         }
         
         // Set up the task expiration handler
         task.expirationHandler = {
             uploadTask.cancel()
-        }
-        
-        // Set up the task completion handler
-        Task {
-            do {
-                await uploadTask.value
-                task.setTaskCompleted(success: true)
-            } catch {
-                task.setTaskCompleted(success: false)
-            }
         }
     }
     
@@ -482,37 +557,6 @@ final class HproseInstance {
             print("Successfully scheduled next background task")
         } catch {
             print("Could not schedule next background task: \(error)")
-        }
-    }
-    
-    func scheduleTweetUpload(tweet: Tweet, itemData: [PendingUpload.ItemData]) {
-        print("DEBUG: scheduleTweetUpload called with \(itemData.count) items")
-        do {
-            // Create a background task request
-            let request = BGProcessingTaskRequest(identifier: "com.tweet.upload")
-            request.requiresNetworkConnectivity = true
-            request.requiresExternalPower = false
-            request.earliestBeginDate = Date(timeIntervalSinceNow: 1) // Start after 1 second
-            
-            // Store the upload data
-            let pendingUpload = PendingUpload(
-                tweet: tweet,
-                selectedItemData: itemData
-            )
-            let data = try JSONEncoder().encode(pendingUpload)
-            UserDefaults.standard.set(data, forKey: "pendingTweetUpload")
-            print("DEBUG: Successfully stored pending upload data")
-            
-            // Schedule the task
-            try BGTaskScheduler.shared.submit(request)
-            print("DEBUG: Successfully scheduled background task")
-        } catch {
-            print("DEBUG: Could not schedule tweet upload: \(error)")
-            // Fallback to immediate upload if background task fails
-            print("DEBUG: Falling back to immediate upload")
-            Task {
-                await handleBackgroundTweetUpload()
-            }
         }
     }
     
@@ -544,58 +588,6 @@ final class HproseInstance {
             var uploadedTweet = tweet
             uploadedTweet.mid = newTweetId
             return uploadedTweet
-        }
-    }
-    
-    func handleBackgroundTweetUpload() async {
-        print("DEBUG: handleBackgroundTweetUpload started")
-        guard let data = UserDefaults.standard.data(forKey: "pendingTweetUpload"),
-              let pendingUpload = try? JSONDecoder().decode(PendingUpload.self, from: data) else {
-            print("DEBUG: No pending upload data found")
-            return
-        }
-        
-        print("DEBUG: Found pending upload with \(pendingUpload.selectedItemData.count) items")
-        // Clear the stored data immediately to prevent duplicate uploads
-        UserDefaults.standard.removeObject(forKey: "pendingTweetUpload")
-        
-        do {
-            var tweet = pendingUpload.tweet
-            var uploadedAttachments: [MimeiFileType] = []
-            
-            // Process items in pairs
-            let itemPairs = pendingUpload.selectedItemData.chunked(into: 2)
-            print("DEBUG: Processing \(itemPairs.count) item pairs")
-            
-            for (index, pair) in itemPairs.enumerated() {
-                print("DEBUG: Processing pair \(index + 1)")
-                do {
-                    let pairAttachments = try await uploadItemPair(pair)
-                    print("DEBUG: Successfully uploaded pair \(index + 1)")
-                    uploadedAttachments.append(contentsOf: pairAttachments)
-                } catch {
-                    print("DEBUG: Error uploading pair \(index + 1): \(error)")
-                    return
-                }
-            }
-            
-            if pendingUpload.selectedItemData.count != uploadedAttachments.count {
-                print("DEBUG: Attachment count mismatch. Expected: \(pendingUpload.selectedItemData.count), Got: \(uploadedAttachments.count)")
-                return
-            }
-            
-            // Update tweet with uploaded attachments
-            tweet.attachments = uploadedAttachments
-            
-            // Upload the tweet
-            print("DEBUG: Uploading final tweet")
-            if let uploadedTweet = try await uploadTweet(tweet) {
-                print("DEBUG: Successfully uploaded tweet: \(uploadedTweet)")
-            } else {
-                print("DEBUG: Failed to upload tweet")
-            }
-        } catch {
-            print("DEBUG: Error in background tweet upload: \(error)")
         }
     }
     
@@ -634,6 +626,65 @@ final class HproseInstance {
             
             print("DEBUG: All uploads in pair successful")
             return uploadResults.compactMap { $0 }
+        }
+    }
+    
+    func scheduleTweetUpload(tweet: Tweet, itemData: [PendingUpload.ItemData]) {
+        print("DEBUG: scheduleTweetUpload called with \(itemData.count) items")
+        
+        // Start upload in background task
+        Task.detached(priority: .background) {
+            do {
+                var tweet = tweet
+                var uploadedAttachments: [MimeiFileType] = []
+                
+                // Process items in pairs
+                let itemPairs = itemData.chunked(into: 2)
+                print("DEBUG: Processing \(itemPairs.count) item pairs")
+                
+                for (index, pair) in itemPairs.enumerated() {
+                    print("DEBUG: Processing pair \(index + 1)")
+                    do {
+                        let pairAttachments = try await self.uploadItemPair(pair)
+                        print("DEBUG: Successfully uploaded pair \(index + 1)")
+                        uploadedAttachments.append(contentsOf: pairAttachments)
+                    } catch {
+                        print("DEBUG: Error uploading pair \(index + 1): \(error)")
+                        return
+                    }
+                }
+                
+                if itemData.count != uploadedAttachments.count {
+                    print("DEBUG: Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)")
+                    return
+                }
+                
+                // Update tweet with uploaded attachments
+                tweet.attachments = uploadedAttachments
+                
+                // Upload the tweet
+                print("DEBUG: Uploading final tweet")
+                if let uploadedTweet = try await self.uploadTweet(tweet) {
+                    print("DEBUG: Successfully uploaded tweet: \(uploadedTweet)")
+                    // Notify main thread of success
+                    await MainActor.run {
+                        // TODO: Show success message to user
+                        print("DEBUG: Tweet published successfully")
+                    }
+                } else {
+                    print("DEBUG: Failed to upload tweet")
+                    await MainActor.run {
+                        // TODO: Show error message to user
+                        print("DEBUG: Failed to publish tweet")
+                    }
+                }
+            } catch {
+                print("DEBUG: Error in background upload: \(error)")
+                await MainActor.run {
+                    // TODO: Show error message to user
+                    print("DEBUG: Error during upload: \(error.localizedDescription)")
+                }
+            }
         }
     }
 }

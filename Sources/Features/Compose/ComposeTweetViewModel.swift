@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import PhotosUI
+import Photos
 
 @available(iOS 16.0, *)
 enum TweetError: LocalizedError {
@@ -36,6 +37,7 @@ class ComposeTweetViewModel: ObservableObject {
     
     func postTweet() async {
         print("DEBUG: Starting postTweet()")
+        
         let trimmedContent = tweetContent.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Allow empty content if there are attachments
@@ -47,60 +49,61 @@ class ComposeTweetViewModel: ObservableObject {
         
         isUploading = true
         uploadProgress = 0.0
-        let currentUser = HproseInstance.shared.appUser
         
-        do {
-            print("DEBUG: Creating tweet object")
-            // Create tweet with empty attachments initially
-            let tweet = Tweet(
-                mid: UUID().uuidString,
-                authorId: currentUser.isGuest ? "iFG4GC9r0fF22jYBCkuPThybzwO" : currentUser.mid,
-                content: trimmedContent,
-                timestamp: Date(),
-            )
-            
-            print("DEBUG: Preparing item data for \(selectedItems.count) items")
-            // Prepare item data
-            var itemData: [HproseInstance.PendingUpload.ItemData] = []
-            for item in selectedItems {
-                print("DEBUG: Processing item: \(item.itemIdentifier ?? "unknown")")
-                do {
-                    // First try to get the type identifier
-                    let typeIdentifier = try await item.loadTransferable(type: String.self)
-                    print("DEBUG: Type identifier: \(typeIdentifier ?? "nil")")
-                    
-                    // Then try to get the image data
-                    if let data = try await item.loadTransferable(type: Data.self) {
-                        print("DEBUG: Successfully loaded image data: \(data.count) bytes")
-                        itemData.append(HproseInstance.PendingUpload.ItemData(
-                            identifier: item.itemIdentifier ?? UUID().uuidString,
-                            typeIdentifier: typeIdentifier ?? "public.image",
-                            data: data
-                        ))
-                    } else {
-                        print("DEBUG: Failed to load image data")
-                    }
-                } catch {
-                    print("DEBUG: Error loading item data: \(error)")
+        // Create tweet object
+        print("DEBUG: Creating tweet object")
+        let tweet = Tweet(
+            mid: "",
+            authorId: HproseInstance.shared.appUser.mid,
+            content: trimmedContent,
+            timestamp: Date(),
+            title: nil,
+            originalTweetId: nil,
+            originalAuthorId: nil,
+            author: nil,
+            favorites: [false, false, false],
+            favoriteCount: 0,
+            bookmarkCount: 0,
+            retweetCount: 0,
+            commentCount: 0,
+            attachments: nil,
+            isPrivate: false,
+            downloadable: nil
+        )
+        
+        // Prepare item data
+        print("DEBUG: Preparing item data for \(selectedItems.count) items")
+        var itemData: [HproseInstance.PendingUpload.ItemData] = []
+        
+        for item in selectedItems {
+            print("DEBUG: Processing item: \(item.itemIdentifier ?? "unknown")")
+            do {
+                if let data = try await item.loadTransferable(type: Data.self) {
+                    print("DEBUG: Successfully loaded image data: \(data.count) bytes")
+                    itemData.append(HproseInstance.PendingUpload.ItemData(
+                        identifier: item.itemIdentifier ?? UUID().uuidString,
+                        typeIdentifier: item.supportedContentTypes.first?.identifier ?? "public.image",
+                        data: data
+                    ))
                 }
+            } catch {
+                print("DEBUG: Error loading image data: \(error)")
+                self.error = error
+                isUploading = false
+                uploadProgress = 0.0
+                return
             }
-            
-            print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
-            // Schedule upload with prepared data
-            HproseInstance.shared.scheduleTweetUpload(tweet: tweet, itemData: itemData)
-            
-            print("DEBUG: Resetting form")
-            // Reset form
-            tweetContent = ""
-            selectedItems = []
-            selectedMedia = []
-            isUploading = false
-            uploadProgress = 0.0
-        } catch {
-            print("DEBUG: Error in postTweet: \(error)")
-            isUploading = false
-            uploadProgress = 0
-            self.error = error
         }
+        
+        print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
+        HproseInstance.shared.scheduleTweetUpload(tweet: tweet, itemData: itemData)
+        
+        // Reset form
+        print("DEBUG: Resetting form")
+        tweetContent = ""
+        selectedItems = []
+        selectedMedia = []
+        isUploading = false
+        uploadProgress = 0.0
     }
 }
