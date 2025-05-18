@@ -486,6 +486,7 @@ final class HproseInstance {
     }
     
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingUpload.ItemData]) {
+        print("DEBUG: scheduleTweetUpload called with \(itemData.count) items")
         do {
             // Create a background task request
             let request = BGProcessingTaskRequest(identifier: "com.tweet.upload")
@@ -500,13 +501,15 @@ final class HproseInstance {
             )
             let data = try JSONEncoder().encode(pendingUpload)
             UserDefaults.standard.set(data, forKey: "pendingTweetUpload")
+            print("DEBUG: Successfully stored pending upload data")
             
             // Schedule the task
             try BGTaskScheduler.shared.submit(request)
-            print("Successfully scheduled background task")
+            print("DEBUG: Successfully scheduled background task")
         } catch {
-            print("Could not schedule tweet upload: \(error)")
+            print("DEBUG: Could not schedule tweet upload: \(error)")
             // Fallback to immediate upload if background task fails
+            print("DEBUG: Falling back to immediate upload")
             Task {
                 await handleBackgroundTweetUpload()
             }
@@ -536,11 +539,14 @@ final class HproseInstance {
     }
     
     func handleBackgroundTweetUpload() async {
+        print("DEBUG: handleBackgroundTweetUpload started")
         guard let data = UserDefaults.standard.data(forKey: "pendingTweetUpload"),
               let pendingUpload = try? JSONDecoder().decode(PendingUpload.self, from: data) else {
+            print("DEBUG: No pending upload data found")
             return
         }
         
+        print("DEBUG: Found pending upload with \(pendingUpload.selectedItemData.count) items")
         // Clear the stored data immediately to prevent duplicate uploads
         UserDefaults.standard.removeObject(forKey: "pendingTweetUpload")
         
@@ -550,19 +556,22 @@ final class HproseInstance {
             
             // Process items in pairs
             let itemPairs = pendingUpload.selectedItemData.chunked(into: 2)
+            print("DEBUG: Processing \(itemPairs.count) item pairs")
             
-            for pair in itemPairs {
+            for (index, pair) in itemPairs.enumerated() {
+                print("DEBUG: Processing pair \(index + 1)")
                 do {
                     let pairAttachments = try await uploadItemPair(pair)
+                    print("DEBUG: Successfully uploaded pair \(index + 1)")
                     uploadedAttachments.append(contentsOf: pairAttachments)
                 } catch {
-                    print("Error uploading pair: \(error)")
+                    print("DEBUG: Error uploading pair \(index + 1): \(error)")
                     return
                 }
             }
             
             if pendingUpload.selectedItemData.count != uploadedAttachments.count {
-                print("Attachments upload failure")
+                print("DEBUG: Attachment count mismatch. Expected: \(pendingUpload.selectedItemData.count), Got: \(uploadedAttachments.count)")
                 return
             }
             
@@ -570,21 +579,24 @@ final class HproseInstance {
             tweet.attachments = uploadedAttachments
             
             // Upload the tweet
+            print("DEBUG: Uploading final tweet")
             if let uploadedTweet = try await uploadTweet(tweet) {
-                print("Successfully uploaded tweet: \(uploadedTweet)")
+                print("DEBUG: Successfully uploaded tweet: \(uploadedTweet)")
             } else {
-                print("Failed to upload tweet")
+                print("DEBUG: Failed to upload tweet")
             }
         } catch {
-            print("Error in background tweet upload: \(error)")
+            print("DEBUG: Error in background tweet upload: \(error)")
         }
     }
     
     private func uploadItemPair(_ pair: [PendingUpload.ItemData]) async throws -> [MimeiFileType] {
+        print("DEBUG: Starting uploadItemPair with \(pair.count) items")
         // Create async tasks for each item in the pair
         let uploadTasks = pair.map { itemData in
             Task {
-                try await uploadToIPFS(data: itemData.data, typeIdentifier: itemData.typeIdentifier)
+                print("DEBUG: Creating upload task for item: \(itemData.identifier)")
+                return try await uploadToIPFS(data: itemData.data, typeIdentifier: itemData.typeIdentifier)
             }
         }
         
@@ -593,21 +605,25 @@ final class HproseInstance {
             // Add all upload tasks to the group
             for task in uploadTasks {
                 group.addTask {
-                    try await task.value
+                    print("DEBUG: Adding upload task to group")
+                    return try await task.value
                 }
             }
             
             // Collect results
             var uploadResults: [MimeiFileType?] = []
             for try await result in group {
+                print("DEBUG: Received upload result: \(result != nil ? "success" : "nil")")
                 uploadResults.append(result)
             }
             
             // Validate results
             if uploadResults.contains(where: { $0 == nil }) {
+                print("DEBUG: Some uploads failed in pair")
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment upload failure in pair"])
             }
             
+            print("DEBUG: All uploads in pair successful")
             return uploadResults.compactMap { $0 }
         }
     }

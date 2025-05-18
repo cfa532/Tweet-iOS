@@ -35,10 +35,12 @@ class ComposeTweetViewModel: ObservableObject {
     }
     
     func postTweet() async {
+        print("DEBUG: Starting postTweet()")
         let trimmedContent = tweetContent.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Allow empty content if there are attachments
         guard !trimmedContent.isEmpty || !selectedItems.isEmpty else {
+            print("DEBUG: Tweet validation failed - empty content and no attachments")
             error = TweetError.emptyTweet
             return
         }
@@ -47,6 +49,7 @@ class ComposeTweetViewModel: ObservableObject {
         uploadProgress = 0.0
         
         do {
+            print("DEBUG: Creating tweet object")
             // Create tweet with empty attachments initially
             let tweet = Tweet(
                 mid: UUID().uuidString,
@@ -57,22 +60,37 @@ class ComposeTweetViewModel: ObservableObject {
                 attachments: [],
             )
             
+            print("DEBUG: Preparing item data for \(selectedItems.count) items")
             // Prepare item data
             var itemData: [HproseInstance.PendingUpload.ItemData] = []
             for item in selectedItems {
-                if let data = try await item.loadTransferable(type: Data.self),
-                   let typeIdentifier = try await item.loadTransferable(type: String.self) {
-                    itemData.append(HproseInstance.PendingUpload.ItemData(
-                        identifier: item.itemIdentifier ?? UUID().uuidString,
-                        typeIdentifier: typeIdentifier,
-                        data: data
-                    ))
+                print("DEBUG: Processing item: \(item.itemIdentifier ?? "unknown")")
+                do {
+                    // First try to get the type identifier
+                    let typeIdentifier = try await item.loadTransferable(type: String.self)
+                    print("DEBUG: Type identifier: \(typeIdentifier ?? "nil")")
+                    
+                    // Then try to get the image data
+                    if let data = try await item.loadTransferable(type: Data.self) {
+                        print("DEBUG: Successfully loaded image data: \(data.count) bytes")
+                        itemData.append(HproseInstance.PendingUpload.ItemData(
+                            identifier: item.itemIdentifier ?? UUID().uuidString,
+                            typeIdentifier: typeIdentifier ?? "public.image",
+                            data: data
+                        ))
+                    } else {
+                        print("DEBUG: Failed to load image data")
+                    }
+                } catch {
+                    print("DEBUG: Error loading item data: \(error)")
                 }
             }
             
+            print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
             // Schedule upload with prepared data
             HproseInstance.shared.scheduleTweetUpload(tweet: tweet, itemData: itemData)
             
+            print("DEBUG: Resetting form")
             // Reset form
             tweetContent = ""
             selectedItems = []
@@ -80,6 +98,7 @@ class ComposeTweetViewModel: ObservableObject {
             isUploading = false
             uploadProgress = 0.0
         } catch {
+            print("DEBUG: Error in postTweet: \(error)")
             isUploading = false
             uploadProgress = 0
             self.error = error
