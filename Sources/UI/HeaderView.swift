@@ -29,7 +29,7 @@ struct HeaderView: View {
                     .frame(width: 32, height: 32)
                     .clipShape(Circle())
                 } else {
-                    Image(systemName: "person.circle.fill")
+                    Image("ic_splash")
                         .resizable()
                         .frame(width: 32, height: 32)
                         .foregroundColor(.gray)
