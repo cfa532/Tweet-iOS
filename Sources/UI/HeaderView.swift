@@ -5,6 +5,8 @@ struct HeaderView: View {
     @State private var isSettingsSheetPresented = false
     @EnvironmentObject private var userViewModel: UserViewModel
     
+    let appUser = HproseInstance.shared.appUser
+    
     var body: some View {
         HStack {
             // Left: User Avatar
@@ -15,7 +17,7 @@ struct HeaderView: View {
                     isLoginSheetPresented = true
                 }
             }) {
-                if let avatarURL = userViewModel.currentUser?.avatar {
+                if let avatarURL = appUser.avatarUrl {
                     AsyncImage(url: URL(string: avatarURL)) { image in
                         image
                             .resizable()
@@ -37,7 +39,7 @@ struct HeaderView: View {
             Spacer()
             
             // Middle: App Logo
-            Image("AppLogo") // Make sure to add this to your asset catalog
+            Image("AppIcon") // Make sure to add this to your asset catalog
                 .resizable()
                 .scaledToFit()
                 .frame(height: 32)

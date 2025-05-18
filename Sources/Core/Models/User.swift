@@ -44,6 +44,13 @@ struct User: Codable, Identifiable, Hashable {
         return mid == Constants.GUEST_ID
     }
     
+    var avatarUrl: String? {
+        if let avatar = avatar, let baseUrl = baseUrl {
+            return avatar.count > 27 ? "\(baseUrl)/ipfs/\(mid)" :  "\(baseUrl)/mm/\(mid)"
+        }
+        return nil
+    }
+    
     func copy(baseUrl: String? = nil, followingList: [String]? = nil) -> User {
         var copy = self
         if let baseUrl = baseUrl {
