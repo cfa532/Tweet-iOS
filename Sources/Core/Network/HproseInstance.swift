@@ -446,17 +446,42 @@ final class HproseInstance {
     }
     
     // MARK: - Background Task Registration
-    static func registerBackgroundTasks() {
-        do {
-            try BGTaskScheduler.shared.register(
-                forTaskWithIdentifier: "com.tweet.upload",
-                using: nil
-            ) { task in
-                self.handleBackgroundTask(task: task as! BGProcessingTask)
+    static func handleBackgroundTask(task: BGProcessingTask) {
+        // Schedule the next background task
+        scheduleNextBackgroundTask()
+        
+        // Create a task to handle the upload
+        let uploadTask = Task {
+            await HproseInstance.shared.handleBackgroundTweetUpload()
+        }
+        
+        // Set up the task expiration handler
+        task.expirationHandler = {
+            uploadTask.cancel()
+        }
+        
+        // Set up the task completion handler
+        Task {
+            do {
+                await uploadTask.value
+                task.setTaskCompleted(success: true)
+            } catch {
+                task.setTaskCompleted(success: false)
             }
-            print("Successfully registered background task")
+        }
+    }
+    
+    private static func scheduleNextBackgroundTask() {
+        let request = BGProcessingTaskRequest(identifier: "com.tweet.upload")
+        request.requiresNetworkConnectivity = true
+        request.requiresExternalPower = false
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 3600) // Schedule next task in 1 hour
+        
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            print("Successfully scheduled next background task")
         } catch {
-            print("Could not register background task: \(error)")
+            print("Could not schedule next background task: \(error)")
         }
     }
     
@@ -584,45 +609,6 @@ final class HproseInstance {
             }
             
             return uploadResults.compactMap { $0 }
-        }
-    }
-    
-    private static func handleBackgroundTask(task: BGProcessingTask) {
-        // Schedule the next background task
-        scheduleNextBackgroundTask()
-        
-        // Create a task to handle the upload
-        let uploadTask = Task {
-            await HproseInstance.shared.handleBackgroundTweetUpload()
-        }
-        
-        // Set up the task expiration handler
-        task.expirationHandler = {
-            uploadTask.cancel()
-        }
-        
-        // Set up the task completion handler
-        Task {
-            do {
-                await uploadTask.value
-                task.setTaskCompleted(success: true)
-            } catch {
-                task.setTaskCompleted(success: false)
-            }
-        }
-    }
-    
-    private static func scheduleNextBackgroundTask() {
-        let request = BGProcessingTaskRequest(identifier: "com.tweet.upload")
-        request.requiresNetworkConnectivity = true
-        request.requiresExternalPower = false
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 3600) // Schedule next task in 1 hour
-        
-        do {
-            try BGTaskScheduler.shared.submit(request)
-            print("Successfully scheduled next background task")
-        } catch {
-            print("Could not schedule next background task: \(error)")
         }
     }
 }

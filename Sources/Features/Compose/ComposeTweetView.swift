@@ -23,6 +23,34 @@ struct ComposeTweetView: View {
                         isEditorFocused = true
                     }
                 
+                // Thumbnail preview section
+                if !viewModel.selectedItems.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(viewModel.selectedItems, id: \.itemIdentifier) { item in
+                                ThumbnailView(item: item)
+                                    .frame(width: 100, height: 100)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .overlay(
+                                        Button(action: {
+                                            viewModel.selectedItems.removeAll { $0.itemIdentifier == item.itemIdentifier }
+                                        }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(.white)
+                                                .background(Color.black.opacity(0.5))
+                                                .clipShape(Circle())
+                                        }
+                                        .padding(4),
+                                        alignment: .topTrailing
+                                    )
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                    .frame(height: 120)
+                    .background(Color(.systemBackground))
+                }
+                
                 // Attachment toolbar
                 HStack(spacing: 20) {
                     PhotosPicker(selection: $viewModel.selectedItems,
@@ -78,7 +106,7 @@ struct ComposeTweetView: View {
                             dismiss()
                         }
                     }
-                    .disabled(viewModel.tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.tweetContent.count > 280)
+                    .disabled(!viewModel.canPostTweet)
                 }
             }
             .onAppear {
@@ -91,6 +119,30 @@ struct ComposeTweetView: View {
                 }
             }
             .ignoresSafeArea(.keyboard, edges: .bottom)
+        }
+    }
+}
+
+@available(iOS 16.0, *)
+struct ThumbnailView: View {
+    let item: PhotosPickerItem
+    @State private var image: Image?
+    
+    var body: some View {
+        Group {
+            if let image = image {
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                ProgressView()
+            }
+        }
+        .task {
+            if let data = try? await item.loadTransferable(type: Data.self),
+               let uiImage = UIImage(data: data) {
+                image = Image(uiImage: uiImage)
+            }
         }
     }
 }

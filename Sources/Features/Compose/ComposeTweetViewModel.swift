@@ -26,6 +26,14 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var isUploading = false
     @Published var uploadProgress = 0.0
     
+    var canPostTweet: Bool {
+        let hasContent = !tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasAttachments = !selectedItems.isEmpty
+        let isWithinLimit = tweetContent.count <= 280
+        
+        return (hasContent || hasAttachments) && isWithinLimit
+    }
+    
     func postTweet() async {
         let trimmedContent = tweetContent.trimmingCharacters(in: .whitespacesAndNewlines)
         

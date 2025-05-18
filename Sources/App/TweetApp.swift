@@ -8,9 +8,6 @@ class AppState: ObservableObject {
     
     func initialize() async {
         do {
-            // Register background tasks
-            HproseInstance.registerBackgroundTasks()
-            
             try await HproseInstance.shared.initialize()
             isInitialized = true
         } catch {
@@ -23,6 +20,16 @@ class AppState: ObservableObject {
 @main
 struct TweetApp: App {
     @StateObject private var appState = AppState()
+    
+    init() {
+        // Configure background task scheduler
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: "com.tweet.upload",
+            using: nil
+        ) { task in
+            HproseInstance.handleBackgroundTask(task: task as! BGProcessingTask)
+        }
+    }
     
     var body: some Scene {
         WindowGroup {
