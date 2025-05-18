@@ -299,7 +299,7 @@ final class HproseInstance {
                 // Create MimeiFileType with the CID
                 return MimeiFileType(
                     mid: cid,
-                    type: mediaType,
+                    type: mediaType.rawValue,
                     size: Int64(fileSize),
                     fileName: fileName,
                     timestamp: fileTimestamp,
