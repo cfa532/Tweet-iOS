@@ -11,8 +11,7 @@ struct TweetBodyView: View {
             }
             
             if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl {
-                let appUser = HproseInstance.shared.appUser
-                MediaGridView(attachments: attachments, baseUrl: appUser.baseUrl ?? "")
+                MediaGridView(attachments: attachments, baseUrl: baseUrl)
             }
         }
         TweetActionButtonsView(tweet: tweet)

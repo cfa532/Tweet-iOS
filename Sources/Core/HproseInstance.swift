@@ -76,7 +76,7 @@ final class HproseInstance {
                     if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID {
                         let providers = try await getProviders(userId, baseUrl: "http://\(firstIp)")
                         if let accessibleUser = getAccessibleUser(providers, userId: userId) {
-                            appUser = accessibleUser
+                            appUser = accessibleUser.copy()
                             cachedUsers.insert(appUser)
                         }
                         
@@ -119,71 +119,79 @@ final class HproseInstance {
                 return []
             }
             
-            return response.compactMap { dict -> Tweet? in
-//                print("Processing tweet dictionary: \(dict)")
+            // First create tweets without author data
+            let tweets = response.compactMap { dict -> Tweet? in
                 return Tweet.from(dict: dict)
             }
+            
+            // Then fetch author data for each tweet
+            var tweetsWithAuthors: [Tweet] = []
+            for var tweet in tweets {
+                if let author = try await getUser(tweet.authorId) {
+                    tweet.author = author
+                    tweetsWithAuthors.append(tweet)
+                }
+            }
+            
+            return tweetsWithAuthors
         }
     }
     
-    // MARK: - Hprose Service Wrapper
-    private func callService<T>(_ service: AnyObject?, entry: String, params: [String: Any], transform: @escaping ((Any?) throws -> T)) async throws -> T {
-        guard let service = service else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global().async {
-                do {
-                    let response = service.runMApp(entry, params, [])
-                    let result = try transform(response)
-                    continuation.resume(returning: result)
-                } catch {
-                    continuation.resume(throwing: error)
+    func getUser(_ userId: String) async throws -> User? {
+        return try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            
+            let entry = "get_user"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": userId,
+            ]
+            guard let response = service.runMApp(entry, params, nil) else {
+                print("Invalid response format from server")
+                return nil
+            }
+            
+            // First try to decode it as User
+            if let userData = try? JSONSerialization.data(withJSONObject: response),
+               let user = try? JSONDecoder().decode(User.self, from: userData) {
+                // Cache the user
+                cachedUsers.insert(user)
+                return user
+            }
+            
+            // If decoding as User failed, try to get IP address
+            if let ipAddress = response as? String {
+                // Create new client for this IP
+                let newClient = HproseHttpClient()
+                newClient.timeout = 60
+                newClient.uri = "http://\(ipAddress)/webapi/"
+                let newService = newClient.useService(HproseService.self) as AnyObject
+                
+                // Make new request to get user from this IP
+                if let userResponse = newService.runMApp(entry, params, nil) as? [String: Any],
+                   let userData = try? JSONSerialization.data(withJSONObject: userResponse),
+                   let user = try? JSONDecoder().decode(User.self, from: userData) {
+                    // Cache the user
+                    cachedUsers.insert(user)
+                    return user
                 }
             }
-        }
-    }
-    
-    private func callService(_ service: AnyObject?, entry: String, params: [String: Any]) async throws {
-        guard let service = service else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global().async {
-                do {
-                    _ = service.runMApp(entry, params, [])
-                    continuation.resume()
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
+            
+            return nil
         }
     }
     
     func likeTweet(_ tweetId: String) async throws {
         try await withRetry {
             let entry = "like_tweet"
-            let params: [Any] = [
-                appId,
-                "last",
-                entry,
-                appUser.id,
-                tweetId
-            ]
-        }
-    }
-    
-    func retweet(_ tweetId: String) async throws {
-        try await withRetry {
-            let entry = "retweet"
-            let params: [Any] = [
-                appId,
-                "last",
-                entry,
-                appUser.id,
-                tweetId
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": appUser.id,
+                "tweetid": tweetId
             ]
         }
     }
@@ -191,12 +199,23 @@ final class HproseInstance {
     func bookmarkTweet(_ tweetId: String) async throws {
         try await withRetry {
             let entry = "bookmark_tweet"
-            let params: [Any] = [
-                appId,
-                "last",
-                entry,
-                appUser.id,
-                tweetId
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": appUser.id,
+                "tweetid": tweetId
+            ]
+        }
+    }
+
+    func retweet(_ tweetId: String) async throws {
+        try await withRetry {
+            let entry = "retweet"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": appUser.id,
+                "tweetid": tweetId
             ]
         }
     }
@@ -204,12 +223,11 @@ final class HproseInstance {
     func deleteTweet(_ tweetId: String) async throws {
         try await withRetry {
             let entry = "delete_tweet"
-            let params: [Any] = [
-                appId,
-                "last",
-                entry,
-                appUser.id,
-                tweetId
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": appUser.id,
+                "tweetid": tweetId
             ]
         }
     }
@@ -652,6 +670,42 @@ final class HproseInstance {
                 print("Error in background upload: \(error)")
                 await MainActor.run {
                     print("Error during upload: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    // MARK: - Hprose Service Wrapper
+    private func callService<T>(_ service: AnyObject?, entry: String, params: [String: Any], transform: @escaping ((Any?) throws -> T)) async throws -> T {
+        guard let service = service else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                do {
+                    let response = service.runMApp(entry, params, [])
+                    let result = try transform(response)
+                    continuation.resume(returning: result)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+    
+    private func callService(_ service: AnyObject?, entry: String, params: [String: Any]) async throws {
+        guard let service = service else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                do {
+                    _ = service.runMApp(entry, params, [])
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
                 }
             }
         }
