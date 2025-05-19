@@ -8,7 +8,7 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                HeaderView()
+                AppHeaderView()
                     .padding(.vertical, 8)
                 
                 TabView {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct HeaderView: View {
+struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
     @EnvironmentObject private var userViewModel: UserViewModel
@@ -200,6 +200,6 @@ struct SettingsView: View {
 }
 
 #Preview {
-    HeaderView()
+    AppHeaderView()
         .environmentObject(UserViewModel())
 } 
