@@ -137,6 +137,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A08 /* UI */ = {
 			isa = PBXGroup;
 			children = (
+				46E5B3372DDA315700AEF31F /* TabButton.swift */,
 				46E5B32C2DDA045B00AEF31F /* AppHeaderView.swift */,
 			);
 			path = UI;
@@ -234,7 +235,6 @@
 				46E5B33E2DDAB74400AEF31F /* TweetActionButtonsView.swift */,
 				46E5B33F2DDAB74400AEF31F /* TweetBodyView.swift */,
 				46E5B3402DDAB74400AEF31F /* TweetHeaderView.swift */,
-				46E5B3372DDA315700AEF31F /* TabButton.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
