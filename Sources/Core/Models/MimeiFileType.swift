@@ -1,6 +1,6 @@
 import Foundation
 
-struct MimeiFileType: Identifiable, Codable {
+struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
     var id: String { mid }  // Computed property that returns mid
     var mid: String
     var type: String    // Image
@@ -33,5 +33,15 @@ struct MimeiFileType: Identifiable, Codable {
     func getUrl(_ baseUrl: String) -> URL? {
         let path = mid.count > 27 ? "\(baseUrl)/ipfs/\(mid)" : "\(baseUrl)/mm/\(mid)"
         return URL(string: path)
+    }
+    
+    // Implement the hash(into:) method for Hashable conformance
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(mid) // Use the unique identifier (mid) for hashing
+    }
+    
+    // Implement the == operator for Hashable conformance
+    static func == (lhs: MimeiFileType, rhs: MimeiFileType) -> Bool {
+        return lhs.mid == rhs.mid // Compare based on the unique identifier (mid)
     }
 }
