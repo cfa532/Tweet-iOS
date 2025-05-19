@@ -24,7 +24,16 @@ final class HproseInstance {
     var appUser: User = User(mid: Constants.GUEST_ID)
     
     private var appId: String = Bundle.main.bundleIdentifier ?? ""
-    private var cachedUsers: Set<User> = []
+    private let cachedUsersLock = NSLock()
+    private var _cachedUsers: Set<User> = []
+    private var cachedUsers: Set<User> {
+        get {
+            cachedUsersLock.withLock { _cachedUsers }
+        }
+        set {
+            cachedUsersLock.withLock { _cachedUsers = newValue }
+        }
+    }
     private var preferenceHelper: PreferenceHelper?
     private var chatDatabase: ChatDatabase?
     private var tweetDao: CachedTweetDao?
@@ -138,6 +147,11 @@ final class HproseInstance {
     }
     
     func getUser(_ userId: String) async throws -> User? {
+        // Check cache first
+        if let cachedUser = cachedUsersLock.withLock({ _cachedUsers.first(where: { $0.mid == userId }) }) {
+            return cachedUser
+        }
+        
         return try await withRetry {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
@@ -156,9 +170,10 @@ final class HproseInstance {
             
             // First try to decode it as User
             if let userData = try? JSONSerialization.data(withJSONObject: response),
-               let user = try? JSONDecoder().decode(User.self, from: userData) {
+               var user = try? JSONDecoder().decode(User.self, from: userData) {
                 // Cache the user
-                cachedUsers.insert(user)
+                user.baseUrl = appUser.baseUrl
+                _ = cachedUsersLock.withLock { _cachedUsers.insert(user) }
                 return user
             }
             
@@ -173,9 +188,10 @@ final class HproseInstance {
                 // Make new request to get user from this IP
                 if let userResponse = newService.runMApp(entry, params, nil) as? [String: Any],
                    let userData = try? JSONSerialization.data(withJSONObject: userResponse),
-                   let user = try? JSONDecoder().decode(User.self, from: userData) {
+                   var user = try? JSONDecoder().decode(User.self, from: userData) {
                     // Cache the user
-                    cachedUsers.insert(user)
+                    user.baseUrl = "http://\(ipAddress)"
+                    _ = cachedUsersLock.withLock { _cachedUsers.insert(user) }
                     return user
                 }
             }
