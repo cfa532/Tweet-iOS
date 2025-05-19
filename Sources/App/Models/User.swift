@@ -46,7 +46,7 @@ struct User: Codable, Identifiable, Hashable {
     
     var avatarUrl: String? {
         if let avatar = avatar, let baseUrl = baseUrl {
-            return avatar.count > 27 ? "\(baseUrl)/ipfs/\(mid)" :  "\(baseUrl)/mm/\(mid)"
+            return avatar.count > 27 ? "\(baseUrl)/ipfs/\(avatar)" :  "\(baseUrl)/mm/\(avatar)"
         }
         return nil
     }
