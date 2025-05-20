@@ -35,7 +35,6 @@ struct VideoPlayerCacheView: View {
     let attachment: MimeiFileType
     var play: Bool
 
-    @State private var localUrl: URL?
     @State private var player: AVPlayer?
     @State private var isPlaying: Bool = false
     @State private var isMuted: Bool = PreferenceHelper().getSpeakerMute()
@@ -43,63 +42,56 @@ struct VideoPlayerCacheView: View {
     private let preferenceHelper = PreferenceHelper()
 
     var body: some View {
-        Group {
-            if let localUrl = localUrl {
-                ZStack {
-                    VideoPlayer(player: player)
-                        .onAppear {
-                            if player == nil {
-                                player = AVPlayer(url: localUrl)
-                                player?.isMuted = isMuted
-                            }
-                            handlePlayback()
-                        }
-                        .onDisappear {
-                            player?.pause()
-                            player = nil
-                            isPlaying = false
-                        }
-                        .clipped()
-                        .onVisibilityChanged { visible in
-                            isVisible = visible
-                            handlePlayback()
-                        }
-                    HStack(spacing: 20) {
-                        Button(action: {
-                            if isPlaying {
-                                player?.pause()
-                            } else {
-                                player?.play()
-                            }
-                            isPlaying.toggle()
-                        }) {
-                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                .foregroundColor(.white)
-                                .padding()
-                                .background(Color.black.opacity(0.5))
-                                .clipShape(Circle())
-                        }
-                        Button(action: {
-                            isMuted.toggle()
-                            player?.isMuted = isMuted
-                            preferenceHelper.setSpeakerMute(isMuted)
-                        }) {
-                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .foregroundColor(.white)
-                                .padding()
-                                .background(Color.black.opacity(0.5))
-                                .clipShape(Circle())
-                        }
+        ZStack {
+            VideoPlayer(player: player)
+                .onAppear {
+                    if player == nil {
+                        let asset = AVURLAsset(url: url)
+                        let playerItem = AVPlayerItem(asset: asset)
+                        player = AVPlayer(playerItem: playerItem)
+                        player?.isMuted = isMuted
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    handlePlayback()
                 }
-            } else {
-                ProgressView()
-                    .onAppear {
-                        cacheOrDownloadVideo()
+                .onDisappear {
+                    player?.pause()
+                    player = nil
+                    isPlaying = false
+                }
+                .clipped()
+                .onVisibilityChanged { visible in
+                    isVisible = visible
+                    handlePlayback()
+                }
+            HStack(spacing: 20) {
+                Button(action: {
+                    if isPlaying {
+                        player?.pause()
+                    } else {
+                        player?.play()
                     }
+                    isPlaying.toggle()
+                }) {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.black.opacity(0.5))
+                        .clipShape(Circle())
+                }
+                Button(action: {
+                    isMuted.toggle()
+                    player?.isMuted = isMuted
+                    preferenceHelper.setSpeakerMute(isMuted)
+                }) {
+                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.black.opacity(0.5))
+                        .clipShape(Circle())
+                }
             }
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         }
         .clipped()
     }
@@ -112,32 +104,6 @@ struct VideoPlayerCacheView: View {
             player?.pause()
             isPlaying = false
         }
-    }
-
-    private func cacheOrDownloadVideo() {
-        let cacheKey = url.lastPathComponent
-        let fileExtension = attachment.fileName?.split(separator: ".").last ?? "mp4"
-        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(cacheKey).\(fileExtension)")
-        if FileManager.default.fileExists(atPath: tempFile.path) {
-            localUrl = tempFile
-            return
-        }
-        let task = URLSession.shared.downloadTask(with: url) { tempUrl, response, error in
-            guard let tempUrl = tempUrl else { return }
-            do {
-                // Remove existing file if it exists
-                if FileManager.default.fileExists(atPath: tempFile.path) {
-                    try FileManager.default.removeItem(at: tempFile)
-                }
-                try FileManager.default.moveItem(at: tempUrl, to: tempFile)
-                DispatchQueue.main.async {
-                    localUrl = tempFile
-                }
-            } catch {
-                print("Failed to move video file: \(error)")
-            }
-        }
-        task.resume()
     }
 }
 
