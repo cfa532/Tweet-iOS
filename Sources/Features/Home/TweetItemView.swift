@@ -6,12 +6,21 @@ struct TweetItemView: View {
     let retweet: (Tweet) async -> Void
     let bookmarkTweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
+    var isInProfile: Bool = false
+    var onAvatarTap: ((User) -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             // Author info
             if let user = tweet.author {
-                Avatar(user: user)
+                Button(action: {
+                    if !isInProfile {
+                        onAvatarTap?(user)
+                    }
+                }) {
+                    Avatar(user: user)
+                }
+                .buttonStyle(PlainButtonStyle())
             }
             VStack(alignment: .leading, content: {
                 TweetHeaderView(tweet: tweet)
@@ -34,7 +43,9 @@ struct TweetItemView_Previews: PreviewProvider {
             likeTweet: { _ in },
             retweet: { _ in },
             bookmarkTweet: { _ in },
-            deleteTweet: { _ in }
+            deleteTweet: { _ in },
+            isInProfile: false,
+            onAvatarTap: { _ in }
         )
     }
 } 

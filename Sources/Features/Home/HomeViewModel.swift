@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 
+@available(iOS 17.0, *)
 struct HomeView: View {
     @State private var tweets: [Tweet] = []
     @State private var isLoading = false
@@ -8,13 +9,16 @@ struct HomeView: View {
     @State private var selectedTab = 0
     @State private var isScrolling = false
     @State private var scrollOffset: CGFloat = 0
+    @State private var selectedUser: User? = nil
 
     private let hproseInstance = HproseInstance.shared
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack(spacing: 0) {
-                // Custom Tab Bar
+                AppHeaderView()
+                    .padding(.vertical, 8)
+                // Tab bar (no avatars/settings here)
                 HStack(spacing: 0) {
                     TabButton(title: "Followings", isSelected: selectedTab == 0) {
                         withAnimation { selectedTab = 0 }
@@ -36,7 +40,10 @@ struct HomeView: View {
                         likeTweet: likeTweet,
                         retweet: retweet,
                         bookmarkTweet: bookmarkTweet,
-                        deleteTweet: deleteTweet
+                        deleteTweet: deleteTweet,
+                        onAvatarTap: { user in
+                            selectedUser = user
+                        }
                     )
                     .tag(0)
 
@@ -45,7 +52,9 @@ struct HomeView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
             }
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(item: $selectedUser) { user in
+                ProfileView(user: user)
+            }
         }
         .task {
             await loadInitialTweets()
@@ -110,6 +119,7 @@ struct HomeView: View {
 }
 
 // MARK: - Preview
+@available(iOS 17.0, *)
 struct HomeView_Previews: PreviewProvider {
     static var previews: some View {
         HomeView()

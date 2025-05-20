@@ -11,6 +11,7 @@ struct ProfileView: View {
     @State private var isFollowing = false // Set this based on your logic
     @State private var isLoading = false
     @State private var didLoad = false
+    @State private var selectedUser: User? = nil
 
     var isCurrentUser: Bool {
         user.mid == hproseInstance.appUser.mid
@@ -141,7 +142,9 @@ struct ProfileView: View {
                                   likeTweet: { _ in },
                                   retweet: { _ in },
                                   bookmarkTweet: { _ in },
-                                  deleteTweet: { _ in })
+                                  deleteTweet: { _ in },
+                                  isInProfile: true,
+                                  onAvatarTap: { _ in /* do nothing in profile */ })
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.hidden)
                 }
@@ -149,6 +152,18 @@ struct ProfileView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.zero)
             }
+
+            // Hidden NavigationLink for avatar navigation (not used in profile, but for completeness)
+            NavigationLink(
+                destination: selectedUser.map { ProfileView(user: $0) },
+                isActive: Binding(
+                    get: { selectedUser != nil },
+                    set: { if !$0 { selectedUser = nil } }
+                )
+            ) {
+                EmptyView()
+            }
+            .hidden()
         }
         .sheet(isPresented: $showEditSheet) {
             Text("Edit User Info Sheet")
@@ -172,15 +187,17 @@ struct ProfileView: View {
             }
         }
         .task {
-            // Only load once
             if !didLoad {
                 isLoading = true
+                let start = Date()
                 do {
                     let loadedTweets = try await hproseInstance.fetchUserTweet(user: user, startRank: 0, endRank: 19)
                     tweets = loadedTweets
                 } catch {
-                    // Optionally handle error
+                    // handle error
                 }
+                let end = Date()
+                print("Time to load tweets: \(end.timeIntervalSince(start)) seconds")
                 isLoading = false
                 didLoad = true
             }

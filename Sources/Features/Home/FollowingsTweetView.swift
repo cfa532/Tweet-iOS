@@ -9,6 +9,7 @@ struct FollowingsTweetView: View {
     let retweet: (Tweet) async -> Void
     let bookmarkTweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
+    let onAvatarTap: (User) -> Void
 
     var body: some View {
         ScrollView {
@@ -19,7 +20,9 @@ struct FollowingsTweetView: View {
                         likeTweet: likeTweet,
                         retweet: retweet,
                         bookmarkTweet: bookmarkTweet,
-                        deleteTweet: deleteTweet
+                        deleteTweet: deleteTweet,
+                        isInProfile: false,
+                        onAvatarTap: onAvatarTap
                     )
                     .id(tweet.id)
                 }
@@ -52,7 +55,8 @@ struct FollowingsTweetView_Previews: PreviewProvider {
             likeTweet: { _ in },
             retweet: { _ in },
             bookmarkTweet: { _ in },
-            deleteTweet: { _ in }
+            deleteTweet: { _ in },
+            onAvatarTap: { _ in }
         )
     }
 } 
