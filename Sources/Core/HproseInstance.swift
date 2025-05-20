@@ -82,17 +82,19 @@ final class HproseInstance: ObservableObject {
                     client.uri = appUser.baseUrl!+"/webapi/"
                     hproseClient = client.useService(HproseService.self) as AnyObject
                     
-                    if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID {
-                        let providers = try await getProviders(userId, baseUrl: "http://\(firstIp)")
-                        if let accessibleUser = getAccessibleUser(providers, userId: userId) {
-                            appUser = accessibleUser.copy()
+                    if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID,
+                       // get best IP for the given userId
+                       let providerIp = try await getProvider(userId) {
+                        // get user object from this IP
+                        if let user = try await getUser(userId, baseUrl: "http://\(providerIp)") {
+                            appUser = user
+                            appUser.baseUrl = "http://\(providerIp)"
                             cachedUsers.insert(appUser)
+                            return
                         }
-                        
-                    } else {
-                        appUser.followingList = Gadget.getAlphaIds()
-                        cachedUsers.insert(appUser)
                     }
+                    appUser.followingList = Gadget.getAlphaIds()
+                    cachedUsers.insert(appUser)
                     return
                 }
             } catch {
@@ -166,17 +168,24 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func getUser(_ userId: String) async throws -> User? {
+    func getUser(_ userId: String, baseUrl: String = shared.appUser.baseUrl ?? "") async throws -> User? {
         // Check cache first
         if let cachedUser = cachedUsersLock.withLock({ _cachedUsers.first(where: { $0.mid == userId }) }) {
             return cachedUser
         }
         
         return try await withRetry {
-            guard let service = hproseClient else {
+            guard var service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            
+            if baseUrl != appUser.baseUrl {
+                // try to get User object from a different node other than the current one.
+                let newClient = HproseHttpClient()
+                newClient.timeout = 60
+                newClient.uri = "http://\(baseUrl)/webapi/"
+                service = newClient.useService(HproseService.self) as AnyObject
+            }
+
             let entry = "get_user"
             let params = [
                 "aid": appId,
@@ -192,12 +201,12 @@ final class HproseInstance: ObservableObject {
             if let userData = try? JSONSerialization.data(withJSONObject: response),
                var user = try? JSONDecoder().decode(User.self, from: userData) {
                 // Cache the user
-                user.baseUrl = appUser.baseUrl
+                user.baseUrl = baseUrl
                 _ = cachedUsersLock.withLock { _cachedUsers.insert(user) }
                 return user
             }
             
-            // If decoding as User failed, try to get IP address
+            // If decoding as User failed, the response might be an IP address
             if let ipAddress = response as? String {
                 // Create new client for this IP
                 let newClient = HproseHttpClient()
@@ -220,7 +229,7 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func login(_ loginUser: User) async throws -> [String: String] {
+    func login(_ loginUser: User) async throws -> [String: Any] {
         return try await withRetry {
             let entry = "login"
             let params = [
@@ -251,12 +260,20 @@ final class HproseInstance: ObservableObject {
                         }
                         
                         do {
-                            let userObject = try JSONDecoder().decode(User.self, from: userData)
+                            var userObject = try JSONDecoder().decode(User.self, from: userData)
                             hproseClient = newService   // update serving node for current session.
-                            appUser = userObject
-                            appUser.baseUrl = loginUser.baseUrl
+                            userObject.baseUrl = loginUser.baseUrl
                             
-                            return ["reason": "", "status": "success"]
+                            // Capture the value before the MainActor block
+                            let finalUser = userObject
+                            
+                            // Update appUser on the main thread
+                            await MainActor.run {
+                                self.appUser = finalUser
+                                preferenceHelper?.setUserId(finalUser.mid)
+                            }
+                            
+                            return ["user": userObject, "status": "success"]
                         } catch {
                             return ["reason": "Failed to decode user data: \(error.localizedDescription)", "status": "failure"]
                         }
@@ -464,18 +481,17 @@ final class HproseInstance: ObservableObject {
         return htmlString
     }
     
-    private func getProviders(_ mid: String, baseUrl: String) async throws -> [String] {
+    private func getProvider(_ mid: String) async throws -> String? {
         return try await withRetry {
             let params = [
                 "aid": appId,
                 "ver": "last",
+                "mid": mid
             ]
-            if let response = hproseClient?.runMApp("get_providers", params, []) {
-                if let ips = response as? [String] {
-                    return Array(Set(ips))
-                }
+            if let response = hproseClient?.runMApp("get_provider", params, []) {
+                return response as? String
             }
-            return []
+            return nil
         }
     }
     

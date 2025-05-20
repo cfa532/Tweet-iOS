@@ -140,10 +140,10 @@ struct LoginView: View {
                 if var user = try await hproseInstance.getUser(userId) {
                     user.password = password
                     let result = try await hproseInstance.login(user)
-                    if result["status"] == "success" {
+                    if result["status"] as? String == "success" {
                         showSuccess = true
                     } else {
-                        errorMessage = result["reason"]
+                        errorMessage = result["reason"] as? String
                     }
                 } else {
                     errorMessage = "Cannot find user by \(userId)"
