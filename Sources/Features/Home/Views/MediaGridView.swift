@@ -22,21 +22,21 @@ struct MediaGridView: View {
                 ZStack {
                     switch attachments.count {
                     case 1:
-                        mediaCell(attachments[0])
+                        MediaCell(attachment: attachments[0], baseUrl: baseUrl)
                             .frame(width: gridWidth, height: gridHeight)
                     case 2:
                         HStack(spacing: 2) {
-                            mediaCell(attachments[0])
-                            mediaCell(attachments[1])
+                            MediaCell(attachment: attachments[0], baseUrl: baseUrl)
+                            MediaCell(attachment: attachments[1], baseUrl: baseUrl)
                         }
                         .frame(width: gridWidth, height: gridHeight)
                     case 3:
                         HStack(spacing: 2) {
-                            mediaCell(attachments[0])
+                            MediaCell(attachment: attachments[0], baseUrl: baseUrl)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight)
                             VStack(spacing: 2) {
-                                mediaCell(attachments[1])
-                                mediaCell(attachments[2])
+                                MediaCell(attachment: attachments[1], baseUrl: baseUrl)
+                                MediaCell(attachment: attachments[2], baseUrl: baseUrl)
                             }
                             .frame(width: gridWidth / 2 - 1, height: gridHeight)
                         }
@@ -44,12 +44,12 @@ struct MediaGridView: View {
                     case 4:
                         VStack(spacing: 2) {
                             HStack(spacing: 2) {
-                                mediaCell(attachments[0])
-                                mediaCell(attachments[1])
+                                MediaCell(attachment: attachments[0], baseUrl: baseUrl)
+                                MediaCell(attachment: attachments[1], baseUrl: baseUrl)
                             }
                             HStack(spacing: 2) {
-                                mediaCell(attachments[2])
-                                mediaCell(attachments[3])
+                                MediaCell(attachment: attachments[2], baseUrl: baseUrl)
+                                MediaCell(attachment: attachments[3], baseUrl: baseUrl)
                             }
                         }
                         .frame(width: gridWidth, height: gridHeight)
@@ -63,17 +63,5 @@ struct MediaGridView: View {
             }
             .aspectRatio(4/3, contentMode: .fit)
         }
-    }
-
-    @ViewBuilder
-    private func mediaCell(_ attachment: MimeiFileType) -> some View {
-        AsyncImage(url: attachment.getUrl(baseUrl)) { image in
-            image
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-        } placeholder: {
-            Color.gray
-        }
-        .clipped()
     }
 }
