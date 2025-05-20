@@ -142,8 +142,12 @@ struct ProfileView: View {
                                   retweet: { _ in },
                                   bookmarkTweet: { _ in },
                                   deleteTweet: { _ in })
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
                 }
                 .listStyle(PlainListStyle())
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.zero)
             }
         }
         .sheet(isPresented: $showEditSheet) {
