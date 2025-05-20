@@ -17,30 +17,3 @@ struct TweetBodyView: View {
         TweetActionButtonsView(tweet: tweet)
     }
 }
-
-struct MediaGridView: View {
-    let attachments: [MimeiFileType]
-    let baseUrl: String
-    
-    var body: some View {
-        let columns = [
-            GridItem(.flexible()),
-            GridItem(.flexible())
-        ]
-        
-        LazyVGrid(columns: columns, spacing: 4) {
-            ForEach(attachments, id: \.self) { attachment in // Use the correct ForEach initializer
-                AsyncImage(url: attachment.getUrl(baseUrl)) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Color.gray
-                }
-                .frame(height: 200)
-                .clipped()
-            }
-        }
-    }
-}
-
