@@ -33,7 +33,6 @@ struct HomeView: View {
                         isLoading: $isLoading,
                         isRefreshing: $isRefreshing,
                         loadInitialTweets: loadInitialTweets,
-                        refresh: refresh,
                         likeTweet: likeTweet,
                         retweet: retweet,
                         bookmarkTweet: bookmarkTweet,
@@ -56,25 +55,13 @@ struct HomeView: View {
     func loadInitialTweets() async {
         isLoading = true
         do {
-            tweets = try await hproseInstance.fetchTweets(
+            tweets = try await hproseInstance.fetchTweetFeed(
                 user: hproseInstance.appUser, startRank: 0, endRank: 20
             )
         } catch {
             print("Error loading tweets: \(error)")
         }
         isLoading = false
-    }
-
-    func refresh() async {
-        isRefreshing = true
-        do {
-            tweets = try await hproseInstance.fetchTweets(
-                user: hproseInstance.appUser, startRank: 0, endRank: 20
-            )
-        } catch {
-            print("Error refreshing tweets: \(error)")
-        }
-        isRefreshing = false
     }
 
     func likeTweet(_ tweet: Tweet) async {

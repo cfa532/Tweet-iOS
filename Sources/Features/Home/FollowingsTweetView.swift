@@ -5,7 +5,6 @@ struct FollowingsTweetView: View {
     @Binding var isLoading: Bool
     @Binding var isRefreshing: Bool
     let loadInitialTweets: () async -> Void
-    let refresh: () async -> Void
     let likeTweet: (Tweet) async -> Void
     let retweet: (Tweet) async -> Void
     let bookmarkTweet: (Tweet) async -> Void
@@ -31,7 +30,6 @@ struct FollowingsTweetView: View {
             }
         }
         .refreshable {
-            await refresh()
         }
         .onAppear {
             if tweets.isEmpty {
@@ -51,7 +49,6 @@ struct FollowingsTweetView_Previews: PreviewProvider {
             isLoading: .constant(false),
             isRefreshing: .constant(false),
             loadInitialTweets: {},
-            refresh: {},
             likeTweet: { _ in },
             retweet: { _ in },
             bookmarkTweet: { _ in },

@@ -37,7 +37,8 @@
 		46E5B3472DDC0CFB00AEF31F /* Avatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3462DDC0CF500AEF31F /* Avatar.swift */; };
 		46E5B3492DDC0F6900AEF31F /* MediaGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3482DDC0F5B00AEF31F /* MediaGridView.swift */; };
 		46E5B34B2DDC155600AEF31F /* MediaCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B34A2DDC155200AEF31F /* MediaCell.swift */; };
-		46E5B34D2DDC6A8600AEF31F /* UserProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B34C2DDC6A7E00AEF31F /* UserProfileView.swift */; };
+		46E5B34F2DDC9F1B00AEF31F /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B34E2DDC9F1B00AEF31F /* ProfileView.swift */; };
+		46E5B3512DDCA00000AEF31F /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3502DDC9FFC00AEF31F /* Settings.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -72,7 +73,8 @@
 		46E5B3462DDC0CF500AEF31F /* Avatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Avatar.swift; sourceTree = "<group>"; };
 		46E5B3482DDC0F5B00AEF31F /* MediaGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaGridView.swift; sourceTree = "<group>"; };
 		46E5B34A2DDC155200AEF31F /* MediaCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCell.swift; sourceTree = "<group>"; };
-		46E5B34C2DDC6A7E00AEF31F /* UserProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfileView.swift; sourceTree = "<group>"; };
+		46E5B34E2DDC9F1B00AEF31F /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileView.swift; sourceTree = "<group>"; };
+		46E5B3502DDC9FFC00AEF31F /* Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings.swift; sourceTree = "<group>"; };
 		83423F5E23BD65E924B7AD86 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D424303A66FF70A9FBF5540E /* Pods-Tweet.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.release.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.release.xcconfig"; sourceTree = "<group>"; };
 		FFC29454DC8954BB0F934F77 /* Pods-Tweet.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.debug.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.debug.xcconfig"; sourceTree = "<group>"; };
@@ -145,6 +147,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A08 /* UI */ = {
 			isa = PBXGroup;
 			children = (
+				46E5B3502DDC9FFC00AEF31F /* Settings.swift */,
 				46E5B3372DDA315700AEF31F /* TabButton.swift */,
 				46E5B32C2DDA045B00AEF31F /* AppHeaderView.swift */,
 			);
@@ -224,7 +227,7 @@
 		46E5B3282DDA02E200AEF31F /* Profile */ = {
 			isa = PBXGroup;
 			children = (
-				46E5B34C2DDC6A7E00AEF31F /* UserProfileView.swift */,
+				46E5B34E2DDC9F1B00AEF31F /* ProfileView.swift */,
 				46E5B32E2DDA048500AEF31F /* UserViewModel.swift */,
 			);
 			path = Profile;
@@ -390,10 +393,11 @@
 				4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */,
 				4608E2DA2DD5CD920051A92D /* User.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */,
+				46E5B34F2DDC9F1B00AEF31F /* ProfileView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A2A /* PollCreationView.swift in Sources */,
+				46E5B3512DDCA00000AEF31F /* Settings.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A2C /* LocationPickerView.swift in Sources */,
 				46E5B33A2DDA315700AEF31F /* RecommendedTweetView.swift in Sources */,
-				46E5B34D2DDC6A8600AEF31F /* UserProfileView.swift in Sources */,
 				46E5B33B2DDA315700AEF31F /* TweetItemView.swift in Sources */,
 				46E5B33C2DDA315700AEF31F /* FollowingsTweetView.swift in Sources */,
 				46E5B33D2DDA315700AEF31F /* TabButton.swift in Sources */,

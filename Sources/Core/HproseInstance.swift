@@ -104,7 +104,7 @@ final class HproseInstance: ObservableObject {
     }
     
     // MARK: - Tweet Operations
-    func fetchTweets(
+    func fetchTweetFeed(
         user: User,
         startRank: UInt,
         endRank: UInt,
@@ -123,6 +123,49 @@ final class HproseInstance: ObservableObject {
                 "end": endRank,
                 "gid": appUser.mid,
                 "hostid": user.hostIds?.first as Any
+            ]
+            
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+                print("Invalid response format from server")
+                return []
+            }
+            
+            // First create tweets without author data
+            let tweets = response.compactMap { dict -> Tweet? in
+                return Tweet.from(dict: dict)
+            }
+            
+            // Then fetch author data for each tweet
+            var tweetsWithAuthors: [Tweet] = []
+            for var tweet in tweets {
+                if let author = try await getUser(tweet.authorId) {
+                    tweet.author = author
+                    tweetsWithAuthors.append(tweet)
+                }
+            }
+            
+            return tweetsWithAuthors
+        }
+    }
+    
+    func fetchUserTweet(
+        user: User,
+        startRank: UInt,
+        endRank: UInt,
+        entry: String = "get_tweets_by_rank"
+    ) async throws -> [Tweet] {
+        try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": user.mid,
+                "start": startRank,
+                "end": endRank,
+                "gid": appUser.mid,
             ]
             
             guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {

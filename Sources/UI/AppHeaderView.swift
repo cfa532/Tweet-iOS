@@ -4,6 +4,7 @@ struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
     @StateObject private var hproseInstance = HproseInstance.shared
+    @State private var showProfile = false
 //    @EnvironmentObject private var userViewModel: UserViewModel
     
     var body: some View {
@@ -13,11 +14,20 @@ struct AppHeaderView: View {
                 if hproseInstance.appUser.isGuest {
                     isLoginSheetPresented = true
                 } else {
-                    // TODO: Navigate to profile
+                    showProfile = true
                 }
             }) {
                 Avatar(user: hproseInstance.appUser, size: 32)
             }
+            .background(
+                NavigationLink(
+                    destination: ProfileView(user: hproseInstance.appUser), // Replace [] with actual tweets
+                    isActive: $showProfile
+                ) {
+                    EmptyView()
+                }
+                .hidden()
+            )
             
             Spacer()
             
@@ -201,44 +211,6 @@ struct RegistrationView: View {
             }
             .padding()
             .navigationBarItems(trailing: Button("Close") {
-                dismiss()
-            })
-        }
-    }
-}
-
-struct SettingsView: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var userViewModel: UserViewModel
-    
-    var body: some View {
-        NavigationView {
-            List {
-                Section(header: Text("Account")) {
-                    if userViewModel.isLoggedIn {
-                        Button("Logout") {
-                            // TODO: Implement logout
-                        }
-                        .foregroundColor(.red)
-                    }
-                }
-                
-                Section(header: Text("App Settings")) {
-                    Toggle("Dark Mode", isOn: .constant(false))
-                    Toggle("Notifications", isOn: .constant(true))
-                }
-                
-                Section(header: Text("About")) {
-                    HStack {
-                        Text("Version")
-                        Spacer()
-                        Text("1.0.0")
-                            .foregroundColor(.gray)
-                    }
-                }
-            }
-            .navigationTitle("Settings")
-            .navigationBarItems(trailing: Button("Done") {
                 dismiss()
             })
         }
