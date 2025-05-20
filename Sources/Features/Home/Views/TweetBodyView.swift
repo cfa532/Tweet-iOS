@@ -14,6 +14,7 @@ struct TweetBodyView: View {
                 MediaGridView(attachments: attachments, baseUrl: baseUrl)
             }
         }
+        Spacer(minLength: 12)
         TweetActionButtonsView(tweet: tweet)
     }
 }
