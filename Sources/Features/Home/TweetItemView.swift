@@ -8,10 +8,15 @@ struct TweetItemView: View {
     let deleteTweet: (Tweet) async -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        HStack(alignment: .top, spacing: 8) {
             // Author info
-            TweetHeaderView(tweet: tweet)
-            TweetBodyView(tweet: tweet)
+            if let user = tweet.author {
+                Avatar(user: user)
+            }
+            VStack(alignment: .leading, content: {
+                TweetHeaderView(tweet: tweet)
+                TweetBodyView(tweet: tweet)
+            })
         }
         .padding()
         .background(Color(.systemBackground))

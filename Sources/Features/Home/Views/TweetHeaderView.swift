@@ -6,22 +6,8 @@ struct TweetHeaderView: View {
     
     var body: some View {
         HStack {
-            if let avatarUrl = tweet.author?.avatarUrl {
-                AsyncImage(url: URL(string: avatarUrl)) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Color.gray
-                }
-                .frame(width: 40, height: 40)
-                .clipShape(Circle())
-            } else {
-                Image("ic_splash")
-                    .frame(width: 40, height: 40)
-                    .clipShape(Circle())
-            }
-            VStack(alignment: .leading) {
+
+            HStack(alignment: .top) {
                 Text(tweet.author?.name ?? "No one")
                     .font(.headline)
                 Text("@\(tweet.author?.username ?? "")")
