@@ -114,8 +114,8 @@ struct VideoPlayerCacheView: View {
     }
 
     private func cacheOrDownloadVideo() {
-        let cacheKey = url.absoluteString.sha256()
-        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(cacheKey).mp4")
+        let cacheKey = url.lastPathComponent
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(cacheKey)
         if FileManager.default.fileExists(atPath: tempFile.path) {
             localUrl = tempFile
             return
@@ -132,15 +132,6 @@ struct VideoPlayerCacheView: View {
             }
         }
         task.resume()
-    }
-}
-
-// Helper to hash the URL for cache key
-extension String {
-    func sha256() -> String {
-        let data = Data(self.utf8)
-        let hash = SHA256.hash(data: data)
-        return hash.compactMap { String(format: "%02x", $0) }.joined()
     }
 }
 
