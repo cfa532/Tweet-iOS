@@ -3,37 +3,20 @@ import SwiftUI
 struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
+    @StateObject private var hproseInstance = HproseInstance.shared
 //    @EnvironmentObject private var userViewModel: UserViewModel
-    
-    let appUser = HproseInstance.shared.appUser
     
     var body: some View {
         HStack {
             // Left: User Avatar
             Button(action: {
-                if appUser.isGuest {
+                if hproseInstance.appUser.isGuest {
                     isLoginSheetPresented = true
                 } else {
                     // TODO: Navigate to profile
                 }
             }) {
-                if let avatarURL = appUser.avatarUrl {
-                    AsyncImage(url: URL(string: avatarURL)) { image in
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } placeholder: {
-                        Image(systemName: "person.circle.fill")
-                            .resizable()
-                    }
-                    .frame(width: 32, height: 32)
-                    .clipShape(Circle())
-                } else {
-                    Image("ic_splash")
-                        .resizable()
-                        .frame(width: 32, height: 32)
-                        .foregroundColor(.gray)
-                }
+                Avatar(user: hproseInstance.appUser, size: 32)
             }
             
             Spacer()
@@ -87,7 +70,7 @@ struct LoginView: View {
                     .autocapitalization(.none)
                     .disabled(isLoading)
                 
-                TextField("Password", text: $password)
+                SecureField("Password", text: $password)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .disabled(isLoading)
                 
@@ -102,18 +85,20 @@ struct LoginView: View {
                         await login()
                     }
                 }) {
-                    if isLoading {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    } else {
-                        Text("Login")
+                    HStack {
+                        if isLoading {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        } else {
+                            Text("Login")
+                        }
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
                 }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(10)
                 .disabled(isLoading || username.isEmpty || password.isEmpty)
                 
                 Button("Don't have an account? Register") {

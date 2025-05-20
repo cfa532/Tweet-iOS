@@ -9,7 +9,12 @@ import SwiftUI
 
 struct Avatar: View {
     let user: User
-    let size: Int = 40
+    let size: CGFloat
+    
+    init(user: User, size: CGFloat = 40) {
+        self.user = user
+        self.size = size
+    }
     
     var body: some View {
         if let avatarUrl = user.avatarUrl {
@@ -20,11 +25,11 @@ struct Avatar: View {
             } placeholder: {
                 Color.gray
             }
-            .frame(width: CGFloat(size), height: CGFloat(size))
+            .frame(width: size, height: size)
             .clipShape(Circle())
         } else {
             Image("ic_splash")
-                .frame(width: CGFloat(size), height: CGFloat(size))
+                .frame(width: size, height: size)
                 .clipShape(Circle())
         }
     }
