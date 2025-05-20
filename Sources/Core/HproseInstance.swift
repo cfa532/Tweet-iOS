@@ -58,7 +58,7 @@ final class HproseInstance {
             mid: Constants.GUEST_ID,
             baseUrl: preferenceHelper?.getAppUrls().first ?? "",
         )
-        appUser.followingList = Gadget.shared.getAlphaIds()
+        appUser.followingList = Gadget.getAlphaIds()
         
         try await initAppEntry()
     }
@@ -90,7 +90,7 @@ final class HproseInstance {
                         }
                         
                     } else {
-                        appUser.followingList = Gadget.shared.getAlphaIds()
+                        appUser.followingList = Gadget.getAlphaIds()
                         cachedUsers.insert(appUser)
                     }
                     return
@@ -146,6 +146,26 @@ final class HproseInstance {
         }
     }
     
+    func getUserId(_ username: String) async throws -> String? {
+        try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            
+            let entry = "get_userid"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "username": username,
+            ]
+            guard let response = service.runMApp(entry, params, nil) else {
+                print("Invalid response format from server")
+                return nil
+            }
+            return response as? String
+        }
+    }
+    
     func getUser(_ userId: String) async throws -> User? {
         // Check cache first
         if let cachedUser = cachedUsersLock.withLock({ _cachedUsers.first(where: { $0.mid == userId }) }) {
@@ -197,6 +217,49 @@ final class HproseInstance {
             }
             
             return nil
+        }
+    }
+    
+    func login(_ loginUser: User) async throws -> [String: String] {
+        return try await withRetry {
+            let entry = "login"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "username": loginUser.username!,
+                "password": loginUser.password!
+            ]
+            let newClient = HproseHttpClient()
+            newClient.timeout = 60
+            newClient.uri = "\(loginUser.baseUrl!)/webapi/"
+            let newService = newClient.useService(HproseService.self) as AnyObject
+            
+            guard let response = newService.runMApp(entry, params, nil) as? [String: Any] else {
+                return ["reason": "Invalid response format from server", "status": "failure"]
+            }
+            
+            if let status = response["status"] as? String {
+                if status == "failure" {
+                    if let reason = response["reason"] as? String {
+                        return ["reason": reason, "status": "failure"]
+                    }
+                    return ["reason": "Unknown error occurred", "status": "failure"]
+                } else if status == "success" {
+                    if let user = response["user"] as? [String: Any] {
+                        if let userData = try? JSONSerialization.data(withJSONObject: user),
+                           let userObject = try? JSONDecoder().decode(User.self, from: userData) {
+                            
+                            hproseClient = newService   // update serving node for current session.
+                            appUser = userObject
+                            appUser.baseUrl = loginUser.baseUrl
+
+                            return ["reason": "", "status": "success"]
+                        }
+                    }
+                    return ["reason": "User data not found", "status": "failure"]
+                }
+            }
+            return ["reason": "Invalid response status", "status": "failure"]
         }
     }
     
@@ -481,16 +544,6 @@ final class HproseInstance {
 //                return try JSONDecoder().decode(ChatMessage.self, from: data)
 //            }
 //        }
-//    }
-    
-//    func getUser(_ userId: String) async throws -> User? {
-//        client.uri = appUser.baseUrl
-//        let params: [Any] = [appId, "last", "getUser", userId]
-//        let response = try await client.invoke("getUser", params) as? [String: Any]
-//        
-//        guard let response = response else { return nil }
-//        let data = try JSONSerialization.data(withJSONObject: response)
-//        return try JSONDecoder().decode(User.self, from: data)
 //    }
     
     // MARK: - Background Upload

@@ -3,7 +3,7 @@ import SwiftUI
 struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
-    @EnvironmentObject private var userViewModel: UserViewModel
+//    @EnvironmentObject private var userViewModel: UserViewModel
     
     let appUser = HproseInstance.shared.appUser
     
@@ -11,10 +11,10 @@ struct AppHeaderView: View {
         HStack {
             // Left: User Avatar
             Button(action: {
-                if userViewModel.isLoggedIn {
-                    // TODO: Navigate to profile
-                } else {
+                if appUser.isGuest {
                     isLoginSheetPresented = true
+                } else {
+                    // TODO: Navigate to profile
                 }
             }) {
                 if let avatarURL = appUser.avatarUrl {
@@ -88,6 +88,9 @@ struct LoginView: View {
                 
                 Button(action: {
                     // TODO: Implement login
+                    Task {
+                        try await UserViewModel.login(username: username, password: password)
+                    }
                 }) {
                     Text("Login")
                         .frame(maxWidth: .infinity)

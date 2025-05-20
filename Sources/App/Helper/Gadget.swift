@@ -179,7 +179,7 @@ class Gadget {
         return ip4 ?? ip6
     }
 
-    func getAlphaIds() -> [String] {
+    static func getAlphaIds() -> [String] {
         let alphaIdString = AppConfig.alphaId
         return alphaIdString
             .split(separator: ",")
