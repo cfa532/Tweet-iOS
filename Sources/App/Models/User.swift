@@ -15,7 +15,7 @@ struct User: Codable, Identifiable, Hashable {
     var lastLogin: Date?
     var cloudDrivePort: Int?
     
-    var tweetCount: Int
+    var tweetCount: Int?
     var followingCount: Int?
     var followersCount: Int?
     var bookmarksCount: Int?

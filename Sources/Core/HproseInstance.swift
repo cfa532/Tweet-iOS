@@ -245,15 +245,39 @@ final class HproseInstance {
                     }
                     return ["reason": "Unknown error occurred", "status": "failure"]
                 } else if status == "success" {
-                    if let user = response["user"] as? [String: Any] {
-                        if let userData = try? JSONSerialization.data(withJSONObject: user),
-                           let userObject = try? JSONDecoder().decode(User.self, from: userData) {
+                    if let userJsonString = response["user"] as? String {
+                        print("Debug - User JSON string: \(userJsonString)")
+                        
+                        guard let userData = userJsonString.data(using: .utf8) else {
+                            return ["reason": "Failed to convert user data to UTF-8", "status": "failure"]
+                        }
+                        
+                        do {
+                            let userObject = try JSONDecoder().decode(User.self, from: userData)
+                            print("Debug - Successfully decoded user: \(userObject)")
                             
                             hproseClient = newService   // update serving node for current session.
                             appUser = userObject
                             appUser.baseUrl = loginUser.baseUrl
-
+                            
                             return ["reason": "", "status": "success"]
+                        } catch {
+                            print("Debug - JSON Decoding error: \(error)")
+                            if let decodingError = error as? DecodingError {
+                                switch decodingError {
+                                case .keyNotFound(let key, let context):
+                                    print("Debug - Missing key: \(key.stringValue), context: \(context.debugDescription)")
+                                case .typeMismatch(let type, let context):
+                                    print("Debug - Type mismatch: expected \(type), context: \(context.debugDescription)")
+                                case .valueNotFound(let type, let context):
+                                    print("Debug - Value not found: expected \(type), context: \(context.debugDescription)")
+                                case .dataCorrupted(let context):
+                                    print("Debug - Data corrupted: \(context.debugDescription)")
+                                @unknown default:
+                                    print("Debug - Unknown decoding error")
+                                }
+                            }
+                            return ["reason": "Failed to decode user data: \(error.localizedDescription)", "status": "failure"]
                         }
                     }
                     return ["reason": "User data not found", "status": "failure"]

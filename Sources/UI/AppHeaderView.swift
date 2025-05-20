@@ -71,6 +71,9 @@ struct LoginView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var showRegistration = false
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var showSuccess = false
     
     var body: some View {
         NavigationView {
@@ -82,28 +85,42 @@ struct LoginView: View {
                 TextField("Username", text: $username)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .autocapitalization(.none)
+                    .disabled(isLoading)
                 
-                SecureField("Password", text: $password)
+                TextField("Password", text: $password)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .disabled(isLoading)
+                
+                if let errorMessage = errorMessage {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                }
                 
                 Button(action: {
-                    // TODO: Implement login
                     Task {
-                        try await UserViewModel.login(username: username, password: password)
+                        await login()
                     }
                 }) {
-                    Text("Login")
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
+                    if isLoading {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    } else {
+                        Text("Login")
+                    }
                 }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+                .disabled(isLoading || username.isEmpty || password.isEmpty)
                 
                 Button("Don't have an account? Register") {
                     showRegistration = true
                 }
                 .foregroundColor(.blue)
+                .disabled(isLoading)
             }
             .padding()
             .navigationBarItems(trailing: Button("Close") {
@@ -112,7 +129,48 @@ struct LoginView: View {
             .sheet(isPresented: $showRegistration) {
                 RegistrationView()
             }
+            .alert("Login Successful", isPresented: $showSuccess) {
+                Button("OK") {
+                    dismiss()
+                }
+            } message: {
+                Text("Welcome back!")
+            }
         }
+    }
+    
+    private func login() async {
+        isLoading = true
+        errorMessage = nil
+        
+        do {
+            if username.isEmpty || password.isEmpty {
+                errorMessage = "Username & password are required."
+                return
+            }
+            let hproseInstance = HproseInstance.shared
+            if let userId = try await hproseInstance.getUserId(username) {
+                
+                // retrieve user object from the net.
+                if var user = try await hproseInstance.getUser(userId) {
+                    user.password = password
+                    let result = try await hproseInstance.login(user)
+                    if result["status"] == "success" {
+                        showSuccess = true
+                    } else {
+                        errorMessage = result["reason"]
+                    }
+                } else {
+                    errorMessage = "Cannot find user by \(userId)"
+                }
+            } else {
+                errorMessage = "Cannot find userId by \(username)"
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        
+        isLoading = false
     }
 }
 

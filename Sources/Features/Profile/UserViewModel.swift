@@ -14,20 +14,6 @@ class UserViewModel: ObservableObject {
         // TODO: Implement user state loading
     }
     
-    static func login(username: String, password: String) async throws -> [String: String] {
-        let hproseInstance = HproseInstance.shared
-        if let userId = try await hproseInstance.getUserId(username) {
-            if var user = try await hproseInstance.getUser(userId) {
-                user.password = password
-                let ret = try await hproseInstance.login(user)
-                return ret
-            } else {
-                return ["reason": "Cannot find user by \(userId)", "status": "failure"]
-            }
-        }
-        return ["reason": "Cannot find userId by \(username)", "status": "failure"]
-    }
-    
     func register(username: String, email: String, password: String) async throws {
         // TODO: Implement registration logic
     }
