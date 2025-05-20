@@ -16,7 +16,7 @@ struct MediaCell: View {
 
     var body: some View {
         if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
-            VideoPlayerCacheView(url: url, play: play)
+            VideoPlayerCacheView(url: url, attachment: attachment, play: play)
         } else {
             AsyncImage(url: attachment.getUrl(baseUrl)) { image in
                 image
@@ -32,6 +32,7 @@ struct MediaCell: View {
 
 struct VideoPlayerCacheView: View {
     let url: URL
+    let attachment: MimeiFileType
     var play: Bool
 
     @State private var localUrl: URL?
@@ -115,7 +116,8 @@ struct VideoPlayerCacheView: View {
 
     private func cacheOrDownloadVideo() {
         let cacheKey = url.lastPathComponent
-        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(cacheKey)
+        let fileExtension = attachment.fileName?.split(separator: ".").last ?? "mp4"
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(cacheKey).\(fileExtension)")
         if FileManager.default.fileExists(atPath: tempFile.path) {
             localUrl = tempFile
             return
@@ -123,6 +125,10 @@ struct VideoPlayerCacheView: View {
         let task = URLSession.shared.downloadTask(with: url) { tempUrl, response, error in
             guard let tempUrl = tempUrl else { return }
             do {
+                // Remove existing file if it exists
+                if FileManager.default.fileExists(atPath: tempFile.path) {
+                    try FileManager.default.removeItem(at: tempFile)
+                }
                 try FileManager.default.moveItem(at: tempUrl, to: tempFile)
                 DispatchQueue.main.async {
                     localUrl = tempFile
