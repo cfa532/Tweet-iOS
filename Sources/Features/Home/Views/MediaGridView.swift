@@ -19,7 +19,15 @@ struct MediaGridView: View {
         } else {
             GeometryReader { geometry in
                 let gridWidth = geometry.size.width
-                let gridHeight = gridWidth * 0.75 // 4:3 aspect ratio
+                let isSingleVideo = attachments.count == 1 && attachments[0].type.lowercased() == "video"
+                let aspectRatio: CGFloat = {
+                    if isSingleVideo, let ar = attachments[0].aspectRatio, ar > 0 {
+                        return CGFloat(ar)
+                    } else {
+                        return 4.0 / 3.0
+                    }
+                }()
+                let gridHeight = gridWidth / aspectRatio
                 let firstVideoIndex = attachments.firstIndex { $0.type.lowercased() == "video" }
 
                 ZStack {
@@ -106,7 +114,7 @@ struct MediaGridView: View {
                 .onAppear { isVisible = true }
                 .onDisappear { isVisible = false }
             }
-            .aspectRatio(4/3, contentMode: .fit)
+            .aspectRatio(attachments.count == 1 && attachments[0].type.lowercased() == "video" && attachments[0].aspectRatio != nil ? CGFloat(attachments[0].aspectRatio!) : 4.0/3.0, contentMode: .fit)
         }
     }
 }

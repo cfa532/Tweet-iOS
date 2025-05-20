@@ -7,20 +7,16 @@
 
 import SwiftUI
 import AVKit
+import CryptoKit
 
 struct MediaCell: View {
     let attachment: MimeiFileType
     let baseUrl: String
-    var play: Bool = false // default false, set true for the first video
+    var play: Bool = false
 
     var body: some View {
         if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
-            VideoPlayerWrapper(
-                url: url,
-                fileName: attachment.fileName,
-                mimeType: attachment.type,
-                play: play
-            )
+            VideoPlayerCacheView(url: url, play: play)
         } else {
             AsyncImage(url: attachment.getUrl(baseUrl)) { image in
                 image
@@ -34,52 +30,96 @@ struct MediaCell: View {
     }
 }
 
-struct VideoPlayerWrapper: View {
+struct VideoPlayerCacheView: View {
     let url: URL
-    let fileName: String?
-    let mimeType: String?
     var play: Bool
 
     @State private var localUrl: URL?
     @State private var player: AVPlayer?
+    @State private var isPlaying: Bool = false
+    @State private var isMuted: Bool = PreferenceHelper().getSpeakerMute()
+    @State private var isVisible: Bool = false
+    private let preferenceHelper = PreferenceHelper()
 
     var body: some View {
         Group {
             if let localUrl = localUrl {
-                VideoPlayer(player: player)
-                    .onAppear {
-                        if player == nil {
-                            player = AVPlayer(url: localUrl)
+                ZStack {
+                    VideoPlayer(player: player)
+                        .onAppear {
+                            if player == nil {
+                                player = AVPlayer(url: localUrl)
+                                player?.isMuted = isMuted
+                            }
+                            handlePlayback()
                         }
-                        if play {
-                            player?.play()
+                        .onDisappear {
+                            player?.pause()
+                            player = nil
+                            isPlaying = false
+                        }
+                        .clipped()
+                        .onVisibilityChanged { visible in
+                            isVisible = visible
+                            handlePlayback()
+                        }
+                    HStack(spacing: 20) {
+                        Button(action: {
+                            if isPlaying {
+                                player?.pause()
+                            } else {
+                                player?.play()
+                            }
+                            isPlaying.toggle()
+                        }) {
+                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.black.opacity(0.5))
+                                .clipShape(Circle())
+                        }
+                        Button(action: {
+                            isMuted.toggle()
+                            player?.isMuted = isMuted
+                            preferenceHelper.setSpeakerMute(isMuted)
+                        }) {
+                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.black.opacity(0.5))
+                                .clipShape(Circle())
                         }
                     }
-                    .onDisappear {
-                        player?.pause()
-                        player = nil
-                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
             } else {
                 ProgressView()
                     .onAppear {
-                        downloadToTempIfNeeded()
+                        cacheOrDownloadVideo()
                     }
             }
         }
         .clipped()
     }
 
-    private func downloadToTempIfNeeded() {
-        // If the URL has an extension, use it directly
-        if !url.pathExtension.isEmpty {
-            DispatchQueue.main.async {
-                localUrl = url
-            }
+    private func handlePlayback() {
+        if isVisible && play {
+            player?.play()
+            isPlaying = true
+        } else {
+            player?.pause()
+            isPlaying = false
+        }
+    }
+
+    private func cacheOrDownloadVideo() {
+        let cacheKey = url.absoluteString.sha256()
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(cacheKey).mp4")
+        if FileManager.default.fileExists(atPath: tempFile.path) {
+            localUrl = tempFile
             return
         }
-        // Otherwise, download and save as .mp4
-        let ext = "mp4" // or guess from mimeType/fileName
-        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + "." + ext)
         let task = URLSession.shared.downloadTask(with: url) { tempUrl, response, error in
             guard let tempUrl = tempUrl else { return }
             do {
@@ -92,5 +132,46 @@ struct VideoPlayerWrapper: View {
             }
         }
         task.resume()
+    }
+}
+
+// Helper to hash the URL for cache key
+extension String {
+    func sha256() -> String {
+        let data = Data(self.utf8)
+        let hash = SHA256.hash(data: data)
+        return hash.compactMap { String(format: "%02x", $0) }.joined()
+    }
+}
+
+// ViewModifier to detect visibility
+struct VisibilityModifier: ViewModifier {
+    let onChange: (Bool) -> Void
+    func body(content: Content) -> some View {
+        GeometryReader { geometry in
+            content
+                .background(
+                    Color.clear
+                        .preference(key: VisibilityPreferenceKey.self, value: geometry.frame(in: .global))
+                )
+        }
+        .onPreferenceChange(VisibilityPreferenceKey.self) { frame in
+            let screen = UIScreen.main.bounds
+            let isVisible = screen.intersects(frame)
+            onChange(isVisible)
+        }
+    }
+}
+
+struct VisibilityPreferenceKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
+    }
+}
+
+extension View {
+    func onVisibilityChanged(_ perform: @escaping (Bool) -> Void) -> some View {
+        self.modifier(VisibilityModifier(onChange: perform))
     }
 }
