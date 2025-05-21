@@ -3,7 +3,6 @@ import SwiftUI
 struct FollowingsTweetView: View {
     @State private var tweets: [Tweet] = []
     @Binding var isLoading: Bool
-
     let onAvatarTap: (User) -> Void
 
     private let hproseInstance = HproseInstance.shared
@@ -14,7 +13,9 @@ struct FollowingsTweetView: View {
                 ForEach($tweets) { $tweet in
                     TweetItemView(
                         tweet: $tweet,
-                        retweet: retweet,
+                        retweet: { tweet in
+                            await retweet(tweet)
+                        },
                         deleteTweet: deleteTweet,
                         isInProfile: false,
                         onAvatarTap: onAvatarTap
@@ -50,10 +51,12 @@ struct FollowingsTweetView: View {
         }
         isLoading = false
     }
-
+    
+    
     func retweet(_ tweet: Tweet) async {
         do {
             if let retweet = try await hproseInstance.retweet(tweet) {
+                // Insert retweet at the beginning of the array
                 tweets.insert(retweet, at: 0)
                 
                 // update retweet count of the original tweet

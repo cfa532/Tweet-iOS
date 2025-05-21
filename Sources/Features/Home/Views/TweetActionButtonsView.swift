@@ -27,8 +27,10 @@ struct TweetActionButtonsView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .frame(minWidth: 24, alignment: .leading)
+                    .padding(.leading, 2)
             }
             Spacer()
+            
             // Retweet
             TweetActionButton(
                 icon: "arrow.2.squarepath",
@@ -37,6 +39,16 @@ struct TweetActionButtonsView: View {
                     Task {
                         await retweet(tweet)
                     }
+                    if let hasRetweeted = tweet.favorites?[UserActions.RETWEET.rawValue] {
+                        tweet.favorites?[UserActions.RETWEET.rawValue] = !hasRetweeted
+                    } else {
+                        tweet.favorites?[UserActions.RETWEET.rawValue] = true
+                    }
+                    if let count = tweet.retweetCount {
+                        tweet.retweetCount = count + 1
+                    } else {
+                        tweet.retweetCount = 1
+                    }
                 }
             )
             if  let count = tweet.retweetCount, count > 0 {
@@ -44,6 +56,7 @@ struct TweetActionButtonsView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .frame(minWidth: 24, alignment: .leading)
+                    .padding(.leading, 2)
             }
             Spacer()
             
@@ -121,6 +134,7 @@ struct TweetActionButtonsView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .frame(minWidth: 24, alignment: .leading)
+                    .padding(.leading, 2)
             }
             Spacer()
             

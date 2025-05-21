@@ -410,6 +410,13 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /**
+     * Increase the retweetCount of the original tweet mimei.
+     * @param tweet is the original tweet
+     * @param retweetId of the retweet.
+     * @param direction to indicate increase or decrease retweet count.
+     * @return updated original tweet.
+     * */
     func updateRetweetCount(
         tweet: Tweet,
         retweetId: String,
@@ -453,6 +460,29 @@ final class HproseInstance: ObservableObject {
             }
             guard let response = service.runMApp(entry, params, nil) as? String else {
                 print("Invalid response delete tweetID: \(tweetId)")
+                return nil
+            }
+            return response     // deleted tweetId
+        }
+    }
+    
+    func deleteComment(parentTweet: Tweet, commentId: String) async throws -> String? {
+        try await withRetry {
+            let entry = "delete_comment"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "authorid": appUser.mid,
+                "tweetid": parentTweet.mid,
+                "hostid": parentTweet.author?.hostIds?.first as Any,
+                "commentid": commentId,
+                "userid": appUser.mid
+            ]
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            guard let response = service.runMApp(entry, params, nil) as? String else {
+                print("Invalid response delete commentId: \(commentId)")
                 return nil
             }
             return response     // deleted tweetId
