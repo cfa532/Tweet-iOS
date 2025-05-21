@@ -66,6 +66,7 @@ struct TweetActionButtonsView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .frame(minWidth: 24, alignment: .leading)
+                    .padding(.leading, 2)
             }
             Spacer()
             

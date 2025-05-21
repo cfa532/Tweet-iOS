@@ -297,10 +297,8 @@ final class HproseInstance: ObservableObject {
                     }
                     return ["reason": "Unknown error occurred", "status": "failure"]
                 } else if status == "success" {
-                    if let userDict = response["user"] as? [String: Any] {
-                        // Convert dictionary to Data
-                        let userData = try JSONSerialization.data(withJSONObject: userDict, options: [])
-                        var userObject = try JSONDecoder().decode(User.self, from: userData)
+                    if let userDict = response["user"] as? [String: Any],
+                       var userObject = User.from(dict: userDict) {
                         hproseClient = newService   // update serving node for current session.
                         userObject.baseUrl = loginUser.baseUrl
                         
@@ -338,11 +336,25 @@ final class HproseInstance: ObservableObject {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            guard let response = service.runMApp(entry, params, nil) as? Tweet else {
+            guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
                 print("Invalid response format toggle favorite")
                 return nil
             }
-            return response
+            // update appUser object
+            if let userDict = response["user"] as? [String: Any],
+               let user = User.from(dict: userDict) {
+                await MainActor.run {
+                    appUser.favoritesCount = user.favoritesCount
+                }
+            }
+            // update the tweet object
+            if let isFavorite = response["isFavorite"] as? Bool,
+               let favoriteCount = response["count"] as? Int {
+                var favorites = tweet.favorites ?? [false, false, false]
+                favorites[UserActions.FAVORITE.rawValue] = isFavorite
+                return tweet.copy(favorites: favorites, favoriteCount: favoriteCount)
+            }
+            return nil
         }
     }
     

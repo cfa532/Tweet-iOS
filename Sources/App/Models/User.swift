@@ -61,6 +61,19 @@ struct User: Codable, Identifiable, Hashable {
         }
         return copy
     }
+
+    // MARK: - Factory Method
+    static func from(dict: [String: Any]) -> User? {
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: dict, options: [])
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            return try decoder.decode(User.self, from: jsonData)
+        } catch {
+            print("Error converting dictionary to User: \(error)")
+            return nil
+        }
+    }
 }
 
 enum Constants {

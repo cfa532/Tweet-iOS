@@ -15,7 +15,7 @@ struct Tweet: Identifiable, Codable {
     var author: User?
     
     // User interaction flags
-    var favorites: [Bool]? // [liked, bookmarked, retweeted]
+    var favorites: [Bool]? // [favorite, bookmark, retweeted]
     var favoriteCount: Int?
     var bookmarkCount: Int?
     var retweetCount: Int?
@@ -182,5 +182,47 @@ struct Tweet: Identifiable, Codable {
             }
             return nil
         }
+    }
+    
+    /// Creates a copy of the tweet with updated attributes
+    /// - Parameters:
+    ///   - content: New content for the tweet
+    ///   - title: New title for the tweet
+    ///   - author: New author for the tweet
+    ///   - favorites: New favorites array
+    ///   - favoriteCount: New favorite count
+    ///   - bookmarkCount: New bookmark count
+    ///   - retweetCount: New retweet count
+    ///   - commentCount: New comment count
+    ///   - attachments: New attachments array
+    ///   - isPrivate: New privacy setting
+    ///   - downloadable: New downloadability setting
+    /// - Returns: A new Tweet instance with the updated values
+    func copy(
+        content: String? = nil,
+        title: String? = nil,
+        author: User? = nil,
+        favorites: [Bool]? = nil,
+        favoriteCount: Int? = nil,
+        bookmarkCount: Int? = nil,
+        retweetCount: Int? = nil,
+        commentCount: Int? = nil,
+        attachments: [MimeiFileType]? = nil,
+        isPrivate: Bool? = nil,
+        downloadable: Bool? = nil
+    ) -> Tweet {
+        var copy = self
+        if let content = content { copy.content = content }
+        if let title = title { copy.title = title }
+        if let author = author { copy.author = author }
+        if let favorites = favorites { copy.favorites = favorites }
+        if let favoriteCount = favoriteCount { copy.favoriteCount = favoriteCount }
+        if let bookmarkCount = bookmarkCount { copy.bookmarkCount = bookmarkCount }
+        if let retweetCount = retweetCount { copy.retweetCount = retweetCount }
+        if let commentCount = commentCount { copy.commentCount = commentCount }
+        if let attachments = attachments { copy.attachments = attachments }
+        if let isPrivate = isPrivate { copy.isPrivate = isPrivate }
+        if let downloadable = downloadable { copy.downloadable = downloadable }
+        return copy
     }
 }
