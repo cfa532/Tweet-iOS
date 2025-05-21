@@ -194,11 +194,20 @@ struct MediaBrowserView: View {
                                     .resizable()
                                     .scaledToFit()
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .onTapGesture {
+                                        dismiss()
+                                    }
                             } placeholder: {
                                 Color.gray
+                                    .onTapGesture {
+                                        dismiss()
+                                    }
                             }
                         } else {
                             Color.gray
+                                .onTapGesture {
+                                    dismiss()
+                                }
                         }
                     }
                     .tag(idx)
@@ -206,6 +215,8 @@ struct MediaBrowserView: View {
             }
             .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
             .background(Color.black.edgesIgnoringSafeArea(.all))
+
+            // Close button
             Button(action: { dismiss() }) {
                 Image(systemName: "xmark.circle.fill")
                     .resizable()
