@@ -52,6 +52,22 @@ struct TweetActionButtonsView: View {
                 icon: "heart",
                 isSelected: tweet.favorites?[UserActions.FAVORITE.rawValue] == true,
                 action: {
+                    if let isFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] {
+                        tweet.favorites?[UserActions.FAVORITE.rawValue] = !isFavorite
+                    } else {
+                        tweet.favorites?[UserActions.FAVORITE.rawValue] = true
+                    }
+                    if let isFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue], isFavorite {
+                        if let favoriteCount = tweet.favoriteCount {
+                            tweet.favoriteCount = favoriteCount + 1
+                        } else {
+                            tweet.favoriteCount = 0
+                        }
+                    } else {
+                        if let favoriteCount = tweet.favoriteCount {
+                            tweet.favoriteCount = max(0, favoriteCount - 1)
+                        }
+                    }
                     Task {
                         if let updatedTweet = try await hproseInstance.toggleFavorite(tweet) {
                             tweet = updatedTweet
