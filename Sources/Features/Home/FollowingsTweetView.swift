@@ -1,15 +1,12 @@
 import SwiftUI
 
 struct FollowingsTweetView: View {
-    @Binding var tweets: [Tweet]
+    @State private var tweets: [Tweet] = []
     @Binding var isLoading: Bool
-    @Binding var isRefreshing: Bool
-    let loadInitialTweets: () async -> Void
-    let likeTweet: (Tweet) async -> Void
-    let retweet: (Tweet) async -> Void
-    let bookmarkTweet: (Tweet) async -> Void
-    let deleteTweet: (Tweet) async -> Void
+
     let onAvatarTap: (User) -> Void
+
+    private let hproseInstance = HproseInstance.shared
 
     var body: some View {
         ScrollView {
@@ -17,9 +14,7 @@ struct FollowingsTweetView: View {
                 ForEach(tweets) { tweet in
                     TweetItemView(
                         tweet: tweet,
-                        likeTweet: likeTweet,
                         retweet: retweet,
-                        bookmarkTweet: bookmarkTweet,
                         deleteTweet: deleteTweet,
                         isInProfile: false,
                         onAvatarTap: onAvatarTap
@@ -41,22 +36,53 @@ struct FollowingsTweetView: View {
                 }
             }
         }
+        .task {
+            await loadInitialTweets()
+        }
+    }
+    
+    func loadInitialTweets() async {
+        isLoading = true
+        do {
+            tweets = try await hproseInstance.fetchTweetFeed(
+                user: hproseInstance.appUser, startRank: 0, endRank: 20
+            )
+        } catch {
+            print("Error loading tweets: \(error)")
+        }
+        isLoading = false
+    }
+
+    func retweet(_ tweet: Tweet) async {
+        do {
+            if let retweet = try await hproseInstance.retweet(tweet) {
+                tweets.insert(retweet, at: 0)
+                
+                // update retweet count of the original tweet
+                if let updatedOriginalTweet = try await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: retweet.mid) {
+                    if let index = tweets.firstIndex(where: { $0.id == updatedOriginalTweet.mid }) {
+                        tweets[index] = updatedOriginalTweet
+                    }
+                } else {
+                    print("Update of the original tweet failed. \(tweet) \(retweet)")
+                }
+            } else {
+                print("Retweet failed. \(tweet)")
+            }
+        } catch {
+            print("Error retweeting: \(error) \(tweet)")
+        }
+    }
+
+    func deleteTweet(_ tweet: Tweet) async {
+        do {
+            if let tweetId = try await hproseInstance.deleteTweet(tweet.id) {
+                tweets.removeAll { $0.id == tweetId }
+            } else {
+                print("Error deleting tweet: \(tweet)")
+            }
+        } catch {
+            print("Error deleting tweet: \(error)")
+        }
     }
 }
-
-// MARK: - Preview
-struct FollowingsTweetView_Previews: PreviewProvider {
-    static var previews: some View {
-        FollowingsTweetView(
-            tweets: .constant([]),
-            isLoading: .constant(false),
-            isRefreshing: .constant(false),
-            loadInitialTweets: {},
-            likeTweet: { _ in },
-            retweet: { _ in },
-            bookmarkTweet: { _ in },
-            deleteTweet: { _ in },
-            onAvatarTap: { _ in }
-        )
-    }
-} 

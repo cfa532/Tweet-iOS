@@ -7,7 +7,9 @@ enum UserActions: Int {
 }
 
 struct TweetActionButtonsView: View {
-    let tweet: Tweet
+    @Binding var tweet: Tweet
+    var retweet: (Tweet) async -> Void
+
     private let hproseInstance = HproseInstance.shared
     
     var body: some View {
@@ -20,8 +22,8 @@ struct TweetActionButtonsView: View {
                     // Comment action
                 }
             )
-            if tweet.commentCount > 0 {
-                Text("\(tweet.commentCount)")
+            if let count = tweet.commentCount, count > 0 {
+                Text("\(count)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .frame(minWidth: 24, alignment: .leading)
@@ -33,51 +35,62 @@ struct TweetActionButtonsView: View {
                 isSelected: tweet.favorites?[UserActions.RETWEET.rawValue] == true,
                 action: {
                     Task {
-                        try await hproseInstance.retweet(tweet.mid)
+                        await retweet(tweet)
                     }
                 }
             )
-            if tweet.retweetCount > 0 {
-                Text("\(tweet.retweetCount)")
+            if  let count = tweet.retweetCount, count > 0 {
+                Text("\(count)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .frame(minWidth: 24, alignment: .leading)
             }
             Spacer()
+            
             // Heart
             TweetActionButton(
                 icon: "heart",
                 isSelected: tweet.favorites?[UserActions.FAVORITE.rawValue] == true,
                 action: {
                     Task {
-                        try await hproseInstance.likeTweet(tweet.mid)
+                        if let updatedTweet = try await hproseInstance.toggleFavorite(tweet.mid) {
+                            tweet = updatedTweet
+                        } else {
+                            print(("Toggle favorite failed.\(tweet)"))
+                        }
                     }
                 }
             )
-            if tweet.favoriteCount > 0 {
-                Text("\(tweet.favoriteCount)")
+            if let count = tweet.favoriteCount, count > 0 {
+                Text("\(count)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .frame(minWidth: 24, alignment: .leading)
             }
             Spacer()
+            
             // Bookmark
             TweetActionButton(
                 icon: "bookmark",
                 isSelected: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true,
                 action: {
                     Task {
-                        try await hproseInstance.bookmarkTweet(tweet.mid)
+                        if let updatedTweet = try await hproseInstance.toggleBookmark(tweet.mid) {
+                            tweet = updatedTweet
+                        } else {
+                            print(("Toggle bookmark failed.\(tweet)"))
+                        }
                     }
                 }
             )
-            if tweet.bookmarkCount > 0 {
-                Text("\(tweet.bookmarkCount)")
+            if let count = tweet.bookmarkCount, count > 0 {
+                Text("\(count)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .frame(minWidth: 24, alignment: .leading)
             }
-            Spacer() // Extra space before share button
+            Spacer()
+            
             TweetActionButton(
                 icon: "square.and.arrow.up",
                 isSelected: false,

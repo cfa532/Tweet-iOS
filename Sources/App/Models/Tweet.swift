@@ -5,7 +5,7 @@ struct Tweet: Identifiable, Codable {
     var mid: String
     let authorId: String // mid of the author
     var content: String?
-    var timestamp: Date
+    var timestamp: Date = Date()
     var title: String?
     
     var originalTweetId: String? // retweet id of the original tweet
@@ -13,14 +13,13 @@ struct Tweet: Identifiable, Codable {
     
     // Display only properties
     var author: User?
-    var originalTweet: Tweet? { nil } // Computed property to avoid recursive reference
     
     // User interaction flags
     var favorites: [Bool]? // [liked, bookmarked, retweeted]
-    var favoriteCount: Int
-    var bookmarkCount: Int
-    var retweetCount: Int
-    var commentCount: Int
+    var favoriteCount: Int?
+    var bookmarkCount: Int?
+    var retweetCount: Int?
+    var commentCount: Int?
     
     // Media attachments
     var attachments: [MimeiFileType]?
@@ -28,7 +27,7 @@ struct Tweet: Identifiable, Codable {
     var downloadable: Bool?
     
     // Computed properties for user interaction states
-    var isLiked: Bool {
+    var isFavorite: Bool {
         get { favorites?[0] ?? false }
         set {
             if favorites == nil {
@@ -67,7 +66,6 @@ struct Tweet: Identifiable, Codable {
         case originalTweetId
         case originalAuthorId
         case author
-        case originalTweet
         case favorites
         case favoriteCount
         case bookmarkCount

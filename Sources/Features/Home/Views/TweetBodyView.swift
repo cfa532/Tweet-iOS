@@ -13,8 +13,10 @@ extension View {
 }
 
 struct TweetBodyView: View {
-    let tweet: Tweet
+    @Binding var tweet: Tweet
     var enableTap: Bool = false
+    var retweet: (Tweet) async -> Void
+    var deleteTweet: (Tweet) async -> Void
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -30,6 +32,7 @@ struct TweetBodyView: View {
             }
         }
         Spacer(minLength: 12)
-        TweetActionButtonsView(tweet: tweet)
+        
+        TweetActionButtonsView(tweet: $tweet, retweet: retweet)
     }
 }

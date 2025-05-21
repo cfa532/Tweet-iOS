@@ -3,7 +3,6 @@ import SwiftUI
 
 @available(iOS 17.0, *)
 struct HomeView: View {
-    @State private var tweets: [Tweet] = []
     @State private var isLoading = false
     @State private var isRefreshing = false
     @State private var selectedTab = 0
@@ -33,14 +32,7 @@ struct HomeView: View {
                 // Tab Content
                 TabView(selection: $selectedTab) {
                     FollowingsTweetView(
-                        tweets: $tweets,
                         isLoading: $isLoading,
-                        isRefreshing: $isRefreshing,
-                        loadInitialTweets: loadInitialTweets,
-                        likeTweet: likeTweet,
-                        retweet: retweet,
-                        bookmarkTweet: bookmarkTweet,
-                        deleteTweet: deleteTweet,
                         onAvatarTap: { user in
                             selectedUser = user
                         }
@@ -55,65 +47,6 @@ struct HomeView: View {
             .navigationDestination(item: $selectedUser) { user in
                 ProfileView(user: user)
             }
-        }
-        .task {
-            await loadInitialTweets()
-        }
-    }
-
-    func loadInitialTweets() async {
-        isLoading = true
-        do {
-            tweets = try await hproseInstance.fetchTweetFeed(
-                user: hproseInstance.appUser, startRank: 0, endRank: 20
-            )
-        } catch {
-            print("Error loading tweets: \(error)")
-        }
-        isLoading = false
-    }
-
-    func likeTweet(_ tweet: Tweet) async {
-        do {
-            try await hproseInstance.likeTweet(tweet.id)
-            if let index = tweets.firstIndex(where: { $0.id == tweet.id }) {
-                tweets[index].isLiked.toggle()
-                tweets[index].favoriteCount += tweets[index].isLiked ? 1 : -1
-            }
-        } catch {
-            print("Error liking tweet: \(error)")
-        }
-    }
-
-    func retweet(_ tweet: Tweet) async {
-        do {
-            try await hproseInstance.retweet(tweet.id)
-            if let index = tweets.firstIndex(where: { $0.id == tweet.id }) {
-                tweets[index].isRetweeted.toggle()
-                tweets[index].retweetCount += tweets[index].isRetweeted ? 1 : -1
-            }
-        } catch {
-            print("Error retweeting: \(error)")
-        }
-    }
-
-    func bookmarkTweet(_ tweet: Tweet) async {
-        do {
-            try await hproseInstance.bookmarkTweet(tweet.id)
-            if let index = tweets.firstIndex(where: { $0.id == tweet.id }) {
-                tweets[index].isBookmarked.toggle()
-            }
-        } catch {
-            print("Error bookmarking tweet: \(error)")
-        }
-    }
-
-    func deleteTweet(_ tweet: Tweet) async {
-        do {
-            try await hproseInstance.deleteTweet(tweet.id)
-            tweets.removeAll { $0.id == tweet.id }
-        } catch {
-            print("Error deleting tweet: \(error)")
         }
     }
 }

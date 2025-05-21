@@ -1,10 +1,8 @@
 import SwiftUI
 
 struct TweetItemView: View {
-    let tweet: Tweet
-    let likeTweet: (Tweet) async -> Void
+    @State var tweet: Tweet
     let retweet: (Tweet) async -> Void
-    let bookmarkTweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
@@ -27,7 +25,7 @@ struct TweetItemView: View {
                 TweetHeaderView(tweet: tweet)
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
-                TweetBodyView(tweet: tweet, enableTap: false)
+                TweetBodyView(tweet: $tweet, enableTap: false, retweet: retweet, deleteTweet: deleteTweet)
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
             })
@@ -35,7 +33,11 @@ struct TweetItemView: View {
         .padding()
         .background(Color(.systemBackground))
         .background(
-            NavigationLink(destination: TweetDetailView(tweet: tweet), isActive: $showDetail) {
+            NavigationLink(destination: TweetDetailView(
+                tweet: $tweet,
+                retweet: retweet,
+                deleteTweet: deleteTweet
+            ), isActive: $showDetail) {
                 EmptyView()
             }
             .hidden()
@@ -51,9 +53,7 @@ struct TweetItemView_Previews: PreviewProvider {
                 mid: "1",
                 authorId: "1"
             ),
-            likeTweet: { _ in },
             retweet: { _ in },
-            bookmarkTweet: { _ in },
             deleteTweet: { _ in },
             isInProfile: false,
             onAvatarTap: { _ in }

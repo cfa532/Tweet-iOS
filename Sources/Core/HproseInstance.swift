@@ -328,19 +328,30 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func likeTweet(_ tweetId: String) async throws {
-        try await withRetry {
-            let entry = "like_tweet"
+    /*
+     Return an updated tweet object after toggling favorite status of the tweet by appUser.
+     */
+    func toggleFavorite(_ tweetId: String) async throws -> Tweet? {
+        return try await withRetry {
+            let entry = "toggle_favorite"
             let params = [
                 "aid": appId,
                 "ver": "last",
                 "userid": appUser.id,
                 "tweetid": tweetId
             ]
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            guard let response = service.runMApp(entry, params, nil) as? Tweet else {
+                print("Invalid response format toggle favorite")
+                return nil
+            }
+            return response
         }
     }
     
-    func bookmarkTweet(_ tweetId: String) async throws {
+    func toggleBookmark(_ tweetId: String) async throws -> Tweet?  {
         try await withRetry {
             let entry = "bookmark_tweet"
             let params = [
@@ -349,22 +360,63 @@ final class HproseInstance: ObservableObject {
                 "userid": appUser.id,
                 "tweetid": tweetId
             ]
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            guard let response = service.runMApp(entry, params, nil) as? Tweet else {
+                print("Invalid response format toggle bookmark")
+                return nil
+            }
+            return response
         }
     }
 
-    func retweet(_ tweetId: String) async throws {
+    func retweet(_ tweet: Tweet) async throws -> Tweet? {
         try await withRetry {
-            let entry = "retweet"
+            if let retweet = try await uploadTweet(
+                Tweet(
+                    mid: Constants.GUEST_ID,
+                    authorId: appUser.mid,
+                    originalTweetId: tweet.mid,
+                    originalAuthorId: tweet.authorId
+                )
+            ) {
+                return retweet
+            }
+            return nil
+        }
+    }
+    
+    func updateRetweetCount(
+        tweet: Tweet,
+        retweetId: String,
+        direction: Bool = true   // add/remove retweet
+    ) async throws -> Tweet? {
+        try await withRetry {
+            let entry = direction ? "retweet_added" : "retweet_removed"
             let params = [
                 "aid": appId,
                 "ver": "last",
                 "userid": appUser.id,
-                "tweetid": tweetId
+                "retweetid": retweetId,
+                "tweetid": tweet.mid,
+                "authorid": tweet.authorId,
             ]
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            guard let updatedOriginalTweet = service.runMApp(entry, params, nil) as? Tweet else {
+                print("Invalid response update retweet: \(retweetId) \(tweet) \(direction)")
+                return nil
+            }
+            return updatedOriginalTweet
         }
     }
     
-    func deleteTweet(_ tweetId: String) async throws {
+    /**
+     * Delete a tweet and returned the deleted tweetId
+     * */
+    func deleteTweet(_ tweetId: String) async throws -> String? {
         try await withRetry {
             let entry = "delete_tweet"
             let params = [
@@ -373,6 +425,14 @@ final class HproseInstance: ObservableObject {
                 "userid": appUser.id,
                 "tweetid": tweetId
             ]
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            guard let response = service.runMApp(entry, params, nil) as? String else {
+                print("Invalid response delete tweetID: \(tweetId)")
+                return nil
+            }
+            return response
         }
     }
     

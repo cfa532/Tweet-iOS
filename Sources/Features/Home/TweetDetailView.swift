@@ -2,10 +2,12 @@ import SwiftUI
 import AVKit
 
 struct TweetDetailView: View {
-    let tweet: Tweet
+    @Binding var tweet: Tweet
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
-    
+    let retweet: (Tweet) async -> Void
+    let deleteTweet: (Tweet) async -> Void
+
     var body: some View {
         VStack {
             if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl, !attachments.isEmpty {
@@ -52,7 +54,7 @@ struct TweetDetailView: View {
                             .padding(.vertical, 8)
                     }
                     // Action bar
-                    TweetActionButtonsView(tweet: tweet)
+                    TweetActionButtonsView(tweet: $tweet, retweet: retweet)
                         .padding(.top, 16)
                 }
                 .padding()

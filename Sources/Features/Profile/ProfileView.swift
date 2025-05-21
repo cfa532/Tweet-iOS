@@ -139,9 +139,7 @@ struct ProfileView: View {
             } else {
                 List(tweets) { tweet in
                     TweetItemView(tweet: tweet,
-                                  likeTweet: { _ in },
                                   retweet: { _ in },
-                                  bookmarkTweet: { _ in },
                                   deleteTweet: { _ in },
                                   isInProfile: true,
                                   onAvatarTap: { _ in /* do nothing in profile */ })
