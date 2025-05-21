@@ -73,14 +73,28 @@ struct FollowingsTweetView: View {
     }
 
     func deleteTweet(_ tweet: Tweet) async {
-        do {
-            if let tweetId = try await hproseInstance.deleteTweet(tweet.mid) {
-                tweets.removeAll { $0.id == tweetId }
-            } else {
-                print("Error deleting tweet: \(tweet)")
+        // Remove from UI immediately
+        tweets.removeAll { $0.id == tweet.mid }
+        
+        // Handle deletion in background
+        Task.detached {
+            do {
+                if let tweetId = try await hproseInstance.deleteTweet(tweet.mid) {
+                    print("Successfully deleted tweet: \(tweetId)")
+                } else {
+                    print("Error deleting tweet: \(tweet)")
+                    // Optionally, you could add the tweet back to the UI here if deletion failed
+                    await MainActor.run {
+                        tweets.append(tweet)
+                    }
+                }
+            } catch {
+                print("Error deleting tweet: \(error)")
+                // Optionally, you could add the tweet back to the UI here if deletion failed
+                await MainActor.run {
+                    tweets.append(tweet)
+                }
             }
-        } catch {
-            print("Error deleting tweet: \(error)")
         }
     }
 }
