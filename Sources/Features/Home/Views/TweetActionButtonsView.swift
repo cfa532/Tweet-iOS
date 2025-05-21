@@ -58,14 +58,14 @@ struct TweetActionButtonsView: View {
                         tweet.favorites?[UserActions.FAVORITE.rawValue] = true
                     }
                     if let isFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue], isFavorite {
-                        if let favoriteCount = tweet.favoriteCount {
-                            tweet.favoriteCount = favoriteCount + 1
+                        if let count = tweet.favoriteCount {
+                            tweet.favoriteCount = count + 1
                         } else {
                             tweet.favoriteCount = 0
                         }
                     } else {
-                        if let favoriteCount = tweet.favoriteCount {
-                            tweet.favoriteCount = max(0, favoriteCount - 1)
+                        if let count = tweet.favoriteCount {
+                            tweet.favoriteCount = max(0, count - 1)
                         }
                     }
                     Task {
@@ -91,8 +91,24 @@ struct TweetActionButtonsView: View {
                 icon: "bookmark",
                 isSelected: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true,
                 action: {
+                    if let isFavorite = tweet.favorites?[UserActions.BOOKMARK.rawValue] {
+                        tweet.favorites?[UserActions.BOOKMARK.rawValue] = !isFavorite
+                    } else {
+                        tweet.favorites?[UserActions.BOOKMARK.rawValue] = true
+                    }
+                    if let isFavorite = tweet.favorites?[UserActions.BOOKMARK.rawValue], isFavorite {
+                        if let count = tweet.bookmarkCount {
+                            tweet.bookmarkCount = count + 1
+                        } else {
+                            tweet.bookmarkCount = 0
+                        }
+                    } else {
+                        if let count = tweet.bookmarkCount {
+                            tweet.bookmarkCount = max(0, count - 1)
+                        }
+                    }
                     Task {
-                        if let updatedTweet = try await hproseInstance.toggleBookmark(tweet.mid) {
+                        if let updatedTweet = try await hproseInstance.toggleBookmark(tweet) {
                             tweet = updatedTweet
                         } else {
                             print(("Toggle bookmark failed.\(tweet)"))

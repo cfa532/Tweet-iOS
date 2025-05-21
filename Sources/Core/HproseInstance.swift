@@ -358,23 +358,39 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func toggleBookmark(_ tweetId: String) async throws -> Tweet?  {
+    func toggleBookmark(_ tweet: Tweet) async throws -> Tweet?  {
         try await withRetry {
-            let entry = "bookmark_tweet"
+            let entry = "toggle_bookmark"
             let params = [
                 "aid": appId,
                 "ver": "last",
                 "userid": appUser.id,
-                "tweetid": tweetId
+                "tweetid": tweet.mid,
+                "authorid": tweet.authorId,
+                "userhostid": appUser.hostIds?.first as Any
             ]
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            guard let response = service.runMApp(entry, params, nil) as? Tweet else {
+            guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
                 print("Invalid response format toggle bookmark")
                 return nil
             }
-            return response
+            // update appUser object
+            if let userDict = response["user"] as? [String: Any],
+               let user = User.from(dict: userDict) {
+                await MainActor.run {
+                    appUser.bookmarksCount = user.bookmarksCount
+                }
+            }
+            // update the tweet object
+            if let hasBookmarked = response["hasBookmarked"] as? Bool,
+               let bookmarkCount = response["count"] as? Int {
+                var favorites = tweet.favorites ?? [false, false, false]
+                favorites[UserActions.BOOKMARK.rawValue] = hasBookmarked
+                return tweet.copy(favorites: favorites, bookmarkCount: bookmarkCount)
+            }
+            return nil
         }
     }
 
