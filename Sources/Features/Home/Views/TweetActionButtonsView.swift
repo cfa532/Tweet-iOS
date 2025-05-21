@@ -11,21 +11,25 @@ struct TweetActionButtonsView: View {
     private let hproseInstance = HproseInstance.shared
     
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 0) {
+            // Comment
             TweetActionButton(
                 icon: "message",
-                count: tweet.commentCount,
                 isSelected: false,
                 action: {
-                    Task {
-                        try await hproseInstance.bookmarkTweet(tweet.mid)
-                    }
+                    // Comment action
                 }
             )
-            
+            if tweet.commentCount > 0 {
+                Text("\(tweet.commentCount)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(minWidth: 24, alignment: .leading)
+            }
+            Spacer()
+            // Retweet
             TweetActionButton(
                 icon: "arrow.2.squarepath",
-                count: tweet.retweetCount,
                 isSelected: tweet.favorites?[UserActions.RETWEET.rawValue] == true,
                 action: {
                     Task {
@@ -33,10 +37,16 @@ struct TweetActionButtonsView: View {
                     }
                 }
             )
-            
+            if tweet.retweetCount > 0 {
+                Text("\(tweet.retweetCount)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(minWidth: 24, alignment: .leading)
+            }
+            Spacer()
+            // Heart
             TweetActionButton(
                 icon: "heart",
-                count: tweet.favoriteCount,
                 isSelected: tweet.favorites?[UserActions.FAVORITE.rawValue] == true,
                 action: {
                     Task {
@@ -44,10 +54,16 @@ struct TweetActionButtonsView: View {
                     }
                 }
             )
-            
+            if tweet.favoriteCount > 0 {
+                Text("\(tweet.favoriteCount)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(minWidth: 24, alignment: .leading)
+            }
+            Spacer()
+            // Bookmark
             TweetActionButton(
                 icon: "bookmark",
-                count: tweet.bookmarkCount,
                 isSelected: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true,
                 action: {
                     Task {
@@ -55,27 +71,35 @@ struct TweetActionButtonsView: View {
                     }
                 }
             )
+            if tweet.bookmarkCount > 0 {
+                Text("\(tweet.bookmarkCount)")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(minWidth: 24, alignment: .leading)
+            }
+            Spacer() // Extra space before share button
+            TweetActionButton(
+                icon: "square.and.arrow.up",
+                isSelected: false,
+                action: {
+                    // Share action
+                }
+            )
+            .padding(.leading, 40)
         }
+        .padding(.horizontal, 4)
     }
 }
 
 struct TweetActionButton: View {
     let icon: String
-    let count: Int
     let isSelected: Bool
     let action: () -> Void
     
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .foregroundColor(isSelected ? .blue : .secondary)
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.subheadline)
-                        .foregroundColor(isSelected ? .blue : .secondary)
-                }
-            }
+            Image(systemName: icon)
+                .foregroundColor(isSelected ? .blue : .secondary)
         }
     }
 }
