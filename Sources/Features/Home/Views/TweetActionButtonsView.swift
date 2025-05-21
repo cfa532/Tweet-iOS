@@ -53,7 +53,7 @@ struct TweetActionButtonsView: View {
                 isSelected: tweet.favorites?[UserActions.FAVORITE.rawValue] == true,
                 action: {
                     Task {
-                        if let updatedTweet = try await hproseInstance.toggleFavorite(tweet.mid) {
+                        if let updatedTweet = try await hproseInstance.toggleFavorite(tweet) {
                             tweet = updatedTweet
                         } else {
                             print(("Toggle favorite failed.\(tweet)"))

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct TweetItemView: View {
-    @State var tweet: Tweet
+    @Binding var tweet: Tweet
     let retweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
     var isInProfile: Bool = false
@@ -44,19 +44,3 @@ struct TweetItemView: View {
         )
     }
 }
-
-// MARK: - Preview
-struct TweetItemView_Previews: PreviewProvider {
-    static var previews: some View {
-        TweetItemView(
-            tweet: Tweet(
-                mid: "1",
-                authorId: "1"
-            ),
-            retweet: { _ in },
-            deleteTweet: { _ in },
-            isInProfile: false,
-            onAvatarTap: { _ in }
-        )
-    }
-} 

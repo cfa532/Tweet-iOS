@@ -76,7 +76,7 @@ final class HproseInstance: ObservableObject {
                 print(addrs)
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     #if DEBUG
-                        let firstIp = "125.118.43.78:8002"  // for testing
+                        let firstIp = "125.118.94.59:8002"  // for testing
                     #endif
                     appUser = appUser.copy(baseUrl: "http://\(firstIp)")
                     client.uri = appUser.baseUrl!+"/webapi/"
@@ -331,14 +331,16 @@ final class HproseInstance: ObservableObject {
     /*
      Return an updated tweet object after toggling favorite status of the tweet by appUser.
      */
-    func toggleFavorite(_ tweetId: String) async throws -> Tweet? {
+    func toggleFavorite(_ tweet: Tweet) async throws -> Tweet? {
         return try await withRetry {
             let entry = "toggle_favorite"
             let params = [
                 "aid": appId,
                 "ver": "last",
                 "userid": appUser.id,
-                "tweetid": tweetId
+                "tweetid": tweet.mid,
+                "authorid": tweet.authorId,
+                "userhostid": appUser.hostIds?.first as Any
             ]
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])

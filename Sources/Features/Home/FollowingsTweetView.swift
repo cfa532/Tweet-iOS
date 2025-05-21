@@ -11,9 +11,9 @@ struct FollowingsTweetView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(tweets) { tweet in
+                ForEach($tweets) { $tweet in
                     TweetItemView(
-                        tweet: tweet,
+                        tweet: $tweet,
                         retweet: retweet,
                         deleteTweet: deleteTweet,
                         isInProfile: false,
@@ -28,6 +28,7 @@ struct FollowingsTweetView: View {
             }
         }
         .refreshable {
+            await loadInitialTweets()
         }
         .onAppear {
             if tweets.isEmpty {
@@ -35,9 +36,6 @@ struct FollowingsTweetView: View {
                     await loadInitialTweets()
                 }
             }
-        }
-        .task {
-            await loadInitialTweets()
         }
     }
     

@@ -137,14 +137,16 @@ struct ProfileView: View {
                     .foregroundColor(.gray)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(tweets) { tweet in
-                    TweetItemView(tweet: tweet,
-                                  retweet: { _ in },
-                                  deleteTweet: { _ in },
-                                  isInProfile: true,
-                                  onAvatarTap: { _ in /* do nothing in profile */ })
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
+                List {
+                    ForEach($tweets) { $tweet in
+                        TweetItemView(tweet: $tweet,
+                                      retweet: { _ in },
+                                      deleteTweet: { _ in },
+                                      isInProfile: true,
+                                      onAvatarTap: { _ in /* do nothing in profile */ })
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                    }
                 }
                 .listStyle(PlainListStyle())
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
