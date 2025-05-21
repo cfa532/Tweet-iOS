@@ -1,7 +1,8 @@
 import SwiftUI
 
-struct TweetHeaderView: View {
-    let tweet: Tweet
+struct TweetItemHeaderView: View {
+    @Binding var tweet: Tweet
+    let deleteTweet: (String) async -> Void
     private let hproseInstance = HproseInstance.shared
     
     var body: some View {
@@ -20,7 +21,8 @@ struct TweetHeaderView: View {
             Menu {
                 Button(role: .destructive) {
                     Task {
-                        try await hproseInstance.deleteTweet(tweet.mid)
+//                        try await hproseInstance.deleteTweet(tweet.mid)
+                        await deleteTweet(tweet.mid)
                     }
                 } label: {
                     Label("Delete", systemImage: "trash")
@@ -30,18 +32,5 @@ struct TweetHeaderView: View {
                     .foregroundColor(.secondary)
             }
         }
-    }
-}
-
-// MARK: - Preview
-struct TweetHeaderView_Previews: PreviewProvider {
-    static var previews: some View {
-        TweetHeaderView(
-            tweet: Tweet(
-                mid: "1",
-                authorId: "1"
-            ),
-        )
-        .padding()
     }
 }

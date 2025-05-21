@@ -32,8 +32,8 @@
 		46E5B33C2DDA315700AEF31F /* FollowingsTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3352DDA315700AEF31F /* FollowingsTweetView.swift */; };
 		46E5B33D2DDA315700AEF31F /* TabButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3372DDA315700AEF31F /* TabButton.swift */; };
 		46E5B3422DDAB74400AEF31F /* TweetActionButtonsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B33E2DDAB74400AEF31F /* TweetActionButtonsView.swift */; };
-		46E5B3432DDAB74400AEF31F /* TweetBodyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B33F2DDAB74400AEF31F /* TweetBodyView.swift */; };
-		46E5B3442DDAB74400AEF31F /* TweetHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3402DDAB74400AEF31F /* TweetHeaderView.swift */; };
+		46E5B3432DDAB74400AEF31F /* TweetItemBodyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B33F2DDAB74400AEF31F /* TweetItemBodyView.swift */; };
+		46E5B3442DDAB74400AEF31F /* TweetItemHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3402DDAB74400AEF31F /* TweetItemHeaderView.swift */; };
 		46E5B3472DDC0CFB00AEF31F /* Avatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3462DDC0CF500AEF31F /* Avatar.swift */; };
 		46E5B3492DDC0F6900AEF31F /* MediaGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3482DDC0F5B00AEF31F /* MediaGridView.swift */; };
 		46E5B34B2DDC155600AEF31F /* MediaCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B34A2DDC155200AEF31F /* MediaCell.swift */; };
@@ -69,8 +69,8 @@
 		46E5B3372DDA315700AEF31F /* TabButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabButton.swift; sourceTree = "<group>"; };
 		46E5B3382DDA315700AEF31F /* TweetItemView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetItemView.swift; sourceTree = "<group>"; };
 		46E5B33E2DDAB74400AEF31F /* TweetActionButtonsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetActionButtonsView.swift; sourceTree = "<group>"; };
-		46E5B33F2DDAB74400AEF31F /* TweetBodyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetBodyView.swift; sourceTree = "<group>"; };
-		46E5B3402DDAB74400AEF31F /* TweetHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetHeaderView.swift; sourceTree = "<group>"; };
+		46E5B33F2DDAB74400AEF31F /* TweetItemBodyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetItemBodyView.swift; sourceTree = "<group>"; };
+		46E5B3402DDAB74400AEF31F /* TweetItemHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetItemHeaderView.swift; sourceTree = "<group>"; };
 		46E5B3462DDC0CF500AEF31F /* Avatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Avatar.swift; sourceTree = "<group>"; };
 		46E5B3482DDC0F5B00AEF31F /* MediaGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaGridView.swift; sourceTree = "<group>"; };
 		46E5B34A2DDC155200AEF31F /* MediaCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCell.swift; sourceTree = "<group>"; };
@@ -251,8 +251,8 @@
 				46E5B3482DDC0F5B00AEF31F /* MediaGridView.swift */,
 				46E5B3462DDC0CF500AEF31F /* Avatar.swift */,
 				46E5B33E2DDAB74400AEF31F /* TweetActionButtonsView.swift */,
-				46E5B33F2DDAB74400AEF31F /* TweetBodyView.swift */,
-				46E5B3402DDAB74400AEF31F /* TweetHeaderView.swift */,
+				46E5B33F2DDAB74400AEF31F /* TweetItemBodyView.swift */,
+				46E5B3402DDAB74400AEF31F /* TweetItemHeaderView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -378,8 +378,8 @@
 				46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */,
 				46E5B32D2DDA045B00AEF31F /* AppHeaderView.swift in Sources */,
 				46E5B3422DDAB74400AEF31F /* TweetActionButtonsView.swift in Sources */,
-				46E5B3432DDAB74400AEF31F /* TweetBodyView.swift in Sources */,
-				46E5B3442DDAB74400AEF31F /* TweetHeaderView.swift in Sources */,
+				46E5B3432DDAB74400AEF31F /* TweetItemBodyView.swift in Sources */,
+				46E5B3442DDAB74400AEF31F /* TweetItemHeaderView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1A /* TweetApp.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1E /* Tweet.swift in Sources */,

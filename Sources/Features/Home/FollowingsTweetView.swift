@@ -74,7 +74,7 @@ struct FollowingsTweetView: View {
 
     func deleteTweet(_ tweet: Tweet) async {
         do {
-            if let tweetId = try await hproseInstance.deleteTweet(tweet.id) {
+            if let tweetId = try await hproseInstance.deleteTweet(tweet.mid) {
                 tweets.removeAll { $0.id == tweetId }
             } else {
                 print("Error deleting tweet: \(tweet)")

@@ -22,10 +22,10 @@ struct TweetItemView: View {
                 .buttonStyle(PlainButtonStyle())
             }
             VStack(alignment: .leading, content: {
-                TweetHeaderView(tweet: tweet)
+                TweetItemHeaderView(tweet: $tweet)
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
-                TweetBodyView(tweet: $tweet, enableTap: false, retweet: retweet, deleteTweet: deleteTweet)
+                TweetItemBodyView(tweet: $tweet, enableTap: false, retweet: retweet)
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
             })

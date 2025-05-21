@@ -445,7 +445,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "userid": appUser.id,
+                "authorid": appUser.mid,
                 "tweetid": tweetId
             ]
             guard let service = hproseClient else {
@@ -455,7 +455,7 @@ final class HproseInstance: ObservableObject {
                 print("Invalid response delete tweetID: \(tweetId)")
                 return nil
             }
-            return response
+            return response     // deleted tweetId
         }
     }
     
@@ -886,42 +886,6 @@ final class HproseInstance: ObservableObject {
                 print("Error in background upload: \(error)")
                 await MainActor.run {
                     print("Error during upload: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-    
-    // MARK: - Hprose Service Wrapper
-    private func callService<T>(_ service: AnyObject?, entry: String, params: [String: Any], transform: @escaping ((Any?) throws -> T)) async throws -> T {
-        guard let service = service else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global().async {
-                do {
-                    let response = service.runMApp(entry, params, [])
-                    let result = try transform(response)
-                    continuation.resume(returning: result)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
-    }
-    
-    private func callService(_ service: AnyObject?, entry: String, params: [String: Any]) async throws {
-        guard let service = service else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global().async {
-                do {
-                    _ = service.runMApp(entry, params, [])
-                    continuation.resume()
-                } catch {
-                    continuation.resume(throwing: error)
                 }
             }
         }

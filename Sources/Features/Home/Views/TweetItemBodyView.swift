@@ -12,11 +12,10 @@ extension View {
     }
 }
 
-struct TweetBodyView: View {
+struct TweetItemBodyView: View {
     @Binding var tweet: Tweet
     var enableTap: Bool = false
     var retweet: (Tweet) async -> Void
-    var deleteTweet: (Tweet) async -> Void
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
