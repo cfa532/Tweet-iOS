@@ -297,29 +297,22 @@ final class HproseInstance: ObservableObject {
                     }
                     return ["reason": "Unknown error occurred", "status": "failure"]
                 } else if status == "success" {
-                    if let userJsonString = response["user"] as? String {
-                        guard let userData = userJsonString.data(using: .utf8) else {
-                            return ["reason": "Failed to convert user data to UTF-8", "status": "failure"]
-                        }
+                    if let userDict = response["user"] as? [String: Any] {
+                        // Convert dictionary to Data
+                        let userData = try JSONSerialization.data(withJSONObject: userDict, options: [])
+                        var userObject = try JSONDecoder().decode(User.self, from: userData)
+                        hproseClient = newService   // update serving node for current session.
+                        userObject.baseUrl = loginUser.baseUrl
                         
-                        do {
-                            var userObject = try JSONDecoder().decode(User.self, from: userData)
-                            hproseClient = newService   // update serving node for current session.
-                            userObject.baseUrl = loginUser.baseUrl
-                            
-                            // Capture the value before the MainActor block
-                            let finalUser = userObject
-                            
-                            // Update appUser on the main thread
-                            await MainActor.run {
-                                self.appUser = finalUser
-                                preferenceHelper?.setUserId(finalUser.mid)
-                            }
-                            
-                            return ["user": userObject, "status": "success"]
-                        } catch {
-                            return ["reason": "Failed to decode user data: \(error.localizedDescription)", "status": "failure"]
+                        // Capture the value before the MainActor block
+                        let finalUser = userObject
+                        
+                        // Update appUser on the main thread
+                        await MainActor.run {
+                            self.appUser = finalUser
+                            preferenceHelper?.setUserId(finalUser.mid)
                         }
+                        return ["user": userObject, "status": "success"]
                     }
                     return ["reason": "User data not found", "status": "failure"]
                 }
