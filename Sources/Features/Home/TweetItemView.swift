@@ -8,6 +8,7 @@ struct TweetItemView: View {
     let deleteTweet: (Tweet) async -> Void
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
+    @State private var showDetail = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -24,11 +25,21 @@ struct TweetItemView: View {
             }
             VStack(alignment: .leading, content: {
                 TweetHeaderView(tweet: tweet)
-                TweetBodyView(tweet: tweet)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showDetail = true }
+                TweetBodyView(tweet: tweet, enableTap: false)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showDetail = true }
             })
         }
         .padding()
         .background(Color(.systemBackground))
+        .background(
+            NavigationLink(destination: TweetDetailView(tweet: tweet), isActive: $showDetail) {
+                EmptyView()
+            }
+            .hidden()
+        )
     }
 }
 
