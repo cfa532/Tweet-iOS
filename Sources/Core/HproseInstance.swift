@@ -191,6 +191,32 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    func getTweet(
+        tweetId: String,
+        authorId: String,
+        nodeUrl: String? = nil
+    )  async throws -> Tweet? {
+        try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+
+            let entry = "get_tweet"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "tweetid": tweetId,
+                "userid": appUser.mid
+            ]
+            if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any],
+               var tweet = Tweet.from(dict: tweetDict) {
+                tweet.author = try await getUser(authorId)
+                return tweet
+            }
+            return nil
+        }
+    }
+    
     func getUserId(_ username: String) async throws -> String? {
         try await withRetry {
             guard let service = hproseClient else {
