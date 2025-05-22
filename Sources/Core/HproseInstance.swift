@@ -427,7 +427,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "userid": appUser.id,
+                "userid": appUser.mid,
                 "retweetid": retweetId,
                 "tweetid": tweet.mid,
                 "authorid": tweet.authorId,
@@ -435,11 +435,11 @@ final class HproseInstance: ObservableObject {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            guard let updatedOriginalTweet = service.runMApp(entry, params, nil) as? Tweet else {
-                print("Invalid response update retweet: \(retweetId) \(tweet) \(direction)")
-                return nil
+            if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any],
+               let updatedOriginalTweet = Tweet.from(dict: tweetDict) {
+                return updatedOriginalTweet
             }
-            return updatedOriginalTweet
+            return nil
         }
     }
     
