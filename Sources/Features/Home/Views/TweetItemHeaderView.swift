@@ -12,8 +12,6 @@ struct TweetItemHeaderView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
-            
-            Spacer()
         }
     }
 }

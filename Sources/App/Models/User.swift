@@ -34,7 +34,7 @@ class User: ObservableObject, Identifiable, Hashable, Codable {
     @Published var commentsList: [String]? // List of MimeiId
     @Published var topTweets: [String]? // List of MimeiId
     
-    enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey {
         case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile
         case timestamp, lastLogin, cloudDrivePort, tweetCount, followingCount
         case followersCount, bookmarksCount, favoritesCount, commentsCount
@@ -52,7 +52,11 @@ class User: ObservableObject, Identifiable, Hashable, Codable {
     required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
+        // Initialize required properties first
         mid = try container.decode(String.self, forKey: .mid)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        
+        // Initialize optional properties
         baseUrl = try container.decodeIfPresent(String.self, forKey: .baseUrl)
         writableUrl = try container.decodeIfPresent(String.self, forKey: .writableUrl)
         name = try container.decodeIfPresent(String.self, forKey: .name)
@@ -61,7 +65,6 @@ class User: ObservableObject, Identifiable, Hashable, Codable {
         avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
         email = try container.decodeIfPresent(String.self, forKey: .email)
         profile = try container.decodeIfPresent(String.self, forKey: .profile)
-        timestamp = try container.decode(Date.self, forKey: .timestamp)
         lastLogin = try container.decodeIfPresent(Date.self, forKey: .lastLogin)
         cloudDrivePort = try container.decodeIfPresent(Int.self, forKey: .cloudDrivePort)
         
@@ -87,7 +90,11 @@ class User: ObservableObject, Identifiable, Hashable, Codable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         
+        // Encode required properties
         try container.encode(mid, forKey: .mid)
+        try container.encode(timestamp, forKey: .timestamp)
+        
+        // Encode optional properties
         try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
         try container.encodeIfPresent(writableUrl, forKey: .writableUrl)
         try container.encodeIfPresent(name, forKey: .name)
@@ -96,7 +103,6 @@ class User: ObservableObject, Identifiable, Hashable, Codable {
         try container.encodeIfPresent(avatar, forKey: .avatar)
         try container.encodeIfPresent(email, forKey: .email)
         try container.encodeIfPresent(profile, forKey: .profile)
-        try container.encode(timestamp, forKey: .timestamp)
         try container.encodeIfPresent(lastLogin, forKey: .lastLogin)
         try container.encodeIfPresent(cloudDrivePort, forKey: .cloudDrivePort)
         
