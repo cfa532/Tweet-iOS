@@ -30,7 +30,7 @@ class ComposeTweetViewModel: ObservableObject {
     var canPostTweet: Bool {
         let hasContent = !tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasAttachments = !selectedItems.isEmpty
-        let isWithinLimit = tweetContent.count <= 280
+        let isWithinLimit = tweetContent.count <= Constants.MAX_TWEET_SIZE
         
         return (hasContent || hasAttachments) && isWithinLimit
     }

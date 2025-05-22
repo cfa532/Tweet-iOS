@@ -77,8 +77,8 @@ struct ComposeTweetView: View {
                     
                     Spacer()
                     
-                    Text("\(max(0, 280 - viewModel.tweetContent.count))")
-                        .foregroundColor(viewModel.tweetContent.count > 280 ? .red : .gray)
+                    Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.tweetContent.count))")
+                        .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .gray)
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)

@@ -1,6 +1,11 @@
 import Foundation
 import Combine
 
+enum Constants {
+    static let GUEST_ID = "000000000000000000000000000"
+    static let MAX_TWEET_SIZE = 28000
+}
+
 class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var mid: String
     @Published var baseUrl: String?
@@ -187,8 +192,4 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             return nil
         }
     }
-}
-
-enum Constants {
-    static let GUEST_ID = "000000000000000000000000000"
 }
