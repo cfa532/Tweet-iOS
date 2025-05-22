@@ -14,8 +14,9 @@ extension View {
 
 struct TweetItemBodyView: View {
     @Binding var tweet: Tweet
-    var enableTap: Bool = false
     var retweet: (Tweet) async -> Void
+    var embedded: Bool = false
+    var enableTap: Bool = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -31,7 +32,8 @@ struct TweetItemBodyView: View {
             }
         }
         Spacer(minLength: 12)
-        
-        TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+        if !embedded {
+            TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+        }
     }
 }

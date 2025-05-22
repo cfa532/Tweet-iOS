@@ -2,9 +2,6 @@ import SwiftUI
 
 struct TweetItemHeaderView: View {
     @Binding var tweet: Tweet
-    let deleteTweet: (Tweet) async -> Void
-    @Environment(\.dismiss) private var dismiss
-    private let hproseInstance = HproseInstance.shared
     
     var body: some View {
         HStack {
@@ -17,8 +14,19 @@ struct TweetItemHeaderView: View {
             }
             
             Spacer()
-            
-            Menu {
+        }
+    }
+}
+
+struct TweetMenu: View {
+    @Binding var tweet: Tweet
+    let deleteTweet: (Tweet) async -> Void
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var appUser = HproseInstance.shared.appUser
+
+    var body: some View {
+        Menu {
+            if tweet.authorId == appUser.mid {
                 Button(role: .destructive) {
                     // Start deletion in background
                     Task {
@@ -29,10 +37,10 @@ struct TweetItemHeaderView: View {
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .foregroundColor(.secondary)
             }
+        } label: {
+            Image(systemName: "ellipsis")
+                .foregroundColor(.secondary)
         }
     }
 }

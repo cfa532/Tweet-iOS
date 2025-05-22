@@ -33,7 +33,7 @@ struct TweetDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     // Author info
-                    TweetItemHeaderView(tweet: $tweet, deleteTweet: deleteTweet)
+                    TweetItemHeaderView(tweet: $tweet)
                     
                     // Tweet content
                     if let content = tweet.content, !content.isEmpty {
