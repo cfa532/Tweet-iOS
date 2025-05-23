@@ -305,7 +305,7 @@ final class HproseInstance: ObservableObject {
             
             // First try to decode it as User
             if let userData = try? JSONSerialization.data(withJSONObject: response),
-               var user = try? JSONDecoder().decode(User.self, from: userData) {
+               let user = try? JSONDecoder().decode(User.self, from: userData) {
                 // Cache the user
                 user.baseUrl = baseUrl
                 _ = cachedUsersLock.withLock { _cachedUsers.insert(user) }
@@ -323,7 +323,7 @@ final class HproseInstance: ObservableObject {
                 // Make new request to get user from this IP
                 if let userResponse = newService.runMApp(entry, params, nil) as? [String: Any],
                    let userData = try? JSONSerialization.data(withJSONObject: userResponse),
-                   var user = try? JSONDecoder().decode(User.self, from: userData) {
+                   let user = try? JSONDecoder().decode(User.self, from: userData) {
                     // Cache the user
                     user.baseUrl = "http://\(ipAddress)"
                     _ = cachedUsersLock.withLock { _cachedUsers.insert(user) }
@@ -361,7 +361,7 @@ final class HproseInstance: ObservableObject {
                     return ["reason": "Unknown error occurred", "status": "failure"]
                 } else if status == "success" {
                     if let userDict = response["user"] as? [String: Any],
-                       var userObject = User.from(dict: userDict) {
+                       let userObject = User.from(dict: userDict) {
                         hproseClient = newService   // update serving node for current session.
                         userObject.baseUrl = loginUser.baseUrl
                         
@@ -1066,6 +1066,66 @@ final class HproseInstance: ObservableObject {
                 return (updatedTweet, newComment)
             }
             return nil
+        }
+    }
+    
+    /**
+     * Return the current tweet list that is pinned to top.
+     */
+    func togglePinnedTweet(tweetId: String) async throws -> [String: Any]? {
+        try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            let entry = "toggle_top_tweets"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "tweetid": tweetId,
+                "userid": appUser.mid,
+            ]
+            if let response = service.runMApp(entry, params, nil) as? [String: Any] {
+               return response
+            }
+            return nil
+        }
+    }
+
+    /**
+     * Return a list of {tweetId, timestamp} for each pinned Tweet. The timestamp is when
+     * the tweet is pinned.
+     */
+    func getPinnedTweets(user: User) async throws -> [[String: Any]] {
+        try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            let entry = "get_top_tweets"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": user.mid,
+                "gid": appUser.mid
+            ]
+            if let response = service.runMApp(entry, params, nil) as? [[String: Any]] {
+                var result: [[String: Any]] = []
+                for dict in response {
+                    if let tweetDict = dict["tweet"] as? [String: Any],
+                       let tweet = Tweet.from(dict: tweetDict) {
+                        var tweetWithAuthor = tweet
+                        if let author = try? await getUser(tweet.authorId) {
+                            tweetWithAuthor.author = author
+                        }
+                        let timePinned = dict["timestamp"]
+                        result.append([
+                            "tweet": tweetWithAuthor,
+                            "timePinned": timePinned as Any
+                        ])
+                    }
+                }
+                return result
+            }
+            return []
         }
     }
 }

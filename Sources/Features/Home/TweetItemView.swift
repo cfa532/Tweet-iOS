@@ -6,6 +6,7 @@ struct TweetItemView: View {
     let retweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
     let embedded: Bool = false
+    var isPinned: Bool = false
     
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
@@ -46,7 +47,7 @@ struct TweetItemView: View {
                                 }
                                 HStack(alignment: .top) {
                                     TweetItemHeaderView(tweet: .constant(originalTweet))
-                                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet)
+                                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: isPinned)
                                 }
                                 .contentShape(Rectangle())
                                 .onTapGesture {
@@ -77,7 +78,7 @@ struct TweetItemView: View {
                     VStack(alignment: .leading) {
                         HStack {
                             TweetItemHeaderView(tweet: $tweet)
-                            TweetMenu(tweet: $tweet, deleteTweet: deleteTweet)
+                            TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: isPinned)
                         }
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
@@ -87,7 +88,7 @@ struct TweetItemView: View {
                         
                         // Embedded original tweet
                         VStack(alignment: .leading, spacing: 8) {
-                            TweetItemView(tweet: .constant(originalTweet), retweet: retweet, deleteTweet: deleteTweet)
+                            TweetItemView(tweet: .constant(originalTweet), retweet: retweet, deleteTweet: deleteTweet, isPinned: isPinned)
                         }
                         .padding()
                         .background(Color(.secondarySystemBackground))
@@ -111,7 +112,7 @@ struct TweetItemView: View {
                     HStack {
                         TweetItemHeaderView(tweet: $tweet)
                         //                        Spacer()
-                        TweetMenu(tweet: $tweet, deleteTweet: deleteTweet)
+                        TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: isPinned)
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }

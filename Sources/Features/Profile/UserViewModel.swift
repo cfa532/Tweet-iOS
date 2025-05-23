@@ -20,7 +20,7 @@ class UserViewModel: ObservableObject {
     
     static func logout() {
         // TODO: Implement logout logic
-        var appUser = HproseInstance.shared.appUser
+        let appUser = HproseInstance.shared.appUser
         appUser.mid = Constants.GUEST_ID
         appUser.followingList = Gadget.getAlphaIds()
     }

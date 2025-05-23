@@ -7,6 +7,9 @@ struct ProfileView: View {
 
     let user: User
     @State private var tweets: [Tweet] = []
+    @State private var pinnedTweets: [Tweet] = []
+    @State private var pinnedTweetIds: Set<String> = []
+    @State private var pinnedTweetTimes: [String: Any] = [:]
     @State private var showEditSheet = false
     @State private var showAvatarFullScreen = false
     @State private var isFollowing = false // Set this based on your logic
@@ -118,27 +121,29 @@ struct ProfileView: View {
             .padding(.vertical, 8)
             .background(Color(.systemGray6))
 
-            // Tabs (optional, for now just a sticky bar)
-            HStack {
-                Text("Pinned")
-                    .font(.subheadline)
-                    .bold()
-                Spacer()
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 6)
-            .background(Color(.systemGray6))
-
             // Posts List
             if isLoading {
                 ProgressView("Loading tweets...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if tweets.isEmpty {
+            } else if tweets.isEmpty && pinnedTweets.isEmpty {
                 Text("No tweets yet.")
                     .foregroundColor(.gray)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
+                    if !pinnedTweets.isEmpty {
+                        Section(header: Text("Pinned").font(.subheadline).bold()) {
+                            ForEach($pinnedTweets) { $tweet in
+                                TweetItemView(tweet: $tweet,
+                                              retweet: { _ in },
+                                              deleteTweet: { _ in },
+                                              isInProfile: true,
+                                              onAvatarTap: { _ in })
+                                    .listRowInsets(EdgeInsets())
+                                    .listRowSeparator(.hidden)
+                            }
+                        }
+                    }
                     ForEach($tweets) { $tweet in
                         TweetItemView(tweet: $tweet,
                                       retweet: { _ in },
@@ -192,8 +197,29 @@ struct ProfileView: View {
                 isLoading = true
                 let start = Date()
                 do {
+                    let pinnedList = try await hproseInstance.getPinnedTweets(user: user)
+                    // Extract tweets and their pin times, sort by timePinned descending
+                    let sortedPinned = pinnedList.compactMap { dict -> (Tweet, Any)? in
+                        guard let tweet = dict["tweet"] as? Tweet, let timePinned = dict["timePinned"] else { return nil }
+                        return (tweet, timePinned)
+                    }.sorted { lhs, rhs in
+                        // Sort by timePinned descending (most recent first)
+                        guard let l = lhs.1 as? TimeInterval, let r = rhs.1 as? TimeInterval else { return false }
+                        return l > r
+                    }
+                    pinnedTweets = sortedPinned.map { $0.0 }
+                    pinnedTweetIds = Set(pinnedTweets.map { $0.mid })
+                    pinnedTweetTimes = Dictionary(uniqueKeysWithValues: sortedPinned.map { ($0.0.mid, $0.1) })
+                } catch {
+                    print("Error loading pinned tweets: \(error)")
+                }
+                do {
                     let loadedTweets = try await hproseInstance.fetchUserTweet(user: user, startRank: 0, endRank: 19)
-                    tweets = loadedTweets
+                    tweets = loadedTweets.map { tweet in
+                        var t = tweet
+                        t.isPinned = pinnedTweetIds.contains(tweet.mid)
+                        return t
+                    }
                 } catch {
                     // handle error
                 }

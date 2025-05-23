@@ -42,7 +42,7 @@ struct TweetDetailView: View {
                         Avatar(user: user)
                     }
                     TweetItemHeaderView(tweet: $tweet)
-                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet)
+                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: tweet.isPinned ?? false)
                 }
                 .padding(.horizontal)
                 .padding(.top)

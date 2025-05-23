@@ -20,12 +20,30 @@ struct TweetItemHeaderView: View {
 struct TweetMenu: View {
     @Binding var tweet: Tweet
     let deleteTweet: (Tweet) async -> Void
+    let isPinned: Bool
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
+    @State private var isTogglingPin = false
+    private let hproseInstance = HproseInstance.shared
 
     var body: some View {
         Menu {
             if tweet.authorId == appUser.mid {
+                Button(action: {
+                    Task {
+                        isTogglingPin = true
+                        _ = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid)
+                        isTogglingPin = false
+                    }
+                }) {
+                    if isTogglingPin {
+                        Label("Toggling...", systemImage: "pin")
+                    } else if isPinned {
+                        Label("Unpin", systemImage: "pin.slash")
+                    } else {
+                        Label("Pin", systemImage: "pin")
+                    }
+                }
                 Button(role: .destructive) {
                     // Start deletion in background
                     Task {
