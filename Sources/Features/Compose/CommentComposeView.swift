@@ -1,5 +1,7 @@
 import SwiftUI
+import PhotosUI
 
+@available(iOS 16.0, *)
 struct CommentComposeView: View {
     @Binding var tweet: Tweet
     @Environment(\.dismiss) private var dismiss
@@ -7,16 +9,28 @@ struct CommentComposeView: View {
     @State private var isSubmitting = false
     @State private var error: Error?
     @State private var isQuoting = false
+    @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var isUploading = false
+    @State private var uploadProgress = 0.0
     
     private let hproseInstance = HproseInstance.shared
     
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                // Quote toggle
-                Toggle(isOn: $isQuoting) {
-                    Text("Quote Tweet")
-                        .font(.subheadline)
+                // Quote checkbox
+                HStack {
+                    Button(action: { isQuoting.toggle() }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: isQuoting ? "checkmark.square.fill" : "square")
+                                .foregroundColor(isQuoting ? .blue : .secondary)
+                            Text("Quote Tweet")
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                        }
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    Spacer()
                 }
                 .padding()
                 .background(Color(.systemBackground))
@@ -35,16 +49,19 @@ struct CommentComposeView: View {
                         if let content = tweet.content {
                             Text(content)
                                 .font(.body)
+                                .lineLimit(3)
                         }
                         
                         if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl {
                             MediaGridView(attachments: attachments, baseUrl: baseUrl)
+                                .frame(maxHeight: 100)
                         }
                     }
                     .padding()
                     .background(Color(.secondarySystemBackground))
                     .cornerRadius(8)
                     .padding(.horizontal)
+                    .frame(maxHeight: 150)
                 }
                 
                 TextEditor(text: $commentText)
@@ -52,9 +69,46 @@ struct CommentComposeView: View {
                     .padding()
                     .background(Color(.systemBackground))
                 
-                // Character count
-                HStack {
+                // Thumbnail preview section
+                if !selectedItems.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(selectedItems, id: \.itemIdentifier) { item in
+                                ThumbnailView(item: item)
+                                    .frame(width: 100, height: 100)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .overlay(
+                                        Button(action: {
+                                            selectedItems.removeAll { $0.itemIdentifier == item.itemIdentifier }
+                                        }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(.white)
+                                                .background(Color.black.opacity(0.5))
+                                                .clipShape(Circle())
+                                        }
+                                        .padding(4),
+                                        alignment: .topTrailing
+                                    )
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                    .frame(height: 120)
+                    .background(Color(.systemBackground))
+                }
+                
+                // Attachment toolbar
+                HStack(spacing: 20) {
+                    PhotosPicker(selection: $selectedItems,
+                               matching: .any(of: [.images, .videos])) {
+                        Image(systemName: "photo.on.rectangle")
+                            .font(.system(size: 20))
+                            .foregroundColor(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    
                     Spacer()
+                    
                     Text("\(max(0, Constants.MAX_TWEET_SIZE - commentText.count))")
                         .foregroundColor(commentText.count > Constants.MAX_TWEET_SIZE ? .red : .gray)
                 }
@@ -83,7 +137,7 @@ struct CommentComposeView: View {
                             await submitComment()
                         }
                     }
-                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSubmitting)
+                    .disabled((commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedItems.isEmpty) || isSubmitting)
                 }
             }
         }
@@ -91,7 +145,11 @@ struct CommentComposeView: View {
     
     private func submitComment() async {
         isSubmitting = true
+        isUploading = true
+        uploadProgress = 0.0
+        
         do {
+            // Create the comment object
             let comment = Tweet(
                 mid: "",
                 authorId: hproseInstance.appUser.mid,
@@ -102,13 +160,57 @@ struct CommentComposeView: View {
                 author: hproseInstance.appUser
             )
             
-            if let updatedTweet = try await hproseInstance.submitComment(comment, to: tweet) {
-                tweet = updatedTweet
-                dismiss()
+            // Prepare item data for attachments
+            var itemData: [HproseInstance.PendingUpload.ItemData] = []
+            
+            for item in selectedItems {
+                if let data = try await item.loadTransferable(type: Data.self) {
+                    let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+                    let fileExtension: String
+                    
+                    if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
+                        fileExtension = "jpg"
+                    } else if typeIdentifier.contains("png") {
+                        fileExtension = "png"
+                    } else if typeIdentifier.contains("gif") {
+                        fileExtension = "gif"
+                    } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+                        fileExtension = "heic"
+                    } else if typeIdentifier.contains("mp4") {
+                        fileExtension = "mp4"
+                    } else if typeIdentifier.contains("mov") {
+                        fileExtension = "mov"
+                    } else if typeIdentifier.contains("m4v") {
+                        fileExtension = "m4v"
+                    } else if typeIdentifier.contains("mkv") {
+                        fileExtension = "mkv"
+                    } else {
+                        fileExtension = "file"
+                    }
+                    
+                    let timestamp = Int(Date().timeIntervalSince1970)
+                    let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
+                    
+                    itemData.append(HproseInstance.PendingUpload.ItemData(
+                        identifier: item.itemIdentifier ?? UUID().uuidString,
+                        typeIdentifier: typeIdentifier,
+                        data: data,
+                        fileName: filename
+                    ))
+                }
             }
+            
+            // Schedule the comment upload with attachments
+            hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
+            
+            // Dismiss the view immediately since the upload will happen in the background
+            dismiss()
         } catch {
             self.error = error
         }
+        
         isSubmitting = false
+        isUploading = false
+        uploadProgress = 0.0
     }
 } 

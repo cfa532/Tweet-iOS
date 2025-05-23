@@ -984,21 +984,73 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    func scheduleCommentUpload(comment: Tweet, to tweet: Tweet, itemData: [PendingUpload.ItemData]) {
+        Task.detached(priority: .background) {
+            do {
+                var comment = comment
+                var uploadedAttachments: [MimeiFileType] = []
+                
+                let itemPairs = itemData.chunked(into: 2)
+                
+                for (index, pair) in itemPairs.enumerated() {
+                    do {
+                        let pairAttachments = try await self.uploadItemPair(pair)
+                        uploadedAttachments.append(contentsOf: pairAttachments)
+                    } catch {
+                        print("Error uploading pair \(index + 1): \(error)")
+                        return
+                    }
+                }
+                
+                if itemData.count != uploadedAttachments.count {
+                    print("Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)")
+                    return
+                }
+                
+                comment.attachments = uploadedAttachments
+                
+                if let updatedTweet = try await self.submitComment(comment, to: tweet) {
+                    await MainActor.run {
+                        print("Comment published successfully \(updatedTweet)")
+                    }
+                } else {
+                    await MainActor.run {
+                        print("Failed to publish comment")
+                    }
+                }
+            } catch {
+                print("Error in background upload: \(error)")
+                await MainActor.run {
+                    print("Error during upload: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
     func submitComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
-        let params: [String: Any] = [
-            "mid": comment.mid,
-            "authorId": comment.authorId,
-            "content": comment.content ?? "",
-            "timestamp": comment.timestamp.timeIntervalSince1970,
-            "originalTweetId": tweet.mid,
-            "originalAuthorId": tweet.authorId
-        ]
-        
-//        let result = try await invoke("submitComment", params)
-//        if let dict = result as? [String: Any] {
-//            return Tweet.from(dict: dict)
-//        }
-        return nil
+        return try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            
+            let params: [String: Any] = [
+                "aid": appId,
+                "ver": "last",
+                "hostid": "ReyCUFHHZmk0N5w_wxUeEuoY5Xr",
+                "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
+                "tweetid": tweet.mid,
+                "authorid": tweet.authorId
+            ]
+            
+            let rawResponse = service.runMApp("add_comment", params, nil)
+            guard let newCommentId = rawResponse as? String else {
+                return Tweet?.none
+            }
+            
+            var uploadedComment = comment
+            uploadedComment.mid = newCommentId
+            return uploadedComment
+        }
     }
 }
 

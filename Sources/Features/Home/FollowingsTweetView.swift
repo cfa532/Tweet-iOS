@@ -1,5 +1,6 @@
 import SwiftUI
 
+@available(iOS 16.0, *)
 struct FollowingsTweetView: View {
     @State private var tweets: [Tweet] = []
     @Binding var isLoading: Bool

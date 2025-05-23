@@ -1,5 +1,6 @@
 import SwiftUI
 
+@available(iOS 16.0, *)
 struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
@@ -147,7 +148,7 @@ struct LoginView: View {
             if let userId = try await hproseInstance.getUserId(username) {
                 
                 // retrieve user object from the net.
-                if var user = try await hproseInstance.getUser(userId) {
+                if let user = try await hproseInstance.getUser(userId) {
                     user.password = password
                     let result = try await hproseInstance.login(user)
                     if result["status"] as? String == "success" {
@@ -218,6 +219,10 @@ struct RegistrationView: View {
 }
 
 #Preview {
-    AppHeaderView()
-        .environmentObject(UserViewModel())
+    if #available(iOS 16.0, *) {
+        AppHeaderView()
+            .environmentObject(UserViewModel())
+    } else {
+        // Fallback on earlier versions
+    }
 } 

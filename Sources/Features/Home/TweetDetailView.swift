@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 
+@available(iOS 16.0, *)
 struct TweetDetailView: View {
     @Binding var tweet: Tweet
     @State private var showBrowser = false

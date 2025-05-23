@@ -6,6 +6,7 @@ enum UserActions: Int {
     case RETWEET = 2
 }
 
+@available(iOS 16.0, *)
 struct TweetActionButtonsView: View {
     @Binding var tweet: Tweet
     var retweet: (Tweet) async -> Void

@@ -12,6 +12,7 @@ extension View {
     }
 }
 
+@available(iOS 16.0, *)
 struct TweetItemBodyView: View {
     @Binding var tweet: Tweet
     var retweet: (Tweet) async -> Void

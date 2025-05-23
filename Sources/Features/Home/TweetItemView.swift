@@ -1,5 +1,6 @@
 import SwiftUI
 
+@available(iOS 16.0, *)
 struct TweetItemView: View {
     @Binding var tweet: Tweet
     let retweet: (Tweet) async -> Void

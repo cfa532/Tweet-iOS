@@ -1,5 +1,6 @@
 import SwiftUI
 
+@available(iOS 16.0, *)
 struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var hproseInstance = HproseInstance.shared
