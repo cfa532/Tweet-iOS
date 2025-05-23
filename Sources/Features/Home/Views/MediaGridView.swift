@@ -40,8 +40,11 @@ struct MediaGridView: View {
                 let aspect: CGFloat = {
                     switch count {
                     case 1:
-                        if isPortrait(attachments[0]) { return 4.0/3.0 } // portrait
-                        else { return 3.0/4.0 } // landscape or square
+                        if let ar = attachments[0].aspectRatio, ar > 0 {
+                            return CGFloat(ar) // Use actual aspect ratio
+                        } else {
+                            return 1.0 // Square when no aspect ratio is available
+                        }
                     case 2:
                         if allPortrait { return 4.0/3.0 }
                         else if allLandscape { return 3.0/4.0 }

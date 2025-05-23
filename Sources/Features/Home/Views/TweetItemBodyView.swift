@@ -27,7 +27,11 @@ struct TweetItemBodyView: View {
         let allLandscape = attachments.allSatisfy { ($0.aspectRatio ?? 1) > 1 }
         switch count {
         case 1:
-            return (attachments[0].aspectRatio ?? 1) < 1 ? 4.0/3.0 : 3.0/4.0
+            if let ar = attachments[0].aspectRatio, ar > 0 {
+                return CGFloat(ar) // Use actual aspect ratio
+            } else {
+                return 1.0 // Square when no aspect ratio is available
+            }
         case 2:
             if allPortrait { return 4.0/3.0 }
             else if allLandscape { return 3.0/4.0 }
