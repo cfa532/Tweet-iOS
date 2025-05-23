@@ -41,7 +41,36 @@ struct TweetItemBodyView: View {
             }
             
             if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl {
+                // Calculate the aspect ratio for the grid
+                let count = attachments.count
+                let allPortrait = attachments.allSatisfy { ($0.aspectRatio ?? 1) < 1 }
+                let allLandscape = attachments.allSatisfy { ($0.aspectRatio ?? 1) > 1 }
+                let aspect: CGFloat = {
+                    switch count {
+                    case 1:
+                        if (attachments[0].aspectRatio ?? 1) < 1 { return 4.0/3.0 }
+                        else { return 3.0/4.0 }
+                    case 2:
+                        if allPortrait { return 4.0/3.0 }
+                        else if allLandscape { return 3.0/4.0 }
+                        else { return 1.0 }
+                    case 3:
+                        if allPortrait { return 4.0/3.0 }
+                        else if allLandscape { return 3.0/4.0 }
+                        else { return 1.0 }
+                    case 4:
+                        return 1.0
+                    default:
+                        return 1.0
+                    }
+                }()
+                // Use the parent's width minus padding (16pt each side)
+                let width = UIScreen.main.bounds.width - 32
+                let height = width / aspect
+
                 MediaGridView(attachments: attachments, baseUrl: baseUrl)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: height)
             }
         }
         Spacer(minLength: 12)

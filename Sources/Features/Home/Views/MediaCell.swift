@@ -21,7 +21,8 @@ struct MediaCell: View {
             AsyncImage(url: attachment.getUrl(baseUrl)) { image in
                 image
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: .fill)
+                    .clipped()
             } placeholder: {
                 Color.gray
             }
