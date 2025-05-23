@@ -3,42 +3,17 @@ import AVKit
 
 @available(iOS 16.0, *)
 struct CommentsSection: View {
-    let tweet: Tweet
-    let comments: [Tweet]
     let isLoading: Bool
     let hasMoreComments: Bool
-    let retweet: (Tweet) async -> Void
-    let deleteTweet: (Tweet) async -> Void
     let onLoadMore: () -> Void
     let onRefresh: () async -> Void
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if isLoading && comments.isEmpty {
+            if isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding()
-            } else if comments.isEmpty {
-                Text("No comments yet")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(comments.indices, id: \.self) { index in
-                            TweetItemView(tweet: .constant(comments[index]), retweet: retweet, deleteTweet: deleteTweet)
-                                .onAppear {
-                                    if index == comments.count - 1 && hasMoreComments {
-                                        onLoadMore()
-                                    }
-                                }
-                        }
-                    }
-                }
-                .refreshable {
-                    await onRefresh()
-                }
             }
         }
     }
@@ -106,13 +81,24 @@ struct TweetDetailView: View {
                 // Divider between tweet and comments
                 Divider()
                 // Comments
+                if comments.isEmpty && !isLoadingComments {
+                    Text("No comments yet")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding()
+                } else {
+                    ForEach($comments, id: \ .id) { $comment in
+                        TweetItemView(tweet: $comment, retweet: retweet, deleteTweet: deleteTweet)
+                            .onAppear {
+                                if $comment.wrappedValue.id == comments.last?.id && hasMoreComments {
+                                    loadMoreComments()
+                                }
+                            }
+                    }
+                }
                 CommentsSection(
-                    tweet: tweet,
-                    comments: comments,
                     isLoading: isLoadingComments,
                     hasMoreComments: hasMoreComments,
-                    retweet: retweet,
-                    deleteTweet: deleteTweet,
                     onLoadMore: loadMoreComments,
                     onRefresh: refreshComments
                 )
@@ -133,7 +119,7 @@ struct TweetDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NewCommentAdded"))) { notification in
             if let tweetId = notification.userInfo?["tweetId"] as? String,
                let updatedTweet = notification.userInfo?["updatedTweet"] as? Tweet,
-               let comment = notification.userInfo?["comment"] as? Tweet,
+               let comment = notification.userInfo? ["comment"] as? Tweet,
                tweetId == tweet.mid {
                 tweet.commentCount = updatedTweet.commentCount
                 if !comments.contains(where: { $0.mid == comment.mid }) {
