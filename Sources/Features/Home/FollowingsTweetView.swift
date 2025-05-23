@@ -6,6 +6,11 @@ struct FollowingsTweetView: View {
     @Binding var isLoading: Bool
     let onAvatarTap: (User) -> Void
 
+    @State private var currentPage: Int = 0
+    @State private var hasMoreTweets: Bool = true
+    @State private var isLoadingMore: Bool = false
+    private let pageSize: Int = 20
+
     private let hproseInstance = HproseInstance.shared
 
     var body: some View {
@@ -23,36 +28,81 @@ struct FollowingsTweetView: View {
                     )
                     .id(tweet.id)
                 }
-                if isLoading {
+                if hasMoreTweets {
+                    ProgressView()
+                        .padding()
+                        .onAppear {
+                            if !isLoadingMore {
+                                loadMoreTweets()
+                            }
+                        }
+                } else if isLoading || isLoadingMore {
                     ProgressView()
                         .padding()
                 }
             }
         }
         .refreshable {
-            await loadInitialTweets()
+            await refreshTweets()
         }
         .onAppear {
             if tweets.isEmpty {
                 Task {
-                    await loadInitialTweets()
+                    await refreshTweets()
                 }
             }
         }
     }
     
-    func loadInitialTweets() async {
+    func refreshTweets() async {
         isLoading = true
+        currentPage = 0
+        hasMoreTweets = true
         do {
-            tweets = try await hproseInstance.fetchTweetFeed(
-                user: hproseInstance.appUser, startRank: 0, endRank: 20
+            let newTweets = try await hproseInstance.fetchTweetFeed(
+                user: hproseInstance.appUser, startRank: 0, endRank: UInt(pageSize)
             )
+            await MainActor.run {
+                tweets = newTweets
+                hasMoreTweets = newTweets.count == pageSize
+                isLoading = false
+            }
         } catch {
-            print("Error loading tweets: \(error)")
+            print("Error refreshing tweets: \(error)")
+            await MainActor.run {
+                isLoading = false
+            }
         }
-        isLoading = false
     }
-    
+
+    func loadMoreTweets() {
+        guard hasMoreTweets, !isLoadingMore else { return }
+        isLoadingMore = true
+        let nextPage = currentPage + 1
+        Task {
+            do {
+                let startRank = UInt(nextPage * pageSize)
+                let endRank = UInt(startRank + UInt(pageSize))
+                let moreTweets = try await hproseInstance.fetchTweetFeed(
+                    user: hproseInstance.appUser, startRank: startRank, endRank: endRank
+                )
+                await MainActor.run {
+                    // Prevent duplicates
+                    let existingIds = Set(tweets.map { $0.id })
+                    let uniqueNew = moreTweets.filter { !existingIds.contains($0.id) }
+                    tweets.append(contentsOf: uniqueNew)
+                    hasMoreTweets = moreTweets.count == pageSize
+                    currentPage = nextPage
+                    isLoadingMore = false
+                }
+            } catch {
+                print("Error loading more tweets: \(error)")
+                await MainActor.run {
+                    isLoadingMore = false
+                }
+            }
+        }
+    }
     
     func retweet(_ tweet: Tweet) async {
         do {
