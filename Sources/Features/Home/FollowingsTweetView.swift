@@ -28,17 +28,12 @@ struct FollowingsTweetView: View {
                     )
                     .id(tweet.id)
                 }
-                if hasMoreTweets {
+                if hasMoreTweets && isLoadingMore {
                     ProgressView()
                         .padding()
                         .onAppear {
-                            if !isLoadingMore {
-                                loadMoreTweets()
-                            }
+                            loadMoreTweets()
                         }
-                } else if isLoading || isLoadingMore {
-                    ProgressView()
-                        .padding()
                 }
             }
         }

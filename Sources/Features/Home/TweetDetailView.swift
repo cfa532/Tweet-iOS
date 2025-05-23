@@ -87,12 +87,14 @@ struct TweetDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding()
                 } else {
-                    ForEach($comments, id: \ .id) { $comment in
+                    ForEach($comments, id: \.id) { $comment in
                         TweetItemView(tweet: $comment, retweet: retweet, deleteTweet: deleteTweet)
+                    }
+                    if hasMoreComments && isLoadingComments {
+                        ProgressView()
+                            .padding()
                             .onAppear {
-                                if $comment.wrappedValue.id == comments.last?.id && hasMoreComments {
-                                    loadMoreComments()
-                                }
+                                loadMoreComments()
                             }
                     }
                 }
