@@ -82,7 +82,8 @@ struct TweetDetailView: View {
                 }
                 // Tweet actions
                 TweetActionButtonsView(tweet: $tweet, retweet: retweet, onGuestAction: handleGuestAction)
-                    .padding(.horizontal)
+                    .padding(.leading, 48)
+                    .padding(.trailing, 8)
                     .padding(.top, 8)
                     .padding(.bottom, 4)
                 // Divider between tweet and comments
