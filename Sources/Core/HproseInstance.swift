@@ -103,6 +103,44 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    func fetchComments(
+        tweet: Tweet,
+        pageNumber: Int = 0,
+        pageSize: Int = 20
+    ) async throws -> [Tweet] {
+        try await withRetry {
+            let entry = "get_comments"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "tweetid": tweet.mid,
+                "userid": appUser.mid,
+                "pn": pageNumber,
+                "ps": pageSize,
+            ]
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+                print("Invalid response format from server")
+                return []
+            }
+            
+            let comments = response.compactMap { dict -> Tweet? in
+                return Tweet.from(dict: dict)
+            }
+            // Then fetch author data for each tweet
+            var tweetsWithAuthors: [Tweet] = []
+            for var tweet in comments {
+                if let author = try await getUser(tweet.authorId) {
+                    tweet.author = author
+                    tweetsWithAuthors.append(tweet)
+                }
+            }
+            return tweetsWithAuthors
+        }
+    }
+    
     // MARK: - Tweet Operations
     func fetchTweetFeed(
         user: User,
@@ -143,7 +181,6 @@ final class HproseInstance: ObservableObject {
                     tweetsWithAuthors.append(tweet)
                 }
             }
-            
             return tweetsWithAuthors
         }
     }
@@ -945,6 +982,23 @@ final class HproseInstance: ObservableObject {
                 }
             }
         }
+    }
+    
+    func submitComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
+        let params: [String: Any] = [
+            "mid": comment.mid,
+            "authorId": comment.authorId,
+            "content": comment.content ?? "",
+            "timestamp": comment.timestamp.timeIntervalSince1970,
+            "originalTweetId": tweet.mid,
+            "originalAuthorId": tweet.authorId
+        ]
+        
+//        let result = try await invoke("submitComment", params)
+//        if let dict = result as? [String: Any] {
+//            return Tweet.from(dict: dict)
+//        }
+        return nil
     }
 }
 

@@ -9,6 +9,7 @@ enum UserActions: Int {
 struct TweetActionButtonsView: View {
     @Binding var tweet: Tweet
     var retweet: (Tweet) async -> Void
+    @State private var showCommentCompose = false
 
     private let hproseInstance = HproseInstance.shared
     
@@ -19,7 +20,7 @@ struct TweetActionButtonsView: View {
                 icon: "message",
                 isSelected: false,
                 action: {
-                    // Comment action
+                    showCommentCompose = true
                 }
             )
             if let count = tweet.commentCount, count > 0 {
@@ -148,6 +149,9 @@ struct TweetActionButtonsView: View {
             .padding(.leading, 40)
         }
         .padding(.horizontal, 4)
+        .sheet(isPresented: $showCommentCompose) {
+            CommentComposeView(tweet: $tweet)
+        }
     }
 }
 
