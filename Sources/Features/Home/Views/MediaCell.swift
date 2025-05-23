@@ -21,11 +21,10 @@ struct MediaCell: View {
             AsyncImage(url: attachment.getUrl(baseUrl)) { image in
                 image
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .aspectRatio(contentMode: .fit)
             } placeholder: {
                 Color.gray
             }
-            .clipped()
         }
     }
 }

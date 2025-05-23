@@ -56,6 +56,7 @@ struct TweetDetailView: View {
                 }
                 // Attachments (edge-to-edge, no margin)
                 if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl, !attachments.isEmpty {
+                    let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
                     TabView(selection: $selectedMediaIndex) {
                         ForEach(attachments.indices, id: \.self) { index in
                             MediaCell(
@@ -64,13 +65,12 @@ struct TweetDetailView: View {
                                 play: index == selectedMediaIndex
                             )
                             .tag(index)
-                            .onTapGesture {
-                                showBrowser = true
-                            }
+                            .onTapGesture { showBrowser = true }
                         }
                     }
                     .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
                     .frame(maxWidth: .infinity)
+                    .frame(height: UIScreen.main.bounds.width / aspect)
                     .background(Color.black)
                 }
                 // Tweet actions
@@ -80,6 +80,8 @@ struct TweetDetailView: View {
                     .padding(.bottom, 4)
                 // Divider between tweet and comments
                 Divider()
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
                 // Comments
                 if comments.isEmpty && !isLoadingComments {
                     Text("No comments yet")
