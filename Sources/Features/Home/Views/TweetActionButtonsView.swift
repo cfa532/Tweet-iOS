@@ -11,6 +11,7 @@ struct TweetActionButtonsView: View {
     @Binding var tweet: Tweet
     var retweet: (Tweet) async -> Void
     @State private var showCommentCompose = false
+    @State private var showShareSheet = false
 
     private let hproseInstance = HproseInstance.shared
     
@@ -144,7 +145,7 @@ struct TweetActionButtonsView: View {
                 icon: "square.and.arrow.up",
                 isSelected: false,
                 action: {
-                    // Share action
+                    showShareSheet = true
                 }
             )
             .padding(.leading, 40)
@@ -153,6 +154,22 @@ struct TweetActionButtonsView: View {
         .sheet(isPresented: $showCommentCompose) {
             CommentComposeView(tweet: $tweet)
         }
+        .sheet(isPresented: $showShareSheet) {
+            ShareSheet(activityItems: [tweetShareText()])
+        }
+    }
+
+    private func tweetShareText() -> String {
+        var text = ""
+        if let author = tweet.author {
+            text += "@\(author.username ?? author.name ?? "")\n"
+        }
+        if let content = tweet.content {
+            text += content + "\n"
+        }
+        // If you have a URL for the tweet, append it here
+        // text += "https://yourapp.com/tweet/\(tweet.id)"
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -167,4 +184,16 @@ struct TweetActionButton: View {
                 .foregroundColor(isSelected ? .blue : .secondary)
         }
     }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    var activityItems: [Any]
+    var applicationActivities: [UIActivity]? = nil
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: applicationActivities)
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
