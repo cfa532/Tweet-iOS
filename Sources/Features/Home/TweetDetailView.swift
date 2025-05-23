@@ -62,9 +62,15 @@ struct TweetDetailView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 // Tweet header (with avatar and menu)
-                TweetItemHeaderView(tweet: $tweet)
-                    .padding(.horizontal)
-                    .padding(.top)
+                HStack(alignment: .top, spacing: 12) {
+                    if let user = tweet.author {
+                        Avatar(user: user)
+                    }
+                    TweetItemHeaderView(tweet: $tweet)
+                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet)
+                }
+                .padding(.horizontal)
+                .padding(.top)
                 // Tweet content
                 if let content = tweet.content, !content.isEmpty {
                     Text(content)
@@ -97,6 +103,8 @@ struct TweetDetailView: View {
                     .padding(.horizontal)
                     .padding(.top, 8)
                     .padding(.bottom, 4)
+                // Divider between tweet and comments
+                Divider()
                 // Comments
                 CommentsSection(
                     tweet: tweet,
