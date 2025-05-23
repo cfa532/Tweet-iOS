@@ -10,147 +10,96 @@ enum UserActions: Int {
 struct TweetActionButtonsView: View {
     @Binding var tweet: Tweet
     var retweet: (Tweet) async -> Void
+    var onGuestAction: () -> Void
     @State private var showCommentCompose = false
     @State private var showShareSheet = false
-
-    private let hproseInstance = HproseInstance.shared
+    @ObservedObject private var hproseInstance = HproseInstance.shared
     
     var body: some View {
-        HStack(spacing: 0) {
-            // Comment
-            TweetActionButton(
-                icon: "message",
-                isSelected: false,
-                action: {
+        HStack(spacing: 16) {
+            // Comment button
+            Button(action: {
+                if hproseInstance.appUser.isGuest {
+                    onGuestAction()
+                } else {
                     showCommentCompose = true
                 }
-            )
-            if let count = tweet.commentCount, count > 0 {
-                Text("\(count)")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .frame(minWidth: 24, alignment: .leading)
-                    .padding(.leading, 2)
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "bubble.left")
+                    if let count = tweet.commentCount, count > 0 {
+                        Text("\(count)")
+                    }
+                }
             }
-            Spacer()
             
-            // Retweet
-            TweetActionButton(
-                icon: "arrow.2.squarepath",
-                isSelected: tweet.favorites?[UserActions.RETWEET.rawValue] == true,
-                action: {
+            // Retweet button
+            Button(action: {
+                if hproseInstance.appUser.isGuest {
+                    onGuestAction()
+                } else {
                     Task {
                         await retweet(tweet)
                     }
-                    if let hasRetweeted = tweet.favorites?[UserActions.RETWEET.rawValue] {
-                        tweet.favorites?[UserActions.RETWEET.rawValue] = !hasRetweeted
-                    } else {
-                        tweet.favorites?[UserActions.RETWEET.rawValue] = true
-                    }
-                    if let count = tweet.retweetCount {
-                        tweet.retweetCount = count + 1
-                    } else {
-                        tweet.retweetCount = 1
+                }
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.2.squarepath")
+                    if let count = tweet.retweetCount, count > 0 {
+                        Text("\(count)")
                     }
                 }
-            )
-            if  let count = tweet.retweetCount, count > 0 {
-                Text("\(count)")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .frame(minWidth: 24, alignment: .leading)
-                    .padding(.leading, 2)
             }
-            Spacer()
             
-            // Heart
-            TweetActionButton(
-                icon: "heart",
-                isSelected: tweet.favorites?[UserActions.FAVORITE.rawValue] == true,
-                action: {
-                    if let isFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] {
-                        tweet.favorites?[UserActions.FAVORITE.rawValue] = !isFavorite
-                    } else {
-                        tweet.favorites?[UserActions.FAVORITE.rawValue] = true
-                    }
-                    if let isFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue], isFavorite {
-                        if let count = tweet.favoriteCount {
-                            tweet.favoriteCount = count + 1
-                        } else {
-                            tweet.favoriteCount = 0
-                        }
-                    } else {
-                        if let count = tweet.favoriteCount {
-                            tweet.favoriteCount = max(0, count - 1)
-                        }
-                    }
+            // Like button
+            Button(action: {
+                if hproseInstance.appUser.isGuest {
+                    onGuestAction()
+                } else {
                     Task {
-                        if let updatedTweet = try await hproseInstance.toggleFavorite(tweet) {
+                        if let updatedTweet = try? await hproseInstance.toggleFavorite(tweet) {
                             tweet = updatedTweet
-                        } else {
-                            print(("Toggle favorite failed.\(tweet)"))
                         }
                     }
                 }
-            )
-            if let count = tweet.favoriteCount, count > 0 {
-                Text("\(count)")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .frame(minWidth: 24, alignment: .leading)
-                    .padding(.leading, 2)
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
+                        .foregroundColor(tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? .red : .primary)
+                    if let count = tweet.favoriteCount, count > 0 {
+                        Text("\(count)")
+                    }
+                }
             }
-            Spacer()
             
-            // Bookmark
-            TweetActionButton(
-                icon: "bookmark",
-                isSelected: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true,
-                action: {
-                    if let isFavorite = tweet.favorites?[UserActions.BOOKMARK.rawValue] {
-                        tweet.favorites?[UserActions.BOOKMARK.rawValue] = !isFavorite
-                    } else {
-                        tweet.favorites?[UserActions.BOOKMARK.rawValue] = true
-                    }
-                    if let isFavorite = tweet.favorites?[UserActions.BOOKMARK.rawValue], isFavorite {
-                        if let count = tweet.bookmarkCount {
-                            tweet.bookmarkCount = count + 1
-                        } else {
-                            tweet.bookmarkCount = 0
-                        }
-                    } else {
-                        if let count = tweet.bookmarkCount {
-                            tweet.bookmarkCount = max(0, count - 1)
-                        }
-                    }
+            // Bookmark button
+            Button(action: {
+                if hproseInstance.appUser.isGuest {
+                    onGuestAction()
+                } else {
                     Task {
-                        if let updatedTweet = try await hproseInstance.toggleBookmark(tweet) {
+                        if let updatedTweet = try? await hproseInstance.toggleBookmark(tweet) {
                             tweet = updatedTweet
-                        } else {
-                            print(("Toggle bookmark failed.\(tweet)"))
                         }
                     }
                 }
-            )
-            if let count = tweet.bookmarkCount, count > 0 {
-                Text("\(count)")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .frame(minWidth: 24, alignment: .leading)
-                    .padding(.leading, 2)
-            }
-            Spacer()
-            
-            TweetActionButton(
-                icon: "square.and.arrow.up",
-                isSelected: false,
-                action: {
-                    showShareSheet = true
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
+                    if let count = tweet.bookmarkCount, count > 0 {
+                        Text("\(count)")
+                    }
                 }
-            )
-            .padding(.leading, 40)
+            }
+            
+            // Share button
+            Button(action: {
+                showShareSheet = true
+            }) {
+                Image(systemName: "square.and.arrow.up")
+            }
         }
-        .padding(.horizontal, 4)
+        .foregroundColor(.primary)
         .sheet(isPresented: $showCommentCompose) {
             CommentComposeView(tweet: $tweet)
         }
@@ -167,8 +116,6 @@ struct TweetActionButtonsView: View {
         if let content = tweet.content {
             text += content + "\n"
         }
-        // If you have a URL for the tweet, append it here
-        // text += "https://yourapp.com/tweet/\(tweet.id)"
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

@@ -19,6 +19,8 @@ struct TweetItemBodyView: View {
     var embedded: Bool = false
     var enableTap: Bool = false
     @State private var isExpanded = false
+    @State private var showLoginSheet = false
+    @ObservedObject private var hproseInstance = HproseInstance.shared
     
     // Helper for grid aspect ratio
     func gridAspect(for attachments: [MimeiFileType]) -> CGFloat {
@@ -44,6 +46,12 @@ struct TweetItemBodyView: View {
             return 1.0
         default:
             return 1.0
+        }
+    }
+    
+    private func handleGuestAction() {
+        if hproseInstance.appUser.isGuest {
+            showLoginSheet = true
         }
     }
     
@@ -73,9 +81,12 @@ struct TweetItemBodyView: View {
                     .frame(maxWidth: .infinity)
             }
             if !embedded {
-                TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+                TweetActionButtonsView(tweet: $tweet, retweet: retweet, onGuestAction: handleGuestAction)
                     .padding(.top, 8)
             }
+        }
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
         }
     }
 }

@@ -28,10 +28,17 @@ struct TweetDetailView: View {
     @State private var isLoadingComments = false
     @State private var currentPage = 0
     @State private var hasMoreComments = true
+    @State private var showLoginSheet = false
+    @ObservedObject private var hproseInstance = HproseInstance.shared
     
-    private let hproseInstance = HproseInstance.shared
     let retweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
+    
+    private func handleGuestAction() {
+        if hproseInstance.appUser.isGuest {
+            showLoginSheet = true
+        }
+    }
     
     var body: some View {
         ScrollView {
@@ -74,7 +81,7 @@ struct TweetDetailView: View {
                         .padding(.vertical, 8)
                 }
                 // Tweet actions
-                TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+                TweetActionButtonsView(tweet: $tweet, retweet: retweet, onGuestAction: handleGuestAction)
                     .padding(.horizontal)
                     .padding(.top, 8)
                     .padding(.bottom, 4)
@@ -116,6 +123,9 @@ struct TweetDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(attachments: tweet.attachments ?? [], baseUrl: tweet.author?.baseUrl ?? "", initialIndex: selectedMediaIndex)
+        }
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
         }
         .onAppear {
             loadComments()
