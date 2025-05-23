@@ -125,7 +125,7 @@ struct TweetItemView: View {
         .background(Color(.systemBackground))
         .background(
             NavigationLink(destination: TweetDetailView(
-                tweet: .constant(detailTweet),
+                tweet: $detailTweet,
                 retweet: retweet,
                 deleteTweet: deleteTweet
             ), isActive: $showDetail) {
@@ -139,6 +139,8 @@ struct TweetItemView: View {
             
             if let originalTweetId = tweet.originalTweetId,
                let originalAuthorId = tweet.originalAuthorId {
+                
+                // should have checked if originalTweet is in the tweets already
                 do {
                     if let t = try await hproseInstance.getTweet(
                         tweetId: originalTweetId,
