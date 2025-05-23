@@ -83,6 +83,7 @@ struct TweetItemBodyView: View {
             if !embedded {
                 TweetActionButtonsView(tweet: $tweet, retweet: retweet, onGuestAction: handleGuestAction)
                     .padding(.top, 8)
+                    .padding(.leading, -8)  // move left.
             }
         }
         .sheet(isPresented: $showLoginSheet) {

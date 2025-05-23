@@ -60,6 +60,7 @@ struct TweetItemView: View {
                                         detailTweet = originalTweet
                                         showDetail = true
                                     }
+                                    .padding(.top, 4)
                             }
                         }
                     }
@@ -119,6 +120,7 @@ struct TweetItemView: View {
                     TweetItemBodyView(tweet: $tweet, retweet: retweet, enableTap: false)
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
+                        .padding(.top, 4)
                 }
             }
         }

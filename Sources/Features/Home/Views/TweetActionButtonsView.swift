@@ -16,7 +16,7 @@ struct TweetActionButtonsView: View {
     @ObservedObject private var hproseInstance = HproseInstance.shared
     
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 0) {
             // Comment button
             Button(action: {
                 if hproseInstance.appUser.isGuest {
@@ -27,10 +27,14 @@ struct TweetActionButtonsView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: "bubble.left")
+                        .frame(width: 20)
                     if let count = tweet.commentCount, count > 0 {
                         Text("\(count)")
+                            .frame(minWidth: 20, alignment: .leading)
                     }
                 }
+                .frame(maxWidth: .infinity)
+                .foregroundColor(.secondary)
             }
             
             // Retweet button
@@ -45,10 +49,14 @@ struct TweetActionButtonsView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.2.squarepath")
+                        .frame(width: 20)
                     if let count = tweet.retweetCount, count > 0 {
                         Text("\(count)")
+                            .frame(minWidth: 20, alignment: .leading)
                     }
                 }
+                .frame(maxWidth: .infinity)
+                .foregroundColor(.secondary)
             }
             
             // Like button
@@ -65,11 +73,14 @@ struct TweetActionButtonsView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
-                        .foregroundColor(tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? .red : .primary)
+                        .frame(width: 20)
                     if let count = tweet.favoriteCount, count > 0 {
                         Text("\(count)")
+                            .frame(minWidth: 20, alignment: .leading)
                     }
                 }
+                .frame(maxWidth: .infinity)
+                .foregroundColor(.secondary)
             }
             
             // Bookmark button
@@ -86,10 +97,14 @@ struct TweetActionButtonsView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
+                        .frame(width: 20)
                     if let count = tweet.bookmarkCount, count > 0 {
                         Text("\(count)")
+                            .frame(minWidth: 20, alignment: .leading)
                     }
                 }
+                .frame(maxWidth: .infinity)
+                .foregroundColor(.secondary)
             }
             
             // Share button
@@ -97,9 +112,13 @@ struct TweetActionButtonsView: View {
                 showShareSheet = true
             }) {
                 Image(systemName: "square.and.arrow.up")
+                    .frame(width: 20)
+                    .frame(maxWidth: .infinity)
             }
+            .padding(.leading, 40)
         }
-        .foregroundColor(.primary)
+        .foregroundColor(.secondary)
+        .padding(.horizontal, 4)
         .sheet(isPresented: $showCommentCompose) {
             CommentComposeView(tweet: $tweet)
         }
