@@ -1009,9 +1009,20 @@ final class HproseInstance: ObservableObject {
                 
                 comment.attachments = uploadedAttachments
                 
-                if let updatedTweet = try await self.submitComment(comment, to: tweet) {
+                if let (updatedTweet, newComment) = try await self.submitComment(comment, to: tweet) {
                     await MainActor.run {
-                        print("Comment published successfully \(updatedTweet)")
+                        // Notify observers about both the updated tweet and new comment
+                        NotificationCenter.default.post(
+                            name: NSNotification.Name("NewCommentAdded"),
+                            object: nil,
+                            userInfo: [
+                                "tweetId": tweet.mid,
+                                "updatedTweet": updatedTweet,
+                                "comment": newComment
+                            ]
+                        )
+                        
+                        print("Comment published successfully. Parent tweet comment count: \(updatedTweet.commentCount ?? 0)")
                     }
                 } else {
                     await MainActor.run {
@@ -1027,7 +1038,7 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func submitComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
+    func submitComment(_ comment: Tweet, to tweet: Tweet) async throws -> (Tweet, Tweet)? {
         return try await withRetry {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
@@ -1036,20 +1047,25 @@ final class HproseInstance: ObservableObject {
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
-                "hostid": "ReyCUFHHZmk0N5w_wxUeEuoY5Xr",
+                "hostid": tweet.author?.hostIds?.first as Any,
                 "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
                 "tweetid": tweet.mid,
-                "authorid": tweet.authorId
+                "userid": appUser.mid
             ]
             
-            let rawResponse = service.runMApp("add_comment", params, nil)
-            guard let newCommentId = rawResponse as? String else {
-                return Tweet?.none
+            if let response = service.runMApp("add_comment", params, nil) as? [String: Any],
+               let commentId = response["commentId"] as? String,
+               let count = response["count"] as? Int {
+                // Create the new comment with its ID
+                var newComment = comment
+                newComment.mid = commentId
+                
+                // Update the parent tweet with new comment count
+                let updatedTweet = tweet.copy(commentCount: count)
+                
+                return (updatedTweet, newComment)
             }
-            
-            var uploadedComment = comment
-            uploadedComment.mid = newCommentId
-            return uploadedComment
+            return nil
         }
     }
 }

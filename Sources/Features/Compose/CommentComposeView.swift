@@ -6,12 +6,9 @@ struct CommentComposeView: View {
     @Binding var tweet: Tweet
     @Environment(\.dismiss) private var dismiss
     @State private var commentText = ""
-    @State private var isSubmitting = false
     @State private var error: Error?
     @State private var isQuoting = false
     @State private var selectedItems: [PhotosPickerItem] = []
-    @State private var isUploading = false
-    @State private var uploadProgress = 0.0
     
     private let hproseInstance = HproseInstance.shared
     
@@ -137,17 +134,13 @@ struct CommentComposeView: View {
                             await submitComment()
                         }
                     }
-                    .disabled((commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedItems.isEmpty) || isSubmitting)
+                    .disabled((commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedItems.isEmpty))
                 }
             }
         }
     }
     
     private func submitComment() async {
-        isSubmitting = true
-        isUploading = true
-        uploadProgress = 0.0
-        
         do {
             // Create the comment object
             let comment = Tweet(
@@ -157,7 +150,6 @@ struct CommentComposeView: View {
                 timestamp: Date(),
                 originalTweetId: isQuoting ? tweet.mid : nil,
                 originalAuthorId: isQuoting ? tweet.authorId : nil,
-                author: hproseInstance.appUser
             )
             
             // Prepare item data for attachments
@@ -208,9 +200,5 @@ struct CommentComposeView: View {
         } catch {
             self.error = error
         }
-        
-        isSubmitting = false
-        isUploading = false
-        uploadProgress = 0.0
     }
 } 
