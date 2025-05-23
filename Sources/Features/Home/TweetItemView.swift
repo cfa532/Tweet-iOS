@@ -61,6 +61,9 @@ struct TweetItemView: View {
                                         showDetail = true
                                     }
                                     .padding(.top, 4)
+                                TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+                                    .padding(.top, 8)
+                                    .padding(.leading, -8)
                             }
                         }
                     }
@@ -83,7 +86,7 @@ struct TweetItemView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
-                        TweetItemBodyView(tweet: $tweet, retweet: retweet, embedded: true, enableTap: false)
+                        TweetItemBodyView(tweet: $tweet, retweet: retweet, enableTap: false)
                             .contentShape(Rectangle())
                             .onTapGesture { showDetail = true }
                         
@@ -94,6 +97,10 @@ struct TweetItemView: View {
                         .padding()
                         .background(Color(.secondarySystemBackground))
                         .cornerRadius(8)
+                        
+                        TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+                            .padding(.top, 8)
+                            .padding(.leading, -8)
                     }
                 }
                 
@@ -112,7 +119,6 @@ struct TweetItemView: View {
                 VStack(alignment: .leading) {
                     HStack {
                         TweetItemHeaderView(tweet: $tweet)
-                        //                        Spacer()
                         TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: isPinned)
                     }
                     .contentShape(Rectangle())
@@ -121,6 +127,10 @@ struct TweetItemView: View {
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
                         .padding(.top, 4)
+                    
+                    TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+                        .padding(.top, 8)
+                        .padding(.leading, -8)
                 }
             }
         }

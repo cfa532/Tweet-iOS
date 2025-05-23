@@ -81,7 +81,7 @@ struct TweetDetailView: View {
                         .padding(.vertical, 8)
                 }
                 // Tweet actions
-                TweetActionButtonsView(tweet: $tweet, retweet: retweet, onGuestAction: handleGuestAction)
+                TweetActionButtonsView(tweet: $tweet, retweet: retweet)
                     .padding(.leading, 48)
                     .padding(.trailing, 8)
                     .padding(.top, 8)

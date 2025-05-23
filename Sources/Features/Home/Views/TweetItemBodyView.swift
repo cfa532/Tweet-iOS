@@ -16,7 +16,6 @@ extension View {
 struct TweetItemBodyView: View {
     @Binding var tweet: Tweet
     var retweet: (Tweet) async -> Void
-    var embedded: Bool = false
     var enableTap: Bool = false
     @State private var isExpanded = false
     @State private var showLoginSheet = false
@@ -79,11 +78,6 @@ struct TweetItemBodyView: View {
                 MediaGridView(attachments: attachments, baseUrl: baseUrl)
                     .aspectRatio(gridAspect(for: attachments), contentMode: .fit)
                     .frame(maxWidth: .infinity)
-            }
-            if !embedded {
-                TweetActionButtonsView(tweet: $tweet, retweet: retweet, onGuestAction: handleGuestAction)
-                    .padding(.top, 8)
-                    .padding(.leading, -8)  // move left.
             }
         }
         .sheet(isPresented: $showLoginSheet) {

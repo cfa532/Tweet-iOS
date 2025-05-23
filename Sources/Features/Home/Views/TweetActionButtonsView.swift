@@ -10,17 +10,23 @@ enum UserActions: Int {
 struct TweetActionButtonsView: View {
     @Binding var tweet: Tweet
     var retweet: (Tweet) async -> Void
-    var onGuestAction: () -> Void
     @State private var showCommentCompose = false
     @State private var showShareSheet = false
+    @State private var showLoginSheet = false
     @ObservedObject private var hproseInstance = HproseInstance.shared
+    
+    private func handleGuestAction() {
+        if hproseInstance.appUser.isGuest {
+            showLoginSheet = true
+        }
+    }
     
     var body: some View {
         HStack(spacing: 0) {
             // Comment button
             Button(action: {
                 if hproseInstance.appUser.isGuest {
-                    onGuestAction()
+                    handleGuestAction()
                 } else {
                     showCommentCompose = true
                 }
@@ -34,13 +40,12 @@ struct TweetActionButtonsView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .foregroundColor(.secondary)
             }
             
             // Retweet button
             Button(action: {
                 if hproseInstance.appUser.isGuest {
-                    onGuestAction()
+                    handleGuestAction()
                 } else {
                     Task {
                         await retweet(tweet)
@@ -56,13 +61,12 @@ struct TweetActionButtonsView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .foregroundColor(.secondary)
             }
             
             // Like button
             Button(action: {
                 if hproseInstance.appUser.isGuest {
-                    onGuestAction()
+                    handleGuestAction()
                 } else {
                     Task {
                         if let updatedTweet = try? await hproseInstance.toggleFavorite(tweet) {
@@ -73,6 +77,7 @@ struct TweetActionButtonsView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
+                        .foregroundColor(tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? .red : .primary)
                         .frame(width: 20)
                     if let count = tweet.favoriteCount, count > 0 {
                         Text("\(count)")
@@ -80,13 +85,12 @@ struct TweetActionButtonsView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .foregroundColor(.secondary)
             }
             
             // Bookmark button
             Button(action: {
                 if hproseInstance.appUser.isGuest {
-                    onGuestAction()
+                    handleGuestAction()
                 } else {
                     Task {
                         if let updatedTweet = try? await hproseInstance.toggleBookmark(tweet) {
@@ -104,7 +108,6 @@ struct TweetActionButtonsView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .foregroundColor(.secondary)
             }
             
             // Share button
@@ -124,6 +127,9 @@ struct TweetActionButtonsView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [tweetShareText()])
+        }
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
         }
     }
 
