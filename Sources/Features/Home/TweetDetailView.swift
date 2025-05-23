@@ -36,24 +36,6 @@ struct TweetDetailView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                // Tweet header (with avatar and menu)
-                HStack(alignment: .top, spacing: 12) {
-                    if let user = tweet.author {
-                        Avatar(user: user)
-                    }
-                    TweetItemHeaderView(tweet: $tweet)
-                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: tweet.isPinned ?? false)
-                }
-                .padding(.horizontal)
-                .padding(.top)
-                // Tweet content
-                if let content = tweet.content, !content.isEmpty {
-                    Text(content)
-                        .font(.title3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                }
                 // Attachments (edge-to-edge, no margin)
                 if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl, !attachments.isEmpty {
                     let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
@@ -72,6 +54,24 @@ struct TweetDetailView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: UIScreen.main.bounds.width / aspect)
                     .background(Color.black)
+                }
+                // Tweet header (with avatar and menu)
+                HStack(alignment: .top, spacing: 12) {
+                    if let user = tweet.author {
+                        Avatar(user: user)
+                    }
+                    TweetItemHeaderView(tweet: $tweet)
+                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: tweet.isPinned ?? false)
+                }
+                .padding(.horizontal)
+                .padding(.top)
+                // Tweet content
+                if let content = tweet.content, !content.isEmpty {
+                    Text(content)
+                        .font(.title3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
                 }
                 // Tweet actions
                 TweetActionButtonsView(tweet: $tweet, retweet: retweet)
