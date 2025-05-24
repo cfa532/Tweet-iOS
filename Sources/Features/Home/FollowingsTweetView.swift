@@ -66,6 +66,9 @@ struct FollowingsTweetView: View {
                 withAnimation {
                     proxy.scrollTo("top", anchor: .top)
                 }
+                Task {
+                    await refreshTweets()
+                }
             }
         }
     }
