@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct Avatar: View {
-    let user: User
+    @ObservedObject var user: User
     let size: CGFloat
     
     init(user: User, size: CGFloat = 40) {

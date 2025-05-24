@@ -24,7 +24,7 @@
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
             uuid = "AC9C87C1-8297-4656-AB87-BD4CD781F628"
-            shouldBeEnabled = "Yes"
+            shouldBeEnabled = "No"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
             filePath = "Sources/Core/HproseInstance.swift"
@@ -36,7 +36,7 @@
             landmarkType = "7">
             <Locations>
                <Location
-                  uuid = "AC9C87C1-8297-4656-AB87-BD4CD781F628 - 64c6b50eb4f8db68"
+                  uuid = "AC9C87C1-8297-4656-AB87-BD4CD781F628 - 64c6b50eb4f8db49"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
                   continueAfterRunningActions = "No"
@@ -46,11 +46,25 @@
                   urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
                   startingColumnNumber = "9223372036854775807"
                   endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "372"
-                  endingLineNumber = "372">
+                  startingLineNumber = "371"
+                  endingLineNumber = "371">
                </Location>
                <Location
-                  uuid = "AC9C87C1-8297-4656-AB87-BD4CD781F628 - fde3aabb4574af62"
+                  uuid = "AC9C87C1-8297-4656-AB87-BD4CD781F628 - 1554aec7e08e6345"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(3) suspend resume partial function for closure #1 () async -&gt; Swift.Dictionary&lt;Swift.String, Any&gt; in Tweet.HproseInstance.login(Tweet.User) async throws -&gt; Swift.Dictionary&lt;Swift.String, Any&gt;"
+                  moduleName = "Tweet.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "371"
+                  endingLineNumber = "371">
+               </Location>
+               <Location
+                  uuid = "AC9C87C1-8297-4656-AB87-BD4CD781F628 - fde3aabb4574af43"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
                   continueAfterRunningActions = "No"
@@ -60,22 +74,8 @@
                   urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
                   startingColumnNumber = "9223372036854775807"
                   endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "372"
-                  endingLineNumber = "372">
-               </Location>
-               <Location
-                  uuid = "AC9C87C1-8297-4656-AB87-BD4CD781F628 - a3ecdec0cab560d3"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "closure #1 @Swift.MainActor @Sendable () -&gt; () in closure #1 () async -&gt; Swift.Dictionary&lt;Swift.String, Any&gt; in Tweet.HproseInstance.login(Tweet.User) async throws -&gt; Swift.Dictionary&lt;Swift.String, Any&gt;"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "373"
-                  endingLineNumber = "373">
+                  startingLineNumber = "371"
+                  endingLineNumber = "371">
                </Location>
             </Locations>
          </BreakpointContent>

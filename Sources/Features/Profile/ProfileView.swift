@@ -6,6 +6,7 @@ struct ProfileView: View {
     @ObservedObject var hproseInstance = HproseInstance.shared
 
     let user: User
+    let onLogout: (() -> Void)?
     @State private var tweets: [Tweet] = []
     @State private var pinnedTweets: [Tweet] = []
     @State private var pinnedTweetIds: Set<String> = []
@@ -161,7 +162,7 @@ struct ProfileView: View {
 
             // Hidden NavigationLink for avatar navigation (not used in profile, but for completeness)
             NavigationLink(
-                destination: selectedUser.map { ProfileView(user: $0) },
+                destination: selectedUser.map { ProfileView(user: $0, onLogout: onLogout) },
                 isActive: Binding(
                     get: { selectedUser != nil },
                     set: { if !$0 { selectedUser = nil } }
@@ -183,7 +184,7 @@ struct ProfileView: View {
                     Menu {
                         Button("Logout", role: .destructive) {
                             hproseInstance.logout()
-                            
+                            onLogout?()
                             dismiss()
                         }
                     } label: {

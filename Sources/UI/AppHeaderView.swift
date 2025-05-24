@@ -6,7 +6,6 @@ struct AppHeaderView: View {
     @State private var isSettingsSheetPresented = false
     @StateObject private var hproseInstance = HproseInstance.shared
     @State private var showProfile = false
-//    @EnvironmentObject private var userViewModel: UserViewModel
     
     var body: some View {
         HStack {
@@ -22,7 +21,7 @@ struct AppHeaderView: View {
             }
             .background(
                 NavigationLink(
-                    destination: ProfileView(user: hproseInstance.appUser), // Replace [] with actual tweets
+                    destination: ProfileView(user: hproseInstance.appUser, onLogout: {}), // Replace [] with actual tweets
                     isActive: $showProfile
                 ) {
                     EmptyView()

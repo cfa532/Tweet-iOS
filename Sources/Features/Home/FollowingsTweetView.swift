@@ -5,6 +5,7 @@ struct FollowingsTweetView: View {
     @State private var tweets: [Tweet] = []
     @Binding var isLoading: Bool
     let onAvatarTap: (User) -> Void
+    @Binding var resetTrigger: Bool
 
     @State private var currentPage: Int = 0
     @State private var hasMoreTweets: Bool = true
@@ -50,6 +51,12 @@ struct FollowingsTweetView: View {
                 Task {
                     await refreshTweets()
                 }
+            }
+        }
+        .onChange(of: resetTrigger) { _ in
+            Task {
+                tweets = []
+                await refreshTweets()
             }
         }
     }

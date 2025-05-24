@@ -9,6 +9,7 @@ struct HomeView: View {
     @State private var isScrolling = false
     @State private var scrollOffset: CGFloat = 0
     @State private var selectedUser: User? = nil
+    @State private var resetFollowingsFeed = false
 
     private let hproseInstance = HproseInstance.shared
 
@@ -35,7 +36,8 @@ struct HomeView: View {
                         isLoading: $isLoading,
                         onAvatarTap: { user in
                             selectedUser = user
-                        }
+                        },
+                        resetTrigger: $resetFollowingsFeed
                     )
                     .tag(0)
 
@@ -45,7 +47,10 @@ struct HomeView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
             }
             .navigationDestination(item: $selectedUser) { user in
-                ProfileView(user: user)
+                ProfileView(user: user, onLogout: {
+                    selectedTab = 0
+                    resetFollowingsFeed.toggle()
+                })
             }
         }
     }
