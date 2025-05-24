@@ -305,13 +305,17 @@ final class HproseInstance: ObservableObject {
                 "ver": "last",
                 "userid": userId,
             ]
+            /**
+             response might be an user object if it can be found from the node,
+             or an IP address where the user can be found.
+             */
             guard let response = service.runMApp(entry, params, nil) else {
                 print("Invalid response format from server")
                 return nil
             }
             
             // First try to decode it as User
-            if let userDict = response as? [String: Any],
+            if let userDict = service.runMApp(entry, params, nil) as? [String: Any],
                let user = User.from(dict: userDict) {
                 // Cache the user
                 user.baseUrl = baseUrl
