@@ -173,7 +173,9 @@ struct ProfileView: View {
             .hidden()
         }
         .sheet(isPresented: $showEditSheet) {
-            Text("Edit User Info Sheet")
+            RegistrationView(mode: .edit, user: user, onSubmit: { username, password, alias, profile, hostId in
+                // TODO: Implement user update logic here
+            })
         }
         .fullScreenCover(isPresented: $showAvatarFullScreen) {
             AvatarFullScreenView(user: user, isPresented: $showAvatarFullScreen)

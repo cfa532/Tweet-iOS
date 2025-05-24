@@ -88,7 +88,9 @@ struct LoginView: View {
                 dismiss()
             })
             .sheet(isPresented: $showRegistration) {
-                RegistrationView()
+                RegistrationView(mode: .register, onSubmit: { username, password, alias, profile, hostId in
+                    // TODO: Implement registration logic here
+                })
             }
             .alert("Login Successful", isPresented: $showSuccess) {
                 Button("OK") {
