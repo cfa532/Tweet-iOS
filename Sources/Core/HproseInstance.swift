@@ -413,11 +413,11 @@ final class HproseInstance: ObservableObject {
                 // Sort by Value descending and return list of Field
                 let sorted = response.sorted {
                     (lhs, rhs) in
-                    let lval = (lhs["Value"] as? Int) ?? 0
-                    let rval = (rhs["Value"] as? Int) ?? 0
+                    let lval = (lhs["value"] as? Int) ?? 0
+                    let rval = (rhs["value"] as? Int) ?? 0
                     return lval > rval
                 }
-                return sorted.compactMap { $0["Field"] as? String }
+                return sorted.compactMap { $0["field"] as? String }
             }
             return []
         }
