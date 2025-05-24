@@ -311,8 +311,8 @@ final class HproseInstance: ObservableObject {
             }
             
             // First try to decode it as User
-            if let userData = try? JSONSerialization.data(withJSONObject: response),
-               let user = try? JSONDecoder().decode(User.self, from: userData) {
+            if let userDict = response as? [String: Any],
+               let user = User.from(dict: userDict) {
                 // Cache the user
                 user.baseUrl = baseUrl
                 _ = cachedUsersLock.withLock { _cachedUsers.insert(user) }
@@ -328,16 +328,14 @@ final class HproseInstance: ObservableObject {
                 let newService = newClient.useService(HproseService.self) as AnyObject
                 
                 // Make new request to get user from this IP
-                if let userResponse = newService.runMApp(entry, params, nil) as? [String: Any],
-                   let userData = try? JSONSerialization.data(withJSONObject: userResponse),
-                   let user = try? JSONDecoder().decode(User.self, from: userData) {
+                if let userDict = newService.runMApp(entry, params, nil) as? [String: Any],
+                   let user = User.from(dict: userDict) {
                     // Cache the user
                     user.baseUrl = "http://\(ipAddress)"
                     _ = cachedUsersLock.withLock { _cachedUsers.insert(user) }
                     return user
                 }
             }
-            
             return nil
         }
     }

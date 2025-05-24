@@ -58,12 +58,3 @@ struct AppHeaderView: View {
         }
     }
 }
-
-#Preview {
-    if #available(iOS 16.0, *) {
-        AppHeaderView()
-            .environmentObject(UserViewModel())
-    } else {
-        // Fallback on earlier versions
-    }
-} 
