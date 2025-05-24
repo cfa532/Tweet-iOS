@@ -44,6 +44,7 @@
 		46E5B3592DE005EC00AEF31F /* ThumbnailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3582DE005EC00AEF31F /* ThumbnailView.swift */; };
 		46E5B3612DE16FD800AEF31F /* Login.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3602DE16FD300AEF31F /* Login.swift */; };
 		46E5B3632DE1703200AEF31F /* Registration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3622DE1702C00AEF31F /* Registration.swift */; };
+		46E5B3652DE21A3400AEF31F /* UserListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3642DE21A3400AEF31F /* UserListView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -85,6 +86,7 @@
 		46E5B3582DE005EC00AEF31F /* ThumbnailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailView.swift; sourceTree = "<group>"; };
 		46E5B3602DE16FD300AEF31F /* Login.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Login.swift; sourceTree = "<group>"; };
 		46E5B3622DE1702C00AEF31F /* Registration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Registration.swift; sourceTree = "<group>"; };
+		46E5B3642DE21A3400AEF31F /* UserListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserListView.swift; sourceTree = "<group>"; };
 		83423F5E23BD65E924B7AD86 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D424303A66FF70A9FBF5540E /* Pods-Tweet.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.release.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.release.xcconfig"; sourceTree = "<group>"; };
 		FFC29454DC8954BB0F934F77 /* Pods-Tweet.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.debug.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.debug.xcconfig"; sourceTree = "<group>"; };
@@ -242,6 +244,7 @@
 		46E5B3282DDA02E200AEF31F /* Profile */ = {
 			isa = PBXGroup;
 			children = (
+				46E5B3642DE21A3400AEF31F /* UserListView.swift */,
 				46E5B34E2DDC9F1B00AEF31F /* ProfileView.swift */,
 				46E5B32E2DDA048500AEF31F /* UserViewModel.swift */,
 			);
@@ -405,6 +408,7 @@
 				46E5B34B2DDC155600AEF31F /* MediaCell.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */,
 				46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */,
+				46E5B3652DE21A3400AEF31F /* UserListView.swift in Sources */,
 				4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */,
 				46E5B3302DDA048500AEF31F /* UserViewModel.swift in Sources */,
 				4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */,

@@ -30,6 +30,26 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
         self.url = url
     }
     
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mid = try container.decode(String.self, forKey: .mid)
+        type = try container.decode(String.self, forKey: .type)
+        size = try container.decodeIfPresent(Int64.self, forKey: .size)
+        fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
+        aspectRatio = try container.decodeIfPresent(Float.self, forKey: .aspectRatio)
+        url = try container.decodeIfPresent(String.self, forKey: .url)
+
+        // Robust timestamp decoding
+        if let doubleValue = try? container.decode(Double.self, forKey: .timestamp) {
+            timestamp = Date(timeIntervalSince1970: doubleValue / 1000)
+        } else if let stringValue = try? container.decode(String.self, forKey: .timestamp),
+                  let doubleValue = Double(stringValue) {
+            timestamp = Date(timeIntervalSince1970: doubleValue / 1000)
+        } else {
+            timestamp = Date()
+        }
+    }
+    
     func getUrl(_ baseUrl: String) -> URL? {
         let path = mid.count > 27 ? "\(baseUrl)/ipfs/\(mid)" : "\(baseUrl)/mm/\(mid)"
         return URL(string: path)

@@ -17,6 +17,8 @@ struct ProfileView: View {
     @State private var isLoading = false
     @State private var didLoad = false
     @State private var selectedUser: User? = nil
+    @State private var showUserList = false
+    @State private var userListType: UserContentType = .FOLLOWING
 
     var isCurrentUser: Bool {
         user.mid == hproseInstance.appUser.mid
@@ -82,18 +84,28 @@ struct ProfileView: View {
 
             // Stats Row (always visible)
             HStack {
-                VStack {
-                    Text("Fans")
-                        .font(.caption)
-                    Text("\(user.followersCount ?? 0)")
-                        .font(.headline)
+                Button {
+                    userListType = .FOLLOWER
+                    showUserList = true
+                } label: {
+                    VStack {
+                        Text("Fans")
+                            .font(.caption)
+                        Text("\(user.followersCount ?? 0)")
+                            .font(.headline)
+                    }
                 }
                 Spacer()
-                VStack {
-                    Text("Following")
-                        .font(.caption)
-                    Text("\(user.followingCount ?? 0)")
-                        .font(.headline)
+                Button {
+                    userListType = .FOLLOWING
+                    showUserList = true
+                } label: {
+                    VStack {
+                        Text("Following")
+                            .font(.caption)
+                        Text("\(user.followingCount ?? 0)")
+                            .font(.headline)
+                    }
                 }
                 Spacer()
                 VStack {
@@ -229,6 +241,9 @@ struct ProfileView: View {
                 isLoading = false
                 didLoad = true
             }
+        }
+        .navigationDestination(isPresented: $showUserList) {
+            UserListView(user: user, type: userListType)
         }
     }
 }
