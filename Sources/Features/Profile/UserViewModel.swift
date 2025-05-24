@@ -17,11 +17,4 @@ class UserViewModel: ObservableObject {
     func register(username: String, email: String, password: String) async throws {
         // TODO: Implement registration logic
     }
-    
-    static func logout() {
-        // TODO: Implement logout logic
-        let appUser = HproseInstance.shared.appUser
-        appUser.mid = Constants.GUEST_ID
-        appUser.followingList = Gadget.getAlphaIds()
-    }
 } 

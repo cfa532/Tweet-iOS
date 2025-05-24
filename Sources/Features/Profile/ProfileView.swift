@@ -182,7 +182,8 @@ struct ProfileView: View {
                 if isCurrentUser {
                     Menu {
                         Button("Logout", role: .destructive) {
-                            UserViewModel.logout()
+                            hproseInstance.logout()
+                            
                             dismiss()
                         }
                     } label: {

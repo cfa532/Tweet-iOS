@@ -103,6 +103,13 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    func logout() {
+        appUser.mid = Constants.GUEST_ID
+        appUser.followingList = Gadget.getAlphaIds()
+        appUser.avatar = nil
+        preferenceHelper?.setUserId(nil as String?)
+    }
+    
     func fetchComments(
         tweet: Tweet,
         pageNumber: Int = 0,
