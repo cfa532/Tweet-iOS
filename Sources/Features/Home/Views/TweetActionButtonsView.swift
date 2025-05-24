@@ -77,7 +77,7 @@ struct TweetActionButtonsView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
-                        .foregroundColor(tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? .red : .primary)
+//                        .foregroundColor(tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? .red : .primary)
                         .frame(width: 20)
                     if let count = tweet.favoriteCount, count > 0 {
                         Text("\(count)")
