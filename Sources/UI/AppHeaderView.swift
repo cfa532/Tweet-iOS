@@ -6,6 +6,7 @@ struct AppHeaderView: View {
     @State private var isSettingsSheetPresented = false
     @StateObject private var hproseInstance = HproseInstance.shared
     @State private var showProfile = false
+    var onAppIconTap: () -> Void = {}
     
     var body: some View {
         HStack {
@@ -32,10 +33,12 @@ struct AppHeaderView: View {
             Spacer()
             
             // Middle: App Logo
-            Image("AppIcon") // Make sure to add this to your asset catalog
-                .resizable()
-                .scaledToFit()
-                .frame(height: 32)
+            Button(action: { onAppIconTap() }) {
+                Image("AppIcon") // Make sure to add this to your asset catalog
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 32)
+            }
             
             Spacer()
             

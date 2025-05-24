@@ -10,13 +10,14 @@ struct HomeView: View {
     @State private var scrollOffset: CGFloat = 0
     @State private var selectedUser: User? = nil
     @State private var resetFollowingsFeed = false
+    @State private var scrollToTopTrigger = false
 
     private let hproseInstance = HproseInstance.shared
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                AppHeaderView()
+                AppHeaderView(onAppIconTap: { scrollToTopTrigger.toggle() })
                     .padding(.vertical, 8)
                 // Tab bar (no avatars/settings here)
                 HStack(spacing: 0) {
@@ -37,7 +38,8 @@ struct HomeView: View {
                         onAvatarTap: { user in
                             selectedUser = user
                         },
-                        resetTrigger: $resetFollowingsFeed
+                        resetTrigger: $resetFollowingsFeed,
+                        scrollToTopTrigger: $scrollToTopTrigger
                     )
                     .tag(0)
 

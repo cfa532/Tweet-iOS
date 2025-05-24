@@ -6,6 +6,7 @@ struct FollowingsTweetView: View {
     @Binding var isLoading: Bool
     let onAvatarTap: (User) -> Void
     @Binding var resetTrigger: Bool
+    @Binding var scrollToTopTrigger: Bool
 
     @State private var currentPage: Int = 0
     @State private var hasMoreTweets: Bool = true
@@ -15,48 +16,56 @@ struct FollowingsTweetView: View {
     private let hproseInstance = HproseInstance.shared
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach($tweets) { $tweet in
-                    TweetItemView(
-                        tweet: $tweet,
-                        retweet: { tweet in
-                            await retweet(tweet)
-                        },
-                        deleteTweet: deleteTweet,
-                        isInProfile: false,
-                        onAvatarTap: onAvatarTap
-                    )
-                    .id(tweet.id)
-                }
-                if hasMoreTweets {
-                    ProgressView()
-                        .padding()
-                        .onAppear {
-                            if !isLoadingMore {
-                                loadMoreTweets()
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    Color.clear.frame(height: 0).id("top")
+                    ForEach($tweets) { $tweet in
+                        TweetItemView(
+                            tweet: $tweet,
+                            retweet: { tweet in
+                                await retweet(tweet)
+                            },
+                            deleteTweet: deleteTweet,
+                            isInProfile: false,
+                            onAvatarTap: onAvatarTap
+                        )
+                        .id(tweet.id)
+                    }
+                    if hasMoreTweets {
+                        ProgressView()
+                            .padding()
+                            .onAppear {
+                                if !isLoadingMore {
+                                    loadMoreTweets()
+                                }
                             }
-                        }
-                } else if isLoading || isLoadingMore {
-                    ProgressView()
-                        .padding()
+                    } else if isLoading || isLoadingMore {
+                        ProgressView()
+                            .padding()
+                    }
                 }
             }
-        }
-        .refreshable {
-            await refreshTweets()
-        }
-        .onAppear {
-            if tweets.isEmpty {
+            .refreshable {
+                await refreshTweets()
+            }
+            .onAppear {
+                if tweets.isEmpty {
+                    Task {
+                        await refreshTweets()
+                    }
+                }
+            }
+            .onChange(of: resetTrigger) { _ in
                 Task {
+                    tweets = []
                     await refreshTweets()
                 }
             }
-        }
-        .onChange(of: resetTrigger) { _ in
-            Task {
-                tweets = []
-                await refreshTweets()
+            .onChange(of: scrollToTopTrigger) { _ in
+                withAnimation {
+                    proxy.scrollTo("top", anchor: .top)
+                }
             }
         }
     }
