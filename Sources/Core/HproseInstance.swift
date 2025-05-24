@@ -391,6 +391,61 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /**
+     * @param isFollowing indicates if the appUser is following @param userId. Passing
+     * an argument instead of toggling the status of a follower, because toggling
+     * following/follower status happens on two different hosts.
+     * */
+    func toggleFollower(
+        userId: String,
+        isFollowing: Bool,
+        followerId: String
+    )  async throws {
+        try await withRetry {
+            let user = try await getUser(userId)
+            let entry = "toggle_follower"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": userId,
+                "otherid": followerId,
+                "isfollower": isFollowing
+            ]
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            _ = service.runMApp(entry, params, nil)
+        }
+    }
+    
+    /**
+     * Called when appUser clicks the Follow button.
+     * @param followedId is the user that appUser is following or unfollowing.
+     * */
+    func toggleFollowing(
+        followedId: String,
+        followingId: String
+    )  async throws -> Bool? {
+        try await withRetry {
+            let followedUser = try await getUser(followedId)
+            let entry = "toggle_following"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": followingId,
+                "otherid": followedId,
+                "otherhostid": followedUser?.hostIds?.first as Any
+            ]
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            if let response = service.runMApp(entry, params, nil) as? Bool {
+                return response
+            }
+            return nil
+        }
+    }
+    
     /*
      Return an updated tweet object after toggling favorite status of the tweet by appUser.
      */
@@ -400,7 +455,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "userid": appUser.id,
+                "userid": appUser.mid,
                 "tweetid": tweet.mid,
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any

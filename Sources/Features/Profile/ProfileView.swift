@@ -85,7 +85,6 @@ struct ProfileView: View {
                 VStack {
                     Text("Fans")
                         .font(.caption)
-                        .foregroundColor(.gray)
                     Text("\(user.followersCount ?? 0)")
                         .font(.headline)
                 }
@@ -93,7 +92,6 @@ struct ProfileView: View {
                 VStack {
                     Text("Following")
                         .font(.caption)
-                        .foregroundColor(.gray)
                     Text("\(user.followingCount ?? 0)")
                         .font(.headline)
                 }
@@ -101,7 +99,6 @@ struct ProfileView: View {
                 VStack {
                     Text("Tweet")
                         .font(.caption)
-                        .foregroundColor(.gray)
                     Text("\(user.tweetCount ?? 0)")
                         .font(.headline)
                 }
