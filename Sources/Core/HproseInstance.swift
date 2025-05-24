@@ -230,7 +230,6 @@ final class HproseInstance: ObservableObject {
                     tweetsWithAuthors.append(tweet)
                 }
             }
-            
             return tweetsWithAuthors
         }
     }
@@ -391,6 +390,80 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    func getFollows(
+        user: User,
+        entry: UserContentType
+    ) async throws -> [String] {
+        try await withRetry {
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": user.mid,
+            ]
+            guard var service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            if user.baseUrl != appUser.baseUrl {
+                let newClient = HproseHttpClient()
+                newClient.timeout = 60
+                newClient.uri = "\(user.baseUrl!)/webapi/"
+                service = newClient.useService(HproseService.self) as AnyObject
+            }
+            if let response = service.runMApp(entry.rawValue, params, nil) as? [[String: Any]] {
+                // Sort by Value descending and return list of Field
+                let sorted = response.sorted {
+                    (lhs, rhs) in
+                    let lval = (lhs["Value"] as? Int) ?? 0
+                    let rval = (rhs["Value"] as? Int) ?? 0
+                    return lval > rval
+                }
+                return sorted.compactMap { $0["Field"] as? String }
+            }
+            return []
+        }
+    }
+    
+    func getUserTweetsByType(
+        user: User,
+        type: UserContentType
+    ) async throws -> [Tweet] {
+        try await withRetry {
+            let entry = "get_user_meta"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": user.mid,
+                "type": type.rawValue
+            ]
+            guard var service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            if user.baseUrl != appUser.baseUrl {
+                let newClient = HproseHttpClient()
+                newClient.timeout = 60
+                newClient.uri = "\(user.baseUrl!)/webapi/"
+                service = newClient.useService(HproseService.self) as AnyObject
+            }
+            if let response = service.runMApp(entry, params, nil) as? [[String: Any]] {
+                // First create tweets without author data
+                let tweets = response.compactMap { dict -> Tweet? in
+                    return Tweet.from(dict: dict)
+                }
+                
+                // Then fetch author data for each tweet
+                var tweetsWithAuthors: [Tweet] = []
+                for var tweet in tweets {
+                    if let author = try await getUser(tweet.authorId) {
+                        tweet.author = author
+                        tweetsWithAuthors.append(tweet)
+                    }
+                }
+                return tweetsWithAuthors
+            }
+            return []
+        }
+    }
+    
     /**
      * @param isFollowing indicates if the appUser is following @param userId. Passing
      * an argument instead of toggling the status of a follower, because toggling
@@ -400,9 +473,8 @@ final class HproseInstance: ObservableObject {
         userId: String,
         isFollowing: Bool,
         followerId: String
-    )  async throws {
+    ) async throws {
         try await withRetry {
-            let user = try await getUser(userId)
             let entry = "toggle_follower"
             let params = [
                 "aid": appId,

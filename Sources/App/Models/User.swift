@@ -6,6 +6,14 @@ enum Constants {
     static let MAX_TWEET_SIZE = 28000
 }
 
+enum UserContentType: String {
+    case FAVORITES = "favorite"     // get favorite tweet list of an user
+    case BOOKMARKS = "bookmark"     // get bookmarks
+    case COMMENTS = "comment"       // comments made by an user
+    case FOLLOWER = "get_followers_sorted"      // follower list of an user
+    case FOLLOWING = "get_followings_sorted"    // following list
+}
+
 class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var mid: String
     @Published var baseUrl: String?
