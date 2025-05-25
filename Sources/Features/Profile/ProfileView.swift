@@ -1,5 +1,6 @@
 import SwiftUI
 
+// MARK: - ProfileView
 @available(iOS 16.0, *)
 struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
@@ -13,7 +14,7 @@ struct ProfileView: View {
     @State private var pinnedTweetTimes: [String: Any] = [:]
     @State private var showEditSheet = false
     @State private var showAvatarFullScreen = false
-    @State private var isFollowing = false // Set this based on your logic
+    @State private var isFollowing = false
     @State private var isLoading = false
     @State private var didLoad = false
     @State private var selectedUser: User? = nil
@@ -28,120 +29,34 @@ struct ProfileView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header (now VStack, not ZStack)
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center) {
-                    // Avatar
-                    Button {
-                        showAvatarFullScreen = true
-                    } label: {
-                        Avatar(user: user, size: 72)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .padding(.trailing, 12)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(user.name ?? "User Name")
-                            .font(.title2)
-                            .bold()
-                        Text("@\(user.username ?? "username")")
-                            .foregroundColor(.gray)
-                            .font(.subheadline)
-                    }
-                    Spacer()
-                    // Edit/Follow/Unfollow button
-                    if isCurrentUser {
-                        Button("Edit") {
-                            showEditSheet = true
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.gray.opacity(0.5), lineWidth: 1)
-                        )
-                    } else {
-                        Button(isFollowing ? "Unfollow" : "Follow") {
-                            // Follow/unfollow logic here
-                            isFollowing.toggle()
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(isFollowing ? Color.red : Color.blue, lineWidth: 1)
-                        )
-                        .foregroundColor(isFollowing ? .red : .blue)
-                    }
-                }
-                if let profile = user.profile {
-                    Text(profile)
-                        .font(.body)
-                        .foregroundColor(.primary)
-                }
-            }
-            .padding(.horizontal)
-            .padding(.top)
-            .padding(.bottom, 4) // Reduce bottom padding for tighter layout
-
-            // Stats Row (always visible)
-            HStack {
-                Button {
+            ProfileHeaderView(
+                user: user,
+                isCurrentUser: isCurrentUser,
+                isFollowing: isFollowing,
+                onEditTap: { showEditSheet = true },
+                onFollowToggle: { isFollowing.toggle() },
+                onAvatarTap: { showAvatarFullScreen = true }
+            )
+            
+            ProfileStatsView(
+                user: user,
+                onFollowersTap: {
                     userListType = .FOLLOWER
                     showUserList = true
-                } label: {
-                    VStack {
-                        Text("Fans")
-                            .font(.caption)
-                        Text("\(user.followersCount ?? 0)")
-                            .font(.headline)
-                    }
-                }
-                Spacer()
-                Button {
+                },
+                onFollowingTap: {
                     userListType = .FOLLOWING
                     showUserList = true
-                } label: {
-                    VStack {
-                        Text("Following")
-                            .font(.caption)
-                        Text("\(user.followingCount ?? 0)")
-                            .font(.headline)
-                    }
-                }
-                Spacer()
-                VStack {
-                    Text("Tweet")
-                        .font(.caption)
-                    Text("\(user.tweetCount ?? 0)")
-                        .font(.headline)
-                }
-                Spacer()
-                Button {
+                },
+                onBookmarksTap: {
                     tweetListType = .BOOKMARKS
                     showTweetList = true
-                } label: {
-                    VStack {
-                        Image(systemName: "bookmark")
-                        Text("\(user.bookmarksCount ?? 0)")
-                            .font(.headline)
-                    }
-                }
-                Spacer()
-                Button {
+                },
+                onFavoritesTap: {
                     tweetListType = .FAVORITES
                     showTweetList = true
-                } label: {
-                    VStack {
-                        Image(systemName: "heart")
-                        Text("\(user.favoritesCount ?? 0)")
-                            .font(.headline)
-                    }
                 }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(Color(.systemGray6))
+            )
 
             // Posts List
             if isLoading {
@@ -171,7 +86,7 @@ struct ProfileView: View {
                                       retweet: { _ in },
                                       deleteTweet: { _ in },
                                       isInProfile: true,
-                                      onAvatarTap: { _ in /* do nothing in profile */ })
+                                      onAvatarTap: { _ in })
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
                     }
@@ -181,7 +96,7 @@ struct ProfileView: View {
                 .padding(.zero)
             }
 
-            // Hidden NavigationLink for avatar navigation (not used in profile, but for completeness)
+            // Hidden NavigationLink for avatar navigation
             NavigationLink(
                 destination: selectedUser.map { ProfileView(user: $0, onLogout: onLogout) },
                 isActive: Binding(
