@@ -74,6 +74,7 @@ struct ProfileView: View {
                                 TweetItemView(tweet: $tweet,
                                               retweet: { _ in },
                                               deleteTweet: { _ in },
+                                              isPinned: true,
                                               isInProfile: true,
                                               onAvatarTap: { _ in })
                                     .listRowInsets(EdgeInsets())
@@ -85,6 +86,7 @@ struct ProfileView: View {
                         TweetItemView(tweet: $tweet,
                                       retweet: { _ in },
                                       deleteTweet: { _ in },
+                                      isPinned: pinnedTweetIds.contains(tweet.mid),
                                       isInProfile: true,
                                       onAvatarTap: { _ in })
                             .listRowInsets(EdgeInsets())
@@ -154,12 +156,7 @@ struct ProfileView: View {
                     print("Error loading pinned tweets: \(error)")
                 }
                 do {
-                    let loadedTweets = try await hproseInstance.fetchUserTweet(user: user, startRank: 0, endRank: 19)
-                    tweets = loadedTweets.map { tweet in
-                        var t = tweet
-                        t.isPinned = pinnedTweetIds.contains(tweet.mid)
-                        return t
-                    }
+                    tweets = try await hproseInstance.fetchUserTweet(user: user, startRank: 0, endRank: 19)
                 } catch {
                     // handle error
                 }

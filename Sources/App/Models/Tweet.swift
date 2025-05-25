@@ -26,9 +26,6 @@ struct Tweet: Identifiable, Codable {
     var isPrivate: Bool?
     var downloadable: Bool?
     
-    // Pin status for UI
-    var isPinned: Bool? = nil
-    
     // Computed properties for user interaction states
     var isFavorite: Bool {
         get { favorites?[0] ?? false }
@@ -77,7 +74,6 @@ struct Tweet: Identifiable, Codable {
         case attachments
         case isPrivate
         case downloadable
-        case isPinned
     }
     
     init(from decoder: Decoder) throws {
@@ -98,14 +94,13 @@ struct Tweet: Identifiable, Codable {
         attachments = try container.decodeIfPresent([MimeiFileType].self, forKey: .attachments)
         isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate)
         downloadable = try container.decodeIfPresent(Bool.self, forKey: .downloadable)
-        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned)
     }
     
     init(mid: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
          originalTweetId: String? = nil, originalAuthorId: String? = nil, author: User? = nil,
          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
          commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
-         downloadable: Bool? = nil, isPinned: Bool? = nil) {
+         downloadable: Bool? = nil) {
         self.mid = mid
         self.authorId = authorId
         self.content = content
@@ -122,7 +117,6 @@ struct Tweet: Identifiable, Codable {
         self.attachments = attachments
         self.isPrivate = isPrivate
         self.downloadable = downloadable
-        self.isPinned = isPinned
     }
     
     func encode(to encoder: Encoder) throws {
@@ -143,7 +137,6 @@ struct Tweet: Identifiable, Codable {
         try container.encodeIfPresent(attachments, forKey: .attachments)
         try container.encodeIfPresent(isPrivate, forKey: .isPrivate)
         try container.encodeIfPresent(downloadable, forKey: .downloadable)
-        try container.encodeIfPresent(isPinned, forKey: .isPinned)
     }
     
     // MARK: - Factory Methods
@@ -216,8 +209,7 @@ struct Tweet: Identifiable, Codable {
         commentCount: Int? = nil,
         attachments: [MimeiFileType]? = nil,
         isPrivate: Bool? = nil,
-        downloadable: Bool? = nil,
-        isPinned: Bool? = nil
+        downloadable: Bool? = nil
     ) -> Tweet {
         var copy = self
         if let content = content { copy.content = content }
@@ -231,7 +223,18 @@ struct Tweet: Identifiable, Codable {
         if let attachments = attachments { copy.attachments = attachments }
         if let isPrivate = isPrivate { copy.isPrivate = isPrivate }
         if let downloadable = downloadable { copy.downloadable = downloadable }
-        if let isPinned = isPinned { copy.isPinned = isPinned }
         return copy
+    }
+    
+    /// Checks if this tweet is pinned based on a list of pinned tweets
+    /// - Parameter pinnedTweets: List of pinned tweets with their pin timestamps
+    /// - Returns: True if the tweet is pinned, false otherwise
+    func isPinned(in pinnedTweets: [[String: Any]]) -> Bool {
+        return pinnedTweets.contains { dict in
+            if let pinnedTweet = dict["tweet"] as? Tweet {
+                return pinnedTweet.mid == self.mid
+            }
+            return false
+        }
     }
 }

@@ -23,7 +23,6 @@ struct TweetMenu: View {
     let isPinned: Bool
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
-    @State private var isTogglingPin = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
@@ -31,14 +30,10 @@ struct TweetMenu: View {
             if tweet.authorId == appUser.mid {
                 Button(action: {
                     Task {
-                        isTogglingPin = true
                         _ = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid)
-                        isTogglingPin = false
                     }
                 }) {
-                    if isTogglingPin {
-                        Label("Toggling...", systemImage: "pin")
-                    } else if isPinned {
+                    if isPinned {
                         Label("Unpin", systemImage: "pin.slash")
                     } else {
                         Label("Pin", systemImage: "pin")

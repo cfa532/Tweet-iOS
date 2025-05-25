@@ -29,6 +29,7 @@ struct TweetDetailView: View {
     @State private var currentPage = 0
     @State private var hasMoreComments = true
     @State private var showLoginSheet = false
+    @State private var pinnedTweets: [[String: Any]] = []
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     let retweet: (Tweet) async -> Void
@@ -68,7 +69,7 @@ struct TweetDetailView: View {
                         Avatar(user: user)
                     }
                     TweetItemHeaderView(tweet: $tweet)
-                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: tweet.isPinned ?? false)
+                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: tweet.isPinned(in: pinnedTweets))
                 }
                 .padding(.horizontal)
                 .padding(.top)
@@ -130,6 +131,7 @@ struct TweetDetailView: View {
         }
         .onAppear {
             loadComments()
+            loadPinnedTweets()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NewCommentAdded"))) { notification in
             if let tweetId = notification.userInfo?["tweetId"] as? String,
@@ -140,6 +142,14 @@ struct TweetDetailView: View {
                 if !comments.contains(where: { $0.mid == comment.mid }) {
                     comments.insert(comment, at: 0)
                 }
+            }
+        }
+    }
+    
+    private func loadPinnedTweets() {
+        Task {
+            if let author = tweet.author {
+                pinnedTweets = (try? await hproseInstance.getPinnedTweets(user: author)) ?? []
             }
         }
     }
