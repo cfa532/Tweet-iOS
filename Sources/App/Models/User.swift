@@ -7,9 +7,9 @@ enum Constants {
 }
 
 enum UserContentType: String {
-    case FAVORITES = "favorite"     // get favorite tweet list of an user
-    case BOOKMARKS = "bookmark"     // get bookmarks
-    case COMMENTS = "comment"       // comments made by an user
+    case FAVORITES = "favorite_list"     // get favorite tweet list of an user
+    case BOOKMARKS = "bookmark_list"     // get bookmarks
+    case COMMENTS = "comment_list"       // comments made by an user
     case FOLLOWER = "get_followers_sorted"      // follower list of an user
     case FOLLOWING = "get_followings_sorted"    // following list
 }

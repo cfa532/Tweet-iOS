@@ -254,7 +254,7 @@ final class HproseInstance: ObservableObject {
         nodeUrl: String? = nil
     )  async throws -> Tweet? {
         try await withRetry {
-            guard let service = hproseClient else {
+            guard var service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
 
@@ -262,13 +262,28 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "tweetid": tweetId,
-                "userid": appUser.mid
+                "tweetid": tweetId,     // Tweet to be retrieved
+                "appuserid": appUser.mid    // Used to check if the tweet is favored or bookmarked by appUser
             ]
-            if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any],
-               var tweet = Tweet.from(dict: tweetDict) {
-                tweet.author = try await getUser(authorId)
-                return tweet
+            if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
+                if var tweet = Tweet.from(dict: tweetDict) {
+                    tweet.author = try await getUser(authorId)
+                    return tweet
+                }
+            } else {
+                // the tweet is not on current node. Find its author's node.
+                if let providerIp = try await getProvider(authorId) {
+                    let newClient = HproseHttpClient()
+                    newClient.timeout = 60
+                    newClient.uri = "http://\(providerIp)/webapi/"
+                    service = newClient.useService(HproseService.self) as AnyObject
+                    if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
+                        if var tweet = Tweet.from(dict: tweetDict) {
+                            tweet.author = try await getUser(authorId)
+                            return tweet
+                        }
+                    }
+                }
             }
             return nil
         }
