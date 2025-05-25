@@ -15,6 +15,7 @@ struct UserListView: View {
     @State private var currentPage: Int = 0
     private let pageSize: Int = 20
     @State private var errorMessage: String? = nil
+    @Environment(\.dismiss) private var dismiss
 
     // MARK: - Initialization
     init(
@@ -69,6 +70,9 @@ struct UserListView: View {
             }
         }
         .navigationTitle(title)
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PopToRoot"))) { _ in
+            dismiss()
+        }
     }
 
     // MARK: - Methods
@@ -120,6 +124,7 @@ struct UserListView: View {
 }
 
 // MARK: - UserRowView
+@available(iOS 16.0, *)
 struct UserRowView: View {
     let user: User
     let onFollowToggle: ((User) async -> Void)?
@@ -132,8 +137,11 @@ struct UserRowView: View {
             onTap?(user)
         } label: {
             HStack {
-                Avatar(user: user, size: 40)
-                    .padding(.trailing, 8)
+                NavigationLink(destination: ProfileView(user: user, onLogout: nil)) {
+                    Avatar(user: user, size: 40)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.trailing, 8)
                 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(user.name ?? "User Name")
