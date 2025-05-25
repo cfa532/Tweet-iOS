@@ -19,6 +19,8 @@ struct ProfileView: View {
     @State private var selectedUser: User? = nil
     @State private var showUserList = false
     @State private var userListType: UserContentType = .FOLLOWING
+    @State private var showTweetList = false
+    @State private var tweetListType: UserContentType = .BOOKMARKS
 
     var isCurrentUser: Bool {
         user.mid == hproseInstance.appUser.mid
@@ -115,16 +117,26 @@ struct ProfileView: View {
                         .font(.headline)
                 }
                 Spacer()
-                VStack {
-                    Image(systemName: "bookmark")
-                    Text("\(user.bookmarksCount ?? 0)")
-                        .font(.headline)
+                Button {
+                    tweetListType = .BOOKMARKS
+                    showTweetList = true
+                } label: {
+                    VStack {
+                        Image(systemName: "bookmark")
+                        Text("\(user.bookmarksCount ?? 0)")
+                            .font(.headline)
+                    }
                 }
                 Spacer()
-                VStack {
-                    Image(systemName: "heart")
-                    Text("\(user.favoritesCount ?? 0)")
-                        .font(.headline)
+                Button {
+                    tweetListType = .FAVORITES
+                    showTweetList = true
+                } label: {
+                    VStack {
+                        Image(systemName: "heart")
+                        Text("\(user.favoritesCount ?? 0)")
+                            .font(.headline)
+                    }
                 }
             }
             .padding(.horizontal)
@@ -244,6 +256,9 @@ struct ProfileView: View {
         }
         .navigationDestination(isPresented: $showUserList) {
             UserListView(user: user, type: userListType)
+        }
+        .navigationDestination(isPresented: $showTweetList) {
+            TweetListView(user: user, type: tweetListType)
         }
     }
 }
