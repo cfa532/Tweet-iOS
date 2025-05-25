@@ -486,6 +486,9 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /*
+     Get the UserId list of followers or followings of given user.
+     */
     func getFollows(
         user: User,
         entry: UserContentType
@@ -545,19 +548,21 @@ final class HproseInstance: ObservableObject {
                 newClient.uri = "\(user.baseUrl!)/webapi/"
                 service = newClient.useService(HproseService.self) as AnyObject
             }
-            if let response = service.runMApp(entry, params, nil) as? [[String: Any]] {
-                // First create tweets without author data
-                let tweets = response.compactMap { dict -> Tweet? in
-                    return Tweet.from(dict: dict)
-                }
-                
-                // Then fetch author data for each tweet
+            if let response = service.runMApp(entry, params, nil) as? [Any] {
+                // Process each item in the response array
                 var tweetsWithAuthors: [Tweet] = []
-                for var tweet in tweets {
-                    if let author = try await getUser(tweet.authorId) {
-                        tweet.author = author
-                        tweetsWithAuthors.append(tweet)
+                for item in response {
+                    if let dict = item as? [String: Any] {
+                        // Valid tweet dictionary
+                        if let tweet = Tweet.from(dict: dict) {
+                            if let author = try await getUser(tweet.authorId) {
+                                var tweetWithAuthor = tweet
+                                tweetWithAuthor.author = author
+                                tweetsWithAuthors.append(tweetWithAuthor)
+                            }
+                        }
                     }
+                    // Skip null values
                 }
                 return tweetsWithAuthors
             }

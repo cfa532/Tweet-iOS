@@ -115,17 +115,17 @@ struct TweetListView: View {
         guard hasMoreTweets, !isLoadingMore else { return }
         isLoadingMore = true
         let nextPage = currentPage + 1
-        print("[TweetListView] Loading more tweets: page \(nextPage), pageSize \(pageSize)")
+
         Task {
             do {
                 try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay for spinner visibility
                 let moreTweets = try await tweetFetcher(nextPage, pageSize)
-                print("[TweetListView] Fetched \(moreTweets.count) tweets for page \(nextPage)")
+
                 await MainActor.run {
                     // Prevent duplicates
                     let existingIds = Set(tweets.map { $0.id })
                     let uniqueNew = moreTweets.filter { !existingIds.contains($0.id) }
-                    print("[TweetListView] Appending \(uniqueNew.count) unique tweets")
+
                     tweets.append(contentsOf: uniqueNew)
                     hasMoreTweets = moreTweets.count == pageSize
                     currentPage = nextPage
