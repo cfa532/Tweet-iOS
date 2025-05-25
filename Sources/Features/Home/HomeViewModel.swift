@@ -12,7 +12,7 @@ struct HomeView: View {
     @State private var resetFollowingsFeed = false
     @State private var scrollToTopTrigger = false
 
-    private let hproseInstance = HproseInstance.shared
+    @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
         NavigationStack {

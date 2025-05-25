@@ -24,7 +24,7 @@ struct TweetMenu: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
     @State private var isTogglingPin = false
-    private let hproseInstance = HproseInstance.shared
+    @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
         Menu {

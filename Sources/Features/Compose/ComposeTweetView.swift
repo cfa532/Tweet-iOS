@@ -8,9 +8,8 @@ struct ComposeTweetView: View {
     @FocusState private var isEditorFocused: Bool
     @State private var shouldFocus = false
     @State private var showMediaPicker = false
-    
-    private let hproseInstance = HproseInstance.shared
-    
+    @EnvironmentObject private var hproseInstance: HproseInstance
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {

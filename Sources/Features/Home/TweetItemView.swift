@@ -13,9 +13,8 @@ struct TweetItemView: View {
     @State private var showDetail = false
     @State private var originalTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)
     @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
+    @EnvironmentObject private var hproseInstance: HproseInstance
 
-    private let hproseInstance = HproseInstance.shared
-    
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if let _ = tweet.originalTweetId, let _ = tweet.originalAuthorId {

@@ -13,7 +13,7 @@ struct FollowingsTweetView: View {
     @State private var isLoadingMore: Bool = false
     private let pageSize: Int = 20
 
-    private let hproseInstance = HproseInstance.shared
+    @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
         ScrollViewReader { proxy in

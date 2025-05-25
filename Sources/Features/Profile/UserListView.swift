@@ -7,7 +7,7 @@ struct UserListView: View {
     @State private var isLoading = true
     @State private var error: String? = nil
     @State private var followingStatus: [String: Bool] = [:]
-    @ObservedObject private var hproseInstance = HproseInstance.shared
+    @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
         VStack {

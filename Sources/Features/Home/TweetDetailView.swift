@@ -29,8 +29,8 @@ struct TweetDetailView: View {
     @State private var currentPage = 0
     @State private var hasMoreComments = true
     @State private var showLoginSheet = false
-    @ObservedObject private var hproseInstance = HproseInstance.shared
-    
+    @EnvironmentObject private var hproseInstance: HproseInstance
+
     let retweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
     

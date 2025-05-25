@@ -10,13 +10,13 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var userViewModel: UserViewModel
+    @EnvironmentObject private var hproseInstance: HproseInstance
     
     var body: some View {
         NavigationView {
             List {
                 Section(header: Text("Account")) {
-                    if userViewModel.isLoggedIn {
+                    if !hproseInstance.appUser.isGuest {
                         Button("Logout") {
                             // TODO: Implement logout
                         }

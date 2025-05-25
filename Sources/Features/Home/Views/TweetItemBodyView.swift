@@ -19,8 +19,8 @@ struct TweetItemBodyView: View {
     var enableTap: Bool = false
     @State private var isExpanded = false
     @State private var showLoginSheet = false
-    @ObservedObject private var hproseInstance = HproseInstance.shared
-    
+    @EnvironmentObject private var hproseInstance: HproseInstance
+
     // Helper for grid aspect ratio
     func gridAspect(for attachments: [MimeiFileType]) -> CGFloat {
         let count = attachments.count

@@ -13,8 +13,8 @@ struct TweetActionButtonsView: View {
     @State private var showCommentCompose = false
     @State private var showShareSheet = false
     @State private var showLoginSheet = false
-    @ObservedObject private var hproseInstance = HproseInstance.shared
-    
+    @EnvironmentObject private var hproseInstance: HproseInstance
+
     private func handleGuestAction() {
         if hproseInstance.appUser.isGuest {
             showLoginSheet = true

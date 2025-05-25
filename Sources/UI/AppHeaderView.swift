@@ -4,8 +4,9 @@ import SwiftUI
 struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
-    @StateObject private var hproseInstance = HproseInstance.shared
     @State private var showProfile = false
+    @EnvironmentObject private var hproseInstance: HproseInstance
+
     var onAppIconTap: () -> Void = {}
     
     var body: some View {

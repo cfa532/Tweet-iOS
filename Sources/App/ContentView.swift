@@ -3,7 +3,7 @@ import SwiftUI
 // Main ContentView
 @available(iOS 17.0, *)
 struct ContentView: View {
-    @StateObject private var userViewModel = UserViewModel()
+    @StateObject private var hproseInstance = HproseInstance.shared
     
     var body: some View {
         TabView {
@@ -19,7 +19,7 @@ struct ContentView: View {
                     Label("Compose", systemImage: "square.and.pencil")
                 }
         }
-        .environmentObject(userViewModel)
+        .environmentObject(hproseInstance)
     }
 }
 

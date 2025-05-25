@@ -9,9 +9,8 @@ struct CommentComposeView: View {
     @State private var error: Error?
     @State private var isQuoting = false
     @State private var selectedItems: [PhotosPickerItem] = []
-    
-    private let hproseInstance = HproseInstance.shared
-    
+    @EnvironmentObject private var hproseInstance: HproseInstance
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
