@@ -31,20 +31,20 @@ struct UserListView: View {
                         Spacer()
                         Button(action: {
                             Task {
-                                let isNowFollowing = followingStatus[user.mid] ?? false
                                 // Toggle following for appUser
-                                _ = try? await hproseInstance.toggleFollowing(
+                                if let isFollowing = try? await hproseInstance.toggleFollowing(
                                     followedId: user.mid,
                                     followingId: hproseInstance.appUser.mid
-                                )
-                                // Toggle follower for the other user
-                                _ = try? await hproseInstance.toggleFollower(
-                                    userId: user.mid,
-                                    isFollowing: !isNowFollowing,
-                                    followerId: hproseInstance.appUser.mid
-                                )
-                                await MainActor.run {
-                                    followingStatus[user.mid] = !isNowFollowing
+                                ) {
+                                    // Toggle follower for the other user
+                                    try? await hproseInstance.toggleFollower(
+                                        userId: user.mid,
+                                        isFollowing: isFollowing,
+                                        followerId: hproseInstance.appUser.mid
+                                    )
+                                    await MainActor.run {
+                                        followingStatus[user.mid] = isFollowing
+                                    }
                                 }
                             }
                         }) {
