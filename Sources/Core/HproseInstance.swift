@@ -90,7 +90,7 @@ final class HproseInstance: ObservableObject {
                 print(addrs)
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     #if DEBUG
-                        let firstIp = "125.118.94.59:8002"  // for testing
+                        let firstIp = "183.128.49.46:8002"  // for testing
                     #endif
                     appUser = appUser.copy(baseUrl: "http://\(firstIp)")
                     client.uri = appUser.baseUrl!+"/webapi/"
@@ -163,46 +163,112 @@ final class HproseInstance: ObservableObject {
     }
     
     // MARK: - Tweet Operations
+    /// Updated: Use pageNumber and pageSize for easier pagination
     func fetchTweetFeed(
         user: User,
-        startRank: UInt,
-        endRank: UInt,
+        pageNumber: Int = 0,
+        pageSize: Int = 20,
         entry: String = "get_tweet_feed"
     ) async throws -> [Tweet] {
-        try await withRetry {
+        print("[fetchTweetFeed] Starting fetch for page \(pageNumber) with page size \(pageSize)")
+        
+        // Calculate initial ranks
+        var startRank = UInt(pageNumber * pageSize)
+        var endRank = UInt(startRank + UInt(pageSize))
+        
+        print("[fetchTweetFeed] Initial ranks - start: \(startRank), end: \(endRank)")
+        
+        return try await withRetry {
             guard let service = hproseClient else {
+                print("[fetchTweetFeed] Service not initialized")
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "userid": appUser.isGuest ? "iFG4GC9r0fF22jYBCkuPThybzwO" : appUser.mid,
-                "start": startRank,
-                "end": endRank,
-                "gid": appUser.mid,
-                "hostid": user.hostIds?.first as Any
-            ]
+            var accumulatedTweets: [Tweet] = []
             
-            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
-                print("Invalid response format from server")
-                return []
-            }
-            
-            // First create tweets without author data
-            let tweets = response.compactMap { dict -> Tweet? in
-                return Tweet.from(dict: dict)
-            }
-            
-            // Then fetch author data for each tweet
-            var tweetsWithAuthors: [Tweet] = []
-            for var tweet in tweets {
-                if let author = try await getUser(tweet.authorId) {
-                    tweet.author = author
-                    tweetsWithAuthors.append(tweet)
+            while startRank <= 1000 && accumulatedTweets.count < pageSize { // Continue until we have enough tweets or hit the limit
+                let params = [
+                    "aid": appId,
+                    "ver": "last",
+                    "start": startRank,
+                    "end": endRank,
+                    "userid": user.mid,
+                    "appuserid": appUser.mid,
+                ]
+                
+                print("[fetchTweetFeed] Requesting tweets with params: \(params)")
+                
+                let rawResponse = service.runMApp(entry, params, nil)
+                print("[fetchTweetFeed] Raw response type: \(type(of: rawResponse))")
+                
+                // Unwrap the Optional<Any> response
+                guard let unwrappedResponse = rawResponse else {
+                    print("[fetchTweetFeed] Response is nil")
+                    return accumulatedTweets
                 }
+                
+                // Try to cast to array
+                guard let responseArray = unwrappedResponse as? [Any] else {
+                    print("[fetchTweetFeed] Response is not an array: \(unwrappedResponse)")
+                    return accumulatedTweets
+                }
+                
+                print("[fetchTweetFeed] Raw tweets from server: \(responseArray.count)")
+                
+                // If we got fewer items than page size, we've reached the end
+                if responseArray.count < pageSize {
+                    print("[fetchTweetFeed] Reached end of feed (response count: \(responseArray.count) < page size: \(pageSize))")
+                    return accumulatedTweets
+                }
+                
+                // Filter out null values and convert to dictionaries
+                let validDictionaries = responseArray.compactMap { item -> [String: Any]? in
+                    if let dict = item as? [String: Any] {
+                        return dict
+                    }
+                    return nil
+                }
+                
+                print("[fetchTweetFeed] Valid dictionaries count: \(validDictionaries.count)")
+                
+                // Create tweets from valid dictionaries
+                let tweets = validDictionaries.compactMap { dict -> Tweet? in
+                    if let tweet = Tweet.from(dict: dict) {
+                        return tweet
+                    } else {
+                        print("[fetchTweetFeed] Failed to parse tweet from dict: \(dict)")
+                        return nil
+                    }
+                }
+                
+                print("[fetchTweetFeed] Successfully parsed tweets: \(tweets.count)")
+                
+                // Then fetch author data for each tweet
+                for var tweet in tweets {
+                    if let author = try await getUser(tweet.authorId) {
+                        tweet.author = author
+                        accumulatedTweets.append(tweet)
+                        
+                        // If we've reached the page size, return what we have
+                        if accumulatedTweets.count >= pageSize {
+                            print("[fetchTweetFeed] Returning \(accumulatedTweets.count) tweets with authors (reached page size)")
+                            return accumulatedTweets
+                        }
+                    } else {
+                        print("[fetchTweetFeed] Failed to fetch author for tweet: \(tweet.mid)")
+                    }
+                }
+                
+                // If we got no valid tweets but have more items, increment the ranks
+                print("[fetchTweetFeed] No more valid tweets in this batch, incrementing ranks. Current start: \(startRank), response count: \(responseArray.count)")
+                startRank += UInt(responseArray.count)
+                endRank = startRank + UInt(pageSize)
+                print("[fetchTweetFeed] New ranks - start: \(startRank), end: \(endRank)")
             }
-            return tweetsWithAuthors
+            
+            // Return whatever tweets we've accumulated
+            print("[fetchTweetFeed] Returning \(accumulatedTweets.count) accumulated tweets")
+            return accumulatedTweets
         }
     }
     
@@ -223,7 +289,7 @@ final class HproseInstance: ObservableObject {
                 "userid": user.mid,
                 "start": startRank,
                 "end": endRank,
-                "gid": appUser.mid,
+                "appuserid": appUser.mid,
             ]
             
             guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
@@ -455,7 +521,9 @@ final class HproseInstance: ObservableObject {
     
     func getUserTweetsByType(
         user: User,
-        type: UserContentType
+        type: UserContentType,
+        pageNumber: Int = 0,
+        pageSize: Int = 20
     ) async throws -> [Tweet] {
         try await withRetry {
             let entry = "get_user_meta"
@@ -463,7 +531,10 @@ final class HproseInstance: ObservableObject {
                 "aid": appId,
                 "ver": "last",
                 "userid": user.mid,
-                "type": type.rawValue
+                "type": type.rawValue,
+                "pn": pageNumber,
+                "ps": pageSize,
+                "appuserid": appUser.mid
             ]
             guard var service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
@@ -1271,7 +1342,7 @@ final class HproseInstance: ObservableObject {
                 "aid": appId,
                 "ver": "last",
                 "userid": user.mid,
-                "gid": appUser.mid
+                "appuserid": appUser.mid
             ]
             if let response = service.runMApp(entry, params, nil) as? [[String: Any]] {
                 var result: [[String: Any]] = []

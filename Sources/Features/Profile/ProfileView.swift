@@ -255,10 +255,73 @@ struct ProfileView: View {
             }
         }
         .navigationDestination(isPresented: $showUserList) {
-            UserListView(user: user, type: userListType)
+            UserListView(
+                title: userListType == .FOLLOWER ? "Fans" : "Following",
+                userFetcher: { page, size in
+                    let ids = try await hproseInstance.getFollows(user: user, entry: userListType)
+                    let startIndex = page * size
+                    let endIndex = min(startIndex + size, ids.count)
+                    guard startIndex < endIndex else { return [] }
+                    let pageIds = Array(ids[startIndex..<endIndex])
+                    
+                    var users: [User] = []
+                    for id in pageIds {
+                        if let user = try? await hproseInstance.getUser(id) {
+                            users.append(user)
+                        }
+                    }
+                    return users
+                },
+                onFollowToggle: { user in
+                    if let isFollowing = try? await hproseInstance.toggleFollowing(
+                        followedId: user.mid,
+                        followingId: hproseInstance.appUser.mid
+                    ) {
+                        // Toggle follower for the other user
+                        try? await hproseInstance.toggleFollower(
+                            userId: user.mid,
+                            isFollowing: isFollowing,
+                            followerId: hproseInstance.appUser.mid
+                        )
+                    }
+                },
+                onUserTap: { user in
+                    selectedUser = user
+                }
+            )
         }
         .navigationDestination(isPresented: $showTweetList) {
-            TweetListView(user: user, type: tweetListType)
+            TweetListView(
+                title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",
+                tweetFetcher: { page, size in
+                    try await hproseInstance.getUserTweetsByType(
+                        user: user,
+                        type: tweetListType
+                    )
+                },
+                onRetweet: { tweet in
+                    if let retweet = try? await hproseInstance.retweet(tweet) {
+                        // Update retweet count of the original tweet
+                        if let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
+                            tweet: tweet,
+                            retweetId: retweet.mid
+                        ) {
+                            // Update the tweet in the list if it exists
+                            if let index = tweets.firstIndex(where: { $0.id == updatedOriginalTweet.mid }) {
+                                tweets[index] = updatedOriginalTweet
+                            }
+                        }
+                    }
+                },
+                onDeleteTweet: { tweet in
+                    if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
+                        print("Successfully deleted tweet: \(tweetId)")
+                    }
+                },
+                onAvatarTap: { user in
+                    selectedUser = user
+                }
+            )
         }
     }
 }
