@@ -8,6 +8,7 @@ struct UserListView: View {
     @State private var error: String? = nil
     @State private var followingStatus: [String: Bool] = [:]
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
         VStack {
@@ -18,7 +19,8 @@ struct UserListView: View {
             } else if users.isEmpty {
                 Text("No users found.").foregroundColor(.secondary)
             } else {
-                List(users) { user in
+                List(users.indices, id: \.self) { index in
+                    let user = users[index]
                     HStack(spacing: 12) {
                         Avatar(user: user, size: 40)
                         VStack(alignment: .leading) {
@@ -52,11 +54,18 @@ struct UserListView: View {
                                 .foregroundColor((followingStatus[user.mid] ?? false) ? .red : .blue)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
-                                .background(Color(.systemGray6))
+                                .background(Color(.systemBackground))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke((followingStatus[user.mid] ?? false) ? Color.red : Color.blue, lineWidth: 1)
+                                )
                                 .cornerRadius(8)
                         }
                     }
                     .padding(.vertical, 4)
+                    .listRowBackground(
+                        colorScheme == .light && index % 2 == 1 ? Color(.systemGray6) : Color(.systemBackground)
+                    )
                 }
                 .listStyle(.plain)
             }
