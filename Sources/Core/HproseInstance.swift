@@ -21,7 +21,21 @@ extension Array {
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
-    @Published var appUser: User = User(mid: Constants.GUEST_ID)
+    @Published var appUser: User = User(mid: Constants.GUEST_ID) {
+        didSet {
+            // When appUser is set and is not guest, fetch following and follower lists
+            if !appUser.isGuest {
+                Task {
+                    let following = try? await getFollows(user: appUser, entry: .FOLLOWING)
+                    let followers = try? await getFollows(user: appUser, entry: .FOLLOWER)
+                    await MainActor.run {
+                        self.appUser.followingList = following
+                        self.appUser.fansList = followers
+                    }
+                }
+            }
+        }
+    }
     
     private var appId: String = Bundle.main.bundleIdentifier ?? ""
     private let cachedUsersLock = NSLock()

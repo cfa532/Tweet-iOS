@@ -6,6 +6,8 @@ struct UserListView: View {
     @State private var users: [User] = []
     @State private var isLoading = true
     @State private var error: String? = nil
+    @State private var followingStatus: [String: Bool] = [:]
+    @ObservedObject private var hproseInstance = HproseInstance.shared
 
     var body: some View {
         VStack {
@@ -27,6 +29,32 @@ struct UserListView: View {
                             }
                         }
                         Spacer()
+                        Button(action: {
+                            Task {
+                                let isNowFollowing = followingStatus[user.mid] ?? false
+                                // Toggle following for appUser
+                                _ = try? await hproseInstance.toggleFollowing(
+                                    followedId: user.mid,
+                                    followingId: hproseInstance.appUser.mid
+                                )
+                                // Toggle follower for the other user
+                                _ = try? await hproseInstance.toggleFollower(
+                                    userId: user.mid,
+                                    isFollowing: !isNowFollowing,
+                                    followerId: hproseInstance.appUser.mid
+                                )
+                                await MainActor.run {
+                                    followingStatus[user.mid] = !isNowFollowing
+                                }
+                            }
+                        }) {
+                            Text((followingStatus[user.mid] ?? false) ? "Unfollow" : "Follow")
+                                .foregroundColor((followingStatus[user.mid] ?? false) ? .red : .blue)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(8)
+                        }
                     }
                     .padding(.vertical, 4)
                 }
@@ -48,13 +76,18 @@ struct UserListView: View {
             let hprose = HproseInstance.shared
             let ids = try await hprose.getFollows(user: user, entry: type)
             var loadedUsers: [User] = []
+            var followingMap: [String: Bool] = [:]
             for id in ids {
                 if let u = try? await hprose.getUser(id) {
                     loadedUsers.append(u)
+                    // Determine if appUser is following this user
+                    let isFollowing = hproseInstance.appUser.followingList?.contains(u.mid) ?? false
+                    followingMap[u.mid] = isFollowing
                 }
             }
             await MainActor.run {
                 self.users = loadedUsers
+                self.followingStatus = followingMap
                 self.isLoading = false
             }
         } catch {
