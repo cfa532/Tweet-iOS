@@ -143,7 +143,7 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
-                print("Invalid response format from server")
+                print("Invalid response format from server in fetchComments, params: \(params)")
                 return []
             }
             
@@ -287,7 +287,7 @@ final class HproseInstance: ObservableObject {
                 "username": username,
             ]
             guard let response = service.runMApp(entry, params, nil) else {
-                print("Invalid response format from server")
+                print("Invalid response format from server in getUserId, params: \(params)")
                 return nil
             }
             return response as? String
@@ -323,7 +323,7 @@ final class HproseInstance: ObservableObject {
              or an IP address where the user can be found.
              */
             guard let response = service.runMApp(entry, params, nil) else {
-                print("Invalid response format from server")
+                print("Invalid response format from server in getUser, params: \(params)")
                 return nil
             }
             
@@ -372,6 +372,7 @@ final class HproseInstance: ObservableObject {
             let newService = newClient.useService(HproseService.self) as AnyObject
             
             guard let response = newService.runMApp(entry, params, nil) as? [String: Any] else {
+                print("Invalid response format from server in login, params: \(params)")
                 return ["reason": "Invalid response format from server", "status": "failure"]
             }
             
