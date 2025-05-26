@@ -9,6 +9,7 @@ import SwiftUI
 
 struct LoginView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var username = ""
     @State private var password = ""
     @State private var showRegistration = false
@@ -111,15 +112,15 @@ struct LoginView: View {
                 errorMessage = "Username & password are required."
                 return
             }
-            let hproseInstance = HproseInstance.shared
             if let userId = try await hproseInstance.getUserId(username) {
-                
                 // retrieve user object from the net.
                 if let user = try await hproseInstance.getUser(userId) {
                     user.password = password
                     let result = try await hproseInstance.login(user)
                     if result["status"] as? String == "success" {
-                        showSuccess = true
+                        // Post notification for successful login
+                        NotificationCenter.default.post(name: NSNotification.Name("UserDidLogin"), object: nil)
+                        dismiss()
                     } else {
                         errorMessage = result["reason"] as? String
                     }

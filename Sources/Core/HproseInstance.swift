@@ -1314,7 +1314,7 @@ final class HproseInstance: ObservableObject {
     /**
      * Return the current tweet list that is pinned to top.
      */
-    func togglePinnedTweet(tweetId: String) async throws -> [String: Any]? {
+    func togglePinnedTweet(tweetId: String) async throws -> Bool? {
         try await withRetry {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
@@ -1326,7 +1326,7 @@ final class HproseInstance: ObservableObject {
                 "tweetid": tweetId,
                 "userid": appUser.mid,
             ]
-            if let response = service.runMApp(entry, params, nil) as? [String: Any] {
+            if let response = service.runMApp(entry, params, nil) as? Bool {
                return response
             }
             return nil

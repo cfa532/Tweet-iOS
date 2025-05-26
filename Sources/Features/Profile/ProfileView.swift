@@ -27,6 +27,28 @@ struct ProfileView: View {
         user.mid == hproseInstance.appUser.mid
     }
 
+    private func refreshPinnedTweets() async {
+        do {
+            let pinnedList = try await hproseInstance.getPinnedTweets(user: user)
+            // Extract tweets and their pin times, sort by timePinned descending
+            let sortedPinned = pinnedList.compactMap { dict -> (Tweet, Any)? in
+                guard let tweet = dict["tweet"] as? Tweet, let timePinned = dict["timePinned"] else { return nil }
+                return (tweet, timePinned)
+            }.sorted { lhs, rhs in
+                // Sort by timePinned descending (most recent first)
+                guard let l = lhs.1 as? TimeInterval, let r = rhs.1 as? TimeInterval else { return false }
+                return l > r
+            }
+            await MainActor.run {
+                pinnedTweets = sortedPinned.map { $0.0 }
+                pinnedTweetIds = Set(pinnedTweets.map { $0.mid })
+                pinnedTweetTimes = Dictionary(uniqueKeysWithValues: sortedPinned.map { ($0.0.mid, $0.1) })
+            }
+        } catch {
+            print("Error refreshing pinned tweets: \(error)")
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ProfileHeaderView(
@@ -138,23 +160,7 @@ struct ProfileView: View {
             if !didLoad {
                 isLoading = true
                 let start = Date()
-                do {
-                    let pinnedList = try await hproseInstance.getPinnedTweets(user: user)
-                    // Extract tweets and their pin times, sort by timePinned descending
-                    let sortedPinned = pinnedList.compactMap { dict -> (Tweet, Any)? in
-                        guard let tweet = dict["tweet"] as? Tweet, let timePinned = dict["timePinned"] else { return nil }
-                        return (tweet, timePinned)
-                    }.sorted { lhs, rhs in
-                        // Sort by timePinned descending (most recent first)
-                        guard let l = lhs.1 as? TimeInterval, let r = rhs.1 as? TimeInterval else { return false }
-                        return l > r
-                    }
-                    pinnedTweets = sortedPinned.map { $0.0 }
-                    pinnedTweetIds = Set(pinnedTweets.map { $0.mid })
-                    pinnedTweetTimes = Dictionary(uniqueKeysWithValues: sortedPinned.map { ($0.0.mid, $0.1) })
-                } catch {
-                    print("Error loading pinned tweets: \(error)")
-                }
+                await refreshPinnedTweets()
                 do {
                     tweets = try await hproseInstance.fetchUserTweet(user: user, startRank: 0, endRank: 19)
                 } catch {
@@ -164,6 +170,14 @@ struct ProfileView: View {
                 print("Time to load tweets: \(end.timeIntervalSince(start)) seconds")
                 isLoading = false
                 didLoad = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TweetPinStatusChanged"))) { notification in
+            if let tweetId = notification.userInfo?["tweetId"] as? String,
+               let isPinned = notification.userInfo?["isPinned"] as? Bool {
+                Task {
+                    await refreshPinnedTweets()
+                }
             }
         }
         .navigationDestination(isPresented: $showUserList) {

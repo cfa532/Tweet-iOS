@@ -54,6 +54,11 @@ struct HomeView: View {
                     resetFollowingsFeed.toggle()
                 })
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("UserDidLogin"))) { _ in
+                // Reset the feed when user logs in
+                selectedTab = 0
+                resetFollowingsFeed.toggle()
+            }
         }
     }
 }

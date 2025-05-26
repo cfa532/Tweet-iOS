@@ -87,6 +87,11 @@ struct TweetListView: View {
                     }
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("UserDidLogin"))) { _ in
+                Task {
+                    await refreshTweets()
+                }
+            }
         }
     }
 

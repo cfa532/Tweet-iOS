@@ -24,16 +24,34 @@ struct TweetMenu: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var isCurrentlyPinned: Bool
+
+    init(tweet: Binding<Tweet>, deleteTweet: @escaping (Tweet) async -> Void, isPinned: Bool) {
+        self._tweet = tweet
+        self.deleteTweet = deleteTweet
+        self.isPinned = isPinned
+        self._isCurrentlyPinned = State(initialValue: isPinned)
+    }
 
     var body: some View {
         Menu {
             if tweet.authorId == appUser.mid {
                 Button(action: {
                     Task {
-                        _ = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid)
+                        if let isPinned = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
+                            isCurrentlyPinned = isPinned
+                            NotificationCenter.default.post(
+                                name: NSNotification.Name("TweetPinStatusChanged"),
+                                object: nil,
+                                userInfo: [
+                                    "tweetId": tweet.mid,
+                                    "isPinned": isPinned
+                                ]
+                            )
+                        }
                     }
                 }) {
-                    if isPinned {
+                    if isCurrentlyPinned {
                         Label("Unpin", systemImage: "pin.slash")
                     } else {
                         Label("Pin", systemImage: "pin")
