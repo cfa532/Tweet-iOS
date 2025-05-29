@@ -135,7 +135,7 @@ final class HproseInstance: ObservableObject {
                 "aid": appId,
                 "ver": "last",
                 "tweetid": tweet.mid,
-                "userid": appUser.mid,
+                "appuserid": appUser.mid,
                 "pn": pageNumber,
                 "ps": pageSize,
             ]

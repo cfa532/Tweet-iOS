@@ -173,8 +173,8 @@ struct ProfileView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TweetPinStatusChanged"))) { notification in
-            if let tweetId = notification.userInfo?["tweetId"] as? String,
-               let isPinned = notification.userInfo?["isPinned"] as? Bool {
+            if let _ = notification.userInfo?["tweetId"] as? String,
+               let _ = notification.userInfo?["isPinned"] as? Bool {
                 Task {
                     await refreshPinnedTweets()
                 }
