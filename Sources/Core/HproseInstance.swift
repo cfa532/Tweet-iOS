@@ -90,7 +90,7 @@ final class HproseInstance: ObservableObject {
                 print(addrs)
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     #if DEBUG
-                        let firstIp = "183.128.49.46:8002"  // for testing
+                        let firstIp = "122.231.125.75:8002"  // for testing
                     #endif
                     appUser = appUser.copy(baseUrl: "http://\(firstIp)")
                     client.uri = appUser.baseUrl!+"/webapi/"
@@ -192,7 +192,7 @@ final class HproseInstance: ObservableObject {
                     "ver": "last",
                     "start": startRank,
                     "end": endRank,
-                    "userid": user.mid,
+                    "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
                     "appuserid": appUser.mid,
                 ]
                 
