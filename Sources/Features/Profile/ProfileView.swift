@@ -220,9 +220,12 @@ struct ProfileView: View {
             TweetListView(
                 title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",
                 tweetFetcher: { page, size in
-                    try await hproseInstance.getUserTweetsByType(
+                    print("[ProfileView] Fetching tweets for type: \(tweetListType)")
+                    return try await hproseInstance.getUserTweetsByType(
                         user: user,
-                        type: tweetListType
+                        type: tweetListType,
+                        pageNumber: page,
+                        pageSize: size
                     )
                 },
                 onRetweet: { tweet in

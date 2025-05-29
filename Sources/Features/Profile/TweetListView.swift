@@ -80,11 +80,9 @@ struct TweetListView: View {
             .refreshable {
                 await refreshTweets()
             }
-            .onAppear {
+            .task {
                 if tweets.isEmpty {
-                    Task {
-                        await refreshTweets()
-                    }
+                    await refreshTweets()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("UserDidLogin"))) { _ in
