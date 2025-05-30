@@ -106,8 +106,17 @@ struct TweetListView: View {
                         onDeleteTweet: { tweet in
                             let index = tweets.firstIndex(where: { $0.id == tweet.id })
                             var removedTweet: Tweet? = nil
+                            var origIdx: Int? = nil
+                            var oldRetweetCount: Int? = nil
                             if let index = index {
                                 removedTweet = tweets.remove(at: index)
+                            }
+                            // If this was a retweet, optimistically decrement retweetCount and remember old value
+                            if let originalId = tweet.originalTweetId, let idx = tweets.firstIndex(where: { $0.mid == originalId }) {
+                                origIdx = idx
+                                oldRetweetCount = tweets[idx].retweetCount
+                                let current = tweets[idx].retweetCount ?? 1
+                                tweets[idx].retweetCount = max(0, current - 1)
                             }
                             Task {
                                 var success = false
@@ -115,11 +124,21 @@ struct TweetListView: View {
                                     await onDeleteTweet(tweet)
                                     success = !tweets.contains(where: { $0.id == tweet.id })
                                 }
-                                if !success, let removed = removedTweet, let idx = index {
-                                    tweets.insert(removed, at: idx)
-                                    showToastWith(message: "Failed to delete tweet.", type: .error)
+                                if success {
+                                    // Persist the change if this was a retweet
+                                    if let originalId = tweet.originalTweetId, let idx = tweets.firstIndex(where: { $0.mid == originalId }) {
+                                        _ = try? await hproseInstance.updateRetweetCount(tweet: tweets[idx], retweetId: tweet.mid, direction: false)
+                                    }
+                                    showToastWith(message: "Tweet deleted.", type: .success)
                                 } else {
-                                    showToastWith(message: success ? "Tweet deleted." : "Failed to delete tweet.", type: success ? .success : .error)
+                                    // Restore tweet and retweetCount if needed
+                                    if let removed = removedTweet, let idx = index {
+                                        tweets.insert(removed, at: idx)
+                                    }
+                                    if let idx = origIdx, let oldCount = oldRetweetCount {
+                                        tweets[idx].retweetCount = oldCount
+                                    }
+                                    showToastWith(message: "Failed to delete tweet.", type: .error)
                                 }
                             }
                         },
