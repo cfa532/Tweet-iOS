@@ -26,6 +26,7 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var selectedMedia: [MimeiFileType] = []
     @Published var isUploading = false
     @Published var uploadProgress = 0.0
+    @EnvironmentObject private var hproseInstance: HproseInstance
     
     var canPostTweet: Bool {
         let hasContent = !tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -54,7 +55,7 @@ class ComposeTweetViewModel: ObservableObject {
         print("DEBUG: Creating tweet object")
         let tweet = Tweet(
             mid: "",
-            authorId: HproseInstance.shared.appUser.mid,
+            authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(),
             title: nil,
@@ -126,7 +127,7 @@ class ComposeTweetViewModel: ObservableObject {
         }
         
         print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
-        HproseInstance.shared.scheduleTweetUpload(tweet: tweet, itemData: itemData)
+        hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
         
         // Reset form
         print("DEBUG: Resetting form")
