@@ -12,7 +12,6 @@ struct CommentItemView: View {
     @ObservedObject var comment: Tweet
     let deleteComment: (Tweet) async -> Void
     let retweet: (Tweet) async -> Void
-    var isPinned: Bool = false
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
     var commentsVM: CommentsViewModel? = nil
@@ -35,7 +34,7 @@ struct CommentItemView: View {
             VStack(alignment: .leading) {
                 HStack {
                     TweetItemHeaderView(tweet: comment)
-                    TweetMenu(tweet: comment, deleteTweet: deleteComment, isPinned: isPinned)
+                    TweetMenu(tweet: comment, deleteTweet: deleteComment, isPinned: false)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { showDetail = true }
