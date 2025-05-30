@@ -1,7 +1,7 @@
 import SwiftUI
 
 @available(iOS 16.0, *)
-struct TweetListView: View {
+struct TweetListView<RowView: View>: View {
     // MARK: - Properties
     @EnvironmentObject private var hproseInstance: HproseInstance
     let title: String
@@ -10,6 +10,7 @@ struct TweetListView: View {
     let onDeleteTweet: ((Tweet) async -> Void)?
     let onAvatarTap: ((User) -> Void)?
     let showTitle: Bool
+    let rowView: (Tweet) -> RowView
     
     @State private var tweets: [Tweet] = []
     @State private var isLoading: Bool = false
@@ -22,7 +23,7 @@ struct TweetListView: View {
     @State private var deleteResultMessage = ""
     @State private var showToast = false
     @State private var toastMessage = ""
-    @State private var toastType: ToastType = .info
+    @State private var toastType: TweetListView<TweetItemView>.ToastType = .info
     enum ToastType { case success, error, info }
 
     // MARK: - Initialization
@@ -32,7 +33,8 @@ struct TweetListView: View {
         onRetweet: ((Tweet) async -> Void)? = nil,
         onDeleteTweet: ((Tweet) async -> Void)? = nil,
         onAvatarTap: ((User) -> Void)? = nil,
-        showTitle: Bool = true
+        showTitle: Bool = true,
+        rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
         self.tweetFetcher = tweetFetcher
@@ -40,6 +42,7 @@ struct TweetListView: View {
         self.onDeleteTweet = onDeleteTweet
         self.onAvatarTap = onAvatarTap
         self.showTitle = showTitle
+        self.rowView = rowView
     }
 
     // MARK: - Body
@@ -49,130 +52,7 @@ struct TweetListView: View {
                 ScrollView {
                     TweetListContentView(
                         tweets: $tweets,
-                        onRetweet: { tweet in
-                            let placeholderId = String(repeating: "0", count: 17)
-                            let placeholder = Tweet(
-                                mid: placeholderId,
-                                authorId: hproseInstance.appUser.mid,
-                                content: nil,
-                                originalTweetId: tweet.mid,
-                                originalAuthorId: tweet.authorId,
-                                author: hproseInstance.appUser,
-                                favorites: [false, false, true],
-                                favoriteCount: tweet.favoriteCount ?? 0,
-                                bookmarkCount: tweet.bookmarkCount ?? 0,
-                                retweetCount: tweet.retweetCount ?? 0,
-                                commentCount: tweet.commentCount ?? 0,
-                                attachments: nil
-                            )
-                            tweets.insert(placeholder, at: 0)
-                            showToastWith(message: "Retweeting...", type: .info)
-                            let originalIndex = tweets.firstIndex(where: { $0.mid == tweet.mid })
-                            let originalRetweetCount = tweet.retweetCount
-                            if let idx = originalIndex {
-                                tweets[idx].retweetCount = (tweets[idx].retweetCount ?? 0) + 1
-                            }
-                            Task {
-                                var success = false
-                                var newRetweet: Tweet? = nil
-                                if let onRetweet = onRetweet {
-                                    await onRetweet(tweet)
-                                    if let retweet = try? await hproseInstance.retweet(tweet) {
-                                        newRetweet = retweet
-                                        success = true
-                                    }
-                                }
-                                if success, let actualRetweet = newRetweet {
-                                    if let idx = tweets.firstIndex(where: { $0.mid == placeholderId }) {
-                                        await MainActor.run {
-                                            tweets[idx] = actualRetweet
-                                        }
-                                    }
-                                    if let idx = originalIndex {
-                                        if let updated = try? await hproseInstance.updateRetweetCount(tweet: tweets[idx], retweetId: actualRetweet.mid, direction: true) {
-                                            await MainActor.run {
-                                                tweets[idx].retweetCount = updated.retweetCount
-                                                tweets[idx].favoriteCount = updated.favoriteCount
-                                                tweets[idx].bookmarkCount = updated.bookmarkCount
-                                                tweets[idx].commentCount = updated.commentCount
-                                            }
-                                        }
-                                    }
-                                    await MainActor.run {
-                                        showToastWith(message: "Retweet successful!", type: .success)
-                                    }
-                                } else {
-                                    if let idx = tweets.firstIndex(where: { $0.mid == placeholderId }) {
-                                        await MainActor.run {
-                                            let _ = tweets.remove(at: idx)
-                                        }
-                                    }
-                                    if let idx = originalIndex {
-                                        await MainActor.run {
-                                            tweets[idx].retweetCount = originalRetweetCount
-                                        }
-                                    }
-                                    await MainActor.run {
-                                        showToastWith(message: "Retweet failed.", type: .error)
-                                    }
-                                }
-                            }
-                        },
-                        onDeleteTweet: { tweet in
-                            let index = tweets.firstIndex(where: { $0.id == tweet.id })
-                            var removedTweet: Tweet? = nil
-                            var origIdx: Int? = nil
-                            var oldRetweetCount: Int? = nil
-                            if let index = index {
-                                removedTweet = tweets.remove(at: index)
-                            }
-                            // If this was a retweet, optimistically decrement retweetCount and remember old value
-                            if let originalId = tweet.originalTweetId, let idx = tweets.firstIndex(where: { $0.mid == originalId }) {
-                                origIdx = idx
-                                oldRetweetCount = tweets[idx].retweetCount
-                                let current = tweets[idx].retweetCount ?? 1
-                                tweets[idx].retweetCount = max(0, current - 1)
-                            }
-                            Task {
-                                var success = false
-                                if let onDeleteTweet = onDeleteTweet {
-                                    await onDeleteTweet(tweet)
-                                    success = !tweets.contains(where: { $0.id == tweet.id })
-                                }
-                                if success {
-                                    // Persist the change if this was a retweet
-                                    if let originalId = tweet.originalTweetId, let idx = tweets.firstIndex(where: { $0.mid == originalId }) {
-                                        if let updated = try? await hproseInstance.updateRetweetCount(tweet: tweets[idx], retweetId: tweet.mid, direction: false) {
-                                            await MainActor.run {
-                                                tweets[idx].retweetCount = updated.retweetCount
-                                                tweets[idx].favoriteCount = updated.favoriteCount
-                                                tweets[idx].bookmarkCount = updated.bookmarkCount
-                                                tweets[idx].commentCount = updated.commentCount
-                                            }
-                                        }
-                                    }
-                                    await MainActor.run {
-                                        showToastWith(message: "Tweet deleted.", type: .success)
-                                    }
-                                } else {
-                                    // Restore tweet and retweetCount if needed
-                                    if let removed = removedTweet, let idx = index {
-                                        await MainActor.run {
-                                            tweets.insert(removed, at: idx)
-                                        }
-                                    }
-                                    if let idx = origIdx, let oldCount = oldRetweetCount {
-                                        await MainActor.run {
-                                            tweets[idx].retweetCount = oldCount
-                                        }
-                                    }
-                                    await MainActor.run {
-                                        showToastWith(message: "Failed to delete tweet.", type: .error)
-                                    }
-                                }
-                            }
-                        },
-                        onAvatarTap: onAvatarTap
+                        rowView: rowView
                     )
                     LoadingSectionView(hasMoreTweets: hasMoreTweets, isLoading: isLoading, isLoadingMore: isLoadingMore, loadMoreTweets: loadMoreTweets)
                 }
@@ -245,7 +125,7 @@ struct TweetListView: View {
         }
     }
 
-    private func showToastWith(message: String, type: ToastType) {
+    private func showToastWith(message: String, type: TweetListView<TweetItemView>.ToastType) {
         toastMessage = message
         toastType = type
         showToast = true
@@ -256,23 +136,15 @@ struct TweetListView: View {
 }
 
 @available(iOS 16.0, *)
-struct TweetListContentView: View {
+struct TweetListContentView<RowView: View>: View {
     @Binding var tweets: [Tweet]
-    let onRetweet: (Tweet) -> Void
-    let onDeleteTweet: (Tweet) -> Void
-    let onAvatarTap: ((User) -> Void)?
+    let rowView: (Tweet) -> RowView
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0).id("top")
             ForEach(tweets) { tweet in
-                TweetItemView(
-                    tweet: tweet,
-                    retweet: onRetweet,
-                    deleteTweet: onDeleteTweet,
-                    isInProfile: false,
-                    onAvatarTap: onAvatarTap
-                )
-                .id(tweet.id)
+                rowView(tweet)
+                    .id(tweet.id)
             }
         }
     }
@@ -303,7 +175,7 @@ struct LoadingSectionView: View {
 struct ToastOverlayView: View {
     let showToast: Bool
     let toastMessage: String
-    let toastType: TweetListView.ToastType
+    let toastType: TweetListView<TweetItemView>.ToastType
     var body: some View {
         if showToast {
             VStack {
@@ -320,7 +192,7 @@ struct ToastOverlayView: View {
 @available(iOS 16.0, *)
 struct ToastView: View {
     let message: String
-    let type: TweetListView.ToastType
+    let type: TweetListView<TweetItemView>.ToastType
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: iconName)
@@ -371,3 +243,22 @@ struct ToastView: View {
         }
     }
 }
+
+#if DEBUG
+@available(iOS 16.0, *)
+struct TweetListView_Previews: PreviewProvider {
+    static var previews: some View {
+        TweetListView<TweetItemView>(
+            title: "Preview",
+            tweetFetcher: { _, _ in [] },
+            rowView: { tweet in
+                TweetItemView(
+                    tweet: tweet,
+                    retweet: { _ in },
+                    deleteTweet: { _ in }
+                )
+            }
+        )
+    }
+}
+#endif

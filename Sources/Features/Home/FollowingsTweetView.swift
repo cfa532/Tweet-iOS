@@ -9,7 +9,7 @@ struct FollowingsTweetView: View {
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
-        TweetListView(
+        TweetListView<TweetItemView>(
             title: "Timeline",
             tweetFetcher: { page, size in
                 try await hproseInstance.fetchTweetFeed(
@@ -28,7 +28,16 @@ struct FollowingsTweetView: View {
                 }
             },
             onAvatarTap: onAvatarTap,
-            showTitle: false
+            showTitle: false,
+            rowView: { tweet in
+                TweetItemView(
+                    tweet: tweet,
+                    retweet: { _ in },
+                    deleteTweet: { _ in },
+                    isInProfile: false,
+                    onAvatarTap: onAvatarTap
+                )
+            }
         )
     }
 }

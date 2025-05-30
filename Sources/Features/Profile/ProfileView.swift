@@ -255,7 +255,7 @@ struct ProfileView: View {
         }
         // Tweet list navigation (bookmarks/favorites)
         .navigationDestination(isPresented: $showTweetList) {
-            TweetListView(
+            TweetListView<TweetItemView>(
                 title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",
                 tweetFetcher: { page, size in
                     print("[ProfileView] Fetching tweets for type: \(tweetListType)")
@@ -287,6 +287,16 @@ struct ProfileView: View {
                 },
                 onAvatarTap: { user in
                     selectedUser = user
+                },
+                showTitle: true,
+                rowView: { tweet in
+                    TweetItemView(
+                        tweet: tweet,
+                        retweet: { _ in },
+                        deleteTweet: { _ in },
+                        isInProfile: false,
+                        onAvatarTap: { user in selectedUser = user }
+                    )
                 }
             )
         }

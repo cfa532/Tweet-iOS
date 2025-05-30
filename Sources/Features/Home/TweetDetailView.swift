@@ -95,28 +95,26 @@ struct TweetDetailView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 4)
                 // Comments
-                if comments.isEmpty && !isLoadingComments {
-                    Text("No comments yet")
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding()
-                } else {
-                    ForEach(comments, id: \.id) { comment in
-                        TweetItemView(tweet: comment, retweet: retweet, deleteTweet: deleteTweet)
+                TweetListView(
+                    title: "Comments",
+                    tweetFetcher: { page, size in
+                        try await hproseInstance.fetchComments(
+                            tweet: tweet,
+                            pageNumber: page,
+                            pageSize: size
+                        )
+                    },
+                    onRetweet: retweet,
+                    onDeleteTweet: deleteComment,
+                    onAvatarTap: nil,
+                    showTitle: false,
+                    rowView: { comment in
+                        CommentItemView(
+                            comment: comment,
+                            deleteComment: deleteComment,
+                            retweet: retweet
+                        )
                     }
-                    if hasMoreComments && isLoadingComments {
-                        ProgressView()
-                            .padding()
-                            .onAppear {
-                                loadMoreComments()
-                            }
-                    }
-                }
-                CommentsSection(
-                    isLoading: isLoadingComments,
-                    hasMoreComments: hasMoreComments,
-                    onLoadMore: loadMoreComments,
-                    onRefresh: refreshComments
                 )
                 if showToast {
                     VStack {
@@ -148,7 +146,6 @@ struct TweetDetailView: View {
             LoginView()
         }
         .onAppear {
-            loadComments()
             loadPinnedTweets()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NewCommentAdded"))) { notification in
