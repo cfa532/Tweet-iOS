@@ -141,24 +141,52 @@ struct CommentComposeView: View {
     }
     
     private func submitComment() async {
-        do {
-            // Create the comment object
-            var comment = Tweet(
-                mid: "", // Placeholder ID
-                authorId: hproseInstance.appUser.mid,
-                content: commentText.trimmingCharacters(in: .whitespacesAndNewlines),
-                timestamp: Date(),
-                originalTweetId: isQuoting ? tweet.mid : nil,
-                originalAuthorId: isQuoting ? tweet.authorId : nil
-            )
-            // Ensure optimistic comment has author set
-            comment.author = hproseInstance.appUser
-            // Prepare item data for attachments
-            var itemData: [HproseInstance.PendingUpload.ItemData] = []
-            for item in selectedItems {
+        print("DEBUG: Starting submitComment()")
+        
+        let trimmedContent = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Allow empty content if there are attachments
+        guard !trimmedContent.isEmpty || !selectedItems.isEmpty else {
+            print("DEBUG: Comment validation failed - empty content and no attachments")
+            error = TweetError.emptyTweet
+            return
+        }
+        
+        // Create comment object
+        print("DEBUG: Creating comment object")
+        let comment = Tweet(
+            mid: "",
+            authorId: hproseInstance.appUser.mid,
+            content: trimmedContent,
+            timestamp: Date(),
+            title: nil,
+            originalTweetId: isQuoting ? tweet.mid : nil,
+            originalAuthorId: isQuoting ? tweet.authorId : nil,
+            author: hproseInstance.appUser,
+            favorites: [false, false, false],
+            favoriteCount: 0,
+            bookmarkCount: 0,
+            retweetCount: 0,
+            commentCount: 0,
+            attachments: nil,
+            isPrivate: false,
+            downloadable: nil
+        )
+        
+        // Prepare item data
+        print("DEBUG: Preparing item data for \(selectedItems.count) items")
+        var itemData: [HproseInstance.PendingUpload.ItemData] = []
+        
+        for item in selectedItems {
+            print("DEBUG: Processing item: \(item.itemIdentifier ?? "unknown")")
+            do {
                 if let data = try await item.loadTransferable(type: Data.self) {
+                    print("DEBUG: Successfully loaded image data: \(data.count) bytes")
+                    
+                    // Get the type identifier and determine file extension
                     let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
                     let fileExtension: String
+                    
                     if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
                         fileExtension = "jpg"
                     } else if typeIdentifier.contains("png") {
@@ -178,8 +206,11 @@ struct CommentComposeView: View {
                     } else {
                         fileExtension = "file"
                     }
+                    
+                    // Create a unique filename with timestamp
                     let timestamp = Int(Date().timeIntervalSince1970)
                     let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
+                    
                     itemData.append(HproseInstance.PendingUpload.ItemData(
                         identifier: item.itemIdentifier ?? UUID().uuidString,
                         typeIdentifier: typeIdentifier,
@@ -187,11 +218,22 @@ struct CommentComposeView: View {
                         fileName: filename
                     ))
                 }
+            } catch {
+                print("DEBUG: Error loading image data: \(error)")
+                self.error = error
+                return
             }
-            await commentsVM.postComment(comment, tweet: tweet)
-            dismiss()
-        } catch {
-            self.error = error
         }
+        
+        // Add optimistic comment to the list
+        commentsVM.addComment(comment)
+        
+        print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")
+        hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
+        
+        // Reset form and dismiss
+        commentText = ""
+        selectedItems = []
+        dismiss()
     }
 } 
