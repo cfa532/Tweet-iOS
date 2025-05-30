@@ -59,6 +59,10 @@ final class HproseInstance: ObservableObject {
     }()
     private var hproseClient: AnyObject?
     
+    // Global tweet cache: [tweetId: Tweet]
+    private var tweetCache = [String: Tweet]()
+    private let tweetCacheLock = NSLock()
+    
     // MARK: - Initialization
     private init() {}
     
@@ -319,11 +323,14 @@ final class HproseInstance: ObservableObject {
         authorId: String,
         nodeUrl: String? = nil
     )  async throws -> Tweet? {
-        try await withRetry {
+        // Check cache first
+        if let cached = tweetCacheLock.withLock({ tweetCache[tweetId] }) {
+            return cached
+        }
+        return try await withRetry {
             guard var service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-
             let entry = "get_tweet"
             let params = [
                 "aid": appId,
@@ -334,6 +341,8 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
                 if var tweet = Tweet.from(dict: tweetDict) {
                     tweet.author = try await getUser(authorId)
+                    // Store in cache
+                    tweetCacheLock.withLock { tweetCache[tweetId] = tweet }
                     return tweet
                 }
             } else {
@@ -346,6 +355,8 @@ final class HproseInstance: ObservableObject {
                     if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
                         if var tweet = Tweet.from(dict: tweetDict) {
                             tweet.author = try await getUser(authorId)
+                            // Store in cache
+                            tweetCacheLock.withLock { tweetCache[tweetId] = tweet }
                             return tweet
                         }
                     }

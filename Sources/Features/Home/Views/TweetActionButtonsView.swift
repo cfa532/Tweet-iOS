@@ -68,9 +68,19 @@ struct TweetActionButtonsView: View {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
+                    // Optimistic UI update
+                    let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
+                    var newFavorites = tweet.favorites ?? [false, false, false]
+                    newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
+                    tweet.favorites = newFavorites
+                    tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
                     Task {
                         if let updatedTweet = try? await hproseInstance.toggleFavorite(tweet) {
-                            tweet = updatedTweet
+                            // Only update if backend result differs
+                            if updatedTweet.favorites != tweet.favorites || updatedTweet.favoriteCount != tweet.favoriteCount {
+                                tweet.favorites = updatedTweet.favorites
+                                tweet.favoriteCount = updatedTweet.favoriteCount
+                            }
                         }
                     }
                 }
@@ -92,9 +102,19 @@ struct TweetActionButtonsView: View {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
+                    // Optimistic UI update
+                    let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
+                    var newFavorites = tweet.favorites ?? [false, false, false]
+                    newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
+                    tweet.favorites = newFavorites
+                    tweet.bookmarkCount = (tweet.bookmarkCount ?? 0) + (wasBookmarked ? -1 : 1)
                     Task {
                         if let updatedTweet = try? await hproseInstance.toggleBookmark(tweet) {
-                            tweet = updatedTweet
+                            // Only update if backend result differs
+                            if updatedTweet.favorites != tweet.favorites || updatedTweet.bookmarkCount != tweet.bookmarkCount {
+                                tweet.favorites = updatedTweet.favorites
+                                tweet.bookmarkCount = updatedTweet.bookmarkCount
+                            }
                         }
                     }
                 }
