@@ -19,6 +19,7 @@ struct CommentsSection: View {
     }
 }
 
+@MainActor
 @available(iOS 16.0, *)
 struct TweetDetailView: View {
     @ObservedObject var tweet: Tweet
@@ -30,6 +31,8 @@ struct TweetDetailView: View {
     @State private var hasMoreComments = true
     @State private var showLoginSheet = false
     @State private var pinnedTweets: [[String: Any]] = []
+    @State private var showToast = false
+    @State private var toastMessage = ""
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     let retweet: (Tweet) async -> Void
@@ -115,6 +118,21 @@ struct TweetDetailView: View {
                     onLoadMore: loadMoreComments,
                     onRefresh: refreshComments
                 )
+                if showToast {
+                    VStack {
+                        Spacer()
+                        Text(toastMessage)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 14)
+                            .background(Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95))
+                            .foregroundColor(.white)
+                            .cornerRadius(22)
+                            .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
+                            .padding(.bottom, 40)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    .animation(.easeInOut, value: showToast)
+                }
             }
             .refreshable {
                 await refreshComments()
@@ -138,9 +156,24 @@ struct TweetDetailView: View {
                let updatedTweet = notification.userInfo?["updatedTweet"] as? Tweet,
                let comment = notification.userInfo? ["comment"] as? Tweet,
                tweetId == tweet.mid {
-                tweet.commentCount = updatedTweet.commentCount
-                if !comments.contains(where: { $0.mid == comment.mid }) {
-                    comments.insert(comment, at: 0)
+                Task { @MainActor in
+                    tweet.commentCount = updatedTweet.commentCount
+                    if !comments.contains(where: { $0.mid == comment.mid }) {
+                        comments.insert(comment, at: 0)
+                    }
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RevertCommentAdded"))) { notification in
+            Task { @MainActor in
+                if let tweetId = notification.userInfo?["tweetId"] as? String,
+                   let updatedTweet = notification.userInfo?["updatedTweet"] as? Tweet,
+                   let comment = notification.userInfo?["comment"] as? Tweet,
+                   tweetId == tweet.mid {
+                    tweet.commentCount = updatedTweet.commentCount
+                    if let idx = comments.firstIndex(where: { $0.mid == comment.mid }) {
+                        comments.remove(at: idx)
+                    }
                 }
             }
         }
@@ -212,6 +245,28 @@ struct TweetDetailView: View {
             print("Error refreshing comments: \(error)")
             await MainActor.run {
                 isLoadingComments = false
+            }
+        }
+    }
+
+    func deleteComment(_ comment: Tweet) async {
+        let result = try? await hproseInstance.deleteComment(parentTweet: tweet, commentId: comment.mid)
+        if let dict = result, let deletedId = dict["commentId"] as? String, let count = dict["count"] as? Int, deletedId == comment.mid {
+            await MainActor.run {
+                if let idx = comments.firstIndex(where: { $0.mid == comment.mid }) {
+                    comments.remove(at: idx)
+                    tweet.commentCount = count
+                }
+            }
+        } else {
+            await MainActor.run {
+                comments.insert(comment, at: 0)
+                tweet.commentCount = (tweet.commentCount ?? 0) + 1
+                toastMessage = "Failed to delete comment. Please try again."
+                showToast = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    withAnimation { showToast = false }
+                }
             }
         }
     }

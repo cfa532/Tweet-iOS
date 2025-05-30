@@ -676,7 +676,9 @@ final class HproseInstance: ObservableObject {
                let favoriteCount = response["count"] as? Int {
                 var favorites = tweet.favorites ?? [false, false, false]
                 favorites[UserActions.FAVORITE.rawValue] = isFavorite
-                return tweet.copy(favorites: favorites, favoriteCount: favoriteCount)
+                return await MainActor.run {
+                    tweet.copy(favorites: favorites, favoriteCount: favoriteCount)
+                }
             }
             return nil
         }
@@ -712,7 +714,9 @@ final class HproseInstance: ObservableObject {
                let bookmarkCount = response["count"] as? Int {
                 var favorites = tweet.favorites ?? [false, false, false]
                 favorites[UserActions.BOOKMARK.rawValue] = hasBookmarked
-                return tweet.copy(favorites: favorites, bookmarkCount: bookmarkCount)
+                return await MainActor.run {
+                    tweet.copy(favorites: favorites, bookmarkCount: bookmarkCount)
+                }
             }
             return nil
         }
@@ -721,12 +725,14 @@ final class HproseInstance: ObservableObject {
     func retweet(_ tweet: Tweet) async throws -> Tweet? {
         try await withRetry {
             if let retweet = try await uploadTweet(
-                Tweet(
-                    mid: Constants.GUEST_ID,
-                    authorId: appUser.mid,
-                    originalTweetId: tweet.mid,
-                    originalAuthorId: tweet.authorId
-                )
+                await MainActor.run {
+                    Tweet(
+                        mid: Constants.GUEST_ID,
+                        authorId: appUser.mid,
+                        originalTweetId: tweet.mid,
+                        originalAuthorId: tweet.authorId
+                    )
+                }
             ) {
                 return retweet
             }
@@ -761,7 +767,9 @@ final class HproseInstance: ObservableObject {
             }
             if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any],
                let updatedOriginalTweet = Tweet.from(dict: tweetDict) {
-                return updatedOriginalTweet
+                return await MainActor.run {
+                    updatedOriginalTweet
+                }
             }
             return nil
         }
@@ -792,7 +800,7 @@ final class HproseInstance: ObservableObject {
     
     // both author and tweet author can delete this comment
     // TODO
-    func deleteComment(parentTweet: Tweet, commentId: String) async throws -> String? {
+    func deleteComment(parentTweet: Tweet, commentId: String) async throws -> [String: Any]? {
         try await withRetry {
             let entry = "delete_comment"
             let params = [
@@ -807,7 +815,7 @@ final class HproseInstance: ObservableObject {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            guard let response = service.runMApp(entry, params, nil) as? String else {
+            guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
                 print("Invalid response delete commentId: \(commentId)")
                 return nil
             }
@@ -1324,9 +1332,9 @@ final class HproseInstance: ObservableObject {
                 newComment.mid = commentId
                 
                 // Update the parent tweet with new comment count
-                let updatedTweet = tweet.copy(commentCount: count)
-                
-                return (updatedTweet, newComment)
+                return await MainActor.run {
+                    (tweet.copy(commentCount: count), newComment)
+                }
             }
             return nil
         }

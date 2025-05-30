@@ -211,7 +211,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         isPrivate: Bool? = nil,
         downloadable: Bool? = nil
     ) -> Tweet {
-        var copy = self
+        let copy = self
         if let content = content { copy.content = content }
         if let title = title { copy.title = title }
         if let author = author { copy.author = author }
