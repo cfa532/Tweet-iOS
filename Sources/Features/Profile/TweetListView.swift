@@ -17,6 +17,8 @@ struct TweetListView: View {
     @State private var currentPage: Int = 0
     private let pageSize: Int = 10
     @State private var errorMessage: String? = nil
+    @State private var showDeleteResult = false
+    @State private var deleteResultMessage = ""
 
     // MARK: - Initialization
     init(
@@ -38,43 +40,72 @@ struct TweetListView: View {
     // MARK: - Body
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    Color.clear.frame(height: 0).id("top")
-                    ForEach($tweets) { $tweet in
-                        TweetItemView(
-                            tweet: $tweet,
-                            retweet: { tweet in
-                                if let onRetweet = onRetweet {
-                                    Task {
-                                        await onRetweet(tweet)
+            ZStack {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        Color.clear.frame(height: 0).id("top")
+                        ForEach($tweets) { $tweet in
+                            TweetItemView(
+                                tweet: $tweet,
+                                retweet: { tweet in
+                                    if let onRetweet = onRetweet {
+                                        Task {
+                                            await onRetweet(tweet)
+                                        }
                                     }
-                                }
-                            },
-                            deleteTweet: { tweet in
-                                if let onDeleteTweet = onDeleteTweet {
-                                    Task {
-                                        await onDeleteTweet(tweet)
+                                },
+                                deleteTweet: { tweet in
+                                    // Immediate UI removal
+                                    let index = tweets.firstIndex(where: { $0.id == tweet.id })
+                                    var removedTweet: Tweet? = nil
+                                    if let index = index {
+                                        removedTweet = tweets.remove(at: index)
                                     }
+                                    Task {
+                                        var success = false
+                                        if let onDeleteTweet = onDeleteTweet {
+                                            await onDeleteTweet(tweet)
+                                            // Check if tweet is still gone (assume success if not present)
+                                            success = !tweets.contains(where: { $0.id == tweet.id })
+                                        }
+                                        if !success, let removed = removedTweet, let idx = index {
+                                            // Restore if failed
+                                            tweets.insert(removed, at: idx)
+                                            deleteResultMessage = "Failed to delete tweet."
+                                        } else {
+                                            deleteResultMessage = success ? "Tweet deleted." : "Failed to delete tweet."
+                                        }
+                                        showDeleteResult = true
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                            withAnimation { showDeleteResult = false }
+                                        }
+                                    }
+                                },
+                                isInProfile: false,
+                                onAvatarTap: onAvatarTap
+                            )
+                            .id(tweet.id)
+                        }
+                        if hasMoreTweets {
+                            ProgressView()
+                                .padding()
+                                .onAppear {
+                                    if (!isLoadingMore) { loadMoreTweets() }
                                 }
-                            },
-                            isInProfile: false,
-                            onAvatarTap: onAvatarTap
-                        )
-                        .id(tweet.id)
+                        } else if isLoading || isLoadingMore {
+                            ProgressView()
+                                .padding()
+                        }
                     }
-                    if hasMoreTweets {
-                        ProgressView()
-                            .padding()
-                            .onAppear {
-                                if !isLoadingMore {
-                                    loadMoreTweets()
-                                }
-                            }
-                    } else if isLoading || isLoadingMore {
-                        ProgressView()
-                            .padding()
+                }
+                if showDeleteResult {
+                    VStack {
+                        Spacer()
+                        ToastView(message: deleteResultMessage)
+                            .padding(.bottom, 40)
                     }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.easeInOut, value: showDeleteResult)
                 }
             }
             .refreshable {
@@ -142,5 +173,19 @@ struct TweetListView: View {
                 }
             }
         }
+    }
+}
+
+struct ToastView: View {
+    let message: String
+    var body: some View {
+        Text(message)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.black.opacity(0.85))
+            .foregroundColor(.white)
+            .cornerRadius(16)
+            .shadow(radius: 8)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 } 

@@ -19,7 +19,12 @@ struct FollowingsTweetView: View {
                 )
             },
             onRetweet: nil,
-            onDeleteTweet: nil,
+            onDeleteTweet: { tweet in
+                // Only allow delete if current user is the author
+                if tweet.authorId == hproseInstance.appUser.mid {
+                    _ = try? await hproseInstance.deleteTweet(tweet.mid)
+                }
+            },
             onAvatarTap: onAvatarTap,
             showTitle: false
         )

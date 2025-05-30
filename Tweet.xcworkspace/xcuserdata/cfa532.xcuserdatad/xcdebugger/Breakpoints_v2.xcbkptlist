@@ -30,8 +30,8 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "1329"
-            endingLineNumber = "1329"
+            startingLineNumber = "1331"
+            endingLineNumber = "1331"
             landmarkName = "togglePinnedTweet(tweetId:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -66,6 +66,84 @@
             endingLineNumber = "327"
             landmarkName = "getTweet(tweetId:authorId:nodeUrl:)"
             landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "6BA9B454-EB1D-4819-9D04-E7B27E942CC3"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Core/HproseInstance.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "756"
+            endingLineNumber = "756"
+            landmarkName = "deleteTweet(_:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "32FF9325-790E-42C6-84B0-D0DABAF4E7DE"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Features/Profile/TweetListView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "55"
+            endingLineNumber = "55"
+            landmarkName = "body"
+            landmarkType = "24">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "C0AA7C3F-E167-42DB-B9C9-23E8F31AF917"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Features/Profile/TweetListView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "57"
+            endingLineNumber = "57"
+            landmarkName = "body"
+            landmarkType = "24">
+            <Locations>
+               <Location
+                  uuid = "C0AA7C3F-E167-42DB-B9C9-23E8F31AF917 - 280704a665992e56"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "closure #1 (SwiftUI.Binding&lt;Tweet.Tweet&gt;) -&gt; &lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0 in implicit closure #1 (SwiftUI.Binding&lt;Tweet.Tweet&gt;) -&gt; &lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0 in closure #1 () -&gt; SwiftUI.TupleView&lt;(&lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0, SwiftUI.ForEach&lt;SwiftUI.Binding&lt;Swift.Array&lt;Tweet.Tweet&gt;&gt;, Swift.String, &lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0&gt;, Swift.Optional&lt;SwiftUI._ConditionalContent&lt;&lt;&lt;opaque return type of SwiftUI.View.onAppear(perform: Swift.Optional&lt;() -&gt; ()&gt;) -&gt; some&gt;&gt;.0, &lt;&lt;opaque return type of SwiftUI.View.padding(SwiftUI.Edge.Set, Swift.Optional&lt;CoreGraphics.CGFloat&gt;) -&gt; some&gt;&gt;.0&gt;&gt;)&gt; in closure #1 () -&gt; SwiftUI.LazyVStack&lt;SwiftUI.TupleView&lt;(&lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0, SwiftUI.ForEach&lt;SwiftUI.Binding&lt;Swift.Array&lt;Tweet.Tweet&gt;&gt;, Swift.String, &lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0&gt;, Swift.Optional&lt;SwiftUI._ConditionalContent&lt;&lt;&lt;opaque return type of SwiftUI.View.onAppear(perform: Swift.Optional&lt;() -&gt; ()&gt;) -&gt; some&gt;&gt;.0, &lt;&lt;opaque return type of SwiftUI.View.padding(SwiftUI.Edge.Set, Swift.Optional&lt;CoreGraphics.CGFloat&gt;) -&gt; some&gt;&gt;.0&gt;&gt;)&gt;&gt; in closure #1 () -&gt; SwiftUI.TupleView&lt;(SwiftUI.ScrollView&lt;SwiftUI.LazyVStack&lt;SwiftUI.TupleView&lt;(&lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0, SwiftUI.ForEach&lt;SwiftUI.Binding&lt;Swift.Array&lt;Tweet.Tweet&gt;&gt;, Swift.String, &lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0&gt;, Swift.Optional&lt;SwiftUI._ConditionalContent&lt;&lt;&lt;opaque return type of SwiftUI.View.onAppear(perform: Swift.Optional&lt;() -&gt; ()&gt;) -&gt; some&gt;&gt;.0, &lt;&lt;opaque return type of SwiftUI.View.padding(SwiftUI.Edge.Set, Swift.Optional&lt;CoreGraphics.CGFloat&gt;) -&gt; some&gt;&gt;.0&gt;&gt;)&gt;&gt;&gt;, Swift.Optional&lt;&lt;&lt;opaque return type of SwiftUI.View.animation&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Equatable&gt;(_: Swift.Optional&lt;SwiftUI.Animation&gt;, value: &#x3c4;_1_0) -&gt; some&gt;&gt;.0&gt;)&gt; in closure #1 (SwiftUI.ScrollViewProxy) -&gt; &lt;&lt;opaque return type of SwiftUI.View.onReceive&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Combine.Publisher, &#x3c4;_1_0.Failure == Swift.Never&gt;(_: &#x3c4;_1_0, perform: (&#x3c4;_1_0.Output) -&gt; ()) -&gt; some&gt;&gt;.0 in Tweet.TweetListView.body.getter : some"
+                  moduleName = "Tweet.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Features/Profile/TweetListView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "57"
+                  endingLineNumber = "57">
+               </Location>
+               <Location
+                  uuid = "C0AA7C3F-E167-42DB-B9C9-23E8F31AF917 - 2819ee6adb5c805b"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "closure #2 (Tweet.Tweet) async -&gt; () in closure #1 (SwiftUI.Binding&lt;Tweet.Tweet&gt;) -&gt; &lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0 in implicit closure #1 (SwiftUI.Binding&lt;Tweet.Tweet&gt;) -&gt; &lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0 in closure #1 () -&gt; SwiftUI.TupleView&lt;(&lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0, SwiftUI.ForEach&lt;SwiftUI.Binding&lt;Swift.Array&lt;Tweet.Tweet&gt;&gt;, Swift.String, &lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0&gt;, Swift.Optional&lt;SwiftUI._ConditionalContent&lt;&lt;&lt;opaque return type of SwiftUI.View.onAppear(perform: Swift.Optional&lt;() -&gt; ()&gt;) -&gt; some&gt;&gt;.0, &lt;&lt;opaque return type of SwiftUI.View.padding(SwiftUI.Edge.Set, Swift.Optional&lt;CoreGraphics.CGFloat&gt;) -&gt; some&gt;&gt;.0&gt;&gt;)&gt; in closure #1 () -&gt; SwiftUI.LazyVStack&lt;SwiftUI.TupleView&lt;(&lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0, SwiftUI.ForEach&lt;SwiftUI.Binding&lt;Swift.Array&lt;Tweet.Tweet&gt;&gt;, Swift.String, &lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0&gt;, Swift.Optional&lt;SwiftUI._ConditionalContent&lt;&lt;&lt;opaque return type of SwiftUI.View.onAppear(perform: Swift.Optional&lt;() -&gt; ()&gt;) -&gt; some&gt;&gt;.0, &lt;&lt;opaque return type of SwiftUI.View.padding(SwiftUI.Edge.Set, Swift.Optional&lt;CoreGraphics.CGFloat&gt;) -&gt; some&gt;&gt;.0&gt;&gt;)&gt;&gt; in closure #1 () -&gt; SwiftUI.TupleView&lt;(SwiftUI.ScrollView&lt;SwiftUI.LazyVStack&lt;SwiftUI.TupleView&lt;(&lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0, SwiftUI.ForEach&lt;SwiftUI.Binding&lt;Swift.Array&lt;Tweet.Tweet&gt;&gt;, Swift.String, &lt;&lt;opaque return type of SwiftUI.View.id&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Hashable&gt;(&#x3c4;_1_0) -&gt; some&gt;&gt;.0&gt;, Swift.Optional&lt;SwiftUI._ConditionalContent&lt;&lt;&lt;opaque return type of SwiftUI.View.onAppear(perform: Swift.Optional&lt;() -&gt; ()&gt;) -&gt; some&gt;&gt;.0, &lt;&lt;opaque return type of SwiftUI.View.padding(SwiftUI.Edge.Set, Swift.Optional&lt;CoreGraphics.CGFloat&gt;) -&gt; some&gt;&gt;.0&gt;&gt;)&gt;&gt;&gt;, Swift.Optional&lt;&lt;&lt;opaque return type of SwiftUI.View.animation&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Swift.Equatable&gt;(_: Swift.Optional&lt;SwiftUI.Animation&gt;, value: &#x3c4;_1_0) -&gt; some&gt;&gt;.0&gt;)&gt; in closure #1 (SwiftUI.ScrollViewProxy) -&gt; &lt;&lt;opaque return type of SwiftUI.View.onReceive&lt;&#x3c4;_0_0 where &#x3c4;_1_0: Combine.Publisher, &#x3c4;_1_0.Failure == Swift.Never&gt;(_: &#x3c4;_1_0, perform: (&#x3c4;_1_0.Output) -&gt; ()) -&gt; some&gt;&gt;.0 in Tweet.TweetListView.body.getter : some"
+                  moduleName = "Tweet.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Features/Profile/TweetListView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "57"
+                  endingLineNumber = "57">
+               </Location>
+            </Locations>
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>
