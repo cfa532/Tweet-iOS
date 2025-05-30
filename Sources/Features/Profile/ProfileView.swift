@@ -1,32 +1,58 @@
 import SwiftUI
 
 // MARK: - ProfileView
+/// A view that displays a user's profile, including their tweets, pinned tweets, and user information.
+/// This view handles both the current user's profile and other users' profiles.
 @available(iOS 16.0, *)
 struct ProfileView: View {
+    // MARK: - Environment
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
 
+    // MARK: - Properties
+    /// The user whose profile is being displayed
     let user: User
+    /// Optional callback for handling logout
     let onLogout: (() -> Void)?
+
+    // MARK: - State
+    /// List of regular tweets displayed in the profile
     @State private var tweets: [Tweet] = []
+    /// List of tweets that are pinned to the top of the profile
     @State private var pinnedTweets: [Tweet] = []
+    /// Set of tweet IDs that are pinned, used for quick lookup
     @State private var pinnedTweetIds: Set<String> = []
+    /// Dictionary mapping tweet IDs to their pin timestamps
     @State private var pinnedTweetTimes: [String: Any] = [:]
+    /// Controls the visibility of the edit profile sheet
     @State private var showEditSheet = false
+    /// Controls the visibility of the full-screen avatar view
     @State private var showAvatarFullScreen = false
+    /// Tracks whether the current user is following the profile user
     @State private var isFollowing = false
+    /// Indicates if tweets are currently being loaded
     @State private var isLoading = false
+    /// Tracks if the initial data load has been completed
     @State private var didLoad = false
+    /// The user selected when tapping on an avatar
     @State private var selectedUser: User? = nil
+    /// Controls the visibility of the user list (followers/following)
     @State private var showUserList = false
+    /// Determines which type of user list to show (followers or following)
     @State private var userListType: UserContentType = .FOLLOWING
+    /// Controls the visibility of the tweet list (bookmarks/favorites)
     @State private var showTweetList = false
+    /// Determines which type of tweet list to show (bookmarks or favorites)
     @State private var tweetListType: UserContentType = .BOOKMARKS
 
+    // MARK: - Computed Properties
+    /// Returns true if the displayed profile belongs to the current user
     var isCurrentUser: Bool {
         user.mid == hproseInstance.appUser.mid
     }
 
+    // MARK: - Methods
+    /// Refreshes the list of pinned tweets for the profile
     private func refreshPinnedTweets() async {
         do {
             let pinnedList = try await hproseInstance.getPinnedTweets(user: user)
@@ -49,8 +75,10 @@ struct ProfileView: View {
         }
     }
 
+    // MARK: - Body
     var body: some View {
         VStack(spacing: 0) {
+            // Profile header with user info and avatar
             ProfileHeaderView(
                 user: user,
                 isCurrentUser: isCurrentUser,
@@ -60,6 +88,7 @@ struct ProfileView: View {
                 onAvatarTap: { showAvatarFullScreen = true }
             )
             
+            // Stats section showing followers, following, bookmarks, and favorites
             ProfileStatsView(
                 user: user,
                 onFollowersTap: {
@@ -90,6 +119,7 @@ struct ProfileView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
+                    // Pinned tweets section
                     if !pinnedTweets.isEmpty {
                         Section(header: Text("Pinned").font(.subheadline).bold()) {
                             ForEach($pinnedTweets) { $tweet in
@@ -104,6 +134,7 @@ struct ProfileView: View {
                             }
                         }
                     }
+                    // Regular tweets section
                     ForEach($tweets) { $tweet in
                         TweetItemView(tweet: $tweet,
                                       retweet: { _ in },
@@ -132,14 +163,17 @@ struct ProfileView: View {
             }
             .hidden()
         }
+        // Edit profile sheet
         .sheet(isPresented: $showEditSheet) {
             RegistrationView(mode: .edit, user: user, onSubmit: { username, password, alias, profile, hostId in
                 // TODO: Implement user update logic here
             })
         }
+        // Full-screen avatar view
         .fullScreenCover(isPresented: $showAvatarFullScreen) {
             AvatarFullScreenView(user: user, isPresented: $showAvatarFullScreen)
         }
+        // Profile menu with logout option
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if isCurrentUser {
@@ -156,6 +190,7 @@ struct ProfileView: View {
                 }
             }
         }
+        // Initial data loading
         .task {
             if !didLoad {
                 isLoading = true
@@ -172,6 +207,7 @@ struct ProfileView: View {
                 didLoad = true
             }
         }
+        // Listen for tweet pin status changes
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TweetPinStatusChanged"))) { notification in
             if let _ = notification.userInfo?["tweetId"] as? String,
                let _ = notification.userInfo?["isPinned"] as? Bool {
@@ -180,6 +216,7 @@ struct ProfileView: View {
                 }
             }
         }
+        // User list navigation (followers/following)
         .navigationDestination(isPresented: $showUserList) {
             UserListView(
                 title: userListType == .FOLLOWER ? "Fans" : "Following",
@@ -216,6 +253,7 @@ struct ProfileView: View {
                 }
             )
         }
+        // Tweet list navigation (bookmarks/favorites)
         .navigationDestination(isPresented: $showTweetList) {
             TweetListView(
                 title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",

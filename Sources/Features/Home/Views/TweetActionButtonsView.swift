@@ -121,7 +121,8 @@ struct TweetActionButtonsView: View {
             .padding(.leading, 40)
         }
         .foregroundColor(.secondary)
-        .padding(.horizontal, 4)
+        .padding(.trailing, 4)
+        .padding(.leading, 0)
         .sheet(isPresented: $showCommentCompose) {
             CommentComposeView(tweet: $tweet)
         }
@@ -142,19 +143,6 @@ struct TweetActionButtonsView: View {
             text += content + "\n"
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
-
-struct TweetActionButton: View {
-    let icon: String
-    let isSelected: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .foregroundColor(isSelected ? .blue : .secondary)
-        }
     }
 }
 
