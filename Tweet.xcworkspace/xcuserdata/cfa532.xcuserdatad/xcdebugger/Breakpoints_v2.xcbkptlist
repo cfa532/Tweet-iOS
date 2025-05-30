@@ -32,7 +32,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1331"
             endingLineNumber = "1331"
-            landmarkName = "submitComment(_:to:)"
+            landmarkName = "addComment(_:to:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

@@ -4,6 +4,7 @@ import PhotosUI
 @available(iOS 16.0, *)
 struct CommentComposeView: View {
     @ObservedObject var tweet: Tweet
+    @ObservedObject var commentsVM: CommentsViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var commentText = ""
     @State private var error: Error?
@@ -187,71 +188,7 @@ struct CommentComposeView: View {
                     ))
                 }
             }
-            // Optimistic UI update: post notification with placeholder comment and incremented count
-            await MainActor.run {
-                let optimisticTweet = tweet
-                optimisticTweet.commentCount = (tweet.commentCount ?? 0) + 1
-                NotificationCenter.default.post(
-                    name: NSNotification.Name("NewCommentAdded"),
-                    object: nil,
-                    userInfo: [
-                        "tweetId": tweet.mid,
-                        "updatedTweet": optimisticTweet,
-                        "comment": comment
-                    ]
-                )
-            }
-            // Schedule the comment upload with attachments, and handle backend result
-            Task {
-                // Simulate backend returning a real comment (replace with actual backend logic)
-                let realComment: Tweet? = nil // <- Replace with actual backend result if available
-                if let realComment = realComment {
-                    var realCommentWithAuthor = realComment
-                    if realCommentWithAuthor.author == nil {
-                        realCommentWithAuthor.author = hproseInstance.appUser
-                    }
-                    await MainActor.run {
-                        let updatedTweet = tweet
-                        updatedTweet.commentCount = (tweet.commentCount ?? 0) + 1 // or use backend count if available
-                        NotificationCenter.default.post(
-                            name: NSNotification.Name("NewCommentAdded"),
-                            object: nil,
-                            userInfo: [
-                                "tweetId": tweet.mid,
-                                "updatedTweet": updatedTweet,
-                                "comment": realCommentWithAuthor
-                            ]
-                        )
-                    }
-                }
-                let result = await withCheckedContinuation { continuation in
-                    hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
-                    // There is no direct callback, so you may need to listen for a notification or implement a completion handler in scheduleCommentUpload.
-                    // For now, simulate backend failure after a delay for demonstration:
-                    DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                        // Simulate failure (set to true to test failure handling)
-                        let didFail = false
-                        continuation.resume(returning: didFail)
-                    }
-                }
-                if result {
-                    // Backend failed: revert optimistic UI
-                    await MainActor.run {
-                        let revertedTweet = tweet
-                        revertedTweet.commentCount = max(0, (tweet.commentCount ?? 1) - 1)
-                        NotificationCenter.default.post(
-                            name: NSNotification.Name("RevertCommentAdded"),
-                            object: nil,
-                            userInfo: [
-                                "tweetId": tweet.mid,
-                                "updatedTweet": revertedTweet,
-                                "comment": comment
-                            ]
-                        )
-                    }
-                }
-            }
-            // Dismiss the view immediately since the upload will happen in the background
+            await commentsVM.postComment(comment, tweet: tweet)
             dismiss()
         } catch {
             self.error = error

@@ -10,6 +10,7 @@ enum UserActions: Int {
 struct TweetActionButtonsView: View {
     @ObservedObject var tweet: Tweet
     var retweet: (Tweet) async -> Void
+    var commentsVM: CommentsViewModel? = nil
     @State private var showCommentCompose = false
     @State private var showShareSheet = false
     @State private var showLoginSheet = false
@@ -146,7 +147,11 @@ struct TweetActionButtonsView: View {
         .padding(.trailing, 4)
         .padding(.leading, 0)
         .sheet(isPresented: $showCommentCompose) {
-            CommentComposeView(tweet: tweet)
+            if let commentsVM = commentsVM {
+                CommentComposeView(tweet: tweet, commentsVM: commentsVM)
+            } else {
+                CommentComposeView(tweet: tweet, commentsVM: CommentsViewModel(hproseInstance: hproseInstance, parentTweet: tweet))
+            }
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [tweetShareText()])

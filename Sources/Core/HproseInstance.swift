@@ -156,7 +156,7 @@ final class HproseInstance: ObservableObject {
             }
             // Then fetch author data for each tweet
             var tweetsWithAuthors: [Tweet] = []
-            for var tweet in comments {
+            for tweet in comments {
                 if let author = try await getUser(tweet.authorId) {
                     tweet.author = author
                     tweetsWithAuthors.append(tweet)
@@ -229,7 +229,7 @@ final class HproseInstance: ObservableObject {
                         }
                     }
                     // Fetch author if needed
-                    var tweetWithAuthor = tweet
+                    let tweetWithAuthor = tweet
                     if tweetWithAuthor.author == nil {
                         if let author = try? await getUser(tweetWithAuthor.authorId) {
                             tweetWithAuthor.author = author
@@ -238,7 +238,7 @@ final class HproseInstance: ObservableObject {
                     }
                     // If retweet, ensure original is cached and shared
                     if let origId = tweetWithAuthor.originalTweetId, let origAuthorId = tweetWithAuthor.originalAuthorId {
-                        let original: Tweet = tweetCacheLock.withLock {
+                        let _: Tweet = tweetCacheLock.withLock {
                             if let cachedOrig = tweetCache[origId] {
                                 return cachedOrig
                             } else if let origDict = validDictionaries.first(where: { $0["mid"] as? String == origId }), let origParsed = Tweet.from(dict: origDict) {
@@ -300,7 +300,7 @@ final class HproseInstance: ObservableObject {
             
             // Then fetch author data for each tweet
             var tweetsWithAuthors: [Tweet] = []
-            for var tweet in tweets {
+            for tweet in tweets {
                 if let author = try await getUser(tweet.authorId) {
                     tweet.author = author
                     tweetsWithAuthors.append(tweet)
@@ -331,7 +331,7 @@ final class HproseInstance: ObservableObject {
                 "appuserid": appUser.mid    // Used to check if the tweet is favored or bookmarked by appUser
             ]
             if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
-                if var tweet = Tweet.from(dict: tweetDict) {
+                if let tweet = Tweet.from(dict: tweetDict) {
                     tweet.author = try await getUser(authorId)
                     // Store in cache
                     tweetCacheLock.withLock { tweetCache[tweetId] = tweet }
@@ -353,7 +353,7 @@ final class HproseInstance: ObservableObject {
                     newClient.uri = "http://\(providerIp)/webapi/"
                     service = newClient.useService(HproseService.self) as AnyObject
                     if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
-                        if var tweet = Tweet.from(dict: tweetDict) {
+                        if let tweet = Tweet.from(dict: tweetDict) {
                             tweet.author = try await getUser(authorId)
                             // Store in cache
                             tweetCacheLock.withLock { tweetCache[tweetId] = tweet }
@@ -575,7 +575,7 @@ final class HproseInstance: ObservableObject {
                         // Valid tweet dictionary
                         if let tweet = Tweet.from(dict: dict) {
                             if let author = try await getUser(tweet.authorId) {
-                                var tweetWithAuthor = tweet
+                                let tweetWithAuthor = tweet
                                 tweetWithAuthor.author = author
                                 tweetsWithAuthors.append(tweetWithAuthor)
                             }
@@ -1093,7 +1093,7 @@ final class HproseInstance: ObservableObject {
                 // Clean up the temporary file immediately after reading
                 try? FileManager.default.removeItem(at: tempFileURL)
                 
-                var tweet = pendingUpload.tweet
+                let tweet = pendingUpload.tweet
                 var uploadedAttachments: [MimeiFileType] = []
                 
                 // Process items in pairs
@@ -1175,7 +1175,7 @@ final class HproseInstance: ObservableObject {
                 return Tweet?.none
             }
             
-            var uploadedTweet = tweet
+            let uploadedTweet = tweet
             uploadedTweet.mid = newTweetId
             return uploadedTweet
         }
@@ -1215,7 +1215,7 @@ final class HproseInstance: ObservableObject {
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingUpload.ItemData]) {
         Task.detached(priority: .background) {
             do {
-                var tweet = tweet
+                let tweet = tweet
                 var uploadedAttachments: [MimeiFileType] = []
                 
                 let itemPairs = itemData.chunked(into: 2)
@@ -1258,7 +1258,7 @@ final class HproseInstance: ObservableObject {
     func scheduleCommentUpload(comment: Tweet, to tweet: Tweet, itemData: [PendingUpload.ItemData]) {
         Task.detached(priority: .background) {
             do {
-                var comment = comment
+                let comment = comment
                 var uploadedAttachments: [MimeiFileType] = []
                 
                 let itemPairs = itemData.chunked(into: 2)
@@ -1280,7 +1280,7 @@ final class HproseInstance: ObservableObject {
                 
                 comment.attachments = uploadedAttachments
                 
-                if let (updatedTweet, newComment) = try await self.submitComment(comment, to: tweet) {
+                if let (updatedTweet, newComment) = try await self.addComment(comment, to: tweet) {
                     await MainActor.run {
                         // Notify observers about both the updated tweet and new comment
                         NotificationCenter.default.post(
@@ -1309,7 +1309,7 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func submitComment(_ comment: Tweet, to tweet: Tweet) async throws -> (Tweet, Tweet)? {
+    func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> (Tweet, Tweet)? {
         return try await withRetry {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
@@ -1328,7 +1328,7 @@ final class HproseInstance: ObservableObject {
                let commentId = response["commentId"] as? String,
                let count = response["count"] as? Int {
                 // Create the new comment with its ID
-                var newComment = comment
+                let newComment = comment
                 newComment.mid = commentId
                 
                 // Update the parent tweet with new comment count
@@ -1383,7 +1383,7 @@ final class HproseInstance: ObservableObject {
                 for dict in response {
                     if let tweetDict = dict["tweet"] as? [String: Any],
                        let tweet = Tweet.from(dict: tweetDict) {
-                        var tweetWithAuthor = tweet
+                        let tweetWithAuthor = tweet
                         if let author = try? await getUser(tweet.authorId) {
                             tweetWithAuthor.author = author
                         }

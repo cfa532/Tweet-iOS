@@ -133,6 +133,14 @@ struct TweetListView<RowView: View>: View {
             withAnimation { showToast = false }
         }
     }
+
+    // MARK: - Optimistic UI Methods
+    func insertTweet(_ tweet: Tweet) {
+        tweets.insert(tweet, at: 0)
+    }
+    func removeTweet(_ tweet: Tweet) {
+        tweets.removeAll { $0.mid == tweet.mid }
+    }
 }
 
 @available(iOS 16.0, *)

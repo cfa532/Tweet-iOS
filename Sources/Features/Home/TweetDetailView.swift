@@ -21,29 +21,139 @@ struct CommentsSection: View {
 
 @MainActor
 @available(iOS 16.0, *)
+class CommentsViewModel: ObservableObject {
+    @Published var comments: [Tweet] = []
+    @Published var isLoading: Bool = false
+    @Published var hasMore: Bool = true
+    @Published var showToast: Bool = false
+    @Published var toastMessage: String = ""
+    private var currentPage: Int = 0
+    private let pageSize: Int = 20
+    private let hproseInstance: HproseInstance
+    private let parentTweet: Tweet
+
+    init(hproseInstance: HproseInstance, parentTweet: Tweet) {
+        self.hproseInstance = hproseInstance
+        self.parentTweet = parentTweet
+    }
+
+    func loadInitial() async {
+        await MainActor.run { isLoading = true; currentPage = 0 }
+        do {
+            let newComments = try await hproseInstance.fetchComments(
+                tweet: parentTweet,
+                pageNumber: 0,
+                pageSize: pageSize
+            )
+            await MainActor.run {
+                comments = newComments
+                hasMore = newComments.count == pageSize
+                isLoading = false
+            }
+        } catch {
+            await MainActor.run {
+                isLoading = false
+                showToast = true
+                toastMessage = "Failed to load comments."
+            }
+        }
+    }
+
+    func loadMore() async {
+        guard hasMore, !isLoading else { return }
+        await MainActor.run { isLoading = true }
+        let nextPage = currentPage + 1
+        do {
+            let moreComments = try await hproseInstance.fetchComments(
+                tweet: parentTweet,
+                pageNumber: nextPage,
+                pageSize: pageSize
+            )
+            await MainActor.run {
+                let existingIds = Set(comments.map { $0.mid })
+                let uniqueNew = moreComments.filter { !existingIds.contains($0.mid) }
+                comments.append(contentsOf: uniqueNew)
+                hasMore = moreComments.count == pageSize
+                currentPage = nextPage
+                isLoading = false
+            }
+        } catch {
+            await MainActor.run {
+                isLoading = false
+                showToast = true
+                toastMessage = "Failed to load more comments."
+            }
+        }
+    }
+
+    func addComment(_ comment: Tweet) {
+        comments.insert(comment, at: 0)
+    }
+
+    func removeComment(_ comment: Tweet) {
+        comments.removeAll { $0.mid == comment.mid }
+    }
+
+    func postComment(_ comment: Tweet, tweet: Tweet) async {
+        addComment(comment)
+        do {
+            try await hproseInstance.addComment(comment, to: tweet)
+        } catch {
+            removeComment(comment)
+            await MainActor.run {
+                showToast = true
+                toastMessage = "Failed to post comment."
+            }
+        }
+    }
+
+    func deleteComment(_ comment: Tweet) async {
+        let idx = comments.firstIndex(where: { $0.mid == comment.mid })
+        removeComment(comment)
+        do {
+            let result = try await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid)
+            if let dict = result, let deletedId = dict["commentId"] as? String, let count = dict["count"] as? Int, deletedId == comment.mid {
+                parentTweet.commentCount = count
+            }
+        } catch {
+            if let idx = idx {
+                comments.insert(comment, at: idx)
+            }
+            await MainActor.run {
+                showToast = true
+                toastMessage = "Failed to delete comment."
+            }
+        }
+    }
+}
+
+@MainActor
+@available(iOS 16.0, *)
 struct TweetDetailView: View {
     @ObservedObject var tweet: Tweet
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
-    @State private var comments: [Tweet] = []
-    @State private var isLoadingComments = false
-    @State private var currentPage = 0
-    @State private var hasMoreComments = true
     @State private var showLoginSheet = false
     @State private var pinnedTweets: [[String: Any]] = []
-    @State private var showToast = false
-    @State private var toastMessage = ""
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @StateObject private var commentsVM: CommentsViewModel
 
     let retweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
-    
+
+    init(tweet: Tweet, retweet: @escaping (Tweet) async -> Void, deleteTweet: @escaping (Tweet) async -> Void) {
+        self._commentsVM = StateObject(wrappedValue: CommentsViewModel(hproseInstance: HproseInstance.shared, parentTweet: tweet))
+        self.tweet = tweet
+        self.retweet = retweet
+        self.deleteTweet = deleteTweet
+    }
+
     private func handleGuestAction() {
         if hproseInstance.appUser.isGuest {
             showLoginSheet = true
         }
     }
-    
+
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
@@ -51,7 +161,7 @@ struct TweetDetailView: View {
                 if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl, !attachments.isEmpty {
                     let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
                     TabView(selection: $selectedMediaIndex) {
-                        ForEach(attachments.indices, id: \.self) { index in
+                        ForEach(attachments.indices, id: \ .self) { index in
                             MediaCell(
                                 attachment: attachments[index],
                                 baseUrl: baseUrl,
@@ -84,42 +194,35 @@ struct TweetDetailView: View {
                         .padding(.horizontal)
                         .padding(.vertical, 8)
                 }
-                // Tweet actions
-                TweetActionButtonsView(tweet: tweet, retweet: retweet)
+                TweetActionButtonsView(tweet: tweet, retweet: retweet, commentsVM: commentsVM)
                     .padding(.leading, 48)
                     .padding(.trailing, 8)
                     .padding(.top, 8)
                     .padding(.bottom, 4)
-                // Divider between tweet and comments
                 Divider()
                     .padding(.top, 8)
                     .padding(.bottom, 4)
                 // Comments
-                TweetListView(
-                    title: "Comments",
-                    tweetFetcher: { page, size in
-                        try await hproseInstance.fetchComments(
-                            tweet: tweet,
-                            pageNumber: page,
-                            pageSize: size
-                        )
-                    },
-                    onRetweet: retweet,
-                    onDeleteTweet: deleteComment,
-                    onAvatarTap: nil,
-                    showTitle: false,
-                    rowView: { comment in
-                        CommentItemView(
-                            comment: comment,
-                            deleteComment: deleteComment,
-                            retweet: retweet
-                        )
+                ForEach(commentsVM.comments) { comment in
+                    CommentItemView(
+                        comment: comment,
+                        deleteComment: { c in await commentsVM.deleteComment(c) },
+                        retweet: retweet,
+                        commentsVM: commentsVM
+                    )
+                }
+                if commentsVM.isLoading {
+                    ProgressView().padding()
+                } else if commentsVM.hasMore {
+                    Button("Load More") {
+                        Task { await commentsVM.loadMore() }
                     }
-                )
-                if showToast {
+                    .padding()
+                }
+                if commentsVM.showToast {
                     VStack {
                         Spacer()
-                        Text(toastMessage)
+                        Text(commentsVM.toastMessage)
                             .padding(.horizontal, 24)
                             .padding(.vertical, 14)
                             .background(Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95))
@@ -129,12 +232,10 @@ struct TweetDetailView: View {
                             .padding(.bottom, 40)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    .animation(.easeInOut, value: showToast)
+                    .animation(.easeInOut, value: commentsVM.showToast)
                 }
             }
-            .refreshable {
-                await refreshComments()
-            }
+            .task { await commentsVM.loadInitial() }
         }
         .background(Color(.systemBackground))
         .navigationTitle("Tweet")
@@ -148,34 +249,8 @@ struct TweetDetailView: View {
         .onAppear {
             loadPinnedTweets()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NewCommentAdded"))) { notification in
-            if let tweetId = notification.userInfo?["tweetId"] as? String,
-               let updatedTweet = notification.userInfo?["updatedTweet"] as? Tweet,
-               let comment = notification.userInfo? ["comment"] as? Tweet,
-               tweetId == tweet.mid {
-                Task { @MainActor in
-                    tweet.commentCount = updatedTweet.commentCount
-                    if !comments.contains(where: { $0.mid == comment.mid }) {
-                        comments.insert(comment, at: 0)
-                    }
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RevertCommentAdded"))) { notification in
-            Task { @MainActor in
-                if let tweetId = notification.userInfo?["tweetId"] as? String,
-                   let updatedTweet = notification.userInfo?["updatedTweet"] as? Tweet,
-                   let comment = notification.userInfo?["comment"] as? Tweet,
-                   tweetId == tweet.mid {
-                    tweet.commentCount = updatedTweet.commentCount
-                    if let idx = comments.firstIndex(where: { $0.mid == comment.mid }) {
-                        comments.remove(at: idx)
-                    }
-                }
-            }
-        }
     }
-    
+
     private func loadPinnedTweets() {
         Task {
             if let author = tweet.author {
@@ -183,88 +258,5 @@ struct TweetDetailView: View {
             }
         }
     }
-    
-    private func loadComments() {
-        guard !isLoadingComments else { return }
-        isLoadingComments = true
-        
-        Task {
-            do {
-                let newComments = try await hproseInstance.fetchComments(
-                    tweet: tweet,
-                    pageNumber: currentPage,
-                    pageSize: 20
-                )
-                await MainActor.run {
-                    if currentPage == 0 {
-                        comments = newComments
-                    } else {
-                        // Only append comments that are not already in the list
-                        let existingIds = Set(comments.map { $0.mid })
-                        let uniqueNew = newComments.filter { !existingIds.contains($0.mid) }
-                        comments.append(contentsOf: uniqueNew)
-                    }
-                    hasMoreComments = !newComments.isEmpty
-                    isLoadingComments = false
-                }
-            } catch {
-                print("Error loading comments: \(error)")
-                await MainActor.run {
-                    isLoadingComments = false
-                }
-            }
-        }
-    }
-    
-    private func loadMoreComments() {
-        guard hasMoreComments, !isLoadingComments else { return }
-        currentPage += 1
-        loadComments()
-    }
-
-    private func refreshComments() async {
-        await MainActor.run {
-            isLoadingComments = true
-            currentPage = 0
-        }
-        do {
-            let newComments = try await hproseInstance.fetchComments(
-                tweet: tweet,
-                pageNumber: 0,
-                pageSize: 20
-            )
-            await MainActor.run {
-                comments = newComments
-                hasMoreComments = !newComments.isEmpty
-                isLoadingComments = false
-            }
-        } catch {
-            print("Error refreshing comments: \(error)")
-            await MainActor.run {
-                isLoadingComments = false
-            }
-        }
-    }
-
-    func deleteComment(_ comment: Tweet) async {
-        let result = try? await hproseInstance.deleteComment(parentTweet: tweet, commentId: comment.mid)
-        if let dict = result, let deletedId = dict["commentId"] as? String, let count = dict["count"] as? Int, deletedId == comment.mid {
-            await MainActor.run {
-                if let idx = comments.firstIndex(where: { $0.mid == comment.mid }) {
-                    comments.remove(at: idx)
-                    tweet.commentCount = count
-                }
-            }
-        } else {
-            await MainActor.run {
-                comments.insert(comment, at: 0)
-                tweet.commentCount = (tweet.commentCount ?? 0) + 1
-                toastMessage = "Failed to delete comment. Please try again."
-                showToast = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    withAnimation { showToast = false }
-                }
-            }
-        }
-    }
 }
+

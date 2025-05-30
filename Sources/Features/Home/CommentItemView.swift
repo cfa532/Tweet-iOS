@@ -15,6 +15,7 @@ struct CommentItemView: View {
     var isPinned: Bool = false
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
+    var commentsVM: CommentsViewModel? = nil
     @State private var showDetail = false
     @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -42,7 +43,7 @@ struct CommentItemView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
                     .padding(.top, 4)
-                TweetActionButtonsView(tweet: comment, retweet: retweet)
+                TweetActionButtonsView(tweet: comment, retweet: retweet, commentsVM: commentsVM)
                     .padding(.top, 8)
                     .padding(.leading, -8)
             }
