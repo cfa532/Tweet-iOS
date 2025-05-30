@@ -61,7 +61,7 @@ struct TweetListView: View {
                                 favorites: [false, false, true],
                                 favoriteCount: tweet.favoriteCount ?? 0,
                                 bookmarkCount: tweet.bookmarkCount ?? 0,
-                                retweetCount: (tweet.retweetCount ?? 0) + 1,
+                                retweetCount: tweet.retweetCount ?? 0,
                                 commentCount: tweet.commentCount ?? 0,
                                 attachments: nil
                             )
@@ -87,8 +87,11 @@ struct TweetListView: View {
                                         tweets[idx] = actualRetweet
                                     }
                                     if let idx = originalIndex {
-                                        if let updated = try? await hproseInstance.updateRetweetCount(tweet: tweets[idx], retweetId: actualRetweet.mid, direction: true), let updatedCount = updated.retweetCount {
-                                            tweets[idx].retweetCount = updatedCount
+                                        if let updated = try? await hproseInstance.updateRetweetCount(tweet: tweets[idx], retweetId: actualRetweet.mid, direction: true) {
+                                            tweets[idx].retweetCount = updated.retweetCount
+                                            tweets[idx].favoriteCount = updated.favoriteCount
+                                            tweets[idx].bookmarkCount = updated.bookmarkCount
+                                            tweets[idx].commentCount = updated.commentCount
                                         }
                                     }
                                     showToastWith(message: "Retweet successful!", type: .success)
@@ -127,7 +130,12 @@ struct TweetListView: View {
                                 if success {
                                     // Persist the change if this was a retweet
                                     if let originalId = tweet.originalTweetId, let idx = tweets.firstIndex(where: { $0.mid == originalId }) {
-                                        _ = try? await hproseInstance.updateRetweetCount(tweet: tweets[idx], retweetId: tweet.mid, direction: false)
+                                        if let updated = try? await hproseInstance.updateRetweetCount(tweet: tweets[idx], retweetId: tweet.mid, direction: false) {
+                                            tweets[idx].retweetCount = updated.retweetCount
+                                            tweets[idx].favoriteCount = updated.favoriteCount
+                                            tweets[idx].bookmarkCount = updated.bookmarkCount
+                                            tweets[idx].commentCount = updated.commentCount
+                                        }
                                     }
                                     showToastWith(message: "Tweet deleted.", type: .success)
                                 } else {
