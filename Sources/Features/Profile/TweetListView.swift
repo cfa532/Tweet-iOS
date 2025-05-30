@@ -86,8 +86,10 @@ struct TweetListView: View {
                                     if let idx = tweets.firstIndex(where: { $0.mid == placeholderId }) {
                                         tweets[idx] = actualRetweet
                                     }
-                                    if let idx = originalIndex, let updatedCount = actualRetweet.retweetCount {
-                                        tweets[idx].retweetCount = updatedCount
+                                    if let idx = originalIndex {
+                                        if let updated = try? await hproseInstance.updateRetweetCount(tweet: tweets[idx], retweetId: actualRetweet.mid, direction: true), let updatedCount = updated.retweetCount {
+                                            tweets[idx].retweetCount = updatedCount
+                                        }
                                     }
                                     showToastWith(message: "Retweet successful!", type: .success)
                                 } else {
