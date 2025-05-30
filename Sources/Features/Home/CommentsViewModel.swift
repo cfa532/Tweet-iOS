@@ -16,7 +16,7 @@ class CommentsViewModel: ObservableObject {
     private var currentPage: Int = 0
     private let pageSize: Int = 20
     private let hproseInstance: HproseInstance
-    private let parentTweet: Tweet
+    var parentTweet: Tweet
 
     init(hproseInstance: HproseInstance, parentTweet: Tweet) {
         self.hproseInstance = hproseInstance

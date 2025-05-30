@@ -29,6 +29,7 @@ struct TweetDetailView: View {
     @State private var pinnedTweets: [[String: Any]] = []
     @EnvironmentObject private var hproseInstance: HproseInstance
     @StateObject private var commentsVM: CommentsViewModel
+    @State private var originalTweet: Tweet?
 
     let retweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
@@ -38,6 +39,15 @@ struct TweetDetailView: View {
         self.tweet = tweet
         self.retweet = retweet
         self.deleteTweet = deleteTweet
+    }
+
+    // Computed property to determine which tweet to display
+    private var displayTweet: Tweet {
+        let currentTweet = tweet
+        if (currentTweet.content == nil || currentTweet.content?.isEmpty == true) && (currentTweet.attachments == nil || currentTweet.attachments?.isEmpty == true) {
+            return originalTweet ?? currentTweet
+        }
+        return currentTweet
     }
 
     private func handleGuestAction() {
@@ -50,10 +60,10 @@ struct TweetDetailView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 // Attachments (edge-to-edge, no margin)
-                if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl, !attachments.isEmpty {
+                if let attachments = displayTweet.attachments, let baseUrl = displayTweet.author?.baseUrl, !attachments.isEmpty {
                     let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
                     TabView(selection: $selectedMediaIndex) {
-                        ForEach(attachments.indices, id: \ .self) { index in
+                        ForEach(attachments.indices, id: \.self) { index in
                             MediaCell(
                                 attachment: attachments[index],
                                 baseUrl: baseUrl,
@@ -70,23 +80,23 @@ struct TweetDetailView: View {
                 }
                 // Tweet header (with avatar and menu)
                 HStack(alignment: .top, spacing: 12) {
-                    if let user = tweet.author {
+                    if let user = displayTweet.author {
                         Avatar(user: user)
                     }
-                    TweetItemHeaderView(tweet: tweet)
-                    TweetMenu(tweet: tweet, deleteTweet: deleteTweet, isPinned: tweet.isPinned(in: pinnedTweets))
+                    TweetItemHeaderView(tweet: displayTweet)
+                    TweetMenu(tweet: displayTweet, deleteTweet: deleteTweet, isPinned: displayTweet.isPinned(in: pinnedTweets))
                 }
                 .padding(.horizontal)
                 .padding(.top)
                 // Tweet content
-                if let content = tweet.content, !content.isEmpty {
+                if let content = displayTweet.content, !content.isEmpty {
                     Text(content)
                         .font(.title3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
                         .padding(.vertical, 8)
                 }
-                TweetActionButtonsView(tweet: tweet, retweet: retweet, commentsVM: commentsVM)
+                TweetActionButtonsView(tweet: displayTweet, retweet: retweet, commentsVM: commentsVM)
                     .padding(.leading, 48)
                     .padding(.trailing, 8)
                     .padding(.top, 8)
@@ -128,12 +138,21 @@ struct TweetDetailView: View {
                 }
             }
             .task { await commentsVM.loadInitial() }
+            .task {
+                if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
+                    if let originalTweet = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                        self.originalTweet = originalTweet
+                        commentsVM.parentTweet = originalTweet
+                        await commentsVM.loadInitial()
+                    }
+                }
+            }
         }
         .background(Color(.systemBackground))
         .navigationTitle("Tweet")
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
-            MediaBrowserView(attachments: tweet.attachments ?? [], baseUrl: tweet.author?.baseUrl ?? "", initialIndex: selectedMediaIndex)
+            MediaBrowserView(attachments: displayTweet.attachments ?? [], baseUrl: displayTweet.author?.baseUrl ?? "", initialIndex: selectedMediaIndex)
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
@@ -145,7 +164,7 @@ struct TweetDetailView: View {
 
     private func loadPinnedTweets() {
         Task {
-            if let author = tweet.author {
+            if let author = displayTweet.author {
                 pinnedTweets = (try? await hproseInstance.getPinnedTweets(user: author)) ?? []
             }
         }
