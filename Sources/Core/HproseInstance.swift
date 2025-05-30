@@ -633,7 +633,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "userid": appUser.mid,
+                "appuserid": appUser.mid,
                 "tweetid": tweet.mid,
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
@@ -732,7 +732,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "userid": appUser.mid,
+                "appuserid": appUser.mid,
                 "retweetid": retweetId,
                 "tweetid": tweet.mid,
                 "authorid": tweet.authorId,
@@ -757,7 +757,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "authorid": appUser.mid,
+                "appuserid": appUser.mid,
                 "tweetid": tweetId
             ]
             guard let service = hproseClient else {
@@ -771,6 +771,8 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    // both author and tweet author can delete this comment
+    // TODO
     func deleteComment(parentTweet: Tweet, commentId: String) async throws -> String? {
         try await withRetry {
             let entry = "delete_comment"
@@ -781,7 +783,7 @@ final class HproseInstance: ObservableObject {
                 "tweetid": parentTweet.mid,
                 "hostid": parentTweet.author?.hostIds?.first as Any,
                 "commentid": commentId,
-                "userid": appUser.mid
+                "appuserid": appUser.mid
             ]
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
@@ -1292,7 +1294,7 @@ final class HproseInstance: ObservableObject {
                 "hostid": tweet.author?.hostIds?.first as Any,
                 "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
                 "tweetid": tweet.mid,
-                "userid": appUser.mid
+                "appuserid": appUser.mid
             ]
             
             if let response = service.runMApp("add_comment", params, nil) as? [String: Any],
@@ -1324,7 +1326,7 @@ final class HproseInstance: ObservableObject {
                 "aid": appId,
                 "ver": "last",
                 "tweetid": tweetId,
-                "userid": appUser.mid,
+                "appuserid": appUser.mid,
             ]
             if let response = service.runMApp(entry, params, nil) as? Bool {
                return response
