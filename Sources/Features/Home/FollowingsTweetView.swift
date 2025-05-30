@@ -18,7 +18,9 @@ struct FollowingsTweetView: View {
                     pageSize: size
                 )
             },
-            onRetweet: nil,
+            onRetweet: { tweet in
+                // Logic handled in TweetListView for immediate UI update and toast
+            },
             onDeleteTweet: { tweet in
                 // Only allow delete if current user is the author
                 if tweet.authorId == hproseInstance.appUser.mid {
