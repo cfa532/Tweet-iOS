@@ -50,24 +50,52 @@ struct TweetListView: View {
                     TweetListContentView(
                         tweets: $tweets,
                         onRetweet: { tweet in
-                            let placeholder = Tweet(mid: UUID().uuidString, authorId: hproseInstance.appUser.mid, content: tweet.content, originalTweetId: tweet.mid, originalAuthorId: tweet.authorId, author: hproseInstance.appUser, favorites: [false, false, true], favoriteCount: tweet.favoriteCount ?? 0, bookmarkCount: tweet.bookmarkCount ?? 0, retweetCount: (tweet.retweetCount ?? 0) + 1, commentCount: tweet.commentCount ?? 0, attachments: tweet.attachments)
+                            let placeholderId = String(repeating: "0", count: 17)
+                            let placeholder = Tweet(
+                                mid: placeholderId,
+                                authorId: hproseInstance.appUser.mid,
+                                content: nil,
+                                originalTweetId: tweet.mid,
+                                originalAuthorId: tweet.authorId,
+                                author: hproseInstance.appUser,
+                                favorites: [false, false, true],
+                                favoriteCount: tweet.favoriteCount ?? 0,
+                                bookmarkCount: tweet.bookmarkCount ?? 0,
+                                retweetCount: (tweet.retweetCount ?? 0) + 1,
+                                commentCount: tweet.commentCount ?? 0,
+                                attachments: nil
+                            )
                             tweets.insert(placeholder, at: 0)
                             showToastWith(message: "Retweeting...", type: .info)
+                            let originalIndex = tweets.firstIndex(where: { $0.mid == tweet.mid })
+                            let originalRetweetCount = tweet.retweetCount
+                            if let idx = originalIndex {
+                                tweets[idx].retweetCount = (tweets[idx].retweetCount ?? 0) + 1
+                            }
                             Task {
                                 var success = false
+                                var newRetweet: Tweet? = nil
                                 if let onRetweet = onRetweet {
                                     await onRetweet(tweet)
                                     if let retweet = try? await hproseInstance.retweet(tweet) {
-                                        if let idx = tweets.firstIndex(where: { $0.mid == placeholder.mid }) {
-                                            tweets[idx] = retweet
-                                        }
-                                        showToastWith(message: "Retweet successful!", type: .success)
+                                        newRetweet = retweet
                                         success = true
                                     }
                                 }
-                                if (!success) {
-                                    if let idx = tweets.firstIndex(where: { $0.mid == placeholder.mid }) {
+                                if success, let actualRetweet = newRetweet {
+                                    if let idx = tweets.firstIndex(where: { $0.mid == placeholderId }) {
+                                        tweets[idx] = actualRetweet
+                                    }
+                                    if let idx = originalIndex, let updatedCount = actualRetweet.retweetCount {
+                                        tweets[idx].retweetCount = updatedCount
+                                    }
+                                    showToastWith(message: "Retweet successful!", type: .success)
+                                } else {
+                                    if let idx = tweets.firstIndex(where: { $0.mid == placeholderId }) {
                                         tweets.remove(at: idx)
+                                    }
+                                    if let idx = originalIndex {
+                                        tweets[idx].retweetCount = originalRetweetCount
                                     }
                                     showToastWith(message: "Retweet failed.", type: .error)
                                 }
@@ -263,10 +291,11 @@ struct ToastView: View {
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
     private var backgroundColor: Color {
+        // Use a gray-blue color for the toast background
         switch type {
-        case .success: return Color.green.opacity(0.92)
-        case .error: return Color.red.opacity(0.92)
-        case .info: return Color.blue.opacity(0.92)
+        case .success: return Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95) // gray-blue
+        case .error: return Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95)
+        case .info: return Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95)
         }
     }
     private var borderColor: Color {
@@ -290,4 +319,4 @@ struct ToastView: View {
         case .info: return .white
         }
     }
-} 
+}
