@@ -34,7 +34,7 @@ struct CommentItemView: View {
             VStack(alignment: .leading) {
                 HStack {
                     TweetItemHeaderView(tweet: comment)
-                    TweetMenu(tweet: comment, deleteTweet: deleteComment, isPinned: false)
+                    TweetMenu(tweet: comment, deleteTweet: deleteComment, isPinned: false, isComment: true)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { showDetail = true }

@@ -21,15 +21,17 @@ struct TweetMenu: View {
     @ObservedObject var tweet: Tweet
     let deleteTweet: (Tweet) async -> Void
     let isPinned: Bool
+    let isComment: Bool
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var isCurrentlyPinned: Bool
 
-    init(tweet: Tweet, deleteTweet: @escaping (Tweet) async -> Void, isPinned: Bool) {
+    init(tweet: Tweet, deleteTweet: @escaping (Tweet) async -> Void, isPinned: Bool, isComment: Bool = false) {
         self.tweet = tweet
         self.deleteTweet = deleteTweet
         self.isPinned = isPinned
+        self.isComment = isComment
         self._isCurrentlyPinned = State(initialValue: isPinned)
     }
 
@@ -62,8 +64,10 @@ struct TweetMenu: View {
                     Task {
                         await deleteTweet(tweet)
                     }
-                    // Dismiss immediately
-                    dismiss()
+                    // Dismiss only if this is not a comment
+                    if !isComment {
+                        dismiss()
+                    }
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }

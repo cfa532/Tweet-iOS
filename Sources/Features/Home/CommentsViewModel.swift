@@ -107,6 +107,7 @@ class CommentsViewModel: ObservableObject {
     func deleteComment(_ comment: Tweet) async {
         let idx = comments.firstIndex(where: { $0.mid == comment.mid })
         removeComment(comment)
+        parentTweet.commentCount = max(0, (parentTweet.commentCount ?? 1) - 1)
         do {
             let result = try await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid)
             if let dict = result, let deletedId = dict["commentId"] as? String, let count = dict["count"] as? Int, deletedId == comment.mid {
@@ -116,6 +117,7 @@ class CommentsViewModel: ObservableObject {
             if let idx = idx {
                 comments.insert(comment, at: idx)
             }
+            parentTweet.commentCount = (parentTweet.commentCount ?? 0) + 1
             await MainActor.run {
                 showToast = true
                 toastMessage = "Failed to delete comment."
