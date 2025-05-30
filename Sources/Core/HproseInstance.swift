@@ -797,7 +797,38 @@ final class HproseInstance: ObservableObject {
             return response     // deleted tweetId
         }
     }
-    
+        
+    func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> (Tweet, Tweet)? {
+        return try await withRetry {
+            guard let service = hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            
+            let params: [String: Any] = [
+                "aid": appId,
+                "ver": "last",
+                "hostid": tweet.author?.hostIds?.first as Any,
+                "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
+                "tweetid": tweet.mid,
+                "appuserid": appUser.mid
+            ]
+            
+            if let response = service.runMApp("add_comment", params, nil) as? [String: Any],
+               let commentId = response["commentId"] as? String,
+               let count = response["count"] as? Int {
+                // Create the new comment with its ID
+                let newComment = comment
+                newComment.mid = commentId
+                
+                // Update the parent tweet with new comment count
+                return await MainActor.run {
+                    (tweet.copy(commentCount: count), newComment)
+                }
+            }
+            return nil
+        }
+    }
+
     // both author and tweet author can delete this comment
     // TODO
     func deleteComment(parentTweet: Tweet, commentId: String) async throws -> [String: Any]? {
@@ -1306,37 +1337,6 @@ final class HproseInstance: ObservableObject {
                     print("Error during upload: \(error.localizedDescription)")
                 }
             }
-        }
-    }
-    
-    func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> (Tweet, Tweet)? {
-        return try await withRetry {
-            guard let service = hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-            }
-            
-            let params: [String: Any] = [
-                "aid": appId,
-                "ver": "last",
-                "hostid": tweet.author?.hostIds?.first as Any,
-                "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
-                "tweetid": tweet.mid,
-                "appuserid": appUser.mid
-            ]
-            
-            if let response = service.runMApp("add_comment", params, nil) as? [String: Any],
-               let commentId = response["commentId"] as? String,
-               let count = response["count"] as? Int {
-                // Create the new comment with its ID
-                let newComment = comment
-                newComment.mid = commentId
-                
-                // Update the parent tweet with new comment count
-                return await MainActor.run {
-                    (tweet.copy(commentCount: count), newComment)
-                }
-            }
-            return nil
         }
     }
     
