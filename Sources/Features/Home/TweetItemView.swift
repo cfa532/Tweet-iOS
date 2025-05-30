@@ -17,7 +17,7 @@ struct TweetItemView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            if let _ = tweet.originalTweetId, let _ = tweet.originalAuthorId {
+            if let _ = tweet.originalTweetId {
                 // This is a retweet
                 if let user = originalTweet.author {
                     Button(action: {
@@ -30,7 +30,7 @@ struct TweetItemView: View {
                     .buttonStyle(PlainButtonStyle())
                 }
                 if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
-                    // Show original tweet with retweet header
+                    // Show original tweet with retweet menu.
                     VStack(alignment: .leading, spacing: 8) {
                         // Original tweet content
                         HStack(alignment: .top, spacing: 8) {
@@ -45,7 +45,7 @@ struct TweetItemView: View {
                                         .foregroundColor(.secondary)
                                 }
                                 HStack(alignment: .top) {
-                                    TweetItemHeaderView(tweet: .constant(originalTweet))
+                                    TweetItemHeaderView(tweet: $originalTweet)
                                     TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: isPinned)
                                 }
                                 .contentShape(Rectangle())
@@ -60,9 +60,9 @@ struct TweetItemView: View {
                                         showDetail = true
                                     }
                                     .padding(.top, 4)
-                                TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+                                TweetActionButtonsView(tweet: $originalTweet, retweet: retweet)
                                     .padding(.top, 8)
-                                    .padding(.leading, -8)
+                                    .padding(.leading, -20)
                             }
                         }
                     }
@@ -91,7 +91,7 @@ struct TweetItemView: View {
                         
                         // Embedded original tweet
                         VStack(alignment: .leading, spacing: 8) {
-                            TweetItemView(tweet: .constant(originalTweet), retweet: retweet, deleteTweet: deleteTweet, isPinned: isPinned)
+                            TweetItemView(tweet: $originalTweet, retweet: retweet, deleteTweet: deleteTweet, isPinned: isPinned)
                         }
                         .padding()
                         .background(Color(.secondarySystemBackground))
