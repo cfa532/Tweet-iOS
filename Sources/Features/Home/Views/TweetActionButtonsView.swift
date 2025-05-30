@@ -8,7 +8,7 @@ enum UserActions: Int {
 
 @available(iOS 16.0, *)
 struct TweetActionButtonsView: View {
-    @Binding var tweet: Tweet
+    @ObservedObject var tweet: Tweet
     var retweet: (Tweet) async -> Void
     @State private var showCommentCompose = false
     @State private var showShareSheet = false
@@ -76,10 +76,11 @@ struct TweetActionButtonsView: View {
                     tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
                     Task {
                         if let updatedTweet = try? await hproseInstance.toggleFavorite(tweet) {
-                            // Only update if backend result differs
-                            if updatedTweet.favorites != tweet.favorites || updatedTweet.favoriteCount != tweet.favoriteCount {
-                                tweet.favorites = updatedTweet.favorites
-                                tweet.favoriteCount = updatedTweet.favoriteCount
+                            await MainActor.run {
+                                if updatedTweet.favorites != tweet.favorites || updatedTweet.favoriteCount != tweet.favoriteCount {
+                                    tweet.favorites = updatedTweet.favorites
+                                    tweet.favoriteCount = updatedTweet.favoriteCount
+                                }
                             }
                         }
                     }
@@ -110,10 +111,11 @@ struct TweetActionButtonsView: View {
                     tweet.bookmarkCount = (tweet.bookmarkCount ?? 0) + (wasBookmarked ? -1 : 1)
                     Task {
                         if let updatedTweet = try? await hproseInstance.toggleBookmark(tweet) {
-                            // Only update if backend result differs
-                            if updatedTweet.favorites != tweet.favorites || updatedTweet.bookmarkCount != tweet.bookmarkCount {
-                                tweet.favorites = updatedTweet.favorites
-                                tweet.bookmarkCount = updatedTweet.bookmarkCount
+                            await MainActor.run {
+                                if updatedTweet.favorites != tweet.favorites || updatedTweet.bookmarkCount != tweet.bookmarkCount {
+                                    tweet.favorites = updatedTweet.favorites
+                                    tweet.bookmarkCount = updatedTweet.bookmarkCount
+                                }
                             }
                         }
                     }
@@ -144,7 +146,7 @@ struct TweetActionButtonsView: View {
         .padding(.trailing, 4)
         .padding(.leading, 0)
         .sheet(isPresented: $showCommentCompose) {
-            CommentComposeView(tweet: $tweet)
+            CommentComposeView(tweet: tweet)
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [tweetShareText()])

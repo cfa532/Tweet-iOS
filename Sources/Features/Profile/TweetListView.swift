@@ -84,25 +84,37 @@ struct TweetListView: View {
                                 }
                                 if success, let actualRetweet = newRetweet {
                                     if let idx = tweets.firstIndex(where: { $0.mid == placeholderId }) {
-                                        tweets[idx] = actualRetweet
+                                        await MainActor.run {
+                                            tweets[idx] = actualRetweet
+                                        }
                                     }
                                     if let idx = originalIndex {
                                         if let updated = try? await hproseInstance.updateRetweetCount(tweet: tweets[idx], retweetId: actualRetweet.mid, direction: true) {
-                                            tweets[idx].retweetCount = updated.retweetCount
-                                            tweets[idx].favoriteCount = updated.favoriteCount
-                                            tweets[idx].bookmarkCount = updated.bookmarkCount
-                                            tweets[idx].commentCount = updated.commentCount
+                                            await MainActor.run {
+                                                tweets[idx].retweetCount = updated.retweetCount
+                                                tweets[idx].favoriteCount = updated.favoriteCount
+                                                tweets[idx].bookmarkCount = updated.bookmarkCount
+                                                tweets[idx].commentCount = updated.commentCount
+                                            }
                                         }
                                     }
-                                    showToastWith(message: "Retweet successful!", type: .success)
+                                    await MainActor.run {
+                                        showToastWith(message: "Retweet successful!", type: .success)
+                                    }
                                 } else {
                                     if let idx = tweets.firstIndex(where: { $0.mid == placeholderId }) {
-                                        tweets.remove(at: idx)
+                                        await MainActor.run {
+                                            let _ = tweets.remove(at: idx)
+                                        }
                                     }
                                     if let idx = originalIndex {
-                                        tweets[idx].retweetCount = originalRetweetCount
+                                        await MainActor.run {
+                                            tweets[idx].retweetCount = originalRetweetCount
+                                        }
                                     }
-                                    showToastWith(message: "Retweet failed.", type: .error)
+                                    await MainActor.run {
+                                        showToastWith(message: "Retweet failed.", type: .error)
+                                    }
                                 }
                             }
                         },
@@ -131,22 +143,32 @@ struct TweetListView: View {
                                     // Persist the change if this was a retweet
                                     if let originalId = tweet.originalTweetId, let idx = tweets.firstIndex(where: { $0.mid == originalId }) {
                                         if let updated = try? await hproseInstance.updateRetweetCount(tweet: tweets[idx], retweetId: tweet.mid, direction: false) {
-                                            tweets[idx].retweetCount = updated.retweetCount
-                                            tweets[idx].favoriteCount = updated.favoriteCount
-                                            tweets[idx].bookmarkCount = updated.bookmarkCount
-                                            tweets[idx].commentCount = updated.commentCount
+                                            await MainActor.run {
+                                                tweets[idx].retweetCount = updated.retweetCount
+                                                tweets[idx].favoriteCount = updated.favoriteCount
+                                                tweets[idx].bookmarkCount = updated.bookmarkCount
+                                                tweets[idx].commentCount = updated.commentCount
+                                            }
                                         }
                                     }
-                                    showToastWith(message: "Tweet deleted.", type: .success)
+                                    await MainActor.run {
+                                        showToastWith(message: "Tweet deleted.", type: .success)
+                                    }
                                 } else {
                                     // Restore tweet and retweetCount if needed
                                     if let removed = removedTweet, let idx = index {
-                                        tweets.insert(removed, at: idx)
+                                        await MainActor.run {
+                                            tweets.insert(removed, at: idx)
+                                        }
                                     }
                                     if let idx = origIdx, let oldCount = oldRetweetCount {
-                                        tweets[idx].retweetCount = oldCount
+                                        await MainActor.run {
+                                            tweets[idx].retweetCount = oldCount
+                                        }
                                     }
-                                    showToastWith(message: "Failed to delete tweet.", type: .error)
+                                    await MainActor.run {
+                                        showToastWith(message: "Failed to delete tweet.", type: .error)
+                                    }
                                 }
                             }
                         },
@@ -242,9 +264,9 @@ struct TweetListContentView: View {
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0).id("top")
-            ForEach($tweets) { $tweet in
+            ForEach(tweets) { tweet in
                 TweetItemView(
-                    tweet: $tweet,
+                    tweet: tweet,
                     retweet: onRetweet,
                     deleteTweet: onDeleteTweet,
                     isInProfile: false,

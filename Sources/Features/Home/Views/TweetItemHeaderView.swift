@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct TweetItemHeaderView: View {
-    @Binding var tweet: Tweet
+    @ObservedObject var tweet: Tweet
     
     var body: some View {
         HStack {
@@ -18,7 +18,7 @@ struct TweetItemHeaderView: View {
 }
 
 struct TweetMenu: View {
-    @Binding var tweet: Tweet
+    @ObservedObject var tweet: Tweet
     let deleteTweet: (Tweet) async -> Void
     let isPinned: Bool
     @Environment(\.dismiss) private var dismiss
@@ -26,8 +26,8 @@ struct TweetMenu: View {
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var isCurrentlyPinned: Bool
 
-    init(tweet: Binding<Tweet>, deleteTweet: @escaping (Tweet) async -> Void, isPinned: Bool) {
-        self._tweet = tweet
+    init(tweet: Tweet, deleteTweet: @escaping (Tweet) async -> Void, isPinned: Bool) {
+        self.tweet = tweet
         self.deleteTweet = deleteTweet
         self.isPinned = isPinned
         self._isCurrentlyPinned = State(initialValue: isPinned)

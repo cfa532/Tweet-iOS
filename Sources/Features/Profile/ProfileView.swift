@@ -122,8 +122,8 @@ struct ProfileView: View {
                     // Pinned tweets section
                     if !pinnedTweets.isEmpty {
                         Section(header: Text("Pinned").font(.subheadline).bold()) {
-                            ForEach($pinnedTweets) { $tweet in
-                                TweetItemView(tweet: $tweet,
+                            ForEach(pinnedTweets) { tweet in
+                                TweetItemView(tweet: tweet,
                                               retweet: { _ in },
                                               deleteTweet: { _ in },
                                               isPinned: true,
@@ -135,8 +135,8 @@ struct ProfileView: View {
                         }
                     }
                     // Regular tweets section
-                    ForEach($tweets) { $tweet in
-                        TweetItemView(tweet: $tweet,
+                    ForEach(tweets) { tweet in
+                        TweetItemView(tweet: tweet,
                                       retweet: { _ in },
                                       deleteTweet: { _ in },
                                       isPinned: pinnedTweetIds.contains(tweet.mid),

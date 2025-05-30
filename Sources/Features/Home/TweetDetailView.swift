@@ -21,7 +21,7 @@ struct CommentsSection: View {
 
 @available(iOS 16.0, *)
 struct TweetDetailView: View {
-    @Binding var tweet: Tweet
+    @ObservedObject var tweet: Tweet
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
     @State private var comments: [Tweet] = []
@@ -68,8 +68,8 @@ struct TweetDetailView: View {
                     if let user = tweet.author {
                         Avatar(user: user)
                     }
-                    TweetItemHeaderView(tweet: $tweet)
-                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: tweet.isPinned(in: pinnedTweets))
+                    TweetItemHeaderView(tweet: tweet)
+                    TweetMenu(tweet: tweet, deleteTweet: deleteTweet, isPinned: tweet.isPinned(in: pinnedTweets))
                 }
                 .padding(.horizontal)
                 .padding(.top)
@@ -82,7 +82,7 @@ struct TweetDetailView: View {
                         .padding(.vertical, 8)
                 }
                 // Tweet actions
-                TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+                TweetActionButtonsView(tweet: tweet, retweet: retweet)
                     .padding(.leading, 48)
                     .padding(.trailing, 8)
                     .padding(.top, 8)
@@ -98,8 +98,8 @@ struct TweetDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding()
                 } else {
-                    ForEach($comments, id: \.id) { $comment in
-                        TweetItemView(tweet: $comment, retweet: retweet, deleteTweet: deleteTweet)
+                    ForEach(comments, id: \.id) { comment in
+                        TweetItemView(tweet: comment, retweet: retweet, deleteTweet: deleteTweet)
                     }
                     if hasMoreComments && isLoadingComments {
                         ProgressView()

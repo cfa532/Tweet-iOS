@@ -3,7 +3,7 @@ import PhotosUI
 
 @available(iOS 16.0, *)
 struct CommentComposeView: View {
-    @Binding var tweet: Tweet
+    @ObservedObject var tweet: Tweet
     @Environment(\.dismiss) private var dismiss
     @State private var commentText = ""
     @State private var error: Error?

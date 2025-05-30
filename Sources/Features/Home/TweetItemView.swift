@@ -2,7 +2,7 @@ import SwiftUI
 
 @available(iOS 16.0, *)
 struct TweetItemView: View {
-    @Binding var tweet: Tweet
+    @ObservedObject var tweet: Tweet
     let retweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
     let embedded: Bool = false
@@ -45,22 +45,22 @@ struct TweetItemView: View {
                                         .foregroundColor(.secondary)
                                 }
                                 HStack(alignment: .top) {
-                                    TweetItemHeaderView(tweet: $originalTweet)
-                                    TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: isPinned)
+                                    TweetItemHeaderView(tweet: originalTweet)
+                                    TweetMenu(tweet: tweet, deleteTweet: deleteTweet, isPinned: isPinned)
                                 }
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     detailTweet = originalTweet
                                     showDetail = true
                                 }
-                                TweetItemBodyView(tweet: $originalTweet, retweet: retweet)
+                                TweetItemBodyView(tweet: originalTweet, retweet: retweet)
                                     .contentShape(Rectangle())
                                     .onTapGesture {
                                         detailTweet = originalTweet
                                         showDetail = true
                                     }
                                     .padding(.top, 4)
-                                TweetActionButtonsView(tweet: $originalTweet, retweet: retweet)
+                                TweetActionButtonsView(tweet: originalTweet, retweet: retweet)
                                     .padding(.top, 8)
                                     .padding(.leading, -20)
                             }
@@ -80,24 +80,24 @@ struct TweetItemView: View {
                     }
                     VStack(alignment: .leading) {
                         HStack {
-                            TweetItemHeaderView(tweet: $tweet)
-                            TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: isPinned)
+                            TweetItemHeaderView(tweet: tweet)
+                            TweetMenu(tweet: tweet, deleteTweet: deleteTweet, isPinned: isPinned)
                         }
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
-                        TweetItemBodyView(tweet: $tweet, retweet: retweet, enableTap: false)
+                        TweetItemBodyView(tweet: tweet, retweet: retweet, enableTap: false)
                             .contentShape(Rectangle())
                             .onTapGesture { showDetail = true }
                         
                         // Embedded original tweet
                         VStack(alignment: .leading, spacing: 8) {
-                            TweetItemView(tweet: $originalTweet, retweet: retweet, deleteTweet: deleteTweet, isPinned: isPinned)
+                            TweetItemView(tweet: originalTweet, retweet: retweet, deleteTweet: deleteTweet, isPinned: isPinned)
                         }
                         .padding()
                         .background(Color(.secondarySystemBackground))
                         .cornerRadius(8)
                         
-                        TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+                        TweetActionButtonsView(tweet: tweet, retweet: retweet)
                             .padding(.top, 8)
                             .padding(.leading, -8)
                     }
@@ -117,17 +117,17 @@ struct TweetItemView: View {
                 }
                 VStack(alignment: .leading) {
                     HStack {
-                        TweetItemHeaderView(tweet: $tweet)
-                        TweetMenu(tweet: $tweet, deleteTweet: deleteTweet, isPinned: isPinned)
+                        TweetItemHeaderView(tweet: tweet)
+                        TweetMenu(tweet: tweet, deleteTweet: deleteTweet, isPinned: isPinned)
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
-                    TweetItemBodyView(tweet: $tweet, retweet: retweet, enableTap: false)
+                    TweetItemBodyView(tweet: tweet, retweet: retweet, enableTap: false)
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
                         .padding(.top, 4)
                     
-                    TweetActionButtonsView(tweet: $tweet, retweet: retweet)
+                    TweetActionButtonsView(tweet: tweet, retweet: retweet)
                         .padding(.top, 8)
                         .padding(.leading, -8)
                 }
@@ -137,7 +137,7 @@ struct TweetItemView: View {
         .background(Color(.systemBackground))
         .background(
             NavigationLink(destination: TweetDetailView(
-                tweet: $detailTweet,
+                tweet: detailTweet,
                 retweet: retweet,
                 deleteTweet: deleteTweet
             ), isActive: $showDetail) {

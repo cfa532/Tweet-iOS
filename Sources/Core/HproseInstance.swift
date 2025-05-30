@@ -175,22 +175,16 @@ final class HproseInstance: ObservableObject {
         entry: String = "get_tweet_feed"
     ) async throws -> [Tweet] {
         print("[fetchTweetFeed] Starting fetch for page \(pageNumber) with page size \(pageSize)")
-        
-        // Calculate initial ranks
         var startRank = UInt(pageNumber * pageSize)
         var endRank = UInt(startRank + UInt(pageSize))
-        
         print("[fetchTweetFeed] Initial ranks - start: \(startRank), end: \(endRank)")
-        
         return try await withRetry {
             guard let service = hproseClient else {
                 print("[fetchTweetFeed] Service not initialized")
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            
             var accumulatedTweets: [Tweet] = []
-            
-            while startRank <= 1000 && accumulatedTweets.count < pageSize { // Continue until we have enough tweets or hit the limit
+            while startRank <= 1000 && accumulatedTweets.count < pageSize {
                 let params = [
                     "aid": appId,
                     "ver": "last",
@@ -199,78 +193,76 @@ final class HproseInstance: ObservableObject {
                     "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
                     "appuserid": appUser.mid,
                 ]
-                
                 print("[fetchTweetFeed] Requesting tweets with params: \(params)")
-                
                 let rawResponse = service.runMApp(entry, params, nil)
                 print("[fetchTweetFeed] Raw response type: \(type(of: rawResponse))")
-                
-                // Unwrap the Optional<Any> response
                 guard let unwrappedResponse = rawResponse else {
                     print("[fetchTweetFeed] Response is nil")
                     return accumulatedTweets
                 }
-                
-                // Try to cast to array
                 guard let responseArray = unwrappedResponse as? [Any] else {
                     print("[fetchTweetFeed] Response is not an array: \(unwrappedResponse)")
                     return accumulatedTweets
                 }
-                
                 print("[fetchTweetFeed] Raw tweets from server: \(responseArray.count)")
-                
-                // If we got fewer items than page size, we've reached the end
                 if responseArray.count < pageSize {
                     print("[fetchTweetFeed] Reached end of feed (response count: \(responseArray.count) < page size: \(pageSize))")
                     return accumulatedTweets
                 }
-                
-                // Filter out null values and convert to dictionaries
                 let validDictionaries = responseArray.compactMap { item -> [String: Any]? in
-                    if let dict = item as? [String: Any] {
-                        return dict
-                    }
+                    if let dict = item as? [String: Any] { return dict }
                     return nil
                 }
-                
                 print("[fetchTweetFeed] Valid dictionaries count: \(validDictionaries.count)")
-                
-                // Create tweets from valid dictionaries
-                let tweets = validDictionaries.compactMap { dict -> Tweet? in
-                    if let tweet = Tweet.from(dict: dict) {
-                        return tweet
-                    } else {
+                for dict in validDictionaries {
+                    guard let parsedTweet = Tweet.from(dict: dict) else {
                         print("[fetchTweetFeed] Failed to parse tweet from dict: \(dict)")
-                        return nil
+                        continue
                     }
-                }
-                
-                print("[fetchTweetFeed] Successfully parsed tweets: \(tweets.count)")
-                
-                // Then fetch author data for each tweet
-                for var tweet in tweets {
-                    if let author = try await getUser(tweet.authorId) {
-                        tweet.author = author
-                        accumulatedTweets.append(tweet)
-                        
-                        // If we've reached the page size, return what we have
-                        if accumulatedTweets.count >= pageSize {
-                            print("[fetchTweetFeed] Returning \(accumulatedTweets.count) tweets with authors (reached page size)")
-                            return accumulatedTweets
+                    // Use cache for tweet
+                    let tweet: Tweet = tweetCacheLock.withLock {
+                        if let cached = tweetCache[parsedTweet.mid] {
+                            return cached
+                        } else {
+                            tweetCache[parsedTweet.mid] = parsedTweet
+                            return parsedTweet
                         }
-                    } else {
-                        print("[fetchTweetFeed] Failed to fetch author for tweet: \(tweet.mid)")
+                    }
+                    // Fetch author if needed
+                    var tweetWithAuthor = tweet
+                    if tweetWithAuthor.author == nil {
+                        if let author = try? await getUser(tweetWithAuthor.authorId) {
+                            tweetWithAuthor.author = author
+                            tweetCacheLock.withLock { tweetCache[tweetWithAuthor.mid] = tweetWithAuthor }
+                        }
+                    }
+                    // If retweet, ensure original is cached and shared
+                    if let origId = tweetWithAuthor.originalTweetId, let origAuthorId = tweetWithAuthor.originalAuthorId {
+                        let original: Tweet = tweetCacheLock.withLock {
+                            if let cachedOrig = tweetCache[origId] {
+                                return cachedOrig
+                            } else if let origDict = validDictionaries.first(where: { $0["mid"] as? String == origId }), let origParsed = Tweet.from(dict: origDict) {
+                                tweetCache[origId] = origParsed
+                                return origParsed
+                            } else {
+                                // fallback: fetch from network if not present
+                                return tweetCache[origId] ?? Tweet(mid: origId, authorId: origAuthorId)
+                            }
+                        }
+                        // Optionally, you could add a property to Tweet for holding the original Tweet object reference if needed
+                        // (not shown in your model, but you could add: var originalTweet: Tweet?)
+                    }
+                    accumulatedTweets.append(tweetWithAuthor)
+                    if accumulatedTweets.count >= pageSize {
+                        print("[fetchTweetFeed] Returning \(accumulatedTweets.count) tweets with authors (reached page size)")
+                        return accumulatedTweets
                     }
                 }
-                
-                // If we got no valid tweets but have more items, increment the ranks
                 print("[fetchTweetFeed] No more valid tweets in this batch, incrementing ranks. Current start: \(startRank), response count: \(responseArray.count)")
                 startRank += UInt(responseArray.count)
                 endRank = startRank + UInt(pageSize)
                 print("[fetchTweetFeed] New ranks - start: \(startRank), end: \(endRank)")
             }
-            
-            // Return whatever tweets we've accumulated
             print("[fetchTweetFeed] Returning \(accumulatedTweets.count) accumulated tweets")
             return accumulatedTweets
         }
@@ -343,6 +335,14 @@ final class HproseInstance: ObservableObject {
                     tweet.author = try await getUser(authorId)
                     // Store in cache
                     tweetCacheLock.withLock { tweetCache[tweetId] = tweet }
+                    // If this is a retweet, also fetch and cache the original tweet
+                    if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
+                        if tweetCacheLock.withLock({ tweetCache[origId] }) == nil {
+                            if let origTweet = try? await getTweet(tweetId: origId, authorId: origAuthorId) {
+                                tweetCacheLock.withLock { tweetCache[origId] = origTweet }
+                            }
+                        }
+                    }
                     return tweet
                 }
             } else {
@@ -357,6 +357,14 @@ final class HproseInstance: ObservableObject {
                             tweet.author = try await getUser(authorId)
                             // Store in cache
                             tweetCacheLock.withLock { tweetCache[tweetId] = tweet }
+                            // If this is a retweet, also fetch and cache the original tweet
+                            if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
+                                if tweetCacheLock.withLock({ tweetCache[origId] }) == nil {
+                                    if let origTweet = try? await getTweet(tweetId: origId, authorId: origAuthorId) {
+                                        tweetCacheLock.withLock { tweetCache[origId] = origTweet }
+                                    }
+                                }
+                            }
                             return tweet
                         }
                     }

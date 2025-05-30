@@ -1,6 +1,6 @@
 import Foundation
 
-struct Tweet: Identifiable, Codable {
+class Tweet: Identifiable, Codable, ObservableObject {
     var id: String { mid }  // Computed property that returns mid
     var mid: String
     let authorId: String // mid of the author
@@ -15,11 +15,11 @@ struct Tweet: Identifiable, Codable {
     var author: User?
     
     // User interaction flags
-    var favorites: [Bool]? // [favorite, bookmark, retweeted]
-    var favoriteCount: Int?
-    var bookmarkCount: Int?
-    var retweetCount: Int?
-    var commentCount: Int?
+    @Published var favorites: [Bool]? // [favorite, bookmark, retweeted]
+    @Published var favoriteCount: Int?
+    @Published var bookmarkCount: Int?
+    @Published var retweetCount: Int?
+    @Published var commentCount: Int?
     
     // Media attachments
     var attachments: [MimeiFileType]?
@@ -76,7 +76,7 @@ struct Tweet: Identifiable, Codable {
         case downloadable
     }
     
-    init(from decoder: Decoder) throws {
+    required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mid = try container.decode(String.self, forKey: .mid)
         authorId = try container.decode(String.self, forKey: .authorId)
@@ -87,10 +87,10 @@ struct Tweet: Identifiable, Codable {
         originalAuthorId = try container.decodeIfPresent(String.self, forKey: .originalAuthorId)
         author = try container.decodeIfPresent(User.self, forKey: .author)
         favorites = try container.decodeIfPresent([Bool].self, forKey: .favorites)
-        favoriteCount = try container.decode(Int.self, forKey: .favoriteCount)
-        bookmarkCount = try container.decode(Int.self, forKey: .bookmarkCount)
-        retweetCount = try container.decode(Int.self, forKey: .retweetCount)
-        commentCount = try container.decode(Int.self, forKey: .commentCount)
+        favoriteCount = try container.decodeIfPresent(Int.self, forKey: .favoriteCount)
+        bookmarkCount = try container.decodeIfPresent(Int.self, forKey: .bookmarkCount)
+        retweetCount = try container.decodeIfPresent(Int.self, forKey: .retweetCount)
+        commentCount = try container.decodeIfPresent(Int.self, forKey: .commentCount)
         attachments = try container.decodeIfPresent([MimeiFileType].self, forKey: .attachments)
         isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate)
         downloadable = try container.decodeIfPresent(Bool.self, forKey: .downloadable)
@@ -130,10 +130,10 @@ struct Tweet: Identifiable, Codable {
         try container.encodeIfPresent(originalAuthorId, forKey: .originalAuthorId)
         try container.encodeIfPresent(author, forKey: .author)
         try container.encodeIfPresent(favorites, forKey: .favorites)
-        try container.encode(favoriteCount, forKey: .favoriteCount)
-        try container.encode(bookmarkCount, forKey: .bookmarkCount)
-        try container.encode(retweetCount, forKey: .retweetCount)
-        try container.encode(commentCount, forKey: .commentCount)
+        try container.encodeIfPresent(favoriteCount, forKey: .favoriteCount)
+        try container.encodeIfPresent(bookmarkCount, forKey: .bookmarkCount)
+        try container.encodeIfPresent(retweetCount, forKey: .retweetCount)
+        try container.encodeIfPresent(commentCount, forKey: .commentCount)
         try container.encodeIfPresent(attachments, forKey: .attachments)
         try container.encodeIfPresent(isPrivate, forKey: .isPrivate)
         try container.encodeIfPresent(downloadable, forKey: .downloadable)
