@@ -24,6 +24,7 @@ struct TweetListView<RowView: View>: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: TweetListView<TweetItemView>.ToastType = .info
+    @State private var initialLoadComplete = false
     enum ToastType { case success, error, info }
 
     // MARK: - Initialization
@@ -55,6 +56,8 @@ struct TweetListView<RowView: View>: View {
                         rowView: rowView,
                         hasMoreTweets: hasMoreTweets,
                         isLoadingMore: isLoadingMore,
+                        isLoading: isLoading,
+                        initialLoadComplete: initialLoadComplete,
                         loadMoreTweets: { loadMoreTweets() }
                     )
                 }
@@ -85,31 +88,53 @@ struct TweetListView<RowView: View>: View {
     }
 
     // MARK: - Methods
-    func refreshTweets() async {
+    func performInitialLoad() async {
         isLoading = true
-        currentPage = 0
+        initialLoadComplete = false
         hasMoreTweets = true
-        do {
-            let newTweets = try await tweetFetcher(0, pageSize)
-            await MainActor.run {
-                tweets = newTweets
-                hasMoreTweets = newTweets.contains(where: { $0 != nil })
-                if newTweets.count < pageSize {
-                    hasMoreTweets = false
+        currentPage = 0
+        tweets = []
+        var page = 0
+        var totalValidTweets = 0
+        var keepLoading = true
+        while keepLoading {
+            do {
+                let moreTweets = try await tweetFetcher(page, pageSize)
+                let validTweets = moreTweets.compactMap { $0 }
+                let allNil = moreTweets.allSatisfy { $0 == nil }
+                let existingIds = Set(tweets.compactMap { $0?.id })
+                let uniqueNew = validTweets.filter { !existingIds.contains($0.id) }
+                tweets.append(contentsOf: uniqueNew)
+                totalValidTweets = tweets.compactMap { $0 }.count
+                currentPage = page
+                if totalValidTweets > 4 {
+                    hasMoreTweets = moreTweets.count == pageSize && !allNil
+                    keepLoading = false
+                } else if moreTweets.count < pageSize || allNil {
+                    hasMoreTweets = moreTweets.count == pageSize && !allNil
+                    keepLoading = false
+                } else {
+                    page += 1
                 }
-                isLoading = false
-            }
-        } catch {
-            print("Error refreshing tweets: \(error)")
-            await MainActor.run {
-                isLoading = false
+            } catch {
+                print("[TweetListView] Error during initial load: \(error)")
                 errorMessage = error.localizedDescription
+                break
             }
         }
+        isLoading = false
+        initialLoadComplete = true
+    }
+
+    func refreshTweets() async {
+        guard !isLoading else { return }
+        initialLoadComplete = false
+        await performInitialLoad()
     }
 
     func loadMoreTweets(page: Int? = nil) {
-        guard hasMoreTweets, !isLoadingMore else { return }
+        print("loadMoreTweets called: isLoadingMore=\(isLoadingMore), initialLoadComplete=\(initialLoadComplete), hasMoreTweets=\(hasMoreTweets), currentPage=\(currentPage)")
+        guard hasMoreTweets, !isLoadingMore, initialLoadComplete else { return }
         isLoadingMore = true
         let nextPage = page ?? (currentPage + 1)
 
@@ -119,28 +144,14 @@ struct TweetListView<RowView: View>: View {
                 await MainActor.run {
                     let validTweets = moreTweets.compactMap { $0 }
                     let allNil = moreTweets.allSatisfy { $0 == nil }
-
-                    if allNil {
-                        if moreTweets.count < pageSize {
-                            hasMoreTweets = false
-                            isLoadingMore = false
-                            currentPage = nextPage
-                            return
-                        } else {
-                            isLoadingMore = false
-                            loadMoreTweets(page: nextPage + 1)
-                            currentPage = nextPage
-                            return
-                        }
-                    }
-
-                    // Prevent duplicates
                     let existingIds = Set(tweets.compactMap { $0?.id })
                     let uniqueNew = validTweets.filter { !existingIds.contains($0.id) }
 
-                    if uniqueNew.isEmpty && moreTweets.count == pageSize {
+                    if allNil || uniqueNew.isEmpty {
+                        if moreTweets.count < pageSize {
+                            hasMoreTweets = false
+                        }
                         isLoadingMore = false
-                        loadMoreTweets(page: nextPage + 1)
                         currentPage = nextPage
                         return
                     }
@@ -187,6 +198,8 @@ struct TweetListContentView<RowView: View>: View {
     let rowView: (Tweet) -> RowView
     let hasMoreTweets: Bool
     let isLoadingMore: Bool
+    let isLoading: Bool
+    let initialLoadComplete: Bool
     let loadMoreTweets: () -> Void
     var body: some View {
         LazyVStack(spacing: 0) {
@@ -202,8 +215,12 @@ struct TweetListContentView<RowView: View>: View {
                 ProgressView()
                     .frame(height: 40)
                     .onAppear {
-                        if !isLoadingMore {
-                            loadMoreTweets()
+                        if initialLoadComplete && !isLoadingMore {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                if initialLoadComplete && !isLoadingMore {
+                                    loadMoreTweets()
+                                }
+                            }
                         }
                     }
             }
@@ -269,3 +286,4 @@ struct TweetListView_Previews: PreviewProvider {
     }
 }
 #endif
+
