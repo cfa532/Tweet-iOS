@@ -5,14 +5,14 @@ struct TweetListView<RowView: View>: View {
     // MARK: - Properties
     @EnvironmentObject private var hproseInstance: HproseInstance
     let title: String
-    let tweetFetcher: @Sendable (Int, Int) async throws -> [Tweet]
+    let tweetFetcher: @Sendable (Int, Int) async throws -> [Tweet?]
     let onRetweet: ((Tweet) async -> Void)?
     let onDeleteTweet: ((Tweet) async -> Void)?
     let onAvatarTap: ((User) -> Void)?
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     
-    @State private var tweets: [Tweet] = []
+    @State private var tweets: [Tweet?] = []
     @State private var isLoading: Bool = false
     @State private var isLoadingMore: Bool = false
     @State private var hasMoreTweets: Bool = true
@@ -24,12 +24,14 @@ struct TweetListView<RowView: View>: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: TweetListView<TweetItemView>.ToastType = .info
+    @State private var consecutiveAllNilPages: Int = 0
+    private let maxAllNilPages = 5
     enum ToastType { case success, error, info }
 
     // MARK: - Initialization
     init(
         title: String,
-        tweetFetcher: @escaping @Sendable (Int, Int) async throws -> [Tweet],
+        tweetFetcher: @escaping @Sendable (Int, Int) async throws -> [Tweet?],
         onRetweet: ((Tweet) async -> Void)? = nil,
         onDeleteTweet: ((Tweet) async -> Void)? = nil,
         onAvatarTap: ((User) -> Void)? = nil,
@@ -83,7 +85,10 @@ struct TweetListView<RowView: View>: View {
             let newTweets = try await tweetFetcher(0, pageSize)
             await MainActor.run {
                 tweets = newTweets
-                hasMoreTweets = newTweets.count == pageSize
+                hasMoreTweets = !newTweets.contains(where: { $0 == nil }) && newTweets.count == pageSize
+                if newTweets.contains(where: { $0 == nil }) || newTweets.count < pageSize {
+                    hasMoreTweets = false
+                }
                 isLoading = false
             }
         } catch {
@@ -102,18 +107,33 @@ struct TweetListView<RowView: View>: View {
 
         Task {
             do {
-                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay for spinner visibility
+                try await Task.sleep(nanoseconds: 1_000_000_000)
                 let moreTweets = try await tweetFetcher(nextPage, pageSize)
-
                 await MainActor.run {
-                    // Prevent duplicates
-                    let existingIds = Set(tweets.map { $0.id })
-                    let uniqueNew = moreTweets.filter { !existingIds.contains($0.id) }
+                    let validTweets = moreTweets.compactMap { $0 }
+                    let allNil = moreTweets.allSatisfy { $0 == nil }
 
+                    if allNil {
+                        hasMoreTweets = false
+                        isLoadingMore = false
+                        currentPage = nextPage
+                        return
+                    }
+
+                    // Prevent duplicates
+                    let existingIds = Set(tweets.compactMap { $0?.id })
+                    let uniqueNew = validTweets.filter { !existingIds.contains($0.id) }
                     tweets.append(contentsOf: uniqueNew)
-                    hasMoreTweets = moreTweets.count == pageSize
+
                     currentPage = nextPage
-                    isLoadingMore = false
+
+                    if moreTweets.count < pageSize {
+                        hasMoreTweets = false
+                        isLoadingMore = false
+                    } else {
+                        isLoadingMore = false // Set this BEFORE recursion!
+                        loadMoreTweets()
+                    }
                 }
             } catch {
                 print("[TweetListView] Error loading more tweets: \(error)")
@@ -139,20 +159,22 @@ struct TweetListView<RowView: View>: View {
         tweets.insert(tweet, at: 0)
     }
     func removeTweet(_ tweet: Tweet) {
-        tweets.removeAll { $0.mid == tweet.mid }
+        tweets.removeAll { $0?.mid == tweet.mid }
     }
 }
 
 @available(iOS 16.0, *)
 struct TweetListContentView<RowView: View>: View {
-    @Binding var tweets: [Tweet]
+    @Binding var tweets: [Tweet?]
     let rowView: (Tweet) -> RowView
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0).id("top")
-            ForEach(tweets) { tweet in
-                rowView(tweet)
-                    .id(tweet.id)
+            ForEach(tweets.indices, id: \ .self) { index in
+                if let tweet = tweets[index] {
+                    rowView(tweet)
+                        .id(tweet.id)
+                }
             }
         }
     }
