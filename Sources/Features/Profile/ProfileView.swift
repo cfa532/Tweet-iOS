@@ -16,14 +16,10 @@ struct ProfileView: View {
     let onLogout: (() -> Void)?
 
     // MARK: - State
-    /// List of regular tweets displayed in the profile
-    @State private var tweets: [Tweet] = []
     /// List of tweets that are pinned to the top of the profile
     @State private var pinnedTweets: [Tweet] = []
     /// Set of tweet IDs that are pinned, used for quick lookup
     @State private var pinnedTweetIds: Set<String> = []
-    /// Dictionary mapping tweet IDs to their pin timestamps
-    @State private var pinnedTweetTimes: [String: Any] = [:]
     /// Controls the visibility of the edit profile sheet
     @State private var showEditSheet = false
     /// Controls the visibility of the full-screen avatar view
@@ -68,7 +64,6 @@ struct ProfileView: View {
             await MainActor.run {
                 pinnedTweets = sortedPinned.map { $0.0 }
                 pinnedTweetIds = Set(pinnedTweets.map { $0.mid })
-                pinnedTweetTimes = Dictionary(uniqueKeysWithValues: sortedPinned.map { ($0.0.mid, $0.1) })
             }
         } catch {
             print("Error refreshing pinned tweets: \(error)")
@@ -113,36 +108,42 @@ struct ProfileView: View {
             if isLoading {
                 ProgressView("Loading tweets...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if tweets.isEmpty && pinnedTweets.isEmpty {
-                Text("No tweets yet.")
-                    .foregroundColor(.gray)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if pinnedTweets.isEmpty {
+                RegularTweetsView(
+                    user: user,
+                    pinnedTweetIds: pinnedTweetIds,
+                    hproseInstance: hproseInstance,
+                    onUserSelect: { user in selectedUser = user }
+                )
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         // Pinned tweets section
-                        if !pinnedTweets.isEmpty {
-                            VStack(spacing: 0) {
-                                Text("Pinned")
-                                    .font(.subheadline)
-                                    .bold()
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding()
-                                    .background(Color(UIColor.systemBackground))
-                                
-                                ForEach(pinnedTweets) { tweet in
-                                    TweetItemView(tweet: tweet,
-                                                  retweet: { _ in },
-                                                  deleteTweet: { _ in },
-                                                  isPinned: true,
-                                                  isInProfile: true,
-                                                  onAvatarTap: { _ in })
-                                }
-                                
-                                if !pinnedTweets.isEmpty {
-                                    TweetsSectionHeader()
-                                }
+                        VStack(spacing: 0) {
+                            Text("Pinned")
+                                .font(.subheadline)
+                                .bold()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding()
+                                .background(Color(UIColor.systemBackground))
+                            
+                            ForEach(pinnedTweets) { tweet in
+                                TweetItemView(tweet: tweet,
+                                              retweet: { _ in },
+                                              deleteTweet: { tweet in
+                                                  Task {
+                                                      if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
+                                                          print("Successfully deleted pinned tweet: \(tweetId)")
+                                                          await refreshPinnedTweets()
+                                                      }
+                                                  }
+                                              },
+                                              isPinned: true,
+                                              isInProfile: true,
+                                              onAvatarTap: { _ in })
                             }
+                            
+                            TweetsSectionHeader()
                         }
                         
                         // Regular tweets section
@@ -154,7 +155,6 @@ struct ProfileView: View {
                         )
                     }
                 }
-                .scrollDisabled(pinnedTweets.isEmpty) // Only enable scrolling if there are pinned tweets
             }
 
             // Hidden NavigationLink for avatar navigation
@@ -200,15 +200,7 @@ struct ProfileView: View {
         .task {
             if !didLoad {
                 isLoading = true
-                let start = Date()
                 await refreshPinnedTweets()
-                do {
-                    tweets = try await hproseInstance.fetchUserTweet(user: user, startRank: UInt(0), endRank: UInt(19))
-                } catch {
-                    // handle error
-                }
-                let end = Date()
-                print("Time to load tweets: \(end.timeIntervalSince(start)) seconds")
                 isLoading = false
                 didLoad = true
             }
@@ -278,10 +270,7 @@ struct ProfileView: View {
                             tweet: tweet,
                             retweetId: retweet.mid
                         ) {
-                            // Update the tweet in the list if it exists
-                            if let index = tweets.firstIndex(where: { $0.id == updatedOriginalTweet.mid }) {
-                                tweets[index] = updatedOriginalTweet
-                            }
+                            // The TweetListView will handle updating its own state
                         }
                     }
                 },
@@ -365,8 +354,11 @@ private struct RegularTweetsView: View {
                     }
                 },
                 onDeleteTweet: { tweet in
-                    if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
-                        print("Successfully deleted tweet: \(tweetId)")
+                    Task {
+                        if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
+                            print("Successfully deleted tweet: \(tweetId)")
+                            // The TweetListView will handle refreshing its content
+                        }
                     }
                 },
                 onAvatarTap: { user in
@@ -377,7 +369,14 @@ private struct RegularTweetsView: View {
                     TweetItemView(
                         tweet: tweet,
                         retweet: { _ in },
-                        deleteTweet: { _ in },
+                        deleteTweet: { tweet in
+                            Task {
+                                if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
+                                    print("Successfully deleted tweet: \(tweetId)")
+                                    // The TweetListView will handle refreshing its content
+                                }
+                            }
+                        },
                         isPinned: pinnedTweetIds.contains(tweet.mid),
                         isInProfile: true,
                         onAvatarTap: { user in onUserSelect(user) }
