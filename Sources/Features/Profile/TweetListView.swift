@@ -128,7 +128,6 @@ struct TweetListView<RowView: View>: View {
                             return
                         } else {
                             isLoadingMore = false
-                            // Recursively load the next page
                             loadMoreTweets(page: nextPage + 1)
                             currentPage = nextPage
                             return
@@ -138,8 +137,15 @@ struct TweetListView<RowView: View>: View {
                     // Prevent duplicates
                     let existingIds = Set(tweets.compactMap { $0?.id })
                     let uniqueNew = validTweets.filter { !existingIds.contains($0.id) }
-                    tweets.append(contentsOf: uniqueNew)
 
+                    if uniqueNew.isEmpty && moreTweets.count == pageSize {
+                        isLoadingMore = false
+                        loadMoreTweets(page: nextPage + 1)
+                        currentPage = nextPage
+                        return
+                    }
+
+                    tweets.append(contentsOf: uniqueNew)
                     currentPage = nextPage
 
                     if moreTweets.count < pageSize {
