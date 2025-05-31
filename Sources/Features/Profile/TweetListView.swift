@@ -150,10 +150,16 @@ struct TweetListView<RowView: View>: View {
                     if allNil || uniqueNew.isEmpty {
                         if moreTweets.count < pageSize {
                             hasMoreTweets = false
+                            isLoadingMore = false
+                            currentPage = nextPage
+                            return
+                        } else {
+                            // Auto-retry: load next page
+                            isLoadingMore = false
+                            currentPage = nextPage
+                            loadMoreTweets(page: nextPage + 1)
+                            return
                         }
-                        isLoadingMore = false
-                        currentPage = nextPage
-                        return
                     }
 
                     tweets.append(contentsOf: uniqueNew)
