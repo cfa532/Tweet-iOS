@@ -134,16 +134,19 @@ struct ProfileView: View {
                             }
                         }
                     }
+                    
                     // Regular tweets section
-                    ForEach(tweets) { tweet in
-                        TweetItemView(tweet: tweet,
-                                      retweet: { _ in },
-                                      deleteTweet: { _ in },
-                                      isPinned: pinnedTweetIds.contains(tweet.mid),
-                                      isInProfile: true,
-                                      onAvatarTap: { _ in })
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
+                    Section {
+                        RegularTweetsView(
+                            user: user,
+                            pinnedTweetIds: pinnedTweetIds,
+                            hproseInstance: hproseInstance,
+                            onUserSelect: { user in selectedUser = user }
+                        )
+                    } header: {
+                        if !pinnedTweets.isEmpty {
+                            TweetsSectionHeader()
+                        }
                     }
                 }
                 .listStyle(PlainListStyle())
@@ -197,7 +200,7 @@ struct ProfileView: View {
                 let start = Date()
                 await refreshPinnedTweets()
                 do {
-                    tweets = try await hproseInstance.fetchUserTweet(user: user, startRank: 0, endRank: 19)
+                    tweets = try await hproseInstance.fetchUserTweet(user: user, startRank: UInt(0), endRank: UInt(19))
                 } catch {
                     // handle error
                 }
@@ -259,11 +262,10 @@ struct ProfileView: View {
                 title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",
                 tweetFetcher: { page, size in
                     print("[ProfileView] Fetching tweets for type: \(tweetListType)")
-                    return try await hproseInstance.getUserTweetsByType(
+                    return try await hproseInstance.fetchUserTweet(
                         user: user,
-                        type: tweetListType,
-                        pageNumber: page,
-                        pageSize: size
+                        startRank: UInt(page * size),
+                        endRank: UInt((page + 1) * size - 1)
                     )
                 },
                 onRetweet: { tweet in
@@ -300,5 +302,75 @@ struct ProfileView: View {
                 }
             )
         }
+    }
+}
+
+// MARK: - Supporting Views
+@available(iOS 16.0, *)
+private struct TweetsSectionHeader: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            Divider()
+                .background(Color.gray.opacity(0.3))
+                .padding(.vertical, 8)
+            Text("Tweets")
+                .font(.subheadline)
+                .bold()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+        }
+    }
+}
+
+@available(iOS 16.0, *)
+private struct RegularTweetsView: View {
+    let user: User
+    let pinnedTweetIds: Set<String>
+    let hproseInstance: HproseInstance
+    let onUserSelect: (User) -> Void
+    
+    var body: some View {
+        TweetListView<TweetItemView>(
+            title: "",
+            tweetFetcher: { page, size in
+                return try await hproseInstance.fetchUserTweet(
+                    user: user,
+                    startRank: UInt(page * size),
+                    endRank: UInt((page + 1) * size - 1)
+                )
+            },
+            onRetweet: { tweet in
+                if let retweet = try? await hproseInstance.retweet(tweet) {
+                    if let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
+                        tweet: tweet,
+                        retweetId: retweet.mid
+                    ) {
+                        // Note: This update might need to be handled differently now
+                        // since we're using TweetListView
+                    }
+                }
+            },
+            onDeleteTweet: { tweet in
+                if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
+                    print("Successfully deleted tweet: \(tweetId)")
+                }
+            },
+            onAvatarTap: { user in
+                onUserSelect(user)
+            },
+            showTitle: false,
+            rowView: { tweet in
+                TweetItemView(
+                    tweet: tweet,
+                    retweet: { _ in },
+                    deleteTweet: { _ in },
+                    isPinned: pinnedTweetIds.contains(tweet.mid),
+                    isInProfile: true,
+                    onAvatarTap: { user in onUserSelect(user) }
+                )
+            }
+        )
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
     }
 }
