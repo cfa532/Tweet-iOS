@@ -31,9 +31,7 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var uploadProgress = 0.0
     @Published var showToast = false
     @Published var toastMessage = ""
-    @Published var toastType: ToastType = .error
-    
-    enum ToastType { case error }
+    @Published var toastType: ToastView.ToastType = .error
     
     private let hproseInstance: HproseInstance
     
@@ -45,15 +43,6 @@ class ComposeTweetViewModel: ObservableObject {
         !tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty
     }
     
-    private func showErrorToast(_ message: String) {
-        toastMessage = message
-        toastType = .error
-        showToast = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            withAnimation { self.showToast = false }
-        }
-    }
-    
     func postTweet() async {
         print("DEBUG: Starting postTweet()")
         
@@ -62,7 +51,12 @@ class ComposeTweetViewModel: ObservableObject {
         // Allow empty content if there are attachments
         guard !trimmedContent.isEmpty || !selectedItems.isEmpty else {
             print("DEBUG: Tweet validation failed - empty content and no attachments")
-            showErrorToast("Tweet cannot be empty")
+            toastMessage = "Tweet cannot be empty"
+            toastType = .error
+            showToast = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                withAnimation { self.showToast = false }
+            }
             return
         }
         
@@ -134,7 +128,12 @@ class ComposeTweetViewModel: ObservableObject {
                 }
             } catch {
                 print("DEBUG: Error loading image data: \(error)")
-                showErrorToast("Failed to load media: \(error.localizedDescription)")
+                toastMessage = "Failed to load media: \(error.localizedDescription)"
+                toastType = .error
+                showToast = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    withAnimation { self.showToast = false }
+                }
                 return
             }
         }
