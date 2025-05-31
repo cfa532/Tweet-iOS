@@ -58,7 +58,15 @@ struct TweetListView<RowView: View>: View {
                         loadMoreTweets: loadMoreTweets
                     )
                 }
-                ToastOverlayView(showToast: showToast, toastMessage: toastMessage, toastType: toastType)
+                if showToast {
+                    VStack {
+                        Spacer()
+                        ToastView(message: toastMessage, type: toastType)
+                            .padding(.bottom, 40)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.easeInOut, value: showToast)
+                }
             }
             .refreshable {
                 await refreshTweets()
@@ -200,31 +208,13 @@ struct TweetListContentView<RowView: View>: View {
 }
 
 @available(iOS 16.0, *)
-struct ToastOverlayView: View {
-    let showToast: Bool
-    let toastMessage: String
-    let toastType: TweetListView<TweetItemView>.ToastType
-    var body: some View {
-        if showToast {
-            VStack {
-                Spacer()
-                ToastView(message: toastMessage, type: toastType)
-                    .padding(.bottom, 40)
-            }
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-            .animation(.easeInOut, value: showToast)
-        }
-    }
-}
-
-@available(iOS 16.0, *)
 struct ToastView: View {
     let message: String
     let type: TweetListView<TweetItemView>.ToastType
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: iconName)
-                .foregroundColor(iconColor)
+                .foregroundColor(.white)
                 .font(.system(size: 20, weight: .bold))
             Text(message)
                 .font(.system(size: 16, weight: .semibold))
@@ -232,22 +222,14 @@ struct ToastView: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
-        .background(backgroundColor)
+        .background(Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95))
         .cornerRadius(22)
-        .shadow(color: backgroundColor.opacity(0.3), radius: 12, x: 0, y: 4)
+        .shadow(color: Color.black.opacity(0.15), radius: 12, x: 0, y: 4)
         .overlay(
             RoundedRectangle(cornerRadius: 22)
                 .stroke(borderColor, lineWidth: 1.5)
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
-    }
-    private var backgroundColor: Color {
-        // Use a gray-blue color for the toast background
-        switch type {
-        case .success: return Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95) // gray-blue
-        case .error: return Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95)
-        case .info: return Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95)
-        }
     }
     private var borderColor: Color {
         switch type {
@@ -261,13 +243,6 @@ struct ToastView: View {
         case .success: return "checkmark.circle.fill"
         case .error: return "xmark.octagon.fill"
         case .info: return "arrow.2.squarepath"
-        }
-    }
-    private var iconColor: Color {
-        switch type {
-        case .success: return .white
-        case .error: return .white
-        case .info: return .white
         }
     }
 }
