@@ -16,7 +16,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "193"
             endingLineNumber = "193"
-            landmarkName = "insertTweet(_:)"
+            landmarkName = "showToastWith(message:type:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -32,7 +32,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "197"
             endingLineNumber = "197"
-            landmarkName = "removeTweet(_:)"
+            landmarkName = "showToastWith(message:type:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

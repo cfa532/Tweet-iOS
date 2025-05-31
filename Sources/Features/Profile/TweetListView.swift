@@ -281,22 +281,3 @@ struct TweetListContentView<RowView: View>: View {
     }
 }
 
-#if DEBUG
-@available(iOS 16.0, *)
-struct TweetListView_Previews: PreviewProvider {
-    static var previews: some View {
-        TweetListView<TweetItemView>(
-            title: "Preview",
-            tweetFetcher: { _, _ in [] },
-            rowView: { tweet in
-                TweetItemView(
-                    tweet: tweet,
-                    retweet: { _ in },
-                    deleteTweet: { _ in }
-                )
-            }
-        )
-    }
-}
-#endif
-
