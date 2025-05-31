@@ -25,6 +25,7 @@ struct TweetListView<RowView: View>: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     @State private var initialLoadComplete = false
+    @State private var deletedTweetIds = Set<String>()
 
     // MARK: - Initialization
     init(
@@ -81,6 +82,13 @@ struct TweetListView<RowView: View>: View {
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("UserDidLogin"))) { _ in
                 Task {
                     await refreshTweets()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NewTweetCreated"))) { notification in
+                if let newTweet = notification.userInfo?["tweet"] as? Tweet {
+                    withAnimation {
+                        insertTweet(newTweet)
+                    }
                 }
             }
         }
@@ -192,8 +200,48 @@ struct TweetListView<RowView: View>: View {
     func insertTweet(_ tweet: Tweet) {
         tweets.insert(tweet, at: 0)
     }
+    
     func removeTweet(_ tweet: Tweet) {
-        tweets.removeAll { $0?.mid == tweet.mid }
+        // Store the original index for potential restoration
+        let originalIndex = tweets.firstIndex(where: { $0?.mid == tweet.mid })
+        
+        // Remove from tweets array immediately
+        withAnimation {
+            tweets.removeAll { $0?.mid == tweet.mid }
+        }
+        
+        // Attempt actual deletion in background
+        Task {
+            do {
+                if let tweetId = try await hproseInstance.deleteTweet(tweet.mid) {
+                    print("Successfully deleted tweet: \(tweetId)")
+                } else {
+                    // If deletion fails, restore the tweet to its original position
+                    await MainActor.run {
+                        withAnimation {
+                            if let index = originalIndex {
+                                tweets.insert(tweet, at: index)
+                            } else {
+                                tweets.append(tweet)
+                            }
+                        }
+                        showToastWith(message: "Failed to delete tweet", type: .error)
+                    }
+                }
+            } catch {
+                // If deletion fails, restore the tweet to its original position
+                await MainActor.run {
+                    withAnimation {
+                        if let index = originalIndex {
+                            tweets.insert(tweet, at: index)
+                        } else {
+                            tweets.append(tweet)
+                        }
+                    }
+                    showToastWith(message: "Failed to delete tweet: \(error.localizedDescription)", type: .error)
+                }
+            }
+        }
     }
 }
 

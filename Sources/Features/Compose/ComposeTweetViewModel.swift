@@ -55,16 +55,18 @@ class ComposeTweetViewModel: ObservableObject {
     }
     
     func postTweet() async {
+        print("DEBUG: Starting postTweet()")
+        
         let trimmedContent = tweetContent.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Allow empty content if there are attachments
         guard !trimmedContent.isEmpty || !selectedItems.isEmpty else {
             print("DEBUG: Tweet validation failed - empty content and no attachments")
-            error = TweetError.emptyTweet
             showErrorToast("Tweet cannot be empty")
             return
         }
         
+        // Create tweet object
         print("DEBUG: Creating tweet object")
         let tweet = Tweet(
             mid: "",
@@ -132,35 +134,27 @@ class ComposeTweetViewModel: ObservableObject {
                 }
             } catch {
                 print("DEBUG: Error loading image data: \(error)")
-                self.error = error
-                showErrorToast("Failed to process media: \(error.localizedDescription)")
+                showErrorToast("Failed to load media: \(error.localizedDescription)")
                 return
             }
         }
         
-        print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
+        // Set uploading state
         isUploading = true
         
-        // Set up notification observer for upload completion
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("TweetUploadCompleted"),
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let self = self else { return }
-            if let success = notification.userInfo?["success"] as? Bool {
-                if !success {
-                    self.showErrorToast("Failed to upload tweet")
-                }
-            }
-            self.isUploading = false
-        }
-        
+        print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
         hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
         
-        // Reset the form
+        // Reset form
         tweetContent = ""
         selectedItems = []
-        selectedMedia = []
+        isUploading = false
+        
+        // Post notification for new tweet
+        NotificationCenter.default.post(
+            name: NSNotification.Name("NewTweetCreated"),
+            object: nil,
+            userInfo: ["tweet": tweet]
+        )
     }
 }
