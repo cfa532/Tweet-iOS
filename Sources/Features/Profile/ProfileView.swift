@@ -118,40 +118,43 @@ struct ProfileView: View {
                     .foregroundColor(.gray)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List {
-                    // Pinned tweets section
-                    if !pinnedTweets.isEmpty {
-                        Section(header: Text("Pinned").font(.subheadline).bold()) {
-                            ForEach(pinnedTweets) { tweet in
-                                TweetItemView(tweet: tweet,
-                                              retweet: { _ in },
-                                              deleteTweet: { _ in },
-                                              isPinned: true,
-                                              isInProfile: true,
-                                              onAvatarTap: { _ in })
-                                    .listRowInsets(EdgeInsets())
-                                    .listRowSeparator(.hidden)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        // Pinned tweets section
+                        if !pinnedTweets.isEmpty {
+                            VStack(spacing: 0) {
+                                Text("Pinned")
+                                    .font(.subheadline)
+                                    .bold()
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding()
+                                    .background(Color(UIColor.systemBackground))
+                                
+                                ForEach(pinnedTweets) { tweet in
+                                    TweetItemView(tweet: tweet,
+                                                  retweet: { _ in },
+                                                  deleteTweet: { _ in },
+                                                  isPinned: true,
+                                                  isInProfile: true,
+                                                  onAvatarTap: { _ in })
+                                }
+                                
+                                if !pinnedTweets.isEmpty {
+                                    TweetsSectionHeader()
+                                }
                             }
                         }
-                    }
-                    
-                    // Regular tweets section
-                    Section {
+                        
+                        // Regular tweets section
                         RegularTweetsView(
                             user: user,
                             pinnedTweetIds: pinnedTweetIds,
                             hproseInstance: hproseInstance,
                             onUserSelect: { user in selectedUser = user }
                         )
-                    } header: {
-                        if !pinnedTweets.isEmpty {
-                            TweetsSectionHeader()
-                        }
                     }
                 }
-                .listStyle(PlainListStyle())
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .padding(.zero)
+                .scrollDisabled(pinnedTweets.isEmpty) // Only enable scrolling if there are pinned tweets
             }
 
             // Hidden NavigationLink for avatar navigation
@@ -296,7 +299,8 @@ struct ProfileView: View {
                         tweet: tweet,
                         retweet: { _ in },
                         deleteTweet: { _ in },
-                        isInProfile: false,
+                        isPinned: pinnedTweetIds.contains(tweet.mid),
+                        isInProfile: true,
                         onAvatarTap: { user in selectedUser = user }
                     )
                 }
@@ -330,47 +334,56 @@ private struct RegularTweetsView: View {
     let onUserSelect: (User) -> Void
     
     var body: some View {
-        TweetListView<TweetItemView>(
-            title: "",
-            tweetFetcher: { page, size in
-                return try await hproseInstance.fetchUserTweet(
-                    user: user,
-                    startRank: UInt(page * size),
-                    endRank: UInt((page + 1) * size - 1)
-                )
-            },
-            onRetweet: { tweet in
-                if let retweet = try? await hproseInstance.retweet(tweet) {
-                    if let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
-                        tweet: tweet,
-                        retweetId: retweet.mid
-                    ) {
-                        // Note: This update might need to be handled differently now
-                        // since we're using TweetListView
+        ScrollView {
+            TweetListView<TweetItemView>(
+                title: "",
+                tweetFetcher: { page, size in
+                    print("[RegularTweetsView] Fetching tweets page: \(page), size: \(size)")
+                    // Match server's pagination strategy: increment by 11
+                    let startRank = page * 11
+                    let endRank = startRank + 10  // end is inclusive, so we add 10 to get 11 items
+                    print("[RegularTweetsView] Fetching tweets with ranks: start=\(startRank), end=\(endRank)")
+                    
+                    let tweets = try await hproseInstance.fetchUserTweet(
+                        user: user,
+                        startRank: UInt(startRank),
+                        endRank: UInt(endRank)
+                    )
+                    print("[RegularTweetsView] Received \(tweets.count) tweets")
+                    // Convert [Tweet] to [Tweet?] as expected by TweetListView
+                    return tweets.map { Optional($0) }
+                },
+                onRetweet: { tweet in
+                    if let retweet = try? await hproseInstance.retweet(tweet) {
+                        if let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
+                            tweet: tweet,
+                            retweetId: retweet.mid
+                        ) {
+                            // Note: This update might need to be handled differently now
+                            // since we're using TweetListView
+                        }
                     }
+                },
+                onDeleteTweet: { tweet in
+                    if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
+                        print("Successfully deleted tweet: \(tweetId)")
+                    }
+                },
+                onAvatarTap: { user in
+                    onUserSelect(user)
+                },
+                showTitle: false,
+                rowView: { tweet in
+                    TweetItemView(
+                        tweet: tweet,
+                        retweet: { _ in },
+                        deleteTweet: { _ in },
+                        isPinned: pinnedTweetIds.contains(tweet.mid),
+                        isInProfile: true,
+                        onAvatarTap: { user in onUserSelect(user) }
+                    )
                 }
-            },
-            onDeleteTweet: { tweet in
-                if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
-                    print("Successfully deleted tweet: \(tweetId)")
-                }
-            },
-            onAvatarTap: { user in
-                onUserSelect(user)
-            },
-            showTitle: false,
-            rowView: { tweet in
-                TweetItemView(
-                    tweet: tweet,
-                    retweet: { _ in },
-                    deleteTweet: { _ in },
-                    isPinned: pinnedTweetIds.contains(tweet.mid),
-                    isInProfile: true,
-                    onAvatarTap: { user in onUserSelect(user) }
-                )
-            }
-        )
-        .listRowInsets(EdgeInsets())
-        .listRowSeparator(.hidden)
+            )
+        }
     }
 }
