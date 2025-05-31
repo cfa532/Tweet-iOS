@@ -19,7 +19,17 @@ struct FollowingsTweetView: View {
                 )
             },
             onRetweet: { tweet in
-                // Logic handled in TweetListView for immediate UI update and toast
+                Task {
+                    if let retweet = try? await hproseInstance.retweet(tweet) {
+                        // Update retweet count of the original tweet
+                        if let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
+                            tweet: tweet,
+                            retweetId: retweet.mid
+                        ) {
+                            // The TweetListView will handle updating its own state
+                        }
+                    }
+                }
             },
             onDeleteTweet: { tweet in
                 // Only allow delete if current user is the author
@@ -32,12 +42,33 @@ struct FollowingsTweetView: View {
             rowView: { tweet in
                 TweetItemView(
                     tweet: tweet,
-                    retweet: { _ in },
-                    deleteTweet: { _ in },
+                    retweet: { tweet in
+                        Task {
+                            if let retweet = try? await hproseInstance.retweet(tweet) {
+                                // Update retweet count of the original tweet
+                                if let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
+                                    tweet: tweet,
+                                    retweetId: retweet.mid
+                                ) {
+                                    // The TweetListView will handle updating its own state
+                                }
+                            }
+                        }
+                    },
+                    deleteTweet: { tweet in
+                        Task {
+                            if tweet.authorId == hproseInstance.appUser.mid {
+                                if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
+                                    print("Successfully deleted tweet: \(tweetId)")
+                                }
+                            }
+                        }
+                    },
                     isInProfile: false,
                     onAvatarTap: onAvatarTap
                 )
             }
         )
+        .environmentObject(hproseInstance)
     }
 }

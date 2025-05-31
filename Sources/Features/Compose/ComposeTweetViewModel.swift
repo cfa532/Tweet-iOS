@@ -6,11 +6,14 @@ import Photos
 @available(iOS 16.0, *)
 enum TweetError: LocalizedError {
     case emptyTweet
+    case uploadFailed
     
     var errorDescription: String? {
         switch self {
         case .emptyTweet:
             return "Tweet cannot be empty."
+        case .uploadFailed:
+            return "Failed to upload tweet. Please try again."
         }
     }
 }
@@ -26,32 +29,42 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var selectedMedia: [MimeiFileType] = []
     @Published var isUploading = false
     @Published var uploadProgress = 0.0
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @Published var showToast = false
+    @Published var toastMessage = ""
+    @Published var toastType: ToastType = .error
+    
+    enum ToastType { case error }
+    
+    private let hproseInstance: HproseInstance
+    
+    init(hproseInstance: HproseInstance) {
+        self.hproseInstance = hproseInstance
+    }
     
     var canPostTweet: Bool {
-        let hasContent = !tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasAttachments = !selectedItems.isEmpty
-        let isWithinLimit = tweetContent.count <= Constants.MAX_TWEET_SIZE
-        
-        return (hasContent || hasAttachments) && isWithinLimit
+        !tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty
+    }
+    
+    private func showErrorToast(_ message: String) {
+        toastMessage = message
+        toastType = .error
+        showToast = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation { self.showToast = false }
+        }
     }
     
     func postTweet() async {
-        print("DEBUG: Starting postTweet()")
-        
         let trimmedContent = tweetContent.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Allow empty content if there are attachments
         guard !trimmedContent.isEmpty || !selectedItems.isEmpty else {
             print("DEBUG: Tweet validation failed - empty content and no attachments")
             error = TweetError.emptyTweet
+            showErrorToast("Tweet cannot be empty")
             return
         }
         
-        isUploading = true
-        uploadProgress = 0.0
-        
-        // Create tweet object
         print("DEBUG: Creating tweet object")
         let tweet = Tweet(
             mid: "",
@@ -61,7 +74,7 @@ class ComposeTweetViewModel: ObservableObject {
             title: nil,
             originalTweetId: nil,
             originalAuthorId: nil,
-            author: nil,
+            author: hproseInstance.appUser,
             favorites: [false, false, false],
             favoriteCount: 0,
             bookmarkCount: 0,
@@ -120,21 +133,34 @@ class ComposeTweetViewModel: ObservableObject {
             } catch {
                 print("DEBUG: Error loading image data: \(error)")
                 self.error = error
-                isUploading = false
-                uploadProgress = 0.0
+                showErrorToast("Failed to process media: \(error.localizedDescription)")
                 return
             }
         }
         
         print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
+        isUploading = true
+        
+        // Set up notification observer for upload completion
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("TweetUploadCompleted"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self else { return }
+            if let success = notification.userInfo?["success"] as? Bool {
+                if !success {
+                    self.showErrorToast("Failed to upload tweet")
+                }
+            }
+            self.isUploading = false
+        }
+        
         hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
         
-        // Reset form
-        print("DEBUG: Resetting form")
+        // Reset the form
         tweetContent = ""
         selectedItems = []
         selectedMedia = []
-        isUploading = false
-        uploadProgress = 0.0
     }
 }
