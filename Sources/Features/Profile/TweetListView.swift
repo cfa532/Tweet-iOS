@@ -89,10 +89,6 @@ struct TweetListView<RowView: View>: View {
         isLoading = true
         currentPage = 0
         hasMoreTweets = true
-        await loadInitialTweets()
-    }
-    
-    private func loadInitialTweets() async {
         do {
             let newTweets = try await tweetFetcher(0, pageSize)
             await MainActor.run {
