@@ -24,8 +24,6 @@ struct TweetListView<RowView: View>: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: TweetListView<TweetItemView>.ToastType = .info
-    @State private var consecutiveAllNilPages: Int = 0
-    private let maxAllNilPages = 5
     enum ToastType { case success, error, info }
 
     // MARK: - Initialization
@@ -54,9 +52,11 @@ struct TweetListView<RowView: View>: View {
                 ScrollView {
                     TweetListContentView(
                         tweets: $tweets,
-                        rowView: rowView
+                        rowView: rowView,
+                        hasMoreTweets: hasMoreTweets,
+                        isLoadingMore: isLoadingMore,
+                        loadMoreTweets: loadMoreTweets
                     )
-                    LoadingSectionView(hasMoreTweets: hasMoreTweets, isLoading: isLoading, isLoadingMore: isLoadingMore, loadMoreTweets: loadMoreTweets)
                 }
                 ToastOverlayView(showToast: showToast, toastMessage: toastMessage, toastType: toastType)
             }
@@ -81,12 +81,16 @@ struct TweetListView<RowView: View>: View {
         isLoading = true
         currentPage = 0
         hasMoreTweets = true
+        await loadInitialTweets()
+    }
+    
+    private func loadInitialTweets() async {
         do {
             let newTweets = try await tweetFetcher(0, pageSize)
             await MainActor.run {
                 tweets = newTweets
-                hasMoreTweets = !newTweets.contains(where: { $0 == nil }) && newTweets.count == pageSize
-                if newTweets.contains(where: { $0 == nil }) || newTweets.count < pageSize {
+                hasMoreTweets = newTweets.contains(where: { $0 != nil })
+                if newTweets.count < pageSize {
                     hasMoreTweets = false
                 }
                 isLoading = false
@@ -107,17 +111,22 @@ struct TweetListView<RowView: View>: View {
 
         Task {
             do {
-                try await Task.sleep(nanoseconds: 1_000_000_000)
                 let moreTweets = try await tweetFetcher(nextPage, pageSize)
                 await MainActor.run {
                     let validTweets = moreTweets.compactMap { $0 }
                     let allNil = moreTweets.allSatisfy { $0 == nil }
 
                     if allNil {
-                        hasMoreTweets = false
-                        isLoadingMore = false
                         currentPage = nextPage
-                        return
+                        if moreTweets.count < pageSize {
+                            hasMoreTweets = false
+                            isLoadingMore = false
+                            return
+                        } else {
+                            isLoadingMore = false
+                            loadMoreTweets()
+                            return
+                        }
                     }
 
                     // Prevent duplicates
@@ -129,11 +138,8 @@ struct TweetListView<RowView: View>: View {
 
                     if moreTweets.count < pageSize {
                         hasMoreTweets = false
-                        isLoadingMore = false
-                    } else {
-                        isLoadingMore = false // Set this BEFORE recursion!
-                        loadMoreTweets()
                     }
+                    isLoadingMore = false // Always set this at the end
                 }
             } catch {
                 print("[TweetListView] Error loading more tweets: \(error)")
@@ -167,6 +173,9 @@ struct TweetListView<RowView: View>: View {
 struct TweetListContentView<RowView: View>: View {
     @Binding var tweets: [Tweet?]
     let rowView: (Tweet) -> RowView
+    let hasMoreTweets: Bool
+    let isLoadingMore: Bool
+    let loadMoreTweets: () -> Void
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0).id("top")
@@ -176,27 +185,16 @@ struct TweetListContentView<RowView: View>: View {
                         .id(tweet.id)
                 }
             }
-        }
-    }
-}
-
-struct LoadingSectionView: View {
-    let hasMoreTweets: Bool
-    let isLoading: Bool
-    let isLoadingMore: Bool
-    let loadMoreTweets: () -> Void
-    var body: some View {
-        if hasMoreTweets {
-            ProgressView()
-                .padding()
-                .onAppear {
-                    if !isLoadingMore {
-                        loadMoreTweets()
+            // Sentinel view for infinite scroll
+            if hasMoreTweets {
+                Color.clear
+                    .frame(height: 1)
+                    .onAppear {
+                        if !isLoadingMore {
+                            loadMoreTweets()
+                        }
                     }
-                }
-        } else if isLoading || isLoadingMore {
-            ProgressView()
-                .padding()
+            }
         }
     }
 }
