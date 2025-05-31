@@ -187,8 +187,8 @@ struct TweetListContentView<RowView: View>: View {
             }
             // Sentinel view for infinite scroll
             if hasMoreTweets {
-                Color.clear
-                    .frame(height: 1)
+                ProgressView()
+                    .frame(height: 40)
                     .onAppear {
                         if !isLoadingMore {
                             loadMoreTweets()
