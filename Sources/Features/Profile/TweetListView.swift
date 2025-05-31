@@ -55,7 +55,7 @@ struct TweetListView<RowView: View>: View {
                         rowView: rowView,
                         hasMoreTweets: hasMoreTweets,
                         isLoadingMore: isLoadingMore,
-                        loadMoreTweets: loadMoreTweets
+                        loadMoreTweets: { loadMoreTweets() }
                     )
                 }
                 if showToast {
@@ -108,10 +108,10 @@ struct TweetListView<RowView: View>: View {
         }
     }
 
-    func loadMoreTweets() {
+    func loadMoreTweets(page: Int? = nil) {
         guard hasMoreTweets, !isLoadingMore else { return }
         isLoadingMore = true
-        let nextPage = currentPage + 1
+        let nextPage = page ?? (currentPage + 1)
 
         Task {
             do {
@@ -121,14 +121,16 @@ struct TweetListView<RowView: View>: View {
                     let allNil = moreTweets.allSatisfy { $0 == nil }
 
                     if allNil {
-                        currentPage = nextPage
                         if moreTweets.count < pageSize {
                             hasMoreTweets = false
                             isLoadingMore = false
+                            currentPage = nextPage
                             return
                         } else {
                             isLoadingMore = false
-                            loadMoreTweets()
+                            // Recursively load the next page
+                            loadMoreTweets(page: nextPage + 1)
+                            currentPage = nextPage
                             return
                         }
                     }
@@ -143,7 +145,7 @@ struct TweetListView<RowView: View>: View {
                     if moreTweets.count < pageSize {
                         hasMoreTweets = false
                     }
-                    isLoadingMore = false // Always set this at the end
+                    isLoadingMore = false
                 }
             } catch {
                 print("[TweetListView] Error loading more tweets: \(error)")
