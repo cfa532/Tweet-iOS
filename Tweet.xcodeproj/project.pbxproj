@@ -200,6 +200,7 @@
 				46E5B3282DDA02E200AEF31F /* Profile */,
 				1A1A1A1A1A1A1A1A1A1A1A0D /* Home */,
 				1A1A1A1A1A1A1A1A1A1A1A0E /* Compose */,
+				469A994E2DEBF89B00954049 /* MediaViews */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -220,7 +221,6 @@
 			children = (
 				46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */,
 				46E8A7D22DE9D0DF00A30FBA /* CommentItemView.swift */,
-				46E5B3392DDA315700AEF31F /* Views */,
 				1A1A1A1A1A1A1A1A1A1A1A25 /* HomeViewModel.swift */,
 				46E5B3352DDA315700AEF31F /* FollowingsTweetView.swift */,
 				46E5B3362DDA315700AEF31F /* RecommendedTweetView.swift */,
@@ -260,6 +260,20 @@
 			path = Helper;
 			sourceTree = "<group>";
 		};
+		469A994E2DEBF89B00954049 /* MediaViews */ = {
+			isa = PBXGroup;
+			children = (
+				46E5B36C2DE3617400AEF31F /* AvatarFullScreenView.swift */,
+				46E5B34A2DDC155200AEF31F /* MediaCell.swift */,
+				46E5B3482DDC0F5B00AEF31F /* MediaGridView.swift */,
+				46E5B3462DDC0CF500AEF31F /* Avatar.swift */,
+				46E5B33E2DDAB74400AEF31F /* TweetActionButtonsView.swift */,
+				46E5B33F2DDAB74400AEF31F /* TweetItemBodyView.swift */,
+				46E5B3402DDAB74400AEF31F /* TweetItemHeaderView.swift */,
+			);
+			path = MediaViews;
+			sourceTree = "<group>";
+		};
 		46E5B3282DDA02E200AEF31F /* Profile */ = {
 			isa = PBXGroup;
 			children = (
@@ -277,20 +291,6 @@
 				46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */,
 			);
 			name = "Recovered References";
-			sourceTree = "<group>";
-		};
-		46E5B3392DDA315700AEF31F /* Views */ = {
-			isa = PBXGroup;
-			children = (
-				46E5B36C2DE3617400AEF31F /* AvatarFullScreenView.swift */,
-				46E5B34A2DDC155200AEF31F /* MediaCell.swift */,
-				46E5B3482DDC0F5B00AEF31F /* MediaGridView.swift */,
-				46E5B3462DDC0CF500AEF31F /* Avatar.swift */,
-				46E5B33E2DDAB74400AEF31F /* TweetActionButtonsView.swift */,
-				46E5B33F2DDAB74400AEF31F /* TweetItemBodyView.swift */,
-				46E5B3402DDAB74400AEF31F /* TweetItemHeaderView.swift */,
-			);
-			path = Views;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
