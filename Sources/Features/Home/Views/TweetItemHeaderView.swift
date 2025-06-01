@@ -80,6 +80,8 @@ struct TweetMenu: View {
         } label: {
             Image(systemName: "ellipsis")
                 .foregroundColor(.secondary)
+                .padding(12)
+                .contentShape(Rectangle())
         }
     }
 }

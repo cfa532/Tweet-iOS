@@ -1,24 +1,6 @@
 import SwiftUI
 
-struct TabButton: View {
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
 
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Text(title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(isSelected ? .primary : .secondary)
-                Rectangle()
-                    .fill(isSelected ? Color.blue : Color.clear)
-                    .frame(height: 2)
-            }
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
 
 // MARK: - Preview
 struct TabButton_Previews: PreviewProvider {
