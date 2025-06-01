@@ -136,8 +136,8 @@
             filePath = "Sources/Features/Home/FollowingsTweetView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "27"
-            endingLineNumber = "27"
+            startingLineNumber = "30"
+            endingLineNumber = "30"
             landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>
@@ -172,50 +172,6 @@
             endingLineNumber = "770"
             landmarkName = "updateRetweetCount(tweet:retweetId:direction:)"
             landmarkType = "7">
-            <Locations>
-               <Location
-                  uuid = "67B92934-D66A-4B22-96B6-7EFB1D83AF02 - a0376f2f3c95f185"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(1) suspend resume partial function for closure #1 () async throws -&gt; () in Tweet.HproseInstance.updateRetweetCount(tweet: Tweet.Tweet, retweetId: Swift.String, direction: Swift.Bool) async throws -&gt; ()"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "770"
-                  endingLineNumber = "770">
-               </Location>
-               <Location
-                  uuid = "67B92934-D66A-4B22-96B6-7EFB1D83AF02 - b6493efd2cf3df80"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(4) suspend resume partial function for closure #1 () async throws -&gt; () in Tweet.HproseInstance.updateRetweetCount(tweet: Tweet.Tweet, retweetId: Swift.String, direction: Swift.Bool) async throws -&gt; ()"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "770"
-                  endingLineNumber = "770">
-               </Location>
-               <Location
-                  uuid = "67B92934-D66A-4B22-96B6-7EFB1D83AF02 - 8436e188b18610b5"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "closure #1 @Swift.MainActor @Sendable () -&gt; () in closure #1 () async throws -&gt; () in Tweet.HproseInstance.updateRetweetCount(tweet: Tweet.Tweet, retweetId: Swift.String, direction: Swift.Bool) async throws -&gt; ()"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "771"
-                  endingLineNumber = "771">
-               </Location>
-            </Locations>
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>

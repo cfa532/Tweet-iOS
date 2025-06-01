@@ -24,11 +24,13 @@ struct FollowingsTweetView: View {
                     tweet: tweet,
                     retweet: { tweet in
                         do {
+                            let currentCount = tweet.retweetCount ?? 0
+                            tweet.retweetCount = currentCount + 1
+
                             if let retweet = try await hproseInstance.retweet(tweet) {
-                                NotificationCenter.default.post(name: .newTweetCreated, object: retweet.mid)
-                                
-                                let currentCount = tweet.retweetCount ?? 0
-                                tweet.retweetCount = currentCount + 1
+                                NotificationCenter.default.post(name: .newTweetCreated,
+                                                                object: nil,
+                                                                userInfo: ["tweet": retweet])
                                 // Update retweet count of the original tweet in backend.
                                 // tweet, the original tweet now, is updated in the following function.
                                 try? await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: retweet.mid)
