@@ -1195,12 +1195,14 @@ final class HproseInstance: ObservableObject {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            
+            // Create a copy of the tweet and remove its author attribute
+            let tweetForServer = tweet.copy() // Assuming Tweet has a copy() method
+            tweetForServer.author = nil
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
                 "hostid": "ReyCUFHHZmk0N5w_wxUeEuoY5Xr",
-                "tweet": String(data: try JSONEncoder().encode(tweet), encoding: .utf8) ?? ""
+                "tweet": String(data: try JSONEncoder().encode(tweetForServer), encoding: .utf8) ?? ""
             ]
             
             let rawResponse = service.runMApp("add_tweet", params, nil)

@@ -25,6 +25,10 @@ struct FollowingsTweetView: View {
                     retweet: { tweet in
                         do {
                             if let retweet = try await hproseInstance.retweet(tweet) {
+                                NotificationCenter.default.post(name: .newTweetCreated, object: retweet.mid)
+                                
+                                let currentCount = tweet.retweetCount ?? 0
+                                tweet.retweetCount = currentCount + 1
                                 // Update retweet count of the original tweet in backend.
                                 // tweet, the original tweet now, is updated in the following function.
                                 try? await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: retweet.mid)
@@ -51,6 +55,8 @@ struct FollowingsTweetView: View {
                                 authorId: originalAuthorId)
                             {
                                 // originalTweet is loaded in cache, which is visible to user.
+                                let currentCount = originalTweet.retweetCount ?? 0
+                                originalTweet.retweetCount = max(0, currentCount - 1)
                                 try? await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false)
                             }
                         } else {
