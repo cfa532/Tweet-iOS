@@ -24,17 +24,10 @@ struct FollowingsTweetView: View {
                     tweet: tweet,
                     retweet: { tweet in
                         Task {
-                            if let retweet = try? await hproseInstance.retweet(tweet),
-                               // Update retweet count of the original tweet
-                               let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
-                                tweet: tweet,
-                                retweetId: retweet.mid
-                               ) {
-                                // The TweetListView will handle updating its own state
-                                tweet.retweetCount = updatedOriginalTweet.retweetCount
-                                tweet.favoriteCount = updatedOriginalTweet.favoriteCount
-                                tweet.bookmarkCount = updatedOriginalTweet.bookmarkCount
-                                tweet.commentCount = updatedOriginalTweet.commentCount
+                            if let retweet = try? await hproseInstance.retweet(tweet) {
+                                // Update retweet count of the original tweet in backend.
+                                // tweet, the original tweet now, is updated in the following function.
+                               try? await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: retweet.mid)
                             }
                         }
                     },
@@ -52,6 +45,12 @@ struct FollowingsTweetView: View {
                                     // Attempt actual deletion
                                     if let tweetId = try await hproseInstance.deleteTweet(tweet.mid) {
                                         print("Successfully deleted tweet: \(tweetId)")
+                                        if let originalTweetId = tweet.originalTweetId,
+                                           let originalAuthorId = tweet.originalAuthorId,
+                                           let originalTweet = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                                            // originalTweet is loaded in cache, which is visible to user.
+                                            try? await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false)
+                                        }
                                     } else {
                                         // If deletion fails, post restoration notification
                                         NotificationCenter.default.post(

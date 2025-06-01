@@ -354,7 +354,7 @@ final class HproseInstance: ObservableObject {
                     service = newClient.useService(HproseService.self) as AnyObject
                     if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
                         if let tweet = Tweet.from(dict: tweetDict) {
-                            tweet.author = try await getUser(authorId)
+                            tweet.author = try await getUser(authorId, baseUrl: "http://\(providerIp)")
                             // Store in cache
                             tweetCacheLock.withLock { tweetCache[tweetId] = tweet }
                             // If this is a retweet, also fetch and cache the original tweet
@@ -751,7 +751,7 @@ final class HproseInstance: ObservableObject {
         tweet: Tweet,
         retweetId: String,
         direction: Bool = true   // add/remove retweet
-    ) async throws -> Tweet? {
+    ) async throws {
         try await withRetry {
             let entry = direction ? "retweet_added" : "retweet_removed"
             let params = [
@@ -767,11 +767,13 @@ final class HproseInstance: ObservableObject {
             }
             if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any],
                let updatedOriginalTweet = Tweet.from(dict: tweetDict) {
-                return await MainActor.run {
-                    updatedOriginalTweet
+                await MainActor.run {
+                    tweet.retweetCount = updatedOriginalTweet.retweetCount
+                    tweet.favoriteCount = updatedOriginalTweet.favoriteCount
+                    tweet.bookmarkCount = updatedOriginalTweet.bookmarkCount
+                    tweet.commentCount = updatedOriginalTweet.commentCount
                 }
             }
-            return nil
         }
     }
     
