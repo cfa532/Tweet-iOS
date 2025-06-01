@@ -6,7 +6,6 @@ struct TweetListView<RowView: View>: View {
     let title: String
     let tweetFetcher: @Sendable (Int, Int) async throws -> [Tweet?]
     let onRetweet: ((Tweet) async -> Void)?
-    let onAvatarTap: ((User) -> Void)?
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     
@@ -31,14 +30,12 @@ struct TweetListView<RowView: View>: View {
         title: String,
         tweetFetcher: @escaping @Sendable (Int, Int) async throws -> [Tweet?],
         onRetweet: ((Tweet) async -> Void)? = nil,
-        onAvatarTap: ((User) -> Void)? = nil,
         showTitle: Bool = true,
         rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
         self.tweetFetcher = tweetFetcher
         self.onRetweet = onRetweet
-        self.onAvatarTap = onAvatarTap
         self.showTitle = showTitle
         self.rowView = rowView
     }

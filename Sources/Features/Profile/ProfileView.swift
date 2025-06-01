@@ -351,9 +351,6 @@ private struct RegularTweetsView: View {
                         }
                     }
                 },
-                onAvatarTap: { user in
-                    onUserSelect(user)
-                },
                 showTitle: false,
                 rowView: { tweet in
                     TweetItemView(

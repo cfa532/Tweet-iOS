@@ -19,7 +19,7 @@ struct FollowingsTweetView: View {
                     pageSize: size
                 )
             },
-            onAvatarTap: onAvatarTap,
+//            onAvatarTap: onAvatarTap,
             showTitle: false,
             rowView: { tweet in
                 TweetItemView(
@@ -88,7 +88,6 @@ struct FollowingsTweetView: View {
                                 pageSize: size
                             )
                         },
-                        onAvatarTap: onAvatarTap,
                         showTitle: false,
                         rowView: { tweet in
                             TweetItemView(
