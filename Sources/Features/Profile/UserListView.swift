@@ -70,7 +70,7 @@ struct UserListView: View {
             }
         }
         .navigationTitle(title)
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PopToRoot"))) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .popToRoot)) { _ in
             dismiss()
         }
     }

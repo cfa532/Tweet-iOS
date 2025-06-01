@@ -23,6 +23,7 @@
 		4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DC2DD62CCB00A20E19 /* Gadget.swift */; };
 		46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46704DE12DD8CEF7001D69B9 /* MediaType.swift */; };
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
+		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
 		46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */; };
 		46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32A2DDA038E00AEF31F /* AppConfig.swift */; };
 		46E5B32D2DDA045B00AEF31F /* AppHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32C2DDA045B00AEF31F /* AppHeaderView.swift */; };
@@ -71,6 +72,7 @@
 		46704DDD2DD72E58001D69B9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Tweet/Info.plist; sourceTree = "<group>"; };
 		46704DE12DD8CEF7001D69B9 /* MediaType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaType.swift; sourceTree = "<group>"; };
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
+		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
 		46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProfileView.swift; path = Sources/Features/Profile/ProfileView.swift; sourceTree = SOURCE_ROOT; };
 		46E5B32A2DDA038E00AEF31F /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		46E5B32C2DDA045B00AEF31F /* AppHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppHeaderView.swift; sourceTree = "<group>"; };
@@ -183,9 +185,11 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				469A994C2DEB31EF00954049 /* NotificationNames.swift */,
 				4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */,
 				4608E2D72DD5CA640051A92D /* HproseInstance.swift */,
 				469A99492DEB163F00954049 /* ToastView.swift */,
+				46E5B3662DE2DD2900AEF31F /* TweetListView.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -261,7 +265,6 @@
 			children = (
 				46E5B3682DE35E0A00AEF31F /* ProfileHeaderView.swift */,
 				46E5B3692DE35E0A00AEF31F /* ProfileStatsView.swift */,
-				46E5B3662DE2DD2900AEF31F /* TweetListView.swift */,
 				46E5B3642DE21A3400AEF31F /* UserListView.swift */,
 				46E5B34E2DDC9F1B00AEF31F /* ProfileView.swift */,
 			);
@@ -426,6 +429,7 @@
 				46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */,
 				46E5B34B2DDC155600AEF31F /* MediaCell.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */,
+				469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */,
 				46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */,
 				46E5B3652DE21A3400AEF31F /* UserListView.swift in Sources */,
 				46E5B36A2DE35E0A00AEF31F /* ProfileStatsView.swift in Sources */,

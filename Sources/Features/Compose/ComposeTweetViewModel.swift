@@ -151,7 +151,7 @@ class ComposeTweetViewModel: ObservableObject {
         
         // Post notification for new tweet
         NotificationCenter.default.post(
-            name: NSNotification.Name("NewTweetCreated"),
+            name: .newTweetCreated,
             object: nil,
             userInfo: ["tweet": tweet]
         )

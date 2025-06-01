@@ -46,7 +46,16 @@ struct TweetItemView: View {
                                 }
                                 HStack(alignment: .top) {
                                     TweetItemHeaderView(tweet: originalTweet)
-                                    TweetMenu(tweet: tweet, deleteTweet: deleteTweet, isPinned: isPinned)
+                                    TweetMenu(tweet: tweet, deleteTweet: { tweet in
+                                        Task {
+                                            await deleteTweet(tweet)
+                                            // Post notification for successful deletion
+                                            NotificationCenter.default.post(
+                                                name: .tweetDeleted,
+                                                object: tweet.mid
+                                            )
+                                        }
+                                    }, isPinned: isPinned)
                                 }
                                 .contentShape(Rectangle())
                                 .onTapGesture {
@@ -81,7 +90,16 @@ struct TweetItemView: View {
                     VStack(alignment: .leading) {
                         HStack {
                             TweetItemHeaderView(tweet: tweet)
-                            TweetMenu(tweet: tweet, deleteTweet: deleteTweet, isPinned: isPinned)
+                            TweetMenu(tweet: tweet, deleteTweet: { tweet in
+                                Task {
+                                    await deleteTweet(tweet)
+                                    // Post notification for successful deletion
+                                    NotificationCenter.default.post(
+                                        name: .tweetDeleted,
+                                        object: tweet.mid
+                                    )
+                                }
+                            }, isPinned: isPinned)
                         }
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
@@ -118,7 +136,16 @@ struct TweetItemView: View {
                 VStack(alignment: .leading) {
                     HStack {
                         TweetItemHeaderView(tweet: tweet)
-                        TweetMenu(tweet: tweet, deleteTweet: deleteTweet, isPinned: isPinned)
+                        TweetMenu(tweet: tweet, deleteTweet: { tweet in
+                            Task {
+                                await deleteTweet(tweet)
+                                // Post notification for successful deletion
+                                NotificationCenter.default.post(
+                                    name: .tweetDeleted,
+                                    object: tweet.mid
+                                )
+                            }
+                        }, isPinned: isPinned)
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }

@@ -43,7 +43,7 @@ struct TweetMenu: View {
                         if let isPinned = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
                             isCurrentlyPinned = isPinned
                             NotificationCenter.default.post(
-                                name: NSNotification.Name("TweetPinStatusChanged"),
+                                name: .tweetPinStatusChanged,
                                 object: nil,
                                 userInfo: [
                                     "tweetId": tweet.mid,
@@ -63,6 +63,11 @@ struct TweetMenu: View {
                     // Start deletion in background
                     Task {
                         await deleteTweet(tweet)
+                        // Post notification for successful deletion
+                        NotificationCenter.default.post(
+                            name: .tweetDeleted,
+                            object: tweet.mid
+                        )
                     }
                     // Dismiss only if this is not a comment
                     if !isComment {

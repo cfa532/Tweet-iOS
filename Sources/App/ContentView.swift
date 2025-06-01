@@ -18,7 +18,10 @@ struct ContentView: View {
             .onChange(of: selectedTab) { newValue in
                 if newValue == 0 {
                     // Pop to root when home tab is selected
-                    NotificationCenter.default.post(name: NSNotification.Name("PopToRoot"), object: nil)
+                    NotificationCenter.default.post(
+                        name: .popToRoot,
+                        object: nil
+                    )
                 }
             }
             

@@ -206,7 +206,7 @@ struct ProfileView: View {
             }
         }
         // Listen for tweet pin status changes
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TweetPinStatusChanged"))) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
             if let _ = notification.userInfo?["tweetId"] as? String,
                let _ = notification.userInfo?["isPinned"] as? Bool {
                 Task {
@@ -263,31 +263,29 @@ struct ProfileView: View {
                         endRank: UInt((page + 1) * size - 1)
                     )
                 },
-                onRetweet: { tweet in
-                    if let retweet = try? await hproseInstance.retweet(tweet) {
-                        // Update retweet count of the original tweet
-                        if let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
-                            tweet: tweet,
-                            retweetId: retweet.mid
-                        ) {
-                            // The TweetListView will handle updating its own state
-                        }
-                    }
-                },
-                onDeleteTweet: { tweet in
-                    if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
-                        print("Successfully deleted tweet: \(tweetId)")
-                    }
-                },
-                onAvatarTap: { user in
-                    selectedUser = user
-                },
+//                onAvatarTap: { user in
+//                    selectedUser = user
+//                },
                 showTitle: true,
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,
-                        retweet: { _ in },
-                        deleteTweet: { _ in },
+                        retweet: { tweet in
+                            if let retweet = try? await hproseInstance.retweet(tweet) {
+                                if let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
+                                    tweet: tweet,
+                                    retweetId: retweet.mid
+                                ) {
+                                    // The TweetListView will handle updating its own state
+                                }
+                            }
+                        },
+                        deleteTweet: { tweet in
+                            if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
+                                print("Successfully deleted tweet: \(tweetId)")
+                                // The TweetListView will handle refreshing its content
+                            }
+                        },
                         isPinned: pinnedTweetIds.contains(tweet.mid),
                         isInProfile: true,
                         onAvatarTap: { user in selectedUser = user }
@@ -353,14 +351,6 @@ private struct RegularTweetsView: View {
                         }
                     }
                 },
-                onDeleteTweet: { tweet in
-                    Task {
-                        if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
-                            print("Successfully deleted tweet: \(tweetId)")
-                            // The TweetListView will handle refreshing its content
-                        }
-                    }
-                },
                 onAvatarTap: { user in
                     onUserSelect(user)
                 },
@@ -370,11 +360,9 @@ private struct RegularTweetsView: View {
                         tweet: tweet,
                         retweet: { _ in },
                         deleteTweet: { tweet in
-                            Task {
-                                if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
-                                    print("Successfully deleted tweet: \(tweetId)")
-                                    // The TweetListView will handle refreshing its content
-                                }
+                            if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
+                                print("Successfully deleted tweet: \(tweetId)")
+                                // The TweetListView will handle refreshing its content
                             }
                         },
                         isPinned: pinnedTweetIds.contains(tweet.mid),

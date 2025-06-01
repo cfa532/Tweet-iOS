@@ -3,15 +3,14 @@ import SwiftUI
 @available(iOS 16.0, *)
 struct TweetListView<RowView: View>: View {
     // MARK: - Properties
-    @EnvironmentObject private var hproseInstance: HproseInstance
     let title: String
     let tweetFetcher: @Sendable (Int, Int) async throws -> [Tweet?]
     let onRetweet: ((Tweet) async -> Void)?
-    let onDeleteTweet: ((Tweet) async -> Void)?
     let onAvatarTap: ((User) -> Void)?
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     
+    @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var tweets: [Tweet?] = []
     @State private var isLoading: Bool = false
     @State private var isLoadingMore: Bool = false
@@ -32,7 +31,6 @@ struct TweetListView<RowView: View>: View {
         title: String,
         tweetFetcher: @escaping @Sendable (Int, Int) async throws -> [Tweet?],
         onRetweet: ((Tweet) async -> Void)? = nil,
-        onDeleteTweet: ((Tweet) async -> Void)? = nil,
         onAvatarTap: ((User) -> Void)? = nil,
         showTitle: Bool = true,
         rowView: @escaping (Tweet) -> RowView
@@ -40,7 +38,6 @@ struct TweetListView<RowView: View>: View {
         self.title = title
         self.tweetFetcher = tweetFetcher
         self.onRetweet = onRetweet
-        self.onDeleteTweet = onDeleteTweet
         self.onAvatarTap = onAvatarTap
         self.showTitle = showTitle
         self.rowView = rowView
@@ -53,7 +50,9 @@ struct TweetListView<RowView: View>: View {
                 ScrollView {
                     TweetListContentView(
                         tweets: $tweets,
-                        rowView: rowView,
+                        rowView: { tweet in
+                            rowView(tweet)
+                        },
                         hasMoreTweets: hasMoreTweets,
                         isLoadingMore: isLoadingMore,
                         isLoading: isLoading,
@@ -79,15 +78,22 @@ struct TweetListView<RowView: View>: View {
                     await refreshTweets()
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("UserDidLogin"))) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
                 Task {
                     await refreshTweets()
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NewTweetCreated"))) { notification in
+            .onReceive(NotificationCenter.default.publisher(for: .newTweetCreated)) { notification in
                 if let newTweet = notification.userInfo?["tweet"] as? Tweet {
                     withAnimation {
                         insertTweet(newTweet)
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
+                if let deletedTweetId = notification.object as? String {
+                    withAnimation {
+                        tweets.removeAll { $0?.mid == deletedTweetId }
                     }
                 }
             }
@@ -201,47 +207,7 @@ struct TweetListView<RowView: View>: View {
         tweets.insert(tweet, at: 0)
     }
     
-    func removeTweet(_ tweet: Tweet) {
-        // Store the original index for potential restoration
-        let originalIndex = tweets.firstIndex(where: { $0?.mid == tweet.mid })
-        
-        // Remove from tweets array immediately
-        withAnimation {
-            tweets.removeAll { $0?.mid == tweet.mid }
-        }
-        
-        // Attempt actual deletion in background
-        Task {
-            do {
-                if let tweetId = try await hproseInstance.deleteTweet(tweet.mid) {
-                    print("Successfully deleted tweet: \(tweetId)")
-                } else {
-                    // If deletion fails, restore the tweet to its original position
-                    await MainActor.run {
-                        withAnimation {
-                            if let index = originalIndex {
-                                tweets.insert(tweet, at: index)
-                            } else {
-                                tweets.append(tweet)
-                            }
-                        }
-                        showToastWith(message: "Failed to delete tweet", type: .error)
-                    }
-                }
-            } catch {
-                // If deletion fails, restore the tweet to its original position
-                await MainActor.run {
-                    withAnimation {
-                        if let index = originalIndex {
-                            tweets.insert(tweet, at: index)
-                        } else {
-                            tweets.append(tweet)
-                        }
-                    }
-                    showToastWith(message: "Failed to delete tweet: \(error.localizedDescription)", type: .error)
-                }
-            }
-        }
+    func removeTweet(_ tweet: Tweet) async -> Void {
     }
 }
 

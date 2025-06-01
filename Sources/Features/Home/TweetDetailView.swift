@@ -1,24 +1,6 @@
 import SwiftUI
 import AVKit
 
-@available(iOS 16.0, *)
-struct CommentsSection: View {
-    let isLoading: Bool
-    let hasMoreComments: Bool
-    let onLoadMore: () -> Void
-    let onRefresh: () async -> Void
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            }
-        }
-    }
-}
-
 @MainActor
 @available(iOS 16.0, *)
 struct TweetDetailView: View {
@@ -28,14 +10,13 @@ struct TweetDetailView: View {
     @State private var showLoginSheet = false
     @State private var pinnedTweets: [[String: Any]] = []
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @StateObject private var commentsVM: CommentsViewModel
     @State private var originalTweet: Tweet?
+    @Environment(\.dismiss) private var dismiss
 
     let retweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
 
     init(tweet: Tweet, retweet: @escaping (Tweet) async -> Void, deleteTweet: @escaping (Tweet) async -> Void) {
-        self._commentsVM = StateObject(wrappedValue: CommentsViewModel(hproseInstance: HproseInstance.shared, parentTweet: tweet))
         self.tweet = tweet
         self.retweet = retweet
         self.deleteTweet = deleteTweet
@@ -84,7 +65,18 @@ struct TweetDetailView: View {
                         Avatar(user: user)
                     }
                     TweetItemHeaderView(tweet: displayTweet)
-                    TweetMenu(tweet: displayTweet, deleteTweet: deleteTweet, isPinned: displayTweet.isPinned(in: pinnedTweets))
+                    TweetMenu(tweet: displayTweet, deleteTweet: { tweet in
+                        Task {
+                            await deleteTweet(tweet)
+                            // Post notification for successful deletion
+                            NotificationCenter.default.post(
+                                name: .tweetDeleted,
+                                object: tweet.mid
+                            )
+                            // Dismiss the detail view after successful deletion
+                            dismiss()
+                        }
+                    }, isPinned: displayTweet.isPinned(in: pinnedTweets))
                 }
                 .padding(.horizontal)
                 .padding(.top)
@@ -96,7 +88,7 @@ struct TweetDetailView: View {
                         .padding(.horizontal)
                         .padding(.vertical, 8)
                 }
-                TweetActionButtonsView(tweet: displayTweet, retweet: retweet, commentsVM: commentsVM)
+                TweetActionButtonsView(tweet: displayTweet, retweet: retweet)
                     .padding(.leading, 48)
                     .padding(.trailing, 8)
                     .padding(.top, 8)
@@ -104,46 +96,35 @@ struct TweetDetailView: View {
                 Divider()
                     .padding(.top, 8)
                     .padding(.bottom, 4)
-                // Comments
-                ForEach(commentsVM.comments) { comment in
-                    CommentItemView(
-                        comment: comment,
-                        deleteComment: { c in await commentsVM.deleteComment(c) },
-                        retweet: retweet,
-                        commentsVM: commentsVM
-                    )
-                }
-                if commentsVM.isLoading {
-                    ProgressView().padding()
-                } else if commentsVM.hasMore {
-                    Button("Load More") {
-                        Task { await commentsVM.loadMore() }
+                
+                // Comments section using TweetListView
+                TweetListView<CommentItemView>(
+                    title: "Comments",
+                    tweetFetcher: { page, size in
+                        try await hproseInstance.fetchComments(
+                            tweet: displayTweet,
+                            pageNumber: page,
+                            pageSize: size
+                        )
+                    },
+                    showTitle: false,
+                    rowView: { comment in
+                        CommentItemView(
+                            comment: comment,
+                            deleteComment: { comment in
+                                if let res = try? await hproseInstance.deleteComment(parentTweet: displayTweet, commentId: comment.mid) {
+                                    displayTweet.commentCount = res["count"] as? Int
+                                }
+                            },
+                            retweet: retweet
+                        )
                     }
-                    .padding()
-                }
-                if commentsVM.showToast {
-                    VStack {
-                        Spacer()
-                        Text(commentsVM.toastMessage)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 14)
-                            .background(Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95))
-                            .foregroundColor(.white)
-                            .cornerRadius(22)
-                            .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 4)
-                            .padding(.bottom, 40)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                    .animation(.easeInOut, value: commentsVM.showToast)
-                }
+                )
             }
-            .task { await commentsVM.loadInitial() }
             .task {
                 if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
                     if let originalTweet = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
                         self.originalTweet = originalTweet
-                        commentsVM.parentTweet = originalTweet
-                        await commentsVM.loadInitial()
                     }
                 }
             }

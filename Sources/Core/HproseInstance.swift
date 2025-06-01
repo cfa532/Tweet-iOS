@@ -1315,13 +1315,9 @@ final class HproseInstance: ObservableObject {
                     await MainActor.run {
                         // Notify observers about both the updated tweet and new comment
                         NotificationCenter.default.post(
-                            name: NSNotification.Name("NewCommentAdded"),
+                            name: .newCommentAdded,
                             object: nil,
-                            userInfo: [
-                                "tweetId": tweet.mid,
-                                "updatedTweet": updatedTweet,
-                                "comment": newComment
-                            ]
+                            userInfo: ["tweetId": tweet.mid]
                         )
                         
                         print("Comment published successfully. Parent tweet comment count: \(updatedTweet.commentCount ?? 0)")

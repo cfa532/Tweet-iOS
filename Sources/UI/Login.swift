@@ -119,7 +119,7 @@ struct LoginView: View {
                     let result = try await hproseInstance.login(user)
                     if result["status"] as? String == "success" {
                         // Post notification for successful login
-                        NotificationCenter.default.post(name: NSNotification.Name("UserDidLogin"), object: nil)
+                        NotificationCenter.default.post(name: .userDidLogin, object: nil)
                         dismiss()
                     } else {
                         errorMessage = result["reason"] as? String
