@@ -143,7 +143,7 @@
 			isa = PBXGroup;
 			children = (
 				1A1A1A1A1A1A1A1A1A1A1A07 /* App */,
-				1A1A1A1A1A1A1A1A1A1A1A08 /* UI */,
+				1A1A1A1A1A1A1A1A1A1A1A08 /* Screens */,
 				1A1A1A1A1A1A1A1A1A1A1A09 /* Core */,
 				1A1A1A1A1A1A1A1A1A1A1A0A /* Features */,
 			);
@@ -170,7 +170,7 @@
 			path = App;
 			sourceTree = "<group>";
 		};
-		1A1A1A1A1A1A1A1A1A1A1A08 /* UI */ = {
+		1A1A1A1A1A1A1A1A1A1A1A08 /* Screens */ = {
 			isa = PBXGroup;
 			children = (
 				46E5B3622DE1702C00AEF31F /* Registration.swift */,
@@ -179,7 +179,7 @@
 				46E5B3372DDA315700AEF31F /* TabButton.swift */,
 				46E5B32C2DDA045B00AEF31F /* AppHeaderView.swift */,
 			);
-			path = UI;
+			path = Screens;
 			sourceTree = "<group>";
 		};
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
