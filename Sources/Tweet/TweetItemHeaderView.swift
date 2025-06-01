@@ -21,17 +21,16 @@ struct TweetMenu: View {
     @ObservedObject var tweet: Tweet
     let deleteTweet: (Tweet) async -> Void
     let isPinned: Bool
-    let isComment: Bool
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var isCurrentlyPinned: Bool
+    @Environment(\.isDetailView) private var isDetailView
 
-    init(tweet: Tweet, deleteTweet: @escaping (Tweet) async -> Void, isPinned: Bool, isComment: Bool = false) {
+    init(tweet: Tweet, deleteTweet: @escaping (Tweet) async -> Void, isPinned: Bool) {
         self.tweet = tweet
         self.deleteTweet = deleteTweet
         self.isPinned = isPinned
-        self.isComment = isComment
         self._isCurrentlyPinned = State(initialValue: isPinned)
     }
 
@@ -69,8 +68,8 @@ struct TweetMenu: View {
                             object: tweet.mid
                         )
                     }
-                    // Dismiss only if this is not a comment
-                    if !isComment {
+                    // Dismiss only if we're in a detail view
+                    if isDetailView {
                         dismiss()
                     }
                 } label: {
@@ -83,5 +82,17 @@ struct TweetMenu: View {
                 .padding(12)
                 .contentShape(Rectangle())
         }
+    }
+}
+
+// Add environment key for detail view
+private struct IsDetailViewKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var isDetailView: Bool {
+        get { self[IsDetailViewKey.self] }
+        set { self[IsDetailViewKey.self] = newValue }
     }
 }

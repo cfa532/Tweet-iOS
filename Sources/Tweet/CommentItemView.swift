@@ -43,7 +43,7 @@ struct CommentItemView: View {
                                 object: tweet.mid
                             )
                         }
-                    }, isPinned: false, isComment: true)
+                    }, isPinned: false)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { showDetail = true }

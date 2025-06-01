@@ -12,6 +12,7 @@ struct TweetDetailView: View {
     @State private var originalTweet: Tweet?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.isDetailView) private var isDetailView
 
     let retweet: (Tweet) async -> Void
     let deleteTweet: (Tweet) async -> Void
@@ -134,6 +135,7 @@ struct TweetDetailView: View {
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
+        .environment(\.isDetailView, true)
     }
 }
 
