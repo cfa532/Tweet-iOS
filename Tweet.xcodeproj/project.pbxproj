@@ -256,9 +256,6 @@
 				46E5B34A2DDC155200AEF31F /* MediaCell.swift */,
 				46E5B3482DDC0F5B00AEF31F /* MediaGridView.swift */,
 				46E5B3462DDC0CF500AEF31F /* Avatar.swift */,
-				46E5B33E2DDAB74400AEF31F /* TweetActionButtonsView.swift */,
-				46E5B33F2DDAB74400AEF31F /* TweetItemBodyView.swift */,
-				46E5B3402DDAB74400AEF31F /* TweetItemHeaderView.swift */,
 			);
 			path = MediaViews;
 			sourceTree = "<group>";
@@ -267,8 +264,11 @@
 			isa = PBXGroup;
 			children = (
 				46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */,
+				46E5B3402DDAB74400AEF31F /* TweetItemHeaderView.swift */,
 				46E8A7D22DE9D0DF00A30FBA /* CommentItemView.swift */,
+				46E5B33F2DDAB74400AEF31F /* TweetItemBodyView.swift */,
 				46E5B3382DDA315700AEF31F /* TweetItemView.swift */,
+				46E5B33E2DDAB74400AEF31F /* TweetActionButtonsView.swift */,
 				46E5B3522DDD6A7A00AEF31F /* TweetDetailView.swift */,
 			);
 			path = Tweet;
