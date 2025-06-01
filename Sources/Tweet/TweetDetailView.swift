@@ -9,8 +9,8 @@ struct TweetDetailView: View {
     @State private var selectedMediaIndex = 0
     @State private var showLoginSheet = false
     @State private var pinnedTweets: [[String: Any]] = []
-    @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var originalTweet: Tweet?
+    @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
 
     let retweet: (Tweet) async -> Void
@@ -66,15 +66,11 @@ struct TweetDetailView: View {
                     }
                     TweetItemHeaderView(tweet: displayTweet)
                     TweetMenu(tweet: displayTweet, deleteTweet: { tweet in
+                        // Dismiss immediately
+                        dismiss()
+                        // Then perform deletion in background
                         Task {
                             await deleteTweet(tweet)
-                            // Post notification for successful deletion
-                            NotificationCenter.default.post(
-                                name: .tweetDeleted,
-                                object: tweet.mid
-                            )
-                            // Dismiss the detail view after successful deletion
-                            dismiss()
                         }
                     }, isPinned: displayTweet.isPinned(in: pinnedTweets))
                 }
@@ -137,17 +133,6 @@ struct TweetDetailView: View {
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
-        }
-        .onAppear {
-            loadPinnedTweets()
-        }
-    }
-
-    private func loadPinnedTweets() {
-        Task {
-            if let author = displayTweet.author {
-                pinnedTweets = (try? await hproseInstance.getPinnedTweets(user: author)) ?? []
-            }
         }
     }
 }

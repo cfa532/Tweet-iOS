@@ -264,8 +264,8 @@
 			isa = PBXGroup;
 			children = (
 				46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */,
-				46E5B3402DDAB74400AEF31F /* TweetItemHeaderView.swift */,
 				46E8A7D22DE9D0DF00A30FBA /* CommentItemView.swift */,
+				46E5B3402DDAB74400AEF31F /* TweetItemHeaderView.swift */,
 				46E5B33F2DDAB74400AEF31F /* TweetItemBodyView.swift */,
 				46E5B3382DDA315700AEF31F /* TweetItemView.swift */,
 				46E5B33E2DDAB74400AEF31F /* TweetActionButtonsView.swift */,
