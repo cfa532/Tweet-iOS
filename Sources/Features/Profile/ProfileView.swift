@@ -40,6 +40,12 @@ struct ProfileView: View {
     @State private var showTweetList = false
     /// Determines which type of tweet list to show (bookmarks or favorites)
     @State private var tweetListType: UserContentType = .BOOKMARKS
+    /// Tracks the scroll position for header collapse
+    @State private var scrollOffset: CGFloat = 0
+    /// Previous scroll offset for determining scroll direction
+    @State private var previousScrollOffset: CGFloat = 0
+    /// Controls header visibility
+    @State private var isHeaderVisible = true
 
     // MARK: - Computed Properties
     /// Returns true if the displayed profile belongs to the current user
@@ -72,51 +78,53 @@ struct ProfileView: View {
 
     // MARK: - Body
     var body: some View {
-        VStack(spacing: 0) {
-            // Profile header with user info and avatar
-            ProfileHeaderView(
-                user: user,
-                isCurrentUser: isCurrentUser,
-                isFollowing: isFollowing,
-                onEditTap: { showEditSheet = true },
-                onFollowToggle: { isFollowing.toggle() },
-                onAvatarTap: { showAvatarFullScreen = true }
-            )
-            
-            // Stats section showing followers, following, bookmarks, and favorites
-            ProfileStatsView(
-                user: user,
-                onFollowersTap: {
-                    userListType = .FOLLOWER
-                    showUserList = true
-                },
-                onFollowingTap: {
-                    userListType = .FOLLOWING
-                    showUserList = true
-                },
-                onBookmarksTap: {
-                    tweetListType = .BOOKMARKS
-                    showTweetList = true
-                },
-                onFavoritesTap: {
-                    tweetListType = .FAVORITES
-                    showTweetList = true
-                }
-            )
-
-            // Posts List
-            if isLoading {
-                ProgressView("Loading tweets...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if pinnedTweets.isEmpty {
-                RegularTweetsView(
+        ScrollView {
+            VStack(spacing: 0) {
+                // Profile header with user info and avatar
+                ProfileHeaderView(
                     user: user,
-                    pinnedTweetIds: pinnedTweetIds,
-                    hproseInstance: hproseInstance,
-                    onUserSelect: { user in selectedUser = user }
+                    isCurrentUser: isCurrentUser,
+                    isFollowing: isFollowing,
+                    onEditTap: { showEditSheet = true },
+                    onFollowToggle: { isFollowing.toggle() },
+                    onAvatarTap: { showAvatarFullScreen = true }
                 )
-            } else {
-                ScrollView {
+                .transition(.move(edge: .top).combined(with: .opacity))
+                
+                // Stats section showing followers, following, bookmarks, and favorites
+                ProfileStatsView(
+                    user: user,
+                    onFollowersTap: {
+                        userListType = .FOLLOWER
+                        showUserList = true
+                    },
+                    onFollowingTap: {
+                        userListType = .FOLLOWING
+                        showUserList = true
+                    },
+                    onBookmarksTap: {
+                        tweetListType = .BOOKMARKS
+                        showTweetList = true
+                    },
+                    onFavoritesTap: {
+                        tweetListType = .FAVORITES
+                        showTweetList = true
+                    }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+
+                // Posts List
+                if isLoading {
+                    ProgressView("Loading tweets...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if pinnedTweets.isEmpty {
+                    RegularTweetsView(
+                        user: user,
+                        pinnedTweetIds: pinnedTweetIds,
+                        hproseInstance: hproseInstance,
+                        onUserSelect: { user in selectedUser = user }
+                    )
+                } else {
                     LazyVStack(spacing: 0) {
                         // Pinned tweets section
                         VStack(spacing: 0) {
@@ -156,18 +164,27 @@ struct ProfileView: View {
                     }
                 }
             }
-
-            // Hidden NavigationLink for avatar navigation
-            NavigationLink(
-                destination: selectedUser.map { ProfileView(user: $0, onLogout: onLogout) },
-                isActive: Binding(
-                    get: { selectedUser != nil },
-                    set: { if !$0 { selectedUser = nil } }
+        }
+        .coordinateSpace(name: "scrollView")
+        .background(
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: ScrollOffsetPreferenceKey.self,
+                    value: geometry.frame(in: .named("scrollView")).minY
                 )
-            ) {
-                EmptyView()
             }
-            .hidden()
+        )
+        .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
+            scrollOffset = value
+            let isScrollingDown = value < previousScrollOffset
+            let isScrollingUp = value > previousScrollOffset
+            let shouldShowHeader = isScrollingUp || value > 0
+            
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHeaderVisible = shouldShowHeader
+            }
+            
+            previousScrollOffset = value
         }
         // Edit profile sheet
         .sheet(isPresented: $showEditSheet) {
@@ -263,9 +280,6 @@ struct ProfileView: View {
                         endRank: UInt((page + 1) * size - 1)
                     )
                 },
-//                onAvatarTap: { user in
-//                    selectedUser = user
-//                },
                 showTitle: true,
                 rowView: { tweet in
                     TweetItemView(
@@ -321,53 +335,53 @@ private struct RegularTweetsView: View {
     let onUserSelect: (User) -> Void
     
     var body: some View {
-        ScrollView {
-            TweetListView<TweetItemView>(
-                title: "",
-                tweetFetcher: { page, size in
-                    print("[RegularTweetsView] Fetching tweets page: \(page), size: \(size)")
-                    // Match server's pagination strategy: increment by 11
-                    let startRank = page * 11
-                    let endRank = startRank + 10  // end is inclusive, so we add 10 to get 11 items
-                    print("[RegularTweetsView] Fetching tweets with ranks: start=\(startRank), end=\(endRank)")
-                    
-                    let tweets = try await hproseInstance.fetchUserTweet(
-                        user: user,
-                        startRank: UInt(startRank),
-                        endRank: UInt(endRank)
-                    )
-                    print("[RegularTweetsView] Received \(tweets.count) tweets")
-                    // Convert [Tweet] to [Tweet?] as expected by TweetListView
-                    return tweets.map { Optional($0) }
-                },
-                onRetweet: { tweet in
-                    if let retweet = try? await hproseInstance.retweet(tweet) {
-                        if let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
-                            tweet: tweet,
-                            retweetId: retweet.mid
-                        ) {
-                            // Note: This update might need to be handled differently now
-                            // since we're using TweetListView
+        TweetListView<TweetItemView>(
+            title: "",
+            tweetFetcher: { page, size in
+                try await hproseInstance.fetchUserTweet(
+                    user: user,
+                    startRank: UInt(page * size),
+                    endRank: UInt((page + 1) * size - 1)
+                )
+            },
+            showTitle: false,
+            rowView: { tweet in
+                TweetItemView(
+                    tweet: tweet,
+                    retweet: { tweet in
+                        Task {
+                            if let retweet = try? await hproseInstance.retweet(tweet),
+                               let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
+                                tweet: tweet,
+                                retweetId: retweet.mid
+                               ) {
+                                tweet.retweetCount = updatedOriginalTweet.retweetCount
+                                tweet.favoriteCount = updatedOriginalTweet.favoriteCount
+                                tweet.bookmarkCount = updatedOriginalTweet.bookmarkCount
+                                tweet.commentCount = updatedOriginalTweet.commentCount
+                            }
                         }
-                    }
-                },
-                showTitle: false,
-                rowView: { tweet in
-                    TweetItemView(
-                        tweet: tweet,
-                        retweet: { _ in },
-                        deleteTweet: { tweet in
+                    },
+                    deleteTweet: { tweet in
+                        Task {
                             if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
                                 print("Successfully deleted tweet: \(tweetId)")
-                                // The TweetListView will handle refreshing its content
                             }
-                        },
-                        isPinned: pinnedTweetIds.contains(tweet.mid),
-                        isInProfile: true,
-                        onAvatarTap: { user in onUserSelect(user) }
-                    )
-                }
-            )
-        }
+                        }
+                    },
+                    isPinned: pinnedTweetIds.contains(tweet.mid),
+                    isInProfile: true,
+                    onAvatarTap: { user in onUserSelect(user) }
+                )
+            }
+        )
+    }
+}
+
+// MARK: - Scroll Offset Preference Key
+private struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
