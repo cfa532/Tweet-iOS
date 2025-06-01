@@ -165,7 +165,7 @@
 				46E5B32A2DDA038E00AEF31F /* AppConfig.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1D /* ContentView.swift */,
-				4684EA4B2DD72A8600CACE55 /* Helper */,
+				4642A1DC2DD62CCB00A20E19 /* Gadget.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -250,14 +250,6 @@
 				D424303A66FF70A9FBF5540E /* Pods-Tweet.release.xcconfig */,
 			);
 			path = Pods;
-			sourceTree = "<group>";
-		};
-		4684EA4B2DD72A8600CACE55 /* Helper */ = {
-			isa = PBXGroup;
-			children = (
-				4642A1DC2DD62CCB00A20E19 /* Gadget.swift */,
-			);
-			path = Helper;
 			sourceTree = "<group>";
 		};
 		469A994E2DEBF89B00954049 /* MediaViews */ = {
