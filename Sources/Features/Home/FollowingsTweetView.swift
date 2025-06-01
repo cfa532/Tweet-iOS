@@ -7,7 +7,6 @@ struct FollowingsTweetView: View {
     @Binding var resetTrigger: Bool
     @Binding var scrollToTopTrigger: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @State private var tweetListView: TweetListView<TweetItemView>?
 
     var body: some View {
         TweetListView<TweetItemView>(
@@ -19,7 +18,6 @@ struct FollowingsTweetView: View {
                     pageSize: size
                 )
             },
-//            onAvatarTap: onAvatarTap,
             showTitle: false,
             rowView: { tweet in
                 TweetItemView(
@@ -76,32 +74,6 @@ struct FollowingsTweetView: View {
                 )
             }
         )
-        .background(
-            GeometryReader { geometry in
-                Color.clear.onAppear {
-                    tweetListView = TweetListView<TweetItemView>(
-                        title: "Timeline",
-                        tweetFetcher: { page, size in
-                            try await hproseInstance.fetchTweetFeed(
-                                user: hproseInstance.appUser,
-                                pageNumber: page,
-                                pageSize: size
-                            )
-                        },
-                        showTitle: false,
-                        rowView: { tweet in
-                            TweetItemView(
-                                tweet: tweet,
-                                retweet: { _ in },
-                                deleteTweet: { _ in },
-                                isInProfile: false,
-                                onAvatarTap: onAvatarTap
-                            )
-                        }
-                    )
-                }
-            }
-        )
         .onChange(of: resetTrigger) { newValue in
             if newValue {
                 resetTrigger = false
@@ -112,6 +84,5 @@ struct FollowingsTweetView: View {
                 scrollToTopTrigger = false
             }
         }
-//        .environmentObject(hproseInstance)
     }
 }
