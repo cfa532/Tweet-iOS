@@ -15,7 +15,6 @@ extension View {
 @available(iOS 16.0, *)
 struct TweetItemBodyView: View {
     @ObservedObject var tweet: Tweet
-    var retweet: (Tweet) async -> Void
     var enableTap: Bool = false
     @State private var isExpanded = false
     @State private var showLoginSheet = false

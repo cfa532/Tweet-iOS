@@ -37,17 +37,12 @@ struct CommentItemView: View {
                     TweetMenu(tweet: comment, deleteTweet: { tweet in
                         Task {
                             await deleteComment(tweet)
-                            // Post notification for successful deletion
-                            NotificationCenter.default.post(
-                                name: .tweetDeleted,
-                                object: tweet.mid
-                            )
                         }
                     }, isPinned: false)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { showDetail = true }
-                TweetItemBodyView(tweet: comment, retweet: retweet, enableTap: false)
+                TweetItemBodyView(tweet: comment, enableTap: false)
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
                     .padding(.top, 4)

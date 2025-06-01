@@ -69,10 +69,7 @@ struct TweetDetailView: View {
                     TweetMenu(tweet: displayTweet, deleteTweet: { tweet in
                         // Dismiss immediately
                         dismiss()
-                        // Then perform deletion in background
-                        Task {
-                            await deleteTweet(tweet)
-                        }
+                        await deleteTweet(tweet)
                     }, isPinned: displayTweet.isPinned(in: pinnedTweets))
                 }
                 .padding(.horizontal)
@@ -109,8 +106,20 @@ struct TweetDetailView: View {
                         CommentItemView(
                             comment: comment,
                             deleteComment: { comment in
+                                // Post notification for optimistic UI update
+                                NotificationCenter.default.post(
+                                    name: .tweetDeleted,
+                                    object: tweet.mid
+                                )
+                                
                                 if let res = try? await hproseInstance.deleteComment(parentTweet: displayTweet, commentId: comment.mid) {
                                     displayTweet.commentCount = res["count"] as? Int
+                                } else {
+                                    // If deletion fails, post restoration notification
+                                    NotificationCenter.default.post(
+                                        name: .tweetRestored,
+                                        object: tweet.mid
+                                    )
                                 }
                             },
                             retweet: retweet

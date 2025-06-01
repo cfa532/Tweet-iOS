@@ -67,17 +67,12 @@ struct ProfileTweetsSection: View {
                                 TweetItemView(
                                     tweet: tweet,
                                     retweet: { tweet in
-                                        Task {
-                                            if let retweet = try? await hproseInstance.retweet(tweet),
-                                               let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
-                                                tweet: tweet,
-                                                retweetId: retweet.mid
-                                               ) {
-                                                tweet.retweetCount = updatedOriginalTweet.retweetCount
-                                                tweet.favoriteCount = updatedOriginalTweet.favoriteCount
-                                                tweet.bookmarkCount = updatedOriginalTweet.bookmarkCount
-                                                tweet.commentCount = updatedOriginalTweet.commentCount
+                                        do {
+                                            if let retweet = try await hproseInstance.retweet(tweet) {
+                                               try? await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: retweet.mid)
                                             }
+                                        } catch {
+                                            print("Retweet failed in ProfileTweetsSection")
                                         }
                                     },
                                     deleteTweet: { tweet in

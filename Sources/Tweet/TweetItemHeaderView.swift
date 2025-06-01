@@ -62,15 +62,6 @@ struct TweetMenu: View {
                     // Start deletion in background
                     Task {
                         await deleteTweet(tweet)
-                        // Post notification for successful deletion
-                        NotificationCenter.default.post(
-                            name: .tweetDeleted,
-                            object: tweet.mid
-                        )
-                    }
-                    // Dismiss only if we're in a detail view
-                    if isDetailView {
-                        dismiss()
                     }
                 } label: {
                     Label("Delete", systemImage: "trash")
