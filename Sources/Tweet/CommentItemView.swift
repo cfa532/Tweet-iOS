@@ -10,8 +10,6 @@ import SwiftUI
 @available(iOS 16.0, *)
 struct CommentItemView: View {
     @ObservedObject var comment: Tweet
-    let deleteComment: (Tweet) async -> Void
-    let retweet: (Tweet) async -> Void
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
     var commentsVM: CommentsViewModel? = nil
@@ -34,11 +32,7 @@ struct CommentItemView: View {
             VStack(alignment: .leading) {
                 HStack {
                     TweetItemHeaderView(tweet: comment)
-                    TweetMenu(tweet: comment, deleteTweet: { tweet in
-                        Task {
-                            await deleteComment(tweet)
-                        }
-                    }, isPinned: false)
+                    TweetMenu(tweet: comment, isPinned: false)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { showDetail = true }
@@ -46,7 +40,7 @@ struct CommentItemView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
                     .padding(.top, 4)
-                TweetActionButtonsView(tweet: comment, retweet: retweet, commentsVM: commentsVM)
+                TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
                     .padding(.top, 8)
                     .padding(.leading, -8)
             }
@@ -54,11 +48,8 @@ struct CommentItemView: View {
         .padding()
         .background(Color(.systemBackground))
         .background(
-            NavigationLink(destination: TweetDetailView(
-                tweet: detailTweet,
-                retweet: retweet,
-                deleteTweet: deleteComment
-            ), isActive: $showDetail) {
+            NavigationLink(destination: TweetDetailView(tweet: detailTweet),
+                           isActive: $showDetail) {
                 EmptyView()
             }
                 .hidden()

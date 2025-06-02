@@ -3,8 +3,6 @@ import SwiftUI
 @available(iOS 16.0, *)
 struct TweetItemView: View {
     @ObservedObject var tweet: Tweet
-    let retweet: (Tweet) async -> Void
-    let deleteTweet: (Tweet) async -> Void
     let embedded: Bool = false
     var isPinned: Bool = false
     
@@ -46,16 +44,7 @@ struct TweetItemView: View {
                                 }
                                 HStack(alignment: .top) {
                                     TweetItemHeaderView(tweet: originalTweet)
-                                    TweetMenu(tweet: tweet, deleteTweet: { tweet in
-                                        Task {
-                                            await deleteTweet(tweet)
-                                            // Post notification for successful deletion
-                                            NotificationCenter.default.post(
-                                                name: .tweetDeleted,
-                                                object: tweet.mid
-                                            )
-                                        }
-                                    }, isPinned: isPinned)
+                                    TweetMenu(tweet: tweet, isPinned: isPinned)
                                 }
                                 .contentShape(Rectangle())
                                 .onTapGesture {
@@ -69,7 +58,7 @@ struct TweetItemView: View {
                                         showDetail = true
                                     }
                                     .padding(.top, 4)
-                                TweetActionButtonsView(tweet: originalTweet, retweet: retweet)
+                                TweetActionButtonsView(tweet: originalTweet)
                                     .padding(.top, 8)
                                     .padding(.leading, -20)
                             }
@@ -90,16 +79,7 @@ struct TweetItemView: View {
                     VStack(alignment: .leading) {
                         HStack {
                             TweetItemHeaderView(tweet: tweet)
-                            TweetMenu(tweet: tweet, deleteTweet: { tweet in
-                                Task {
-                                    await deleteTweet(tweet)
-                                    // Post notification for successful deletion
-                                    NotificationCenter.default.post(
-                                        name: .tweetDeleted,
-                                        object: tweet.mid
-                                    )
-                                }
-                            }, isPinned: isPinned)
+                            TweetMenu(tweet: tweet, isPinned: isPinned)
                         }
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
@@ -109,13 +89,13 @@ struct TweetItemView: View {
                         
                         // Embedded original tweet
                         VStack(alignment: .leading, spacing: 8) {
-                            TweetItemView(tweet: originalTweet, retweet: retweet, deleteTweet: deleteTweet, isPinned: isPinned)
+                            TweetItemView(tweet: originalTweet, isPinned: isPinned)
                         }
                         .padding()
                         .background(Color(.secondarySystemBackground))
                         .cornerRadius(8)
                         
-                        TweetActionButtonsView(tweet: tweet, retweet: retweet)
+                        TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)
                             .padding(.leading, -8)
                     }
@@ -136,16 +116,7 @@ struct TweetItemView: View {
                 VStack(alignment: .leading) {
                     HStack {
                         TweetItemHeaderView(tweet: tweet)
-                        TweetMenu(tweet: tweet, deleteTweet: { tweet in
-                            Task {
-                                await deleteTweet(tweet)
-                                // Post notification for successful deletion
-                                NotificationCenter.default.post(
-                                    name: .tweetDeleted,
-                                    object: tweet.mid
-                                )
-                            }
-                        }, isPinned: isPinned)
+                        TweetMenu(tweet: tweet, isPinned: isPinned)
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
@@ -154,7 +125,7 @@ struct TweetItemView: View {
                         .onTapGesture { showDetail = true }
                         .padding(.top, 4)
                     
-                    TweetActionButtonsView(tweet: tweet, retweet: retweet)
+                    TweetActionButtonsView(tweet: tweet)
                         .padding(.top, 8)
                         .padding(.leading, -8)
                 }
@@ -165,8 +136,6 @@ struct TweetItemView: View {
         .background(
             NavigationLink(destination: TweetDetailView(
                 tweet: detailTweet,
-                retweet: retweet,
-                deleteTweet: deleteTweet
             ), isActive: $showDetail) {
                 EmptyView()
             }

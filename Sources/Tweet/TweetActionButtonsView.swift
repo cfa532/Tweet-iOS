@@ -9,7 +9,6 @@ enum UserActions: Int {
 @available(iOS 16.0, *)
 struct TweetActionButtonsView: View {
     @ObservedObject var tweet: Tweet
-    var retweet: (Tweet) async -> Void
     var commentsVM: CommentsViewModel? = nil
     @State private var showCommentCompose = false
     @State private var showShareSheet = false
@@ -19,6 +18,24 @@ struct TweetActionButtonsView: View {
     private func handleGuestAction() {
         if hproseInstance.appUser.isGuest {
             showLoginSheet = true
+        }
+    }
+    
+    private func retweet(_ tweet: Tweet) async throws {
+        do {
+            let currentCount = tweet.retweetCount ?? 0
+            tweet.retweetCount = currentCount + 1
+
+            if let retweet = try await hproseInstance.retweet(tweet) {
+                NotificationCenter.default.post(name: .newTweetCreated,
+                                                object: nil,
+                                                userInfo: ["tweet": retweet])
+                // Update retweet count of the original tweet in backend.
+                // tweet, the original tweet now, is updated in the following function.
+                try? await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: retweet.mid)
+            }
+        } catch {
+            print("Retweet failed in FollowingsTweetView")
         }
     }
     
@@ -49,7 +66,11 @@ struct TweetActionButtonsView: View {
                     handleGuestAction()
                 } else {
                     Task {
-                        await retweet(tweet)
+                        do {
+                            try await retweet(tweet)
+                        } catch {
+                            print("reTweet failed. \(tweet)")
+                        }
                     }
                 }
             }) {

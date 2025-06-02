@@ -220,22 +220,6 @@ struct ProfileView: View {
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,
-                        retweet: { tweet in
-                            if let retweet = try? await hproseInstance.retweet(tweet) {
-                                if let updatedOriginalTweet = try? await hproseInstance.updateRetweetCount(
-                                    tweet: tweet,
-                                    retweetId: retweet.mid
-                                ) {
-                                    // The TweetListView will handle updating its own state
-                                }
-                            }
-                        },
-                        deleteTweet: { tweet in
-                            if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
-                                print("Successfully deleted tweet: \(tweetId)")
-                                // The TweetListView will handle refreshing its content
-                            }
-                        },
                         isPinned: pinnedTweetIds.contains(tweet.mid),
                         isInProfile: true,
                         onAvatarTap: { user in selectedUser = user }

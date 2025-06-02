@@ -64,49 +64,6 @@ struct ProfileTweetsSection: View {
                     rowView: { tweet in
                         TweetItemView(
                             tweet: tweet,
-                            retweet: { tweet in
-                                do {
-                                    let currentCount = tweet.retweetCount ?? 0
-                                    tweet.retweetCount = currentCount + 1
-
-                                    if let retweet = try await hproseInstance.retweet(tweet) {
-                                        NotificationCenter.default.post(name: .newTweetCreated,
-                                                                        object: nil,
-                                                                        userInfo: ["tweet": retweet])
-                                        try? await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: retweet.mid)
-                                    }
-                                } catch {
-                                    print("Retweet failed in ProfileTweetsSection")
-                                }
-                            },
-                            deleteTweet: { tweet in
-                                NotificationCenter.default.post(
-                                    name: .tweetDeleted,
-                                    object: tweet.mid
-                                )
-                                if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
-                                    print("Successfully deleted tweet: \(tweetId)")
-                                    if pinnedTweetIds.contains(tweet.mid) {
-                                        await onPinnedTweetsRefresh()
-                                    }
-                                    if let originalTweetId = tweet.originalTweetId,
-                                       let originalAuthorId = tweet.originalAuthorId,
-                                       let originalTweet = try? await hproseInstance.getTweet(tweetId: originalTweetId,
-                                                                                              authorId: originalAuthorId)
-                                    {
-                                        let currentCount = originalTweet.retweetCount ?? 0
-                                        originalTweet.retweetCount = max(0, currentCount - 1)
-                                        try? await hproseInstance.updateRetweetCount(tweet: originalTweet,
-                                                                                     retweetId: tweet.mid,
-                                                                                     direction: false)
-                                    }
-                                } else {
-                                    NotificationCenter.default.post(
-                                        name: .tweetRestored,
-                                        object: tweet.mid
-                                    )
-                                }
-                            },
                             isPinned: pinnedTweetIds.contains(tweet.mid),
                             isInProfile: true,
                             onAvatarTap: { user in onUserSelect(user) }

@@ -14,13 +14,8 @@ struct TweetDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.isDetailView) private var isDetailView
 
-    let retweet: (Tweet) async -> Void
-    let deleteTweet: (Tweet) async -> Void
-
-    init(tweet: Tweet, retweet: @escaping (Tweet) async -> Void, deleteTweet: @escaping (Tweet) async -> Void) {
+    init(tweet: Tweet) {
         self.tweet = tweet
-        self.retweet = retweet
-        self.deleteTweet = deleteTweet
     }
 
     // Computed property to determine which tweet to display
@@ -66,11 +61,7 @@ struct TweetDetailView: View {
                         Avatar(user: user)
                     }
                     TweetItemHeaderView(tweet: displayTweet)
-                    TweetMenu(tweet: displayTweet, deleteTweet: { tweet in
-                        // Dismiss immediately
-                        dismiss()
-                        await deleteTweet(tweet)
-                    }, isPinned: displayTweet.isPinned(in: pinnedTweets))
+                    TweetMenu(tweet: displayTweet, isPinned: displayTweet.isPinned(in: pinnedTweets))
                 }
                 .padding(.horizontal)
                 .padding(.top)
@@ -82,7 +73,7 @@ struct TweetDetailView: View {
                         .padding(.horizontal)
                         .padding(.vertical, 8)
                 }
-                TweetActionButtonsView(tweet: displayTweet, retweet: retweet)
+                TweetActionButtonsView(tweet: displayTweet)
                     .padding(.leading, 48)
                     .padding(.trailing, 8)
                     .padding(.top, 8)
@@ -105,24 +96,6 @@ struct TweetDetailView: View {
                     rowView: { comment in
                         CommentItemView(
                             comment: comment,
-                            deleteComment: { comment in
-                                // Post notification for optimistic UI update
-                                NotificationCenter.default.post(
-                                    name: .tweetDeleted,
-                                    object: tweet.mid
-                                )
-                                
-                                if let res = try? await hproseInstance.deleteComment(parentTweet: displayTweet, commentId: comment.mid) {
-                                    displayTweet.commentCount = res["count"] as? Int
-                                } else {
-                                    // If deletion fails, post restoration notification
-                                    NotificationCenter.default.post(
-                                        name: .tweetRestored,
-                                        object: tweet.mid
-                                    )
-                                }
-                            },
-                            retweet: retweet
                         )
                     }
                 )
