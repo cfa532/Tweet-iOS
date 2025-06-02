@@ -38,7 +38,6 @@ struct FollowingsTweetView: View {
                         } catch {
                             print("Retweet failed in FollowingsTweetView")
                         }
-                        
                     },
                     deleteTweet: { tweet in
                         // Post notification for optimistic UI update

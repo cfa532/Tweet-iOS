@@ -174,10 +174,8 @@ final class HproseInstance: ObservableObject {
         pageSize: Int = 20,
         entry: String = "get_tweet_feed"
     ) async throws -> [Tweet] {
-        print("[fetchTweetFeed] Starting fetch for page \(pageNumber) with page size \(pageSize)")
         var startRank = UInt(pageNumber * pageSize)
         var endRank = UInt(startRank + UInt(pageSize))
-        print("[fetchTweetFeed] Initial ranks - start: \(startRank), end: \(endRank)")
         return try await withRetry {
             guard let service = hproseClient else {
                 print("[fetchTweetFeed] Service not initialized")
@@ -193,9 +191,7 @@ final class HproseInstance: ObservableObject {
                     "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
                     "appuserid": appUser.mid,
                 ]
-                print("[fetchTweetFeed] Requesting tweets with params: \(params)")
                 let rawResponse = service.runMApp(entry, params, nil)
-                print("[fetchTweetFeed] Raw response type: \(type(of: rawResponse))")
                 guard let unwrappedResponse = rawResponse else {
                     print("[fetchTweetFeed] Response is nil")
                     return accumulatedTweets
@@ -204,7 +200,6 @@ final class HproseInstance: ObservableObject {
                     print("[fetchTweetFeed] Response is not an array: \(unwrappedResponse)")
                     return accumulatedTweets
                 }
-                print("[fetchTweetFeed] Raw tweets from server: \(responseArray.count)")
                 if responseArray.count < pageSize {
                     print("[fetchTweetFeed] Reached end of feed (response count: \(responseArray.count) < page size: \(pageSize))")
                     return accumulatedTweets
@@ -213,7 +208,6 @@ final class HproseInstance: ObservableObject {
                     if let dict = item as? [String: Any] { return dict }
                     return nil
                 }
-                print("[fetchTweetFeed] Valid dictionaries count: \(validDictionaries.count)")
                 for dict in validDictionaries {
                     guard let parsedTweet = Tweet.from(dict: dict) else {
                         print("[fetchTweetFeed] Failed to parse tweet from dict: \(dict)")
@@ -258,12 +252,9 @@ final class HproseInstance: ObservableObject {
                         return accumulatedTweets
                     }
                 }
-                print("[fetchTweetFeed] No more valid tweets in this batch, incrementing ranks. Current start: \(startRank), response count: \(responseArray.count)")
                 startRank += UInt(responseArray.count)
                 endRank = startRank + UInt(pageSize)
-                print("[fetchTweetFeed] New ranks - start: \(startRank), end: \(endRank)")
             }
-            print("[fetchTweetFeed] Returning \(accumulatedTweets.count) accumulated tweets")
             return accumulatedTweets
         }
     }

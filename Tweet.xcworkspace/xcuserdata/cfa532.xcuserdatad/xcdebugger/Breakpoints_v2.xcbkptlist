@@ -129,22 +129,6 @@
       <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "0C9BA002-67EB-4487-8BC9-DEED77E3DF8B"
-            shouldBeEnabled = "No"
-            ignoreCount = "0"
-            continueAfterRunningActions = "No"
-            filePath = "Sources/Features/Home/FollowingsTweetView.swift"
-            startingColumnNumber = "9223372036854775807"
-            endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "30"
-            endingLineNumber = "30"
-            landmarkName = "body"
-            landmarkType = "24">
-         </BreakpointContent>
-      </BreakpointProxy>
-      <BreakpointProxy
-         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
-         <BreakpointContent
             uuid = "7DE577EF-9983-4B35-8932-C15479CBD8B7"
             shouldBeEnabled = "No"
             ignoreCount = "0"
@@ -152,8 +136,8 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "756"
-            endingLineNumber = "756"
+            startingLineNumber = "747"
+            endingLineNumber = "747"
             landmarkName = "updateRetweetCount(tweet:retweetId:direction:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -168,8 +152,8 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "770"
-            endingLineNumber = "770"
+            startingLineNumber = "761"
+            endingLineNumber = "761"
             landmarkName = "updateRetweetCount(tweet:retweetId:direction:)"
             landmarkType = "7">
          </BreakpointContent>
