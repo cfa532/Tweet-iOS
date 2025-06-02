@@ -155,22 +155,12 @@ struct CommentComposeView: View {
         // Create comment object
         print("DEBUG: Creating comment object")
         let comment = Tweet(
-            mid: "",
+            mid: Constants.GUEST_ID,                // placeholder Mimei Id
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(),
-            title: nil,
             originalTweetId: isQuoting ? tweet.mid : nil,
             originalAuthorId: isQuoting ? tweet.authorId : nil,
-            author: hproseInstance.appUser,
-            favorites: [false, false, false],
-            favoriteCount: 0,
-            bookmarkCount: 0,
-            retweetCount: 0,
-            commentCount: 0,
-            attachments: nil,
-            isPrivate: false,
-            downloadable: nil
         )
         
         // Prepare item data
@@ -225,8 +215,10 @@ struct CommentComposeView: View {
             }
         }
         
-        // Add optimistic comment to the list
-        commentsVM.addComment(comment)
+        // Add optimistic comment to the list, if it has no attachment.
+        if itemData.count == 0 {
+            commentsVM.addComment(comment)
+        }
         
         print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")
         hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)

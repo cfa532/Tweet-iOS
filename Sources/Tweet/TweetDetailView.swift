@@ -94,9 +94,7 @@ struct TweetDetailView: View {
                     },
                     showTitle: false,
                     rowView: { comment in
-                        CommentItemView(
-                            comment: comment,
-                        )
+                        CommentItemView(comment: comment)
                     }
                 )
             }

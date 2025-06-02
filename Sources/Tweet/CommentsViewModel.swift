@@ -79,49 +79,4 @@ class CommentsViewModel: ObservableObject {
     func removeComment(_ comment: Tweet) {
         comments.removeAll { $0.mid == comment.mid }
     }
-
-    func postComment(_ comment: Tweet, tweet: Tweet) async {
-        addComment(comment)
-        do {
-            guard let (updatedParent, newComment) = try await hproseInstance.addComment(comment, to: tweet) else {
-                throw NSError(domain: "AddComment", code: -1, userInfo: [NSLocalizedDescriptionKey: "No result from addComment"])
-            }
-            if let idx = comments.firstIndex(where: { $0 === comment }) {
-                comments[idx].mid = newComment.mid
-            }
-            print("Backend returned updated commentCount:", updatedParent.commentCount as Any)
-            if let count = updatedParent.commentCount, count > 0 {
-                tweet.commentCount = count
-            } else {
-                tweet.commentCount = (tweet.commentCount ?? 0) + 1
-            }
-        } catch {
-            removeComment(comment)
-            await MainActor.run {
-                showToast = true
-                toastMessage = "Failed to post comment."
-            }
-        }
-    }
-
-    func deleteComment(_ comment: Tweet) async {
-        let idx = comments.firstIndex(where: { $0.mid == comment.mid })
-        removeComment(comment)
-        parentTweet.commentCount = max(0, (parentTweet.commentCount ?? 1) - 1)
-        do {
-            let result = try await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid)
-            if let dict = result, let deletedId = dict["commentId"] as? String, let count = dict["count"] as? Int, deletedId == comment.mid {
-                parentTweet.commentCount = count
-            }
-        } catch {
-            if let idx = idx {
-                comments.insert(comment, at: idx)
-            }
-            parentTweet.commentCount = (parentTweet.commentCount ?? 0) + 1
-            await MainActor.run {
-                showToast = true
-                toastMessage = "Failed to delete comment."
-            }
-        }
-    }
 }

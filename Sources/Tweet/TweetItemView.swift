@@ -5,7 +5,6 @@ struct TweetItemView: View {
     @ObservedObject var tweet: Tweet
     let embedded: Bool = false
     var isPinned: Bool = false
-    
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
     @State private var showDetail = false
