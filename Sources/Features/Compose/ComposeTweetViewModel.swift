@@ -44,8 +44,6 @@ class ComposeTweetViewModel: ObservableObject {
     }
     
     func postTweet() async {
-        print("DEBUG: Starting postTweet()")
-        
         let trimmedContent = tweetContent.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Allow empty content if there are attachments
@@ -61,32 +59,18 @@ class ComposeTweetViewModel: ObservableObject {
         }
         
         // Create tweet object
-        print("DEBUG: Creating tweet object")
         let tweet = Tweet(
-            mid: "",
+            mid: Constants.GUEST_ID,        // placeholder Mimei Id
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(),
-            title: nil,
-            originalTweetId: nil,
-            originalAuthorId: nil,
-            author: hproseInstance.appUser,
-            favorites: [false, false, false],
-            favoriteCount: 0,
-            bookmarkCount: 0,
-            retweetCount: 0,
-            commentCount: 0,
             attachments: nil,
-            isPrivate: false,
-            downloadable: nil
         )
         
         // Prepare item data
-        print("DEBUG: Preparing item data for \(selectedItems.count) items")
         var itemData: [HproseInstance.PendingUpload.ItemData] = []
         
         for item in selectedItems {
-            print("DEBUG: Processing item: \(item.itemIdentifier ?? "unknown")")
             do {
                 if let data = try await item.loadTransferable(type: Data.self) {
                     print("DEBUG: Successfully loaded image data: \(data.count) bytes")
@@ -148,12 +132,5 @@ class ComposeTweetViewModel: ObservableObject {
         tweetContent = ""
         selectedItems = []
         isUploading = false
-        
-        // Post notification for new tweet
-        NotificationCenter.default.post(
-            name: .newTweetCreated,
-            object: nil,
-            userInfo: ["tweet": tweet]
-        )
     }
 }

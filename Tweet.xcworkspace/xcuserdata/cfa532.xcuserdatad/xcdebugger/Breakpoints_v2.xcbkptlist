@@ -158,5 +158,95 @@
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "4E62313C-1F15-43EF-B21C-764AE75D29E8"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Core/HproseInstance.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "1224"
+            endingLineNumber = "1224"
+            landmarkName = "scheduleTweetUpload(tweet:itemData:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "17C19485-738C-4950-BC9A-93D6630B1FE8"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Core/HproseInstance.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "1226"
+            endingLineNumber = "1226"
+            landmarkName = "scheduleTweetUpload(tweet:itemData:)"
+            landmarkType = "7">
+            <Locations>
+               <Location
+                  uuid = "17C19485-738C-4950-BC9A-93D6630B1FE8 - 746731734e2c0322"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(8) suspend resume partial function for closure #1 () async -&gt; () in Tweet.HproseInstance.scheduleTweetUpload(tweet: Tweet.Tweet, itemData: Swift.Array&lt;Tweet.HproseInstance.PendingUpload.ItemData&gt;) -&gt; ()"
+                  moduleName = "Tweet.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "1226"
+                  endingLineNumber = "1226">
+               </Location>
+               <Location
+                  uuid = "17C19485-738C-4950-BC9A-93D6630B1FE8 - 76a1dacbc8b51866"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(16) suspend resume partial function for closure #1 () async -&gt; () in Tweet.HproseInstance.scheduleTweetUpload(tweet: Tweet.Tweet, itemData: Swift.Array&lt;Tweet.HproseInstance.PendingUpload.ItemData&gt;) -&gt; ()"
+                  moduleName = "Tweet.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "1226"
+                  endingLineNumber = "1226">
+               </Location>
+               <Location
+                  uuid = "17C19485-738C-4950-BC9A-93D6630B1FE8 - 1f56ac4daf3f7767"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(17) suspend resume partial function for closure #1 () async -&gt; () in Tweet.HproseInstance.scheduleTweetUpload(tweet: Tweet.Tweet, itemData: Swift.Array&lt;Tweet.HproseInstance.PendingUpload.ItemData&gt;) -&gt; ()"
+                  moduleName = "Tweet.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "1226"
+                  endingLineNumber = "1226">
+               </Location>
+               <Location
+                  uuid = "17C19485-738C-4950-BC9A-93D6630B1FE8 - b7d36cab32d16bc4"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "closure #1 @Swift.MainActor @Sendable () -&gt; () in closure #1 () async -&gt; () in Tweet.HproseInstance.scheduleTweetUpload(tweet: Tweet.Tweet, itemData: Swift.Array&lt;Tweet.HproseInstance.PendingUpload.ItemData&gt;) -&gt; ()"
+                  moduleName = "Tweet.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "1228"
+                  endingLineNumber = "1228">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
    </Breakpoints>
 </Bucket>

@@ -119,9 +119,7 @@ struct ComposeTweetView: View {
                     Button("Tweet") {
                         Task {
                             await viewModel.postTweet()
-                            if !viewModel.isUploading {
-                                dismiss()
-                            }
+                            dismiss()
                         }
                     }
                     .disabled(!viewModel.canPostTweet || viewModel.isUploading)
@@ -140,12 +138,3 @@ struct ComposeTweetView: View {
         }
     }
 }
-
-#Preview {
-    if #available(iOS 16.0, *) {
-        ComposeTweetView()
-            .environmentObject(HproseInstance.shared)
-    } else {
-        // Fallback on earlier versions
-    }
-} 
