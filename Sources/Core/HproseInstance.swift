@@ -167,7 +167,16 @@ final class HproseInstance: ObservableObject {
     }
     
     // MARK: - Tweet Operations
-    /// Updated: Use pageNumber and pageSize for easier pagination
+    /// Fetches a page of tweets for the user's timeline/feed.
+    /// - Parameters:
+    ///   - user: The user whose feed to fetch.
+    ///   - pageNumber: The page number to fetch (0-based).
+    ///   - pageSize: The number of tweets per page.
+    ///   - entry: The backend entry point (default: "get_tweet_feed").
+    /// - Returns: An array of Tweet objects (non-nil, up to pageSize).
+    ///
+    /// The backend may return an array containing nils. If the returned array size is less than pageSize, it means there are no more tweets on the backend.
+    /// This function accumulates only non-nil tweets and stops fetching when the backend returns fewer than pageSize items.
     func fetchTweetFeed(
         user: User,
         pageNumber: Int = 0,
@@ -200,19 +209,25 @@ final class HproseInstance: ObservableObject {
                     print("[fetchTweetFeed] Response is not an array: \(unwrappedResponse)")
                     return accumulatedTweets
                 }
-                // Only keep non-nil tweets
                 let validDictionaries = responseArray.compactMap { item -> [String: Any]? in
                     if let dict = item as? [String: Any] { return dict } else { return nil }
                 }
                 for dict in validDictionaries {
                     guard let parsedTweet = Tweet.from(dict: dict) else { continue }
-                    let tweet: Tweet = tweetCacheLock.withLock {
-                        if let cached = tweetCache[parsedTweet.mid] {
-                            return cached
-                        } else {
-                            tweetCache[parsedTweet.mid] = parsedTweet
-                            return parsedTweet
+                    let cached = tweetCacheLock.withLock { tweetCache[parsedTweet.mid] }
+                    let tweet: Tweet
+                    if let cached = cached {
+                        await MainActor.run {
+                            cached.favorites = parsedTweet.favorites
+                            cached.favoriteCount = parsedTweet.favoriteCount
+                            cached.bookmarkCount = parsedTweet.bookmarkCount
+                            cached.retweetCount = parsedTweet.retweetCount
+                            cached.commentCount = parsedTweet.commentCount
                         }
+                        tweet = cached
+                    } else {
+                        tweetCacheLock.withLock { tweetCache[parsedTweet.mid] = parsedTweet }
+                        tweet = parsedTweet
                     }
                     if tweet.author == nil {
                         if let author = try? await getUser(tweet.authorId) {
@@ -225,7 +240,6 @@ final class HproseInstance: ObservableObject {
                         return accumulatedTweets
                     }
                 }
-                // Stop if backend returned less than pageSize (no more tweets)
                 if responseArray.count < pageSize {
                     return accumulatedTweets
                 }
@@ -236,42 +250,82 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /// Fetches a page of tweets for a specific user.
+    /// - Parameters:
+    ///   - user: The user whose tweets to fetch.
+    ///   - startRank: The starting index for pagination.
+    ///   - endRank: The ending index for pagination.
+    ///   - entry: The backend entry point (default: "get_tweets_by_user").
+    /// - Returns: An array of Tweet objects (non-nil, up to requested page size).
+    ///
+    /// The backend may return an array containing nils. If the returned array size is less than pageSize, it means there are no more tweets on the backend.
+    /// This function accumulates only non-nil tweets and stops fetching when the backend returns fewer than pageSize items.
     func fetchUserTweet(
         user: User,
         startRank: UInt,
         endRank: UInt,
         entry: String = "get_tweets_by_user"
     ) async throws -> [Tweet] {
+        let pageSize = Int(endRank - startRank + 1)
+        var accumulatedTweets: [Tweet] = []
+        var currentStart = startRank
+        var currentEnd = endRank
         return try await withRetry {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "userid": user.mid,
-                "start": startRank,
-                "end": endRank,
-                "appuserid": appUser.mid,
-            ]
-            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
-                print("Invalid response format from server")
-                return []
-            }
-            // Only keep non-nil tweets
-            let tweets = response.compactMap { dict -> Tweet? in
-                guard let dict = dict else { return nil }
-                return Tweet.from(dict: dict)
-            }
-            var tweetsWithAuthors: [Tweet] = []
-            for tweet in tweets {
-                if let author = try? await getUser(tweet.authorId) {
-                    tweet.author = author
-                    tweetsWithAuthors.append(tweet)
+            while accumulatedTweets.count < pageSize {
+                let params = [
+                    "aid": appId,
+                    "ver": "last",
+                    "userid": user.mid,
+                    "start": currentStart,
+                    "end": currentEnd,
+                    "appuserid": appUser.mid,
+                ]
+                guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
+                    print("Invalid response format from server")
+                    return accumulatedTweets
                 }
+                let validDictionaries = response.compactMap { dict -> [String: Any]? in
+                    guard let dict = dict else { return nil }
+                    return dict
+                }
+                for dict in validDictionaries {
+                    guard let parsedTweet = Tweet.from(dict: dict) else { continue }
+                    let cached = tweetCacheLock.withLock { tweetCache[parsedTweet.mid] }
+                    let tweet: Tweet
+                    if let cached = cached {
+                        await MainActor.run {
+                            cached.favorites = parsedTweet.favorites
+                            cached.favoriteCount = parsedTweet.favoriteCount
+                            cached.bookmarkCount = parsedTweet.bookmarkCount
+                            cached.retweetCount = parsedTweet.retweetCount
+                            cached.commentCount = parsedTweet.commentCount
+                        }
+                        tweet = cached
+                    } else {
+                        tweetCacheLock.withLock { tweetCache[parsedTweet.mid] = parsedTweet }
+                        tweet = parsedTweet
+                    }
+                    if tweet.author == nil {
+                        if let author = try? await getUser(tweet.authorId) {
+                            tweet.author = author
+                            tweetCacheLock.withLock { tweetCache[tweet.mid] = tweet }
+                        }
+                    }
+                    accumulatedTweets.append(tweet)
+                    if accumulatedTweets.count >= pageSize {
+                        return accumulatedTweets
+                    }
+                }
+                if response.count < pageSize {
+                    return accumulatedTweets
+                }
+                currentStart += UInt(response.count)
+                currentEnd = currentStart + UInt(pageSize) - 1
             }
-            // If backend returned less than pageSize, no more tweets
-            return tweetsWithAuthors
+            return accumulatedTweets
         }
     }
     
@@ -733,6 +787,7 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any],
                let updatedOriginalTweet = Tweet.from(dict: tweetDict) {
                 await MainActor.run {
+                    tweet.favorites = updatedOriginalTweet.favorites
                     tweet.retweetCount = updatedOriginalTweet.retweetCount
                     tweet.favoriteCount = updatedOriginalTweet.favoriteCount
                     tweet.bookmarkCount = updatedOriginalTweet.bookmarkCount
