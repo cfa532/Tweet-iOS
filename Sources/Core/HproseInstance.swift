@@ -1223,6 +1223,12 @@ final class HproseInstance: ObservableObject {
                 
                 if let uploadedTweet = try await self.uploadTweet(tweet) {
                     await MainActor.run {
+                        // Post notification for new tweet
+                        NotificationCenter.default.post(
+                            name: .newTweetCreated,
+                            object: nil,
+                            userInfo: ["tweet": tweet]
+                        )
                         print("Tweet published successfully \(uploadedTweet)")
                     }
                 } else {
