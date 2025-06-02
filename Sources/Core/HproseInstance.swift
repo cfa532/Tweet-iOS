@@ -200,20 +200,12 @@ final class HproseInstance: ObservableObject {
                     print("[fetchTweetFeed] Response is not an array: \(unwrappedResponse)")
                     return accumulatedTweets
                 }
-                if responseArray.count < pageSize {
-                    print("[fetchTweetFeed] Reached end of feed (response count: \(responseArray.count) < page size: \(pageSize))")
-                    return accumulatedTweets
-                }
+                // Only keep non-nil tweets
                 let validDictionaries = responseArray.compactMap { item -> [String: Any]? in
-                    if let dict = item as? [String: Any] { return dict }
-                    return nil
+                    if let dict = item as? [String: Any] { return dict } else { return nil }
                 }
                 for dict in validDictionaries {
-                    guard let parsedTweet = Tweet.from(dict: dict) else {
-                        print("[fetchTweetFeed] Failed to parse tweet from dict: \(dict)")
-                        continue
-                    }
-                    // Use cache for tweet
+                    guard let parsedTweet = Tweet.from(dict: dict) else { continue }
                     let tweet: Tweet = tweetCacheLock.withLock {
                         if let cached = tweetCache[parsedTweet.mid] {
                             return cached
@@ -222,35 +214,20 @@ final class HproseInstance: ObservableObject {
                             return parsedTweet
                         }
                     }
-                    // Fetch author if needed
-                    let tweetWithAuthor = tweet
-                    if tweetWithAuthor.author == nil {
-                        if let author = try? await getUser(tweetWithAuthor.authorId) {
-                            tweetWithAuthor.author = author
-                            tweetCacheLock.withLock { tweetCache[tweetWithAuthor.mid] = tweetWithAuthor }
+                    if tweet.author == nil {
+                        if let author = try? await getUser(tweet.authorId) {
+                            tweet.author = author
+                            tweetCacheLock.withLock { tweetCache[tweet.mid] = tweet }
                         }
                     }
-                    // If retweet, ensure original is cached and shared
-                    if let origId = tweetWithAuthor.originalTweetId, let origAuthorId = tweetWithAuthor.originalAuthorId {
-                        let _: Tweet = tweetCacheLock.withLock {
-                            if let cachedOrig = tweetCache[origId] {
-                                return cachedOrig
-                            } else if let origDict = validDictionaries.first(where: { $0["mid"] as? String == origId }), let origParsed = Tweet.from(dict: origDict) {
-                                tweetCache[origId] = origParsed
-                                return origParsed
-                            } else {
-                                // fallback: fetch from network if not present
-                                return tweetCache[origId] ?? Tweet(mid: origId, authorId: origAuthorId)
-                            }
-                        }
-                        // Optionally, you could add a property to Tweet for holding the original Tweet object reference if needed
-                        // (not shown in your model, but you could add: var originalTweet: Tweet?)
-                    }
-                    accumulatedTweets.append(tweetWithAuthor)
+                    accumulatedTweets.append(tweet)
                     if accumulatedTweets.count >= pageSize {
-                        print("[fetchTweetFeed] Returning \(accumulatedTweets.count) tweets with authors (reached page size)")
                         return accumulatedTweets
                     }
+                }
+                // Stop if backend returned less than pageSize (no more tweets)
+                if responseArray.count < pageSize {
+                    return accumulatedTweets
                 }
                 startRank += UInt(responseArray.count)
                 endRank = startRank + UInt(pageSize)
@@ -263,13 +240,12 @@ final class HproseInstance: ObservableObject {
         user: User,
         startRank: UInt,
         endRank: UInt,
-        entry: String = "get_tweets_by_rank"
+        entry: String = "get_tweets_by_user"
     ) async throws -> [Tweet] {
-        try await withRetry {
+        return try await withRetry {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            
             let params = [
                 "aid": appId,
                 "ver": "last",
@@ -278,25 +254,23 @@ final class HproseInstance: ObservableObject {
                 "end": endRank,
                 "appuserid": appUser.mid,
             ]
-            
-            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
                 print("Invalid response format from server")
                 return []
             }
-            
-            // First create tweets without author data
+            // Only keep non-nil tweets
             let tweets = response.compactMap { dict -> Tweet? in
+                guard let dict = dict else { return nil }
                 return Tweet.from(dict: dict)
             }
-            
-            // Then fetch author data for each tweet
             var tweetsWithAuthors: [Tweet] = []
             for tweet in tweets {
-                if let author = try await getUser(tweet.authorId) {
+                if let author = try? await getUser(tweet.authorId) {
                     tweet.author = author
                     tweetsWithAuthors.append(tweet)
                 }
             }
+            // If backend returned less than pageSize, no more tweets
             return tweetsWithAuthors
         }
     }
