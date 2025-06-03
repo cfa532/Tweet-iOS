@@ -656,8 +656,9 @@ final class HproseInstance: ObservableObject {
                let favoriteCount = response["count"] as? Int {
                 var favorites = tweet.favorites ?? [false, false, false]
                 favorites[UserActions.FAVORITE.rawValue] = isFavorite
+                let updatedTweet = tweet.copy(favorites: favorites, favoriteCount: favoriteCount)
                 return await MainActor.run {
-                    tweet.copy(favorites: favorites, favoriteCount: favoriteCount)
+                    updatedTweet
                 }
             }
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: No favorite info"])
@@ -691,8 +692,9 @@ final class HproseInstance: ObservableObject {
                let bookmarkCount = response["count"] as? Int {
                 var favorites = tweet.favorites ?? [false, false, false]
                 favorites[UserActions.BOOKMARK.rawValue] = hasBookmarked
+                let updatedTweet = tweet.copy(favorites: favorites, bookmarkCount: bookmarkCount)
                 return await MainActor.run {
-                    tweet.copy(favorites: favorites, bookmarkCount: bookmarkCount)
+                    updatedTweet
                 }
             }
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: No bookmark info"])

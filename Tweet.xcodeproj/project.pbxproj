@@ -41,7 +41,6 @@
 		46E5B3472DDC0CFB00AEF31F /* Avatar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3462DDC0CF500AEF31F /* Avatar.swift */; };
 		46E5B3492DDC0F6900AEF31F /* MediaGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3482DDC0F5B00AEF31F /* MediaGridView.swift */; };
 		46E5B34B2DDC155600AEF31F /* MediaCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B34A2DDC155200AEF31F /* MediaCell.swift */; };
-		46E5B34F2DDC9F1B00AEF31F /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B34E2DDC9F1B00AEF31F /* ProfileView.swift */; };
 		46E5B3512DDCA00000AEF31F /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3502DDC9FFC00AEF31F /* Settings.swift */; };
 		46E5B3532DDD6A7A00AEF31F /* TweetDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3522DDD6A7A00AEF31F /* TweetDetailView.swift */; };
 		46E5B3572DDF74B500AEF31F /* CommentComposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3562DDF74B500AEF31F /* CommentComposeView.swift */; };
@@ -451,7 +450,6 @@
 				4608E2DA2DD5CD920051A92D /* User.swift in Sources */,
 				46E5B3632DE1703200AEF31F /* Registration.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */,
-				46E5B34F2DDC9F1B00AEF31F /* ProfileView.swift in Sources */,
 				46E5B3572DDF74B500AEF31F /* CommentComposeView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A2A /* PollCreationView.swift in Sources */,
 				46E5B36D2DE3617400AEF31F /* AvatarFullScreenView.swift in Sources */,
