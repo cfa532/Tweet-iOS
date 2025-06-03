@@ -10,6 +10,7 @@ struct TweetDetailView: View {
     @State private var showLoginSheet = false
     @State private var pinnedTweets: [[String: Any]] = []
     @State private var originalTweet: Tweet?
+    @State private var selectedUser: User? = nil
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
 
@@ -107,7 +108,7 @@ struct TweetDetailView: View {
                         )
                     ],
                     rowView: { comment in
-                        CommentItemView(comment: comment)
+                        CommentItemView(comment: comment, onAvatarTap: { user in selectedUser = user })
                     }
                 )
             }
@@ -135,6 +136,17 @@ struct TweetDetailView: View {
                 }
             }
         }
+        // Navigation to another user's profile when an avatar is tapped
+        NavigationLink(
+            destination: selectedUser.map { ProfileView(user: $0, onLogout: nil) },
+            isActive: Binding(
+                get: { selectedUser != nil },
+                set: { isActive in if !isActive { selectedUser = nil } }
+            )
+        ) {
+            EmptyView()
+        }
+        .hidden()
     }
 }
 
