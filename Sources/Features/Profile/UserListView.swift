@@ -114,20 +114,42 @@ struct UserListView: View {
     func loadMoreUsers() {
         guard hasMoreUsers, !isLoadingMore else { return }
         isLoadingMore = true
-        
+
         let startIndex = users.count
         let endIndex = min(startIndex + loadMoreBatchSize, userIds.count)
-        let nextBatchIds = Array(userIds[startIndex..<endIndex])
-        
+
         Task {
+            // If we've reached the end of the list, update state and return
+            if startIndex >= userIds.count {
+                await MainActor.run {
+                    hasMoreUsers = false
+                    isLoadingMore = false
+                }
+                return
+            }
+
+            let nextBatchIds = Array(userIds[startIndex..<endIndex])
+            // Defensive: If no more IDs to load, stop
+            if nextBatchIds.isEmpty {
+                await MainActor.run {
+                    hasMoreUsers = false
+                    isLoadingMore = false
+                }
+                return
+            }
+
             do {
                 let moreUsers = try await fetchUserObjects(for: nextBatchIds)
                 await MainActor.run {
-                    // Ensure no duplicates in the final users array
                     let existingIds = Set(users.map { $0.mid })
                     let uniqueNewUsers = moreUsers.filter { !existingIds.contains($0.mid) }
                     users.append(contentsOf: uniqueNewUsers)
-                    hasMoreUsers = endIndex < userIds.count
+                    // If we loaded fewer users than requested, or none, stop loading more
+                    if uniqueNewUsers.isEmpty || moreUsers.count < nextBatchIds.count || endIndex >= userIds.count {
+                        hasMoreUsers = false
+                    } else {
+                        hasMoreUsers = true
+                    }
                     isLoadingMore = false
                 }
             } catch {
@@ -135,6 +157,7 @@ struct UserListView: View {
                 await MainActor.run {
                     isLoadingMore = false
                     errorMessage = error.localizedDescription
+                    hasMoreUsers = false // Stop spinner on error
                 }
             }
         }
