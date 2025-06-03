@@ -12,7 +12,6 @@ struct TweetDetailView: View {
     @State private var originalTweet: Tweet?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.isDetailView) private var isDetailView
 
     init(tweet: Tweet) {
         self.tweet = tweet
@@ -129,7 +128,13 @@ struct TweetDetailView: View {
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
-        .environment(\.isDetailView, true)
+        .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
+            if let deletedTweetId = notification.userInfo?["tweetId"] as? String ?? notification.object as? String {
+                if deletedTweetId == displayTweet.mid {
+                    dismiss()
+                }
+            }
+        }
     }
 }
 
