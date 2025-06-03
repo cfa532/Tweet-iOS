@@ -63,6 +63,12 @@ final class HproseInstance: ObservableObject {
     private var tweetCache = [String: Tweet]()
     private let tweetCacheLock = NSLock()
     
+    /// Exposes a copy of the cached users for read-only external access.
+    /// Note: The returned set is a snapshot and not live-updating. Thread-safe.
+    public var exposedCachedUsers: Set<User> {
+        cachedUsersLock.withLock { _cachedUsers }
+    }
+    
     // MARK: - Initialization
     private init() {}
     
@@ -332,7 +338,7 @@ final class HproseInstance: ObservableObject {
             return cached
         }
         return try await withRetry {
-            guard var service = hproseClient else {
+            guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             let entry = "get_tweet"
@@ -401,12 +407,14 @@ final class HproseInstance: ObservableObject {
             guard let response = service.runMApp(entry, params, nil) else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUser"])
             }
-            if let userDict = service.runMApp(entry, params, nil) as? [String: Any],
+            if let userDict = response as? [String: Any],
+               // a valid User object is returned
                let user = User.from(dict: userDict) {
                 user.baseUrl = baseUrl
                 _ = cachedUsersLock.withLock { _cachedUsers.insert(user) }
                 return user
             }
+            // the user is not found on this node, a provider IP of the user is returned.
             if let ipAddress = response as? String {
                 let newClient = HproseHttpClient()
                 newClient.timeout = 60

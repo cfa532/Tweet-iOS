@@ -4,23 +4,26 @@ import SwiftUI
 struct UserListView: View {
     // MARK: - Properties
     let title: String
-    let userFetcher: @Sendable (Int, Int) async throws -> [User]
+    let userFetcher: @Sendable (Int, Int) async throws -> [String] // Now returns user IDs
     let onFollowToggle: ((User) async -> Void)?
     let onUserTap: ((User) -> Void)?
     
-    @State private var users: [User] = []
+    @State private var userIds: [String] = [] // Store all user IDs
+    @State private var users: [User] = [] // Store fetched user objects
     @State private var isLoading: Bool = false
     @State private var isLoadingMore: Bool = false
     @State private var hasMoreUsers: Bool = true
     @State private var currentPage: Int = 0
-    private let pageSize: Int = 20
+    private let initialBatchSize: Int = 10
+    private let loadMoreBatchSize: Int = 5
     @State private var errorMessage: String? = nil
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var hproseInstance: HproseInstance
 
     // MARK: - Initialization
     init(
         title: String,
-        userFetcher: @escaping @Sendable (Int, Int) async throws -> [User],
+        userFetcher: @escaping @Sendable (Int, Int) async throws -> [String],
         onFollowToggle: ((User) async -> Void)? = nil,
         onUserTap: ((User) -> Void)? = nil
     ) {
@@ -81,10 +84,22 @@ struct UserListView: View {
         currentPage = 0
         hasMoreUsers = true
         do {
-            let newUsers = try await userFetcher(0, pageSize)
+            // First fetch all user IDs
+            let allUserIds = try await userFetcher(0, Int.max)
+            // Deduplicate user IDs
+            let uniqueUserIds = Array(Set(allUserIds))
             await MainActor.run {
-                users = newUsers
-                hasMoreUsers = newUsers.count == pageSize
+                userIds = uniqueUserIds
+                users = []
+            }
+            
+            // Then fetch initial batch of user objects
+            let initialUserIds = Array(uniqueUserIds.prefix(initialBatchSize))
+            let initialUsers = try await fetchUserObjects(for: initialUserIds)
+            
+            await MainActor.run {
+                users = initialUsers
+                hasMoreUsers = uniqueUserIds.count > initialBatchSize
                 isLoading = false
             }
         } catch {
@@ -99,17 +114,20 @@ struct UserListView: View {
     func loadMoreUsers() {
         guard hasMoreUsers, !isLoadingMore else { return }
         isLoadingMore = true
-        let nextPage = currentPage + 1
+        
+        let startIndex = users.count
+        let endIndex = min(startIndex + loadMoreBatchSize, userIds.count)
+        let nextBatchIds = Array(userIds[startIndex..<endIndex])
+        
         Task {
             do {
-                let moreUsers = try await userFetcher(nextPage, pageSize)
+                let moreUsers = try await fetchUserObjects(for: nextBatchIds)
                 await MainActor.run {
-                    // Prevent duplicates
-                    let existingIds = Set(users.map { $0.id })
-                    let uniqueNew = moreUsers.filter { !existingIds.contains($0.id) }
-                    users.append(contentsOf: uniqueNew)
-                    hasMoreUsers = moreUsers.count == pageSize
-                    currentPage = nextPage
+                    // Ensure no duplicates in the final users array
+                    let existingIds = Set(users.map { $0.mid })
+                    let uniqueNewUsers = moreUsers.filter { !existingIds.contains($0.mid) }
+                    users.append(contentsOf: uniqueNewUsers)
+                    hasMoreUsers = endIndex < userIds.count
                     isLoadingMore = false
                 }
             } catch {
@@ -120,6 +138,31 @@ struct UserListView: View {
                 }
             }
         }
+    }
+    
+    private func fetchUserObjects(for userIds: [String]) async throws -> [User] {
+        var fetchedUsers: [User] = []
+        
+        for userId in userIds {
+            // First check if user is in cache
+            if let cachedUser = hproseInstance.exposedCachedUsers.first(where: { $0.mid == userId }) {
+                fetchedUsers.append(cachedUser)
+                continue
+            }
+            
+            // If not in cache, fetch from server
+            do {
+                if let user = try await hproseInstance.getUser(userId) {
+                    fetchedUsers.append(user)
+                }
+            } catch {
+                print("Error fetching user \(userId): \(error)")
+                // Continue with next user ID
+                continue
+            }
+        }
+        
+        return fetchedUsers
     }
 }
 
