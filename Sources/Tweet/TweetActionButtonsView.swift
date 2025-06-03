@@ -57,9 +57,9 @@ struct TweetActionButtonsView: View {
                             .frame(minWidth: 20, alignment: .leading)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: 48, alignment: .leading)
             }
-            
+            Spacer(minLength: 12)
             // Retweet button
             Button(action: {
                 if hproseInstance.appUser.isGuest {
@@ -82,9 +82,9 @@ struct TweetActionButtonsView: View {
                             .frame(minWidth: 20, alignment: .leading)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: 48, alignment: .leading)
             }
-            
+            Spacer(minLength: 12)
             // Like button
             Button(action: {
                 if hproseInstance.appUser.isGuest {
@@ -117,9 +117,9 @@ struct TweetActionButtonsView: View {
                             .frame(minWidth: 20, alignment: .leading)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: 48, alignment: .leading)
             }
-            
+            Spacer(minLength: 12)
             // Bookmark button
             Button(action: {
                 if hproseInstance.appUser.isGuest {
@@ -151,16 +151,16 @@ struct TweetActionButtonsView: View {
                             .frame(minWidth: 20, alignment: .leading)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: 48, alignment: .leading)
             }
-            
+            Spacer(minLength: 0)
             // Share button
             Button(action: {
                 showShareSheet = true
             }) {
                 Image(systemName: "square.and.arrow.up")
                     .frame(width: 20)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(.leading, 40)
         }

@@ -93,6 +93,20 @@ struct TweetDetailView: View {
                         )
                     },
                     showTitle: false,
+                    notifications: [
+                        TweetListNotification(
+                            name: .newCommentAdded,
+                            key: "comment",
+                            shouldAccept: { comment in comment.originalTweetId == displayTweet.mid },
+                            action: { comments, comment in comments.insert(comment, at: 0) }
+                        ),
+                        TweetListNotification(
+                            name: .commentDeleted,
+                            key: "commentId",
+                            shouldAccept: { _ in true },
+                            action: { comments, comment in comments.removeAll { $0?.mid == comment.mid } }
+                        )
+                    ],
                     rowView: { comment in
                         CommentItemView(comment: comment)
                     }

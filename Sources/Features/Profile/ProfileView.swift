@@ -207,26 +207,59 @@ struct ProfileView: View {
             )
         }
         .navigationDestination(isPresented: $showTweetList) {
-            TweetListView<TweetItemView>(
-                title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",
-                tweetFetcher: { page, size in
-                    try await hproseInstance.fetchUserTweet(
-                        user: user,
-                        startRank: UInt(page * size),
-                        endRank: UInt((page + 1) * size - 1)
-                    )
-                },
-                showTitle: true,
-                rowView: { tweet in
-                    TweetItemView(
-                        tweet: tweet,
-                        isPinned: pinnedTweetIds.contains(tweet.mid),
-                        isInProfile: true,
-                        onAvatarTap: { user in selectedUser = user }
-                    )
-                }
-            )
+            bookmarksOrFavoritesListView()
         }
+    }
+
+    @ViewBuilder
+    private func bookmarksOrFavoritesListView() -> some View {
+        TweetListView<TweetItemView>(
+            title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",
+            tweetFetcher: { page, size in
+                try await hproseInstance.getUserTweetsByType(
+                    user: user,
+                    type: tweetListType,
+                    pageNumber: page,
+                    pageSize: size
+                )
+            },
+            showTitle: true,
+            notifications: tweetListType == .BOOKMARKS ? [
+                TweetListNotification(
+                    name: .bookmarkAdded,
+                    key: "tweet",
+                    shouldAccept: { _ in true },
+                    action: { tweets, tweet in tweets.insert(tweet, at: 0) }
+                ),
+                TweetListNotification(
+                    name: .bookmarkRemoved,
+                    key: "tweetId",
+                    shouldAccept: { _ in true },
+                    action: { tweets, tweet in tweets.removeAll { $0?.mid == tweet.mid } }
+                )
+            ] : [
+                TweetListNotification(
+                    name: .favoriteAdded,
+                    key: "tweet",
+                    shouldAccept: { _ in true },
+                    action: { tweets, tweet in tweets.insert(tweet, at: 0) }
+                ),
+                TweetListNotification(
+                    name: .favoriteRemoved,
+                    key: "tweetId",
+                    shouldAccept: { _ in true },
+                    action: { tweets, tweet in tweets.removeAll { $0?.mid == tweet.mid } }
+                )
+            ],
+            rowView: { tweet in
+                TweetItemView(
+                    tweet: tweet,
+                    isPinned: pinnedTweetIds.contains(tweet.mid),
+                    isInProfile: true,
+                    onAvatarTap: { user in selectedUser = user }
+                )
+            }
+        )
     }
 }
 

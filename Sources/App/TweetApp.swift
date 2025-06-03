@@ -20,6 +20,8 @@ class AppState: ObservableObject {
 @main
 struct TweetApp: App {
     @StateObject private var appState = AppState()
+    @State private var showGlobalAlert = false
+    @State private var globalAlertMessage = ""
     
     init() {
         // Configure background task scheduler
@@ -42,6 +44,49 @@ struct TweetApp: App {
                             await appState.initialize()
                         }
                 }
+            }
+            .alert(isPresented: $showGlobalAlert) {
+                Alert(title: Text("Error"), message: Text(globalAlertMessage), dismissButton: .default(Text("OK")))
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .backgroundUploadFailed)) { notification in
+                if let msg = notification.userInfo?["error"] as? String {
+                    globalAlertMessage = msg
+                } else {
+                    globalAlertMessage = "Background upload failed."
+                }
+                showGlobalAlert = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .tweetPublishFailed)) { notification in
+                if let msg = notification.userInfo?["error"] as? String {
+                    globalAlertMessage = msg
+                } else {
+                    globalAlertMessage = "Failed to publish tweet."
+                }
+                showGlobalAlert = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .tweetDeletdFailed)) { notification in
+                if let msg = notification.userInfo?["error"] as? String {
+                    globalAlertMessage = msg
+                } else {
+                    globalAlertMessage = "Failed to delete tweet."
+                }
+                showGlobalAlert = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .commentPublishFailed)) { notification in
+                if let msg = notification.userInfo?["error"] as? String {
+                    globalAlertMessage = msg
+                } else {
+                    globalAlertMessage = "Failed to publish comment."
+                }
+                showGlobalAlert = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .commentDeleteFailed)) { notification in
+                if let msg = notification.userInfo?["error"] as? String {
+                    globalAlertMessage = msg
+                } else {
+                    globalAlertMessage = "Failed to delete comment."
+                }
+                showGlobalAlert = true
             }
             .alert("Error", isPresented: .constant(appState.error != nil)) {
                 Button("OK") {

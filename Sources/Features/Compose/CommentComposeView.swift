@@ -141,8 +141,6 @@ struct CommentComposeView: View {
     }
     
     private func submitComment() async {
-        print("DEBUG: Starting submitComment()")
-        
         let trimmedContent = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Allow empty content if there are attachments
@@ -153,7 +151,6 @@ struct CommentComposeView: View {
         }
         
         // Create comment object
-        print("DEBUG: Creating comment object")
         let comment = Tweet(
             mid: Constants.GUEST_ID,                // placeholder Mimei Id
             authorId: hproseInstance.appUser.mid,

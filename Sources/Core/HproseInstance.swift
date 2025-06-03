@@ -96,7 +96,9 @@ final class HproseInstance: ObservableObject {
                     #if DEBUG
                         let firstIp = "115.205.181.233:8002"  // for testing
                     #endif
-                    appUser = appUser.copy(baseUrl: "http://\(firstIp)")
+                    await MainActor.run {
+                        appUser = appUser.copy(baseUrl: "http://\(firstIp)")
+                    }
                     client.uri = appUser.baseUrl!+"/webapi/"
                     hproseClient = client.useService(HproseService.self) as AnyObject
                     
@@ -105,7 +107,9 @@ final class HproseInstance: ObservableObject {
                        let providerIp = try await getProvider(userId) {
                         // get user object from this IP
                         if let user = try await getUser(userId, baseUrl: "http://\(providerIp)") {
-                            appUser = user
+                            await MainActor.run {
+                                appUser = user
+                            }
                             appUser.baseUrl = "http://\(providerIp)"
                             cachedUsers.insert(appUser)
                             return
@@ -196,15 +200,12 @@ final class HproseInstance: ObservableObject {
                     "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
                     "appuserid": appUser.mid,
                 ]
-                let rawResponse = service.runMApp(entry, params, nil)
-                guard let unwrappedResponse = rawResponse else {
-                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Response is nil in fetchTweetFeed"])
+                guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
+                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetcTweetFeed"])
                 }
-                guard let responseArray = unwrappedResponse as? [Any] else {
-                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Response is not an array in fetchTweetFeed"])
-                }
-                let validDictionaries = responseArray.compactMap { item -> [String: Any]? in
-                    if let dict = item as? [String: Any] { return dict } else { return nil }
+                let validDictionaries = response.compactMap { dict -> [String: Any]? in
+                    guard let dict = dict else { return nil }
+                    return dict
                 }
                 for dict in validDictionaries {
                     guard let parsedTweet = Tweet.from(dict: dict) else { continue }
@@ -234,10 +235,10 @@ final class HproseInstance: ObservableObject {
                         return accumulatedTweets
                     }
                 }
-                if responseArray.count < pageSize {
+                if response.count < pageSize {
                     return accumulatedTweets
                 }
-                startRank += UInt(responseArray.count)
+                startRank += UInt(response.count)
                 endRank = startRank + UInt(pageSize)
             }
             return accumulatedTweets
@@ -524,18 +525,20 @@ final class HproseInstance: ObservableObject {
                 newClient.uri = "\(user.baseUrl!)/webapi/"
                 service = newClient.useService(HproseService.self) as AnyObject
             }
-            guard let response = service.runMApp(entry, params, nil) as? [Any] else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getUserTweetsByType: No response"])
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
+            }
+            let validDictionaries = response.compactMap { dict -> [String: Any]? in
+                guard let dict = dict else { return nil }
+                return dict
             }
             var tweetsWithAuthors: [Tweet] = []
-            for item in response {
-                if let dict = item as? [String: Any] {
-                    if let tweet = Tweet.from(dict: dict) {
-                        if let author = try await getUser(tweet.authorId) {
-                            let tweetWithAuthor = tweet
-                            tweetWithAuthor.author = author
-                            tweetsWithAuthors.append(tweetWithAuthor)
-                        }
+            for item in validDictionaries {
+                if let tweet = Tweet.from(dict: item) {
+                    if let author = try await getUser(tweet.authorId) {
+                        let tweetWithAuthor = tweet
+                        tweetWithAuthor.author = author
+                        tweetsWithAuthors.append(tweetWithAuthor)
                     }
                 }
             }
@@ -750,7 +753,7 @@ final class HproseInstance: ObservableObject {
         }
     }
         
-    func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> (Tweet, Tweet)? {
+    func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
         return try await withRetry {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
@@ -773,8 +776,10 @@ final class HproseInstance: ObservableObject {
                let count = response["count"] as? Int {
                 let newComment = comment
                 newComment.mid = commentId
+                newComment.author = try? await getUser(newComment.authorId)
                 return await MainActor.run {
-                    (tweet.copy(commentCount: count), newComment)
+                    _ = tweet.copy(commentCount: count)
+                    return newComment
                 }
             }
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: No commentId or count"])
@@ -1161,6 +1166,7 @@ final class HproseInstance: ObservableObject {
             
             let uploadedTweet = tweet
             uploadedTweet.mid = newTweetId
+            uploadedTweet.author = try? await self.getUser(tweet.authorId)
             return uploadedTweet
         }
     }
@@ -1222,7 +1228,6 @@ final class HproseInstance: ObservableObject {
                 tweet.attachments = uploadedAttachments
                 
                 if let uploadedTweet = try await self.uploadTweet(tweet) {
-                    uploadedTweet.author = try? await self.getUser(tweet.authorId)
                     await MainActor.run {
                         // Post notification for new tweet
                         NotificationCenter.default.post(
@@ -1266,13 +1271,13 @@ final class HproseInstance: ObservableObject {
                     return
                 }
                 comment.attachments = uploadedAttachments
-                if let (updatedTweet, newComment) = try await self.addComment(comment, to: tweet) {
+                if let newComment = try await self.addComment(comment, to: tweet) {
                     await MainActor.run {
                         // Notify observers about both the updated tweet and new comment
                         NotificationCenter.default.post(
                             name: .newCommentAdded,
                             object: nil,
-                            userInfo: ["tweetId": tweet.mid]
+                            userInfo: ["comment": newComment]
                         )
                     }
                 } else {
@@ -1370,9 +1375,4 @@ class CachedTweetDao {
         // TODO: Implement last tweet rank retrieval
         return 0
     }
-}
-
-// Notification name for background upload failure
-extension Notification.Name {
-    static let backgroundUploadFailed = Notification.Name("backgroundUploadFailed")
 }

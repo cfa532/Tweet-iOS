@@ -61,6 +61,20 @@ struct ProfileTweetsSection: View {
                         }
                     },
                     showTitle: false,
+                    notifications: [
+                        TweetListNotification(
+                            name: .newTweetCreated,
+                            key: "tweet",
+                            shouldAccept: { tweet in tweet.authorId == user.mid },
+                            action: { tweets, tweet in tweets.insert(tweet, at: 0) }
+                        ),
+                        TweetListNotification(
+                            name: .tweetDeleted,
+                            key: "tweetId",
+                            shouldAccept: { _ in true },
+                            action: { tweets, tweet in tweets.removeAll { $0?.mid == tweet.mid } }
+                        )
+                    ],
                     rowView: { tweet in
                         TweetItemView(
                             tweet: tweet,

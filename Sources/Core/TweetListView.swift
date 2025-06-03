@@ -1,5 +1,12 @@
 import SwiftUI
 
+struct TweetListNotification {
+    let name: Notification.Name
+    let key: String
+    let shouldAccept: (Tweet) -> Bool
+    let action: (inout [Tweet?], Tweet) -> Void
+}
+
 @available(iOS 16.0, *)
 struct TweetListView<RowView: View>: View {
     // MARK: - Properties
@@ -7,6 +14,7 @@ struct TweetListView<RowView: View>: View {
     let tweetFetcher: @Sendable (Int, Int) async throws -> [Tweet?]
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
+    let notifications: [TweetListNotification]
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var tweets: [Tweet?] = []
@@ -29,11 +37,27 @@ struct TweetListView<RowView: View>: View {
         title: String,
         tweetFetcher: @escaping @Sendable (Int, Int) async throws -> [Tweet?],
         showTitle: Bool = true,
+        notifications: [TweetListNotification]? = nil,
         rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
         self.tweetFetcher = tweetFetcher
         self.showTitle = showTitle
+        // Default: listen for newTweetCreated and insert at top
+        self.notifications = notifications ?? [
+            TweetListNotification(
+                name: .newTweetCreated,
+                key: "tweet",
+                shouldAccept: { _ in true },
+                action: { tweets, tweet in tweets.insert(tweet, at: 0) }
+            ),
+            TweetListNotification(
+                name: .tweetDeleted,
+                key: "tweetId",
+                shouldAccept: { _ in true },
+                action: { tweets, tweet in tweets.removeAll { $0?.mid == tweet.mid } }
+            )
+        ]
         self.rowView = rowView
     }
 
@@ -77,12 +101,22 @@ struct TweetListView<RowView: View>: View {
                     await refreshTweets()
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .newTweetCreated)) { notification in
-                if let newTweet = notification.userInfo?["tweet"] as? Tweet {
-                    withAnimation {
-                        insertTweet(newTweet)
+            // Listen to all notifications
+            ForEach(Array(notifications.enumerated()), id: \ .element.name) { idx, notification in
+                EmptyView()
+                    .onReceive(NotificationCenter.default.publisher(for: notification.name)) { notif in
+                        if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
+                            var tweetsCopy = tweets
+                            notification.action(&tweetsCopy, tweet)
+                            tweets = tweetsCopy
+                        }
+                        // Special case: tweetDeleted may send tweetId as String
+                        if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
+                            var tweetsCopy = tweets
+                            tweetsCopy.removeAll { $0?.mid == tweetId }
+                            tweets = tweetsCopy
+                        }
                     }
-                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
                 if let deletedTweetId = notification.object as? String {

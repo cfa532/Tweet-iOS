@@ -20,8 +20,25 @@ extension Notification.Name {
     
     /// Posted when a new comment is added
     static let newCommentAdded = Notification.Name("NewCommentAdded")
+    static let commentDeleted = Notification.Name("CommentDeleted")
+    
+    /// Posted when a tweet is bookmarked
+    static let bookmarkAdded = Notification.Name("BookmarkAdded")
+    /// Posted when a tweet is removed from bookmarks
+    static let bookmarkRemoved = Notification.Name("BookmarkRemoved")
+    /// Posted when a tweet is favorited
+    static let favoriteAdded = Notification.Name("FavoriteAdded")
+    /// Posted when a tweet is removed from favorites
+    static let favoriteRemoved = Notification.Name("FavoriteRemoved")
     
     // MARK: - Navigation Related
     /// Posted to pop to root view
     static let popToRoot = Notification.Name("PopToRoot")
-} 
+    
+    // MARK: - System Errors
+    static let backgroundUploadFailed = Notification.Name("BackgroundUploadFailed")
+    static let tweetPublishFailed = Notification.Name("TweetPublishFailed")
+    static let tweetDeletdFailed = Notification.Name("TweetDeletdFailed")
+    static let commentPublishFailed = Notification.Name("CommentPublishFailed")
+    static let commentDeleteFailed = Notification.Name("CommentDeleteFailed")
+}
