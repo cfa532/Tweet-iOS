@@ -10,7 +10,12 @@ class Tweet: Identifiable, Codable, ObservableObject {
     
     var originalTweetId: String? // retweet id of the original tweet
     var originalAuthorId: String? // authorId of the forwarded tweet
-    
+        
+    // Media attachments
+    var attachments: [MimeiFileType]?
+    var isPrivate: Bool?
+    var downloadable: Bool?
+
     // Display only properties
     var author: User?
     
@@ -20,11 +25,6 @@ class Tweet: Identifiable, Codable, ObservableObject {
     @Published var bookmarkCount: Int?
     @Published var retweetCount: Int?
     @Published var commentCount: Int?
-    
-    // Media attachments
-    var attachments: [MimeiFileType]?
-    var isPrivate: Bool?
-    var downloadable: Bool?
     
     // Computed properties for user interaction states
     var isFavorite: Bool {

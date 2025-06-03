@@ -60,8 +60,6 @@ final class HproseInstance: ObservableObject {
     private var hproseClient: AnyObject?
     
     // Global tweet cache: [tweetId: Tweet]
-    private var tweetCache = [String: Tweet]()
-    private let tweetCacheLock = NSLock()
     
     /// Exposes a copy of the cached users for read-only external access.
     /// Note: The returned set is a snapshot and not live-updating. Thread-safe.
@@ -85,6 +83,7 @@ final class HproseInstance: ObservableObject {
         appUser.followingList = Gadget.getAlphaIds()
         
         try await initAppEntry()
+        TweetCacheManager.shared.deleteExpiredTweets()
     }
     
     private func initAppEntry() async throws {
@@ -215,7 +214,7 @@ final class HproseInstance: ObservableObject {
                 }
                 for dict in validDictionaries {
                     guard let parsedTweet = Tweet.from(dict: dict) else { continue }
-                    let cached = tweetCacheLock.withLock { tweetCache[parsedTweet.mid] }
+                    let cached = TweetCacheManager.shared.fetchTweet(mid: parsedTweet.mid)
                     let tweet: Tweet
                     if let cached = cached {
                         await MainActor.run {
@@ -227,13 +226,13 @@ final class HproseInstance: ObservableObject {
                         }
                         tweet = cached
                     } else {
-                        tweetCacheLock.withLock { tweetCache[parsedTweet.mid] = parsedTweet }
+                        TweetCacheManager.shared.saveTweet(parsedTweet)
                         tweet = parsedTweet
                     }
                     if tweet.author == nil {
                         if let author = try? await getUser(tweet.authorId) {
                             tweet.author = author
-                            tweetCacheLock.withLock { tweetCache[tweet.mid] = tweet }
+                            TweetCacheManager.shared.saveTweet(tweet)
                         }
                     }
                     accumulatedTweets.append(tweet)
@@ -293,7 +292,7 @@ final class HproseInstance: ObservableObject {
                 }
                 for dict in validDictionaries {
                     guard let parsedTweet = Tweet.from(dict: dict) else { continue }
-                    let cached = tweetCacheLock.withLock { tweetCache[parsedTweet.mid] }
+                    let cached = TweetCacheManager.shared.fetchTweet(mid: parsedTweet.mid)
                     let tweet: Tweet
                     if let cached = cached {
                         await MainActor.run {
@@ -305,13 +304,13 @@ final class HproseInstance: ObservableObject {
                         }
                         tweet = cached
                     } else {
-                        tweetCacheLock.withLock { tweetCache[parsedTweet.mid] = parsedTweet }
+                        TweetCacheManager.shared.saveTweet(parsedTweet)
                         tweet = parsedTweet
                     }
                     if tweet.author == nil {
                         if let author = try? await getUser(tweet.authorId) {
                             tweet.author = author
-                            tweetCacheLock.withLock { tweetCache[tweet.mid] = tweet }
+                            TweetCacheManager.shared.saveTweet(tweet)
                         }
                     }
                     accumulatedTweets.append(tweet)
@@ -334,7 +333,7 @@ final class HproseInstance: ObservableObject {
         authorId: String,
         nodeUrl: String? = nil
     )  async throws -> Tweet? {
-        if let cached = tweetCacheLock.withLock({ tweetCache[tweetId] }) {
+        if let cached = TweetCacheManager.shared.fetchTweet(mid: tweetId) {
             return cached
         }
         return try await withRetry {
@@ -351,11 +350,11 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
                 if let tweet = Tweet.from(dict: tweetDict) {
                     tweet.author = try await getUser(authorId)
-                    tweetCacheLock.withLock { tweetCache[tweetId] = tweet }
+                    TweetCacheManager.shared.saveTweet(tweet)
                     if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
-                        if tweetCacheLock.withLock({ tweetCache[origId] }) == nil {
+                        if TweetCacheManager.shared.fetchTweet(mid: origId) == nil {
                             if let origTweet = try? await getTweet(tweetId: origId, authorId: origAuthorId) {
-                                tweetCacheLock.withLock { tweetCache[origId] = origTweet }
+                                TweetCacheManager.shared.saveTweet(origTweet)
                             }
                         }
                     }
@@ -544,7 +543,7 @@ final class HproseInstance: ObservableObject {
             for item in validDictionaries {
                 if let tweet = Tweet.from(dict: item) {
                     // Check cache
-                    let cached = tweetCacheLock.withLock { tweetCache[tweet.mid] }
+                    let cached = TweetCacheManager.shared.fetchTweet(mid: tweet.mid)
                     let tweetToUse: Tweet
                     if let cached = cached {
                         await MainActor.run {
@@ -556,13 +555,13 @@ final class HproseInstance: ObservableObject {
                         }
                         tweetToUse = cached
                     } else {
-                        tweetCacheLock.withLock { tweetCache[tweet.mid] = tweet }
+                        TweetCacheManager.shared.saveTweet(tweet)
                         tweetToUse = tweet
                     }
                     if tweetToUse.author == nil {
                         if let author = try? await getUser(tweetToUse.authorId) {
                             tweetToUse.author = author
-                            tweetCacheLock.withLock { tweetCache[tweetToUse.mid] = tweetToUse }
+                            TweetCacheManager.shared.saveTweet(tweetToUse)
                         }
                     }
                     tweetsWithAuthors.append(tweetToUse)

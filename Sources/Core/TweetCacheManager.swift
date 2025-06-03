@@ -35,11 +35,13 @@ extension TweetCacheManager {
         request.predicate = NSPredicate(format: "mid == %@", tweet.mid)
         let cdTweet = (try? context.fetch(request).first) ?? CDTweet(context: context)
         cdTweet.mid = tweet.mid
-        cdTweet.authorId = tweet.authorId
-        cdTweet.content = tweet.content
-        cdTweet.timestamp = tweet.timestamp
         cdTweet.lastAccessed = Date()
-        // ... set other fields as needed ...
+        
+        // Encode tweet to binary data
+        if let tweetData = try? JSONEncoder().encode(tweet) {
+            cdTweet.tweetData = tweetData
+        }
+        
         try? context.save()
     }
 
@@ -59,12 +61,17 @@ extension TweetCacheManager {
 // MARK: - Tweet <-> Core Data Conversion
 extension Tweet {
     static func from(cdTweet: CDTweet) -> Tweet {
-        Tweet(
-            mid: cdTweet.mid ?? "",
-            authorId: cdTweet.authorId ?? "",
-            content: cdTweet.content,
-            timestamp: cdTweet.timestamp ?? Date()
-            // ... map other fields as needed ...
+        if let tweetData = cdTweet.tweetData,
+           let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+            return tweet
+        }
+        
+        // Fallback to basic properties if decoding fails
+        return Tweet(
+            mid: cdTweet.mid,
+            authorId: Constants.GUEST_ID,
+            content: nil,
+            timestamp: Date()
         )
     }
 } 
