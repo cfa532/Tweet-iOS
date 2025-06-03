@@ -96,6 +96,12 @@ struct TweetActionButtonsView: View {
                     newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
                     tweet.favorites = newFavorites
                     tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
+                    // Post notification for favorite add/remove
+                    if wasFavorite {
+                        NotificationCenter.default.post(name: .favoriteRemoved, object: nil, userInfo: ["tweetId": tweet.mid])
+                    } else {
+                        NotificationCenter.default.post(name: .favoriteAdded, object: nil, userInfo: ["tweet": tweet])
+                    }
                     Task {
                         if let updatedTweet = try? await hproseInstance.toggleFavorite(tweet) {
                             await MainActor.run {
@@ -131,6 +137,12 @@ struct TweetActionButtonsView: View {
                     newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
                     tweet.favorites = newFavorites
                     tweet.bookmarkCount = (tweet.bookmarkCount ?? 0) + (wasBookmarked ? -1 : 1)
+                    // Post notification for bookmark add/remove
+                    if wasBookmarked {
+                        NotificationCenter.default.post(name: .bookmarkRemoved, object: nil, userInfo: ["tweetId": tweet.mid])
+                    } else {
+                        NotificationCenter.default.post(name: .bookmarkAdded, object: nil, userInfo: ["tweet": tweet])
+                    }
                     Task {
                         if let updatedTweet = try? await hproseInstance.toggleBookmark(tweet) {
                             await MainActor.run {

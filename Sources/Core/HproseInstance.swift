@@ -535,11 +535,29 @@ final class HproseInstance: ObservableObject {
             var tweetsWithAuthors: [Tweet] = []
             for item in validDictionaries {
                 if let tweet = Tweet.from(dict: item) {
-                    if let author = try await getUser(tweet.authorId) {
-                        let tweetWithAuthor = tweet
-                        tweetWithAuthor.author = author
-                        tweetsWithAuthors.append(tweetWithAuthor)
+                    // Check cache
+                    let cached = tweetCacheLock.withLock { tweetCache[tweet.mid] }
+                    let tweetToUse: Tweet
+                    if let cached = cached {
+                        await MainActor.run {
+                            cached.favorites = tweet.favorites
+                            cached.favoriteCount = tweet.favoriteCount
+                            cached.bookmarkCount = tweet.bookmarkCount
+                            cached.retweetCount = tweet.retweetCount
+                            cached.commentCount = tweet.commentCount
+                        }
+                        tweetToUse = cached
+                    } else {
+                        tweetCacheLock.withLock { tweetCache[tweet.mid] = tweet }
+                        tweetToUse = tweet
                     }
+                    if tweetToUse.author == nil {
+                        if let author = try? await getUser(tweetToUse.authorId) {
+                            tweetToUse.author = author
+                            tweetCacheLock.withLock { tweetCache[tweetToUse.mid] = tweetToUse }
+                        }
+                    }
+                    tweetsWithAuthors.append(tweetToUse)
                 }
             }
             return tweetsWithAuthors

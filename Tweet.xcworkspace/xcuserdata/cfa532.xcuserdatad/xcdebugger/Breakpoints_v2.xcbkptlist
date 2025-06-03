@@ -136,10 +136,10 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "733"
-            endingLineNumber = "733"
-            landmarkName = "HproseInstance"
-            landmarkType = "3">
+            startingLineNumber = "729"
+            endingLineNumber = "729"
+            landmarkName = "updateRetweetCount(tweet:retweetId:direction:)"
+            landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
       <BreakpointProxy
@@ -152,9 +152,9 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "747"
-            endingLineNumber = "747"
-            landmarkName = "deleteTweet(_:)"
+            startingLineNumber = "743"
+            endingLineNumber = "743"
+            landmarkName = "updateRetweetCount(tweet:retweetId:direction:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
