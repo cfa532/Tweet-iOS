@@ -139,22 +139,6 @@ struct ProfileView: View {
         .fullScreenCover(isPresented: $showAvatarFullScreen) {
             AvatarFullScreenView(user: user, isPresented: $showAvatarFullScreen)
         }
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                if isCurrentUser {
-                    Menu {
-                        Button("Logout", role: .destructive) {
-                            hproseInstance.logout()
-                            onLogout?()
-                            dismiss()
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .rotationEffect(.degrees(90))
-                    }
-                }
-            }
-        }
         .task {
             if !didLoad {
                 isLoading = true
@@ -207,7 +191,28 @@ struct ProfileView: View {
             )
         }
         .navigationDestination(isPresented: $showTweetList) {
-            bookmarksOrFavoritesListView()
+            VStack(spacing: 0) {
+                Text(tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites")
+                    .font(.headline)
+                    .bold()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal)
+                    .background(Color(.systemGray6))
+                bookmarksOrFavoritesListView()
+            }
+            .navigationTitle("")
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 8) {
+                        if let avatarUrl = user.avatar, !avatarUrl.isEmpty {
+                            Avatar(user: user, size: 24)
+                        }
+                        Text(user.username ?? user.name ?? "User")
+                            .font(.headline)
+                    }
+                }
+            }
         }
     }
 
