@@ -60,6 +60,9 @@ struct UserListView: View {
                             .padding()
                     }
                 }
+                .safeAreaInset(edge: .bottom) {
+                    Color.clear.frame(height: 60)
+                }
             }
             .refreshable {
                 await refreshUsers()
