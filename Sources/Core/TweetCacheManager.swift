@@ -69,10 +69,14 @@ extension TweetCacheManager {
     func fetchTweet(mid: String) -> Tweet? {
         let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
         request.predicate = NSPredicate(format: "tid == %@", mid)
+        
+        // First, get the tweet and convert it
         if let cdTweet = try? context.fetch(request).first {
+            let tweet = Tweet.from(cdTweet: cdTweet)
+            // Then update the cache time in a separate operation
             cdTweet.timeCached = Date()
             try? context.save()
-            return Tweet.from(cdTweet: cdTweet)
+            return tweet
         }
         return nil
     }
@@ -127,15 +131,19 @@ extension Tweet {
 
 // MARK: - User Caching
 extension TweetCacheManager {
-    func fetchUser(mid: String) -> User? {
+    func fetchUser(mid: String) -> User {
         let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
         request.predicate = NSPredicate(format: "mid == %@", mid)
+        
+        // First, get the user and convert it
         if let cdUser = try? context.fetch(request).first {
+            let user = User.from(cdUser: cdUser)
+            // Then update the cache time in a separate operation
             cdUser.timeCached = Date()
             try? context.save()
-            return User.from(cdUser: cdUser)
+            return user
         }
-        return nil
+        return User.getInstance(mid: mid)
     }
     
     func shouldRefreshUser(mid: String) -> Bool {
@@ -168,55 +176,14 @@ extension TweetCacheManager {
         let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
         let oneMonthAgo = Calendar.current.date(byAdding: .month, value: -1, to: Date())!
         request.predicate = NSPredicate(format: "timeCached < %@", oneMonthAgo as NSDate)
+        
+        // Create a separate array to store the objects to delete
         if let expiredUsers = try? context.fetch(request) {
-            for user in expiredUsers {
+            let usersToDelete = Array(expiredUsers)
+            for user in usersToDelete {
                 context.delete(user)
             }
             try? context.save()
         }
-    }
-}
-
-// MARK: - User <-> Core Data Conversion
-extension User {
-    static func from(cdUser: CDUser) -> User {
-        let user = User(mid: cdUser.mid)
-        
-        // Try to decode the full user data
-        if let userData = cdUser.userData,
-           let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
-            // Copy all properties from the decoded user
-            user.baseUrl = decodedUser.baseUrl
-            user.writableUrl = decodedUser.writableUrl
-            user.name = decodedUser.name
-            user.username = decodedUser.username
-            user.password = decodedUser.password
-            user.avatar = decodedUser.avatar
-            user.email = decodedUser.email
-            user.profile = decodedUser.profile
-            user.timestamp = decodedUser.timestamp
-            user.lastLogin = decodedUser.lastLogin
-            user.cloudDrivePort = decodedUser.cloudDrivePort
-            
-            user.tweetCount = decodedUser.tweetCount
-            user.followingCount = decodedUser.followingCount
-            user.followersCount = decodedUser.followersCount
-            user.bookmarksCount = decodedUser.bookmarksCount
-            user.favoritesCount = decodedUser.favoritesCount
-            user.commentsCount = decodedUser.commentsCount
-            
-            user.hostIds = decodedUser.hostIds
-            user.publicKey = decodedUser.publicKey
-            
-            user.fansList = decodedUser.fansList
-            user.followingList = decodedUser.followingList
-            user.bookmarkedTweets = decodedUser.bookmarkedTweets
-            user.favoriteTweets = decodedUser.favoriteTweets
-            user.repliedTweets = decodedUser.repliedTweets
-            user.commentsList = decodedUser.commentsList
-            user.topTweets = decodedUser.topTweets
-        }
-        
-        return user
     }
 } 

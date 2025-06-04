@@ -24,12 +24,12 @@ struct AvatarFullScreenView: View {
                 }
                 Spacer()
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("mid: \(user.mid)")
-                    if let baseUrl = user.baseUrl {
-                        Text("baseUrl: \(baseUrl)")
-                    }
+                    Text(user.mid)
+//                    if let baseUrl = user.baseUrl {
+//                        Text(baseUrl)
+//                    }
                     if let hostId = user.hostIds?.first {
-                        Text("hostId: \(hostId)")
+                        Text(hostId)
                     }
                 }
                 .foregroundColor(.white)

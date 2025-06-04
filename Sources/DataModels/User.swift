@@ -15,6 +15,10 @@ enum UserContentType: String {
 }
 
 class User: ObservableObject, Codable, Identifiable, Hashable {
+    // MARK: - Singleton Dictionary
+    private static var userInstances: [String: User] = [:]
+    
+    // MARK: - Properties
     @Published var mid: String
     @Published var baseUrl: String?
     @Published var writableUrl: String?
@@ -48,18 +52,74 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     var id: String { mid }  // Computed property that returns mid
     
+    // MARK: - Initialization
+    private init(mid: String = Constants.GUEST_ID, baseUrl: String? = nil) {
+        self.mid = mid
+        self.baseUrl = baseUrl
+        self.timestamp = Date()
+        self.tweetCount = 0
+    }
+    
+    // MARK: - Factory Methods
+    static func getInstance(mid: String) -> User {
+        if let existingUser = userInstances[mid] {
+            return existingUser
+        }
+        let newUser = User(mid: mid)
+        userInstances[mid] = newUser
+        return newUser
+    }
+    
+    static func from(dict: [String: Any]) -> User {
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: dict, options: [])
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            let decodedUser = try decoder.decode(User.self, from: jsonData)
+            updateUserInstance(with: decodedUser)
+            return userInstances[decodedUser.mid]!
+        } catch {
+            print("Error converting dictionary to User: \(error)")
+            return getInstance(mid: Constants.GUEST_ID)
+        }
+    }
+    
+    static func from(cdUser: CDUser) -> User {
+        // Try to decode the full user data
+        if let userData = cdUser.userData,
+           let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
+            updateUserInstance(with: decodedUser)
+        }
+        return getInstance(mid: cdUser.mid)
+    }
+    
+    private static func updateUserInstance(with user: User) {
+        let instance = getInstance(mid: user.mid)
+        Task { @MainActor in
+            instance.name = user.name
+            instance.username = user.username
+            instance.password = user.password
+            instance.avatar = user.avatar
+            instance.email = user.email
+            instance.profile = user.profile
+            instance.lastLogin = user.lastLogin
+            instance.cloudDrivePort = user.cloudDrivePort
+            instance.hostIds = user.hostIds
+            
+            instance.tweetCount = user.tweetCount
+            instance.followingCount = user.followingCount
+            instance.followersCount = user.followersCount
+            instance.bookmarksCount = user.bookmarksCount
+            instance.favoritesCount = user.favoritesCount
+            instance.commentsCount = user.commentsCount
+        }
+    }
+    
     // CodingKeys to handle @Published properties
     enum CodingKeys: String, CodingKey {
         case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile, timestamp, lastLogin, cloudDrivePort
         case tweetCount, followingCount, followersCount, bookmarksCount, favoritesCount, commentsCount
         case hostIds, publicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets
-    }
-    
-    init(mid: String = Constants.GUEST_ID, baseUrl: String? = nil) {
-        self.mid = mid
-        self.baseUrl = baseUrl
-        self.timestamp = Date()
-        self.tweetCount = 0
     }
     
     // Required initializer for Codable
@@ -186,18 +246,5 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(mid)
-    }
-
-    // MARK: - Factory Method
-    static func from(dict: [String: Any]) -> User? {
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: dict, options: [])
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .millisecondsSince1970
-            return try decoder.decode(User.self, from: jsonData)
-        } catch {
-            print("Error converting dictionary to User: \(error)")
-            return nil
-        }
     }
 }

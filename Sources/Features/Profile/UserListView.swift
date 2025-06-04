@@ -171,15 +171,15 @@ struct UserListView: View {
         
         for userId in userIds {
             // First check if user is in Core Data cache
-            if let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId) {
-                fetchedUsers.append(cachedUser)
-                continue
-            }
+            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+            fetchedUsers.append(cachedUser)
+
             
             // If not in cache, fetch from server
             do {
-                if let user = try await hproseInstance.getUser(userId) {
-                    fetchedUsers.append(user)
+                let user = try await hproseInstance.getUser(userId)
+                if user != nil {
+                    fetchedUsers.append(user!)
                 }
             } catch {
                 print("Error fetching user \(userId): \(error)")

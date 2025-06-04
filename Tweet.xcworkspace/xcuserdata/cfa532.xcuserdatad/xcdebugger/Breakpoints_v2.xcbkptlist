@@ -136,9 +136,9 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "731"
-            endingLineNumber = "731"
-            landmarkName = "updateRetweetCount(tweet:retweetId:direction:)"
+            startingLineNumber = "732"
+            endingLineNumber = "732"
+            landmarkName = "retweet(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -152,8 +152,8 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "745"
-            endingLineNumber = "745"
+            startingLineNumber = "746"
+            endingLineNumber = "746"
             landmarkName = "HproseInstance"
             landmarkType = "3">
          </BreakpointContent>
@@ -200,9 +200,9 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "388"
-            endingLineNumber = "388"
-            landmarkName = "getUser(_:baseUrl:)"
+            startingLineNumber = "389"
+            endingLineNumber = "389"
+            landmarkName = "getUserId(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -216,9 +216,9 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "392"
-            endingLineNumber = "392"
-            landmarkName = "getUser(_:baseUrl:)"
+            startingLineNumber = "393"
+            endingLineNumber = "393"
+            landmarkName = "getUserId(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

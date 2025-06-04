@@ -21,16 +21,52 @@ extension Array {
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
-    @Published var appUser: User = User(mid: Constants.GUEST_ID) {
-        didSet {
+    private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
+    var appUser: User {
+        get { _appUser }
+        set {
+            // Update the user instance for this mid
+            let instance = User.getInstance(mid: newValue.mid)
+            instance.baseUrl = newValue.baseUrl
+            instance.writableUrl = newValue.writableUrl
+            instance.name = newValue.name
+            instance.username = newValue.username
+            instance.password = newValue.password
+            instance.avatar = newValue.avatar
+            instance.email = newValue.email
+            instance.profile = newValue.profile
+            instance.timestamp = newValue.timestamp
+            instance.lastLogin = newValue.lastLogin
+            instance.cloudDrivePort = newValue.cloudDrivePort
+            
+            instance.tweetCount = newValue.tweetCount
+            instance.followingCount = newValue.followingCount
+            instance.followersCount = newValue.followersCount
+            instance.bookmarksCount = newValue.bookmarksCount
+            instance.favoritesCount = newValue.favoritesCount
+            instance.commentsCount = newValue.commentsCount
+            
+            instance.hostIds = newValue.hostIds
+            instance.publicKey = newValue.publicKey
+            
+            instance.fansList = newValue.fansList
+            instance.followingList = newValue.followingList
+            instance.bookmarkedTweets = newValue.bookmarkedTweets
+            instance.favoriteTweets = newValue.favoriteTweets
+            instance.repliedTweets = newValue.repliedTweets
+            instance.commentsList = newValue.commentsList
+            instance.topTweets = newValue.topTweets
+            
+            _appUser = instance
+            
             // When appUser is set and is not guest, fetch following and follower lists
-            if !appUser.isGuest {
+            if !instance.isGuest {
                 Task {
-                    let following = try? await getFollows(user: appUser, entry: .FOLLOWING)
-                    let followers = try? await getFollows(user: appUser, entry: .FOLLOWER)
+                    let following = try? await getFollows(user: instance, entry: .FOLLOWING)
+                    let followers = try? await getFollows(user: instance, entry: .FOLLOWER)
                     await MainActor.run {
-                        self.appUser.followingList = following
-                        self.appUser.fansList = followers
+                        instance.followingList = following
+                        instance.fansList = followers
                     }
                 }
             }
@@ -58,11 +94,9 @@ final class HproseInstance: ObservableObject {
         self.chatDatabase = ChatDatabase.shared
         self.tweetDao = TweetCacheDatabase.shared.tweetDao()
         
-        appUser = User(
-            mid: Constants.GUEST_ID,
-            baseUrl: preferenceHelper?.getAppUrls().first ?? "",
-        )
-        appUser.followingList = Gadget.getAlphaIds()
+        _appUser = User.getInstance(mid: Constants.GUEST_ID)
+        _appUser.baseUrl = preferenceHelper?.getAppUrls().first ?? ""
+        _appUser.followingList = Gadget.getAlphaIds()
         
         try await initAppEntry()
         TweetCacheManager.shared.deleteExpiredTweets()
@@ -140,10 +174,9 @@ final class HproseInstance: ObservableObject {
             }
             var tweetsWithAuthors: [Tweet] = []
             for tweet in comments {
-                if let author = try? await getUser(tweet.authorId) {
-                    tweet.author = author
-                    tweetsWithAuthors.append(tweet)
-                }
+                let author = try? await getUser(tweet.authorId)
+                tweet.author = author
+                tweetsWithAuthors.append(tweet)
             }
             return tweetsWithAuthors
         }
@@ -207,8 +240,9 @@ final class HproseInstance: ObservableObject {
                         tweet = parsedTweet
                     }
                     if tweet.author == nil {
-                        if let author = try? await getUser(tweet.authorId) {
-                            tweet.author = author
+                        let author = try? await getUser(tweet.authorId)
+                        tweet.author = author
+                        if author != nil {
                             TweetCacheManager.shared.saveTweet(tweet)
                         }
                     }
@@ -285,8 +319,9 @@ final class HproseInstance: ObservableObject {
                         tweet = parsedTweet
                     }
                     if tweet.author == nil {
-                        if let author = try? await getUser(tweet.authorId) {
-                            tweet.author = author
+                        let author = try? await getUser(tweet.authorId)
+                        tweet.author = author
+                        if author != nil {
                             TweetCacheManager.shared.saveTweet(tweet)
                         }
                     }
@@ -326,7 +361,8 @@ final class HproseInstance: ObservableObject {
             ]
             if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
                 if let tweet = Tweet.from(dict: tweetDict) {
-                    tweet.author = try await getUser(authorId)
+                    let author = try? await getUser(authorId)
+                    tweet.author = author
                     TweetCacheManager.shared.saveTweet(tweet)
                     if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
                         if TweetCacheManager.shared.fetchTweet(mid: origId) == nil {
@@ -360,11 +396,11 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func getUser(_ userId: String, baseUrl: String = shared.appUser.baseUrl ?? "") async throws -> User? {
+    func getUser(_ userId: String, baseUrl: String = shared.appUser.baseUrl ?? "")
+    async throws -> User? {
         // Step 1: Check Core Data cache
-        if !TweetCacheManager.shared.shouldRefreshUser(mid: userId),
-           let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId) {
-            return cachedUser
+        if !TweetCacheManager.shared.shouldRefreshUser(mid: userId) {
+            return TweetCacheManager.shared.fetchUser(mid: userId)
         }
         
         // Step 2: Fetch from server
@@ -387,9 +423,9 @@ final class HproseInstance: ObservableObject {
             guard let response = service.runMApp(entry, params, nil) else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUser"])
             }
-            if let userDict = response as? [String: Any],
-               // a valid User object is returned
-               let user = User.from(dict: userDict) {
+            if let userDict = response as? [String: Any] {
+                // a valid User object is returned
+                let user = User.from(dict: userDict)
                 user.baseUrl = baseUrl
                 
                 // Save to Core Data cache
@@ -402,8 +438,8 @@ final class HproseInstance: ObservableObject {
                 newClient.timeout = 60
                 newClient.uri = "http://\(ipAddress)/webapi/"
                 let newService = newClient.useService(HproseService.self) as AnyObject
-                if let userDict = newService.runMApp(entry, params, nil) as? [String: Any],
-                   let user = User.from(dict: userDict) {
+                if let userDict = newService.runMApp(entry, params, nil) as? [String: Any] {
+                    let user = User.from(dict: userDict)
                     user.baseUrl = "http://\(ipAddress)"
                     
                     // Save to Core Data cache
@@ -411,7 +447,7 @@ final class HproseInstance: ObservableObject {
                     return user
                 }
             }
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "User not found"])
+            return nil
         }
     }
     
@@ -438,8 +474,8 @@ final class HproseInstance: ObservableObject {
                     }
                     return ["reason": "Unknown error occurred", "status": "failure"]
                 } else if status == "success" {
-                    if let userDict = response["user"] as? [String: Any],
-                       let userObject = User.from(dict: userDict) {
+                    if let userDict = response["user"] as? [String: Any] {
+                        let userObject = User.from(dict: userDict)
                         hproseClient = newService
                         userObject.baseUrl = loginUser.baseUrl
                         let finalUser = userObject
@@ -544,8 +580,9 @@ final class HproseInstance: ObservableObject {
                         tweetToUse = tweet
                     }
                     if tweetToUse.author == nil {
-                        if let author = try? await getUser(tweetToUse.authorId) {
-                            tweetToUse.author = author
+                        let author = try? await getUser(tweetToUse.authorId)
+                        tweetToUse.author = author
+                        if author != nil {
                             TweetCacheManager.shared.saveTweet(tweetToUse)
                         }
                     }
@@ -630,8 +667,8 @@ final class HproseInstance: ObservableObject {
             guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: Invalid response"])
             }
-            if let userDict = response["user"] as? [String: Any],
-               let user = User.from(dict: userDict) {
+            if let userDict = response["user"] as? [String: Any] {
+                let user = User.from(dict: userDict)
                 await MainActor.run {
                     appUser.favoritesCount = user.favoritesCount
                 }
@@ -666,8 +703,8 @@ final class HproseInstance: ObservableObject {
             guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: Invalid response"])
             }
-            if let userDict = response["user"] as? [String: Any],
-               let user = User.from(dict: userDict) {
+            if let userDict = response["user"] as? [String: Any] {
+                let user = User.from(dict: userDict)
                 await MainActor.run {
                     appUser.bookmarksCount = user.bookmarksCount
                 }
@@ -1348,9 +1385,8 @@ final class HproseInstance: ObservableObject {
                 if let tweetDict = dict["tweet"] as? [String: Any],
                    let tweet = Tweet.from(dict: tweetDict) {
                     let tweetWithAuthor = tweet
-                    if let author = try? await getUser(tweet.authorId) {
-                        tweetWithAuthor.author = author
-                    }
+                    let author = try? await getUser(tweet.authorId)
+                    tweetWithAuthor.author = author
                     let timePinned = dict["timestamp"]
                     result.append([
                         "tweet": tweetWithAuthor,
