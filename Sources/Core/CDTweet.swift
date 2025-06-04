@@ -9,9 +9,10 @@ import CoreData
 
 @objc(CDTweet)
 public class CDTweet: NSManagedObject {
-    @NSManaged public var mid: String
+    @NSManaged public var tid: String
+    @NSManaged public var uid: String
     @NSManaged public var tweetData: Data?
-    @NSManaged public var lastAccessed: Date
+    @NSManaged public var timeCached: Date
 }
 
 // MARK: - Core Data Properties

@@ -226,7 +226,7 @@ final class HproseInstance: ObservableObject {
                         }
                         tweet = cached
                     } else {
-                        TweetCacheManager.shared.saveTweet(parsedTweet)
+                        TweetCacheManager.shared.saveTweet(parsedTweet, appUser.mid)
                         tweet = parsedTweet
                     }
                     if tweet.author == nil {
