@@ -1,5 +1,51 @@
 import SwiftUI
 
+// MARK: - ProfileTweetsViewModel
+@available(iOS 16.0, *)
+class ProfileTweetsViewModel: ObservableObject {
+    @Published var tweets: [Tweet] = []
+    @Published var isLoading: Bool = false
+    private let hproseInstance: HproseInstance
+    private let user: User
+    private let pinnedTweetIds: Set<String>
+    
+    init(hproseInstance: HproseInstance, user: User, pinnedTweetIds: Set<String>) {
+        self.hproseInstance = hproseInstance
+        self.user = user
+        self.pinnedTweetIds = pinnedTweetIds
+    }
+    
+    func fetchTweets(page: Int, pageSize: Int) async {
+        // Step 1: Fetch from cache immediately
+        let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(
+            for: user.mid,
+            page: page,
+            pageSize: pageSize
+        )
+        
+        // Filter out pinned tweets from cache
+        let filteredCached = cachedTweets.filter { !pinnedTweetIds.contains($0.mid) }
+        
+        await MainActor.run {
+            self.tweets = filteredCached
+        }
+        
+        // Step 2: Fetch from server
+        if let serverTweets = try? await hproseInstance.fetchUserTweet(
+            user: user,
+            startRank: UInt(page * pageSize),
+            endRank: UInt((page + 1) * pageSize - 1)
+        ) {
+            // Filter out pinned tweets from server response
+            let filteredServer = serverTweets.filter { !pinnedTweetIds.contains($0.mid) }
+            
+            await MainActor.run {
+                self.tweets = filteredServer
+            }
+        }
+    }
+}
+
 private struct TweetListScrollOffsetKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -17,6 +63,32 @@ struct ProfileTweetsSection: View {
     let onUserSelect: (User) -> Void
     let onPinnedTweetsRefresh: () async -> Void
     let onScroll: (CGFloat) -> Void
+    @StateObject private var viewModel: ProfileTweetsViewModel
+    
+    init(
+        isLoading: Bool,
+        pinnedTweets: [Tweet],
+        pinnedTweetIds: Set<String>,
+        user: User,
+        hproseInstance: HproseInstance,
+        onUserSelect: @escaping (User) -> Void,
+        onPinnedTweetsRefresh: @escaping () async -> Void,
+        onScroll: @escaping (CGFloat) -> Void
+    ) {
+        self.isLoading = isLoading
+        self.pinnedTweets = pinnedTweets
+        self.pinnedTweetIds = pinnedTweetIds
+        self.user = user
+        self.hproseInstance = hproseInstance
+        self.onUserSelect = onUserSelect
+        self.onPinnedTweetsRefresh = onPinnedTweetsRefresh
+        self.onScroll = onScroll
+        self._viewModel = StateObject(wrappedValue: ProfileTweetsViewModel(
+            hproseInstance: hproseInstance,
+            user: user,
+            pinnedTweetIds: pinnedTweetIds
+        ))
+    }
     
     var body: some View {
         if isLoading {
@@ -37,27 +109,15 @@ struct ProfileTweetsSection: View {
                     tweetFetcher: { page, size in
                         print("[ProfileTweetsSection] tweetFetcher called: page=\(page), size=\(size)")
                         if page == 0 {
-                            let regularTweets = try await hproseInstance.fetchUserTweet(
-                                user: user,
-                                startRank: 0,
-                                endRank: UInt(size - 1)
-                            )
-                            let filteredRegular = regularTweets.filter { !pinnedTweetIds.contains($0.mid) }
-                            let combined = pinnedTweets + filteredRegular
+                            await viewModel.fetchTweets(page: page, pageSize: size)
+                            let combined = pinnedTweets + viewModel.tweets
                             let result = Array(combined.prefix(size))
-                            print("[ProfileTweetsSection] Returning page 0: pinned=\(pinnedTweets.count), filteredRegular=\(filteredRegular.count), total=\(result.count)")
+                            print("[ProfileTweetsSection] Returning page 0: pinned=\(pinnedTweets.count), regular=\(viewModel.tweets.count), total=\(result.count)")
                             return result
                         } else {
-                            let start = UInt(page * size)
-                            let end = UInt((page + 1) * size - 1)
-                            let regularTweets = try await hproseInstance.fetchUserTweet(
-                                user: user,
-                                startRank: start,
-                                endRank: end
-                            )
-                            let filtered = regularTweets.filter { !pinnedTweetIds.contains($0.mid) }
-                            print("[ProfileTweetsSection] Returning page \(page): filtered=\(filtered.count)")
-                            return filtered
+                            await viewModel.fetchTweets(page: page, pageSize: size)
+                            print("[ProfileTweetsSection] Returning page \(page): tweets=\(viewModel.tweets.count)")
+                            return viewModel.tweets
                         }
                     },
                     showTitle: false,

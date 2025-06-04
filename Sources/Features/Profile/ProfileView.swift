@@ -1,5 +1,43 @@
 import SwiftUI
 
+// MARK: - ProfileViewModel
+@available(iOS 16.0, *)
+class ProfileViewModel: ObservableObject {
+    @Published var tweets: [Tweet] = []
+    @Published var isLoading: Bool = false
+    private let hproseInstance: HproseInstance
+    private let user: User
+    
+    init(hproseInstance: HproseInstance, user: User) {
+        self.hproseInstance = hproseInstance
+        self.user = user
+    }
+    
+    func fetchTweets(page: Int, pageSize: Int) async {
+        // Step 1: Fetch from cache immediately
+        let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(
+            for: user.mid,
+            page: page,
+            pageSize: pageSize
+        )
+        
+        await MainActor.run {
+            self.tweets = cachedTweets
+        }
+        
+        // Step 2: Fetch from server
+        if let serverTweets = try? await hproseInstance.fetchUserTweet(
+            user: user,
+            startRank: UInt(page * pageSize),
+            endRank: UInt((page + 1) * pageSize - 1)
+        ) {
+            await MainActor.run {
+                self.tweets = serverTweets
+            }
+        }
+    }
+}
+
 // MARK: - ProfileView
 /// A view that displays a user's profile, including their tweets, pinned tweets, and user information.
 /// This view handles both the current user's profile and other users' profiles.
@@ -46,6 +84,13 @@ struct ProfileView: View {
     @State private var previousScrollOffset: CGFloat = 0
     /// Controls header visibility
     @State private var isHeaderVisible = true
+    @StateObject private var viewModel: ProfileViewModel
+
+    init(user: User, onLogout: (() -> Void)? = nil) {
+        self.user = user
+        self.onLogout = onLogout
+        self._viewModel = StateObject(wrappedValue: ProfileViewModel(hproseInstance: HproseInstance.shared, user: user))
+    }
 
     // MARK: - Computed Properties
     /// Returns true if the displayed profile belongs to the current user
@@ -259,6 +304,9 @@ struct ProfileView: View {
         )
     }
 }
+
+// MARK: - ProfileTweetsSection
+@available(iOS 16.0, *)
 
 // MARK: - Scroll Offset Preference Key
 private struct ScrollOffsetPreferenceKey: PreferenceKey {

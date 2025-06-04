@@ -22,17 +22,12 @@ class FollowingsTweetViewModel: ObservableObject {
             self.tweets = cachedTweets
         }
         
-        // Step 2: Fetch from server and update cache
+        // Step 2: Fetch from server
         if let serverTweets = try? await hproseInstance.fetchTweetFeed(
             user: hproseInstance.appUser,
             pageNumber: page,
             pageSize: pageSize
         ) {
-            // Save new tweets to cache
-            for tweet in serverTweets {
-                TweetCacheManager.shared.saveTweet(tweet, hproseInstance.appUser.mid)
-            }
-            
             // Update the UI with new tweets
             await MainActor.run {
                 self.tweets = serverTweets
