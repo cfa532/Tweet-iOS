@@ -47,6 +47,25 @@ class TweetCacheManager {
 
 // MARK: - Tweet Caching
 extension TweetCacheManager {
+    func fetchCachedTweets(for userId: String, page: Int, pageSize: Int) -> [Tweet] {
+        let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+        request.predicate = NSPredicate(format: "uid == %@", userId)
+        request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+        request.fetchOffset = page * pageSize
+        request.fetchLimit = pageSize
+        
+        if let cdTweets = try? context.fetch(request) {
+            return cdTweets.compactMap { cdTweet in
+                if let tweetData = cdTweet.tweetData,
+                   let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+                    return tweet
+                }
+                return nil
+            }
+        }
+        return []
+    }
+
     func fetchTweet(mid: String) -> Tweet? {
         let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
         request.predicate = NSPredicate(format: "tid == %@", mid)
@@ -64,6 +83,7 @@ extension TweetCacheManager {
         let cdTweet = (try? context.fetch(request).first) ?? CDTweet(context: context)
         cdTweet.tid = tweet.mid
         cdTweet.uid = userId ?? tweet.mid
+        cdTweet.timestamp = tweet.timestamp
         cdTweet.timeCached = Date()
         
         // Encode tweet to binary data

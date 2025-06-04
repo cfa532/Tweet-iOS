@@ -2,6 +2,7 @@
 <model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23788" systemVersion="24F74" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithSwiftData="YES" userDefinedModelVersionIdentifier="">
     <entity name="CDTweet" representedClassName=".CDTweet" syncable="YES">
         <attribute name="tid" optional="NO" attributeType="String"/>
+        <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="timeCached" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="tweetData" optional="YES" attributeType="Binary"/>
         <attribute name="uid" optional="NO" attributeType="String"/>
