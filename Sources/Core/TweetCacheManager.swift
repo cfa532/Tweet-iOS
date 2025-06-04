@@ -152,7 +152,7 @@ extension TweetCacheManager {
         if let cdUser = try? context.fetch(request).first {
             return cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -300 // 5 minutes
         }
-        return true // If no cached user, we should refresh
+        return true // No cached user, we should refresh
     }
 
     func saveUser(_ user: User) {

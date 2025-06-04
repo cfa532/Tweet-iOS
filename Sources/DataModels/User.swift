@@ -93,6 +93,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         return getInstance(mid: cdUser.mid)
     }
     
+    /**
+     * Do not update baseUrl and writableUrl. They are acquired at runtime, not from cache or backend.
+     */
     private static func updateUserInstance(with user: User) {
         let instance = getInstance(mid: user.mid)
         Task { @MainActor in

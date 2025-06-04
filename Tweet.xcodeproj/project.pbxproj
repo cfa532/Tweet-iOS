@@ -200,9 +200,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
-				469A99652DEF38A400954049 /* CDTweet.swift */,
 				469A995E2DEF300900954049 /* TweetCacheManager.swift */,
-				4674940A2DF014820082FAC6 /* CDUser.swift */,
 				469A994C2DEB31EF00954049 /* NotificationNames.swift */,
 				4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */,
 				4608E2D72DD5CA640051A92D /* HproseInstance.swift */,
@@ -230,6 +228,8 @@
 				46704DE12DD8CEF7001D69B9 /* MediaType.swift */,
 				4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */,
 				4608E2D92DD5CD920051A92D /* User.swift */,
+				4674940A2DF014820082FAC6 /* CDUser.swift */,
+				469A99652DEF38A400954049 /* CDTweet.swift */,
 			);
 			path = DataModels;
 			sourceTree = "<group>";
