@@ -170,8 +170,8 @@ struct UserListView: View {
         var fetchedUsers: [User] = []
         
         for userId in userIds {
-            // First check if user is in cache
-            if let cachedUser = hproseInstance.exposedCachedUsers.first(where: { $0.mid == userId }) {
+            // First check if user is in Core Data cache
+            if let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId) {
                 fetchedUsers.append(cachedUser)
                 continue
             }

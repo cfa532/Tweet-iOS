@@ -123,4 +123,60 @@ extension Tweet {
             timestamp: Date()
         )
     }
+}
+
+// MARK: - User Caching
+extension TweetCacheManager {
+    func fetchUser(mid: String) -> User? {
+        let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+        request.predicate = NSPredicate(format: "mid == %@", mid)
+        if let cdUser = try? context.fetch(request).first {
+            cdUser.timeCached = Date()
+            try? context.save()
+            return User.from(cdUser: cdUser)
+        }
+        return nil
+    }
+
+    func saveUser(_ user: User) {
+        let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+        request.predicate = NSPredicate(format: "mid == %@", user.mid)
+        let cdUser = (try? context.fetch(request).first) ?? CDUser(context: context)
+        
+        // Update essential properties
+        cdUser.mid = user.mid
+        cdUser.timeCached = Date()
+        
+        // Encode full user data
+        if let userData = try? JSONEncoder().encode(user) {
+            cdUser.userData = userData
+        }
+        
+        try? context.save()
+    }
+
+    func deleteExpiredUsers() {
+        let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+        let oneMonthAgo = Calendar.current.date(byAdding: .month, value: -1, to: Date())!
+        request.predicate = NSPredicate(format: "timeCached < %@", oneMonthAgo as NSDate)
+        if let expiredUsers = try? context.fetch(request) {
+            for user in expiredUsers {
+                context.delete(user)
+            }
+            try? context.save()
+        }
+    }
+}
+
+// MARK: - User <-> Core Data Conversion
+extension User {
+    static func from(cdUser: CDUser) -> User {
+        if let userData = cdUser.userData,
+           let user = try? JSONDecoder().decode(User.self, from: userData) {
+            return user
+        }
+        
+        // Fallback to basic user with just the ID if decoding fails
+        return User(mid: cdUser.mid)
+    }
 } 

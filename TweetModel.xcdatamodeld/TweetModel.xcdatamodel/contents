@@ -7,4 +7,9 @@
         <attribute name="tweetData" optional="YES" attributeType="Binary"/>
         <attribute name="uid" optional="NO" attributeType="String"/>
     </entity>
+    <entity name="CDUser" representedClassName=".CDUser" syncable="YES">
+        <attribute name="mid" optional="NO" attributeType="String"/>
+        <attribute name="timeCached" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userData" optional="YES" attributeType="Binary"/>
+    </entity>
 </model>

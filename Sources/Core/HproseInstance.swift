@@ -38,16 +38,6 @@ final class HproseInstance: ObservableObject {
     }
     
     private var appId: String = Bundle.main.bundleIdentifier ?? ""
-    private let cachedUsersLock = NSLock()
-    private var _cachedUsers: Set<User> = []
-    private var cachedUsers: Set<User> {
-        get {
-            cachedUsersLock.withLock { _cachedUsers }
-        }
-        set {
-            cachedUsersLock.withLock { _cachedUsers = newValue }
-        }
-    }
     private var preferenceHelper: PreferenceHelper?
     private var chatDatabase: ChatDatabase?
     private var tweetDao: CachedTweetDao?
@@ -58,14 +48,6 @@ final class HproseInstance: ObservableObject {
         return client
     }()
     private var hproseClient: AnyObject?
-    
-    // Global tweet cache: [tweetId: Tweet]
-    
-    /// Exposes a copy of the cached users for read-only external access.
-    /// Note: The returned set is a snapshot and not live-updating. Thread-safe.
-    public var exposedCachedUsers: Set<User> {
-        cachedUsersLock.withLock { _cachedUsers }
-    }
     
     // MARK: - Initialization
     private init() {}
@@ -87,9 +69,6 @@ final class HproseInstance: ObservableObject {
     }
     
     private func initAppEntry() async throws {
-        // Clear cached users during retry init
-        cachedUsers.removeAll()
-        
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
                 let html = try await fetchHTML(from: url)
@@ -113,15 +92,13 @@ final class HproseInstance: ObservableObject {
                         // get user object from this IP
                         if let user = try await getUser(userId, baseUrl: "http://\(providerIp)") {
                             await MainActor.run {
-                                appUser = user
+                                self.appUser = user
                             }
                             appUser.baseUrl = "http://\(providerIp)"
-                            cachedUsers.insert(appUser)
                             return
                         }
                     }
                     appUser.followingList = Gadget.getAlphaIds()
-                    cachedUsers.insert(appUser)
                     return
                 }
             } catch {
@@ -384,9 +361,12 @@ final class HproseInstance: ObservableObject {
     }
     
     func getUser(_ userId: String, baseUrl: String = shared.appUser.baseUrl ?? "") async throws -> User? {
-        if let cachedUser = cachedUsersLock.withLock({ _cachedUsers.first(where: { $0.mid == userId }) }) {
+        // Step 1: Check Core Data cache
+        if let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId) {
             return cachedUser
         }
+        
+        // Step 2: Fetch from server
         return try await withRetry {
             guard var service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
@@ -410,7 +390,9 @@ final class HproseInstance: ObservableObject {
                // a valid User object is returned
                let user = User.from(dict: userDict) {
                 user.baseUrl = baseUrl
-                _ = cachedUsersLock.withLock { _cachedUsers.insert(user) }
+                
+                // Save to Core Data cache
+                TweetCacheManager.shared.saveUser(user)
                 return user
             }
             // the user is not found on this node, a provider IP of the user is returned.
@@ -422,7 +404,9 @@ final class HproseInstance: ObservableObject {
                 if let userDict = newService.runMApp(entry, params, nil) as? [String: Any],
                    let user = User.from(dict: userDict) {
                     user.baseUrl = "http://\(ipAddress)"
-                    _ = cachedUsersLock.withLock { _cachedUsers.insert(user) }
+                    
+                    // Save to Core Data cache
+                    TweetCacheManager.shared.saveUser(user)
                     return user
                 }
             }
