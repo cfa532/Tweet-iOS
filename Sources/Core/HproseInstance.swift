@@ -27,16 +27,11 @@ final class HproseInstance: ObservableObject {
         set {
             // Update the user instance for this mid
             let instance = User.getInstance(mid: newValue.mid)
-            instance.baseUrl = newValue.baseUrl
-            instance.writableUrl = newValue.writableUrl
             instance.name = newValue.name
             instance.username = newValue.username
-            instance.password = newValue.password
             instance.avatar = newValue.avatar
             instance.email = newValue.email
             instance.profile = newValue.profile
-            instance.timestamp = newValue.timestamp
-            instance.lastLogin = newValue.lastLogin
             instance.cloudDrivePort = newValue.cloudDrivePort
             
             instance.tweetCount = newValue.tweetCount
@@ -47,19 +42,9 @@ final class HproseInstance: ObservableObject {
             instance.commentsCount = newValue.commentsCount
             
             instance.hostIds = newValue.hostIds
-            instance.publicKey = newValue.publicKey
-            
-            instance.fansList = newValue.fansList
-            instance.followingList = newValue.followingList
-            instance.bookmarkedTweets = newValue.bookmarkedTweets
-            instance.favoriteTweets = newValue.favoriteTweets
-            instance.repliedTweets = newValue.repliedTweets
-            instance.commentsList = newValue.commentsList
-            instance.topTweets = newValue.topTweets
-            
             _appUser = instance
             
-            // When appUser is set and is not guest, fetch following and follower lists
+            // After user login and appUser is set, fetch following and follower lists
             if !instance.isGuest {
                 Task {
                     let following = try? await getFollows(user: instance, entry: .FOLLOWING)
@@ -73,10 +58,8 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    private var appId: String = Bundle.main.bundleIdentifier ?? ""
+    private var appId: String = Constants.GUEST_ID      // placeholder mimei id
     private var preferenceHelper: PreferenceHelper?
-    private var chatDatabase: ChatDatabase?
-    private var tweetDao: CachedTweetDao?
     
     private lazy var client: HproseClient = {
         let client = HproseHttpClient()
@@ -91,8 +74,6 @@ final class HproseInstance: ObservableObject {
     // MARK: - Public Methods
     func initialize() async throws {
         self.preferenceHelper = PreferenceHelper()
-        self.chatDatabase = ChatDatabase.shared
-        self.tweetDao = TweetCacheDatabase.shared.tweetDao()
         
         _appUser = User.getInstance(mid: Constants.GUEST_ID)
         _appUser.baseUrl = preferenceHelper?.getAppUrls().first ?? ""
@@ -1396,31 +1377,5 @@ final class HproseInstance: ObservableObject {
             }
             return result
         }
-    }
-}
-
-struct ChatMessage: Codable {
-    // TODO: Implement ChatMessage properties
-}
-
-// MARK: - Database Types
-class ChatDatabase {
-    static let shared = ChatDatabase()
-    private init() {}
-}
-
-class TweetCacheDatabase {
-    static let shared = TweetCacheDatabase()
-    private init() {}
-    
-    func tweetDao() -> CachedTweetDao {
-        return CachedTweetDao()
-    }
-}
-
-class CachedTweetDao {
-    func getLastTweetRank() -> Int {
-        // TODO: Implement last tweet rank retrieval
-        return 0
     }
 }
