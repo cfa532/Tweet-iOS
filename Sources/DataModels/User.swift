@@ -61,11 +61,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     
     // MARK: - Factory Methods
-    static func getInstance(mid: String) -> User {
+    static func getInstance(mid: String, baseUrl: String = HproseInstance.baseUrl) -> User {
         if let existingUser = userInstances[mid] {
             return existingUser
         }
-        let newUser = User(mid: mid)
+        let newUser = User(mid: mid, baseUrl: baseUrl)
         userInstances[mid] = newUser
         return newUser
     }
@@ -88,6 +88,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         // Try to decode the full user data
         if let userData = cdUser.userData,
            let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
+            decodedUser.baseUrl = HproseInstance.baseUrl
             updateUserInstance(with: decodedUser)
         }
         return getInstance(mid: cdUser.mid)
