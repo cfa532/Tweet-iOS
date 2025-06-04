@@ -27,32 +27,32 @@ final class HproseInstance: ObservableObject {
         set {
             // Update the user instance for this mid
             let instance = User.getInstance(mid: newValue.mid)
-            instance.name = newValue.name
-            instance.username = newValue.username
-            instance.avatar = newValue.avatar
-            instance.email = newValue.email
-            instance.profile = newValue.profile
-            instance.cloudDrivePort = newValue.cloudDrivePort
-            
-            instance.tweetCount = newValue.tweetCount
-            instance.followingCount = newValue.followingCount
-            instance.followersCount = newValue.followersCount
-            instance.bookmarksCount = newValue.bookmarksCount
-            instance.favoritesCount = newValue.favoritesCount
-            instance.commentsCount = newValue.commentsCount
-            
-            instance.hostIds = newValue.hostIds
-            _appUser = instance
-            
-            // After user login and appUser is set, fetch following and follower lists
-            if !instance.isGuest {
-                Task {
+            Task { @MainActor in
+                instance.baseUrl = newValue.baseUrl
+                instance.writableUrl = newValue.writableUrl
+                instance.name = newValue.name
+                instance.username = newValue.username
+                instance.avatar = newValue.avatar
+                instance.email = newValue.email
+                instance.profile = newValue.profile
+                instance.cloudDrivePort = newValue.cloudDrivePort
+                
+                instance.tweetCount = newValue.tweetCount
+                instance.followingCount = newValue.followingCount
+                instance.followersCount = newValue.followersCount
+                instance.bookmarksCount = newValue.bookmarksCount
+                instance.favoritesCount = newValue.favoritesCount
+                instance.commentsCount = newValue.commentsCount
+                
+                instance.hostIds = newValue.hostIds
+                _appUser = instance
+                
+                // After user login and appUser is set, fetch following and follower lists
+                if !instance.isGuest {
                     let following = try? await getFollows(user: instance, entry: .FOLLOWING)
                     let followers = try? await getFollows(user: instance, entry: .FOLLOWER)
-                    await MainActor.run {
-                        instance.followingList = following
-                        instance.fansList = followers
-                    }
+                    instance.followingList = following
+                    instance.fansList = followers
                 }
             }
         }
@@ -75,11 +75,20 @@ final class HproseInstance: ObservableObject {
     func initialize() async throws {
         self.preferenceHelper = PreferenceHelper()
         
-        _appUser = User.getInstance(mid: Constants.GUEST_ID)
-        _appUser.baseUrl = preferenceHelper?.getAppUrls().first ?? ""
-        _appUser.followingList = Gadget.getAlphaIds()
+        await MainActor.run {
+            _appUser = User.getInstance(mid: Constants.GUEST_ID)
+            _appUser.baseUrl = preferenceHelper?.getAppUrls().first ?? ""
+            _appUser.followingList = Gadget.getAlphaIds()
+        }
         
-        try await initAppEntry()
+        // Try to initialize app entry only once
+        do {
+            try await initAppEntry()
+        } catch {
+            print("Error initializing app entry: \(error)")
+            // Don't throw here, allow the app to continue with default settings
+        }
+        
         TweetCacheManager.shared.deleteExpiredTweets()
     }
     
@@ -89,22 +98,21 @@ final class HproseInstance: ObservableObject {
                 let html = try await fetchHTML(from: url)
                 let paramData = Gadget.shared.extractParamMap(from: html)
                 appId = paramData["mid"] as? String ?? ""
-                guard let addrs = paramData["addrs"] as? String else {return}
-                print(addrs)
+                guard let addrs = paramData["addrs"] as? String else { continue }
+                print("Initializing with addresses: \(addrs)")
+                
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     #if DEBUG
                         let firstIp = "115.205.181.233:8002"  // for testing
                     #endif
                     await MainActor.run {
-                        appUser = appUser.copy(baseUrl: "http://\(firstIp)")
+                        appUser.baseUrl = "http://\(firstIp)"
                     }
                     client.uri = appUser.baseUrl!+"/webapi/"
                     hproseClient = client.useService(HproseService.self) as AnyObject
                     
                     if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID,
-                       // get best IP for the given userId
                        let providerIp = try await getProvider(userId) {
-                        // get user object from this IP
                         if let user = try await getUser(userId, baseUrl: "http://\(providerIp)") {
                             await MainActor.run {
                                 self.appUser = user
@@ -113,13 +121,17 @@ final class HproseInstance: ObservableObject {
                             return
                         }
                     }
-                    appUser.followingList = Gadget.getAlphaIds()
+                    await MainActor.run {
+                        appUser.followingList = Gadget.getAlphaIds()
+                    }
                     return
                 }
             } catch {
-                print("Error initializing app entry: \(error)")
+                print("Error processing URL \(url): \(error)")
+                continue
             }
         }
+        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize app entry with any URL"])
     }
     
     func logout() {
