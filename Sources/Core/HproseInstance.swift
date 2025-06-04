@@ -21,6 +21,7 @@ extension Array {
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
+    static var baseUrl: String = ""
     private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
     var appUser: User {
         get { _appUser }
@@ -105,6 +106,7 @@ final class HproseInstance: ObservableObject {
                     #if DEBUG
                         let firstIp = "115.205.181.233:8002"  // for testing
                     #endif
+                    HproseInstance.baseUrl = "http://\(firstIp)"
                     await MainActor.run {
                         appUser.baseUrl = "http://\(firstIp)"
                     }
@@ -114,10 +116,11 @@ final class HproseInstance: ObservableObject {
                     if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID,
                        let providerIp = try await getProvider(userId) {
                         if let user = try await getUser(userId, baseUrl: "http://\(providerIp)") {
+                            HproseInstance.baseUrl = "http://\(firstIp)"
                             await MainActor.run {
                                 self.appUser = user
+                                appUser.baseUrl = "http://\(providerIp)"
                             }
-                            appUser.baseUrl = "http://\(providerIp)"
                             return
                         }
                     }
