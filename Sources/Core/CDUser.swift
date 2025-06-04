@@ -4,7 +4,7 @@ import CoreData
 public class CDUser: NSManagedObject {
     @NSManaged public var mid: String
     @NSManaged public var userData: Data?
-    @NSManaged public var timeCached: Date
+    @NSManaged public var timeCached: Date?
 }
 
 // MARK: - Core Data Properties

@@ -137,6 +137,15 @@ extension TweetCacheManager {
         }
         return nil
     }
+    
+    func shouldRefreshUser(mid: String) -> Bool {
+        let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+        request.predicate = NSPredicate(format: "mid == %@", mid)
+        if let cdUser = try? context.fetch(request).first {
+            return cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -300 // 5 minutes
+        }
+        return true // If no cached user, we should refresh
+    }
 
     func saveUser(_ user: User) {
         let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
@@ -171,12 +180,43 @@ extension TweetCacheManager {
 // MARK: - User <-> Core Data Conversion
 extension User {
     static func from(cdUser: CDUser) -> User {
+        let user = User(mid: cdUser.mid)
+        
+        // Try to decode the full user data
         if let userData = cdUser.userData,
-           let user = try? JSONDecoder().decode(User.self, from: userData) {
-            return user
+           let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
+            // Copy all properties from the decoded user
+            user.baseUrl = decodedUser.baseUrl
+            user.writableUrl = decodedUser.writableUrl
+            user.name = decodedUser.name
+            user.username = decodedUser.username
+            user.password = decodedUser.password
+            user.avatar = decodedUser.avatar
+            user.email = decodedUser.email
+            user.profile = decodedUser.profile
+            user.timestamp = decodedUser.timestamp
+            user.lastLogin = decodedUser.lastLogin
+            user.cloudDrivePort = decodedUser.cloudDrivePort
+            
+            user.tweetCount = decodedUser.tweetCount
+            user.followingCount = decodedUser.followingCount
+            user.followersCount = decodedUser.followersCount
+            user.bookmarksCount = decodedUser.bookmarksCount
+            user.favoritesCount = decodedUser.favoritesCount
+            user.commentsCount = decodedUser.commentsCount
+            
+            user.hostIds = decodedUser.hostIds
+            user.publicKey = decodedUser.publicKey
+            
+            user.fansList = decodedUser.fansList
+            user.followingList = decodedUser.followingList
+            user.bookmarkedTweets = decodedUser.bookmarkedTweets
+            user.favoriteTweets = decodedUser.favoriteTweets
+            user.repliedTweets = decodedUser.repliedTweets
+            user.commentsList = decodedUser.commentsList
+            user.topTweets = decodedUser.topTweets
         }
         
-        // Fallback to basic user with just the ID if decoding fails
-        return User(mid: cdUser.mid)
+        return user
     }
 } 

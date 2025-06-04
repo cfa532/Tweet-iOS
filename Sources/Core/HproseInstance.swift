@@ -362,7 +362,8 @@ final class HproseInstance: ObservableObject {
     
     func getUser(_ userId: String, baseUrl: String = shared.appUser.baseUrl ?? "") async throws -> User? {
         // Step 1: Check Core Data cache
-        if let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId) {
+        if !TweetCacheManager.shared.shouldRefreshUser(mid: userId),
+           let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId) {
             return cachedUser
         }
         
