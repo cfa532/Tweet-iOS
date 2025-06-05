@@ -141,16 +141,6 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize app entry with any URL"])
     }
     
-    func logout() {
-        // Get the guest user instance
-        let guestUser = User.getInstance(mid: Constants.GUEST_ID)
-        guestUser.followingList = Gadget.getAlphaIds()
-        guestUser.avatar = nil
-        // Update appUser to point to the guest user instance
-        _appUser = guestUser
-        preferenceHelper?.setUserId(nil as String?)
-    }
-    
     func fetchComments(
         tweet: Tweet,
         pageNumber: Int = 0,
@@ -493,6 +483,16 @@ final class HproseInstance: ObservableObject {
             }
             return ["reason": "Invalid response status", "status": "failure"]
         }
+    }
+    
+    func logout() {
+        // Get the guest user instance
+        let guestUser = User.getInstance(mid: Constants.GUEST_ID)
+        guestUser.followingList = Gadget.getAlphaIds()
+        guestUser.avatar = nil
+        // Update appUser to point to the guest user instance
+        _appUser = guestUser
+        preferenceHelper?.setUserId(nil as String?)
     }
     
     /*
