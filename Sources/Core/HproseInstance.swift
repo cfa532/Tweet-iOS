@@ -192,6 +192,7 @@ final class HproseInstance: ObservableObject {
             }
             var accumulatedTweets: [Tweet] = []
             while startRank <= 1000 && accumulatedTweets.count < pageSize {
+                print("[HproseInstance] Fetching tweets from server - startRank: \(startRank), endRank: \(endRank)")
                 let params = [
                     "aid": appId,
                     "ver": "last",
@@ -203,10 +204,12 @@ final class HproseInstance: ObservableObject {
                 guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
                     throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetcTweetFeed"])
                 }
+                print("[HproseInstance] Got \(response.count) tweets from server (including nil)")
                 let validDictionaries = response.compactMap { dict -> [String: Any]? in
                     guard let dict = dict else { return nil }
                     return dict
                 }
+                print("[HproseInstance] Got \(validDictionaries.count) valid tweets from server")
                 for dict in validDictionaries {
                     guard let parsedTweet = Tweet.from(dict: dict) else { continue }
                     let cached = TweetCacheManager.shared.fetchTweet(mid: parsedTweet.mid)
@@ -233,15 +236,18 @@ final class HproseInstance: ObservableObject {
                     }
                     accumulatedTweets.append(tweet)
                     if accumulatedTweets.count >= pageSize {
+                        print("[HproseInstance] Returning \(accumulatedTweets.count) tweets (reached page size)")
                         return accumulatedTweets
                     }
                 }
                 if response.count < pageSize {
+                    print("[HproseInstance] Returning \(accumulatedTweets.count) tweets (end of feed)")
                     return accumulatedTweets
                 }
                 startRank += UInt(response.count)
                 endRank = startRank + UInt(pageSize)
             }
+            print("[HproseInstance] Returning \(accumulatedTweets.count) tweets (reached max rank)")
             return accumulatedTweets
         }
     }

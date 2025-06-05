@@ -15,17 +15,7 @@ class FollowingsTweetViewModel: ObservableObject {
         self.hproseInstance = hproseInstance
     }
     
-    func fetchTweets(page: Int, pageSize: Int) async {
-        // fetch cached tweets
-        let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(
-            for: hproseInstance.appUser.mid,
-            page: page,
-            pageSize: pageSize
-        )
-        let validCached = cachedTweets.compactMap { $0 }
-        await MainActor.run {
-            tweets.mergeTweets(validCached)
-        }
+    func fetchTweets(page: Int, pageSize: Int) async -> [Tweet?] {
         // fetch tweets from server
         if let serverTweets = try? await hproseInstance.fetchTweetFeed(
             user: hproseInstance.appUser,
@@ -39,7 +29,15 @@ class FollowingsTweetViewModel: ObservableObject {
             for tweet in serverTweets {
                 TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid, userId: hproseInstance.appUser.mid)
             }
+            // If we got fewer tweets than requested, pad with nil to indicate end of feed
+            if serverTweets.count < pageSize {
+                var result = serverTweets.map { Optional($0) }
+                result.append(contentsOf: Array(repeating: nil, count: pageSize - serverTweets.count))
+                return result
+            }
+            return serverTweets.map { Optional($0) }
         }
+        return Array(repeating: nil, count: pageSize)
     }
     
     func handleNewTweet(_ tweet: Tweet) {
@@ -56,13 +54,16 @@ class FollowingsTweetViewModel: ObservableObject {
 extension Array where Element == Tweet {
     /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.
     mutating func mergeTweets(_ newTweets: [Tweet]) {
-        var tweetDict = Dictionary(uniqueKeysWithValues: self.map { ($0.mid, $0) })
-        for tweet in newTweets {
-            tweetDict[tweet.mid] = tweet // Overwrite if exists, insert if not
-        }
-        // Preserve order: existing tweets first, then new ones not already present
-        let existingOrder = self.map { $0.mid }
-        let newOrder = newTweets.map { $0.mid }.filter { !existingOrder.contains($0) }
-        self = existingOrder.compactMap { tweetDict[$0] } + newOrder.compactMap { tweetDict[$0] }
+        print("[TweetListView] Merging \(newTweets.count) tweets")
+        // Create a set of existing mids for quick lookup
+        let existingMids = Set(self.map { $0.mid })
+        
+        // Filter out tweets that already exist
+        let uniqueNewTweets = newTweets.filter { !existingMids.contains($0.mid) }
+        
+        // Append new tweets to the end
+        self.append(contentsOf: uniqueNewTweets)
+        
+        print("[TweetListView] After merge: \(self.count) tweets")
     }
 }

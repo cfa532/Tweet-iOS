@@ -114,36 +114,6 @@
             endingLineNumber = "455"
             landmarkName = "login(_:)"
             landmarkType = "7">
-            <Locations>
-               <Location
-                  uuid = "9C71DF1F-E41D-4C1B-8E43-088C4AE90765 - 43aa6730e9170392"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(1) suspend resume partial function for closure #1 () async throws -&gt; Swift.Dictionary&lt;Swift.String, Any&gt; in Tweet.HproseInstance.login(Tweet.User) async throws -&gt; Swift.Dictionary&lt;Swift.String, Any&gt;"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "455"
-                  endingLineNumber = "455">
-               </Location>
-               <Location
-                  uuid = "9C71DF1F-E41D-4C1B-8E43-088C4AE90765 - 8359ca8ffb5b2a15"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(6) suspend resume partial function for closure #1 () async throws -&gt; Swift.Dictionary&lt;Swift.String, Any&gt; in Tweet.HproseInstance.login(Tweet.User) async throws -&gt; Swift.Dictionary&lt;Swift.String, Any&gt;"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "455"
-                  endingLineNumber = "455">
-               </Location>
-            </Locations>
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>
