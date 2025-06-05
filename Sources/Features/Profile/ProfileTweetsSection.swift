@@ -16,37 +16,22 @@ class ProfileTweetsViewModel: ObservableObject {
     }
     
     func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
-        var currentPage = page
-        var allTweets: [Tweet?] = []
-        var keepLoading = true
-        while keepLoading {
-            let serverTweets = try await hproseInstance.fetchUserTweet(
-                user: user,
-                pageNumber: currentPage,
-                pageSize: pageSize
-            )
-            let hasValidTweet = serverTweets.contains { $0 != nil }
-            // Filter out pinned tweets from server response
-            let filteredTweets = serverTweets.filter { tweet in
-                if let tweet = tweet {
-                    return !pinnedTweetIds.contains(tweet.mid)
-                }
-                return true // Keep nil tweets
+        let serverTweets = try await hproseInstance.fetchUserTweet(
+            user: user,
+            pageNumber: page,
+            pageSize: pageSize
+        )
+        // Filter out pinned tweets from server response
+        let filteredTweets = serverTweets.filter { tweet in
+            if let tweet = tweet {
+                return !pinnedTweetIds.contains(tweet.mid)
             }
-            if hasValidTweet {
-                await MainActor.run {
-                    tweets.mergeTweets(filteredTweets.compactMap{ $0 })
-                }
-                allTweets.append(contentsOf: filteredTweets)
-                keepLoading = false
-            } else if serverTweets.isEmpty {
-                keepLoading = false
-            } else {
-                // All tweets are nil, auto-increment page and try again
-                currentPage += 1
-            }
+            return true // Keep nil tweets
         }
-        return allTweets
+        await MainActor.run {
+            tweets.mergeTweets(filteredTweets.compactMap{ $0 })
+        }
+        return filteredTweets
     }
     
     func handleNewTweet(_ tweet: Tweet) {
