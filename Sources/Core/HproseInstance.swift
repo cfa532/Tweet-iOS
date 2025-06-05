@@ -51,14 +51,6 @@ final class HproseInstance: ObservableObject {
                 self._appUser = instance
                 // Notify observers that appUser has changed
                 self.objectWillChange.send()
-                
-                // After user login and appUser is set, fetch following and follower lists
-                if !instance.isGuest {
-                    let following = try? await getFollows(user: instance, entry: .FOLLOWING)
-                    let followers = try? await getFollows(user: instance, entry: .FOLLOWER)
-                    instance.followingList = following
-                    instance.fansList = followers
-                }
             }
         }
     }
@@ -467,18 +459,18 @@ final class HproseInstance: ObservableObject {
                     }
                     return ["reason": "Unknown error occurred", "status": "failure"]
                 } else if status == "success" {
-                    if let userDict = response["user"] as? [String: Any] {
-                        // Get the singleton instance for the logged-in user
-                        let userObject = User.from(dict: userDict)
-                        await MainActor.run {
-                            userObject.baseUrl = loginUser.baseUrl
-                            // Update the appUser reference to point to the new user instance
-                            self._appUser = userObject
-                            preferenceHelper?.setUserId(userObject.mid)
-                        }
-                        return ["user": userObject, "status": "success"]
+                    let followings = try? await getFollows(user: loginUser, entry: .FOLLOWING)
+                    let followers = try? await getFollows(user: loginUser, entry: .FOLLOWER)
+                    
+                    await MainActor.run {
+                        // After user login and appUser is set, fetch following and follower lists
+                        loginUser.followingList = followings
+                        loginUser.fansList = followers
+                        // Update the appUser reference to point to the new user instance
+                        self._appUser = loginUser
+                        preferenceHelper?.setUserId(loginUser.mid)
                     }
-                    return ["reason": "User data not found", "status": "failure"]
+                    return ["reason": "Success", "status": "success"]
                 }
             }
             return ["reason": "Invalid response status", "status": "failure"]

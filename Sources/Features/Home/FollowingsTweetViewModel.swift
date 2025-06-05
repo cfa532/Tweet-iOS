@@ -5,21 +5,6 @@
 //  Created by 超方 on 2025/6/4.
 //
 
-// MARK: - Tweet Array Extension
-extension Array where Element == Tweet {
-    /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.
-    mutating func mergeTweets(_ newTweets: [Tweet]) {
-        var tweetDict = Dictionary(uniqueKeysWithValues: self.map { ($0.mid, $0) })
-        for tweet in newTweets {
-            tweetDict[tweet.mid] = tweet // Overwrite if exists, insert if not
-        }
-        // Preserve order: existing tweets first, then new ones not already present
-        let existingOrder = self.map { $0.mid }
-        let newOrder = newTweets.map { $0.mid }.filter { !existingOrder.contains($0) }
-        self = existingOrder.compactMap { tweetDict[$0] } + newOrder.compactMap { tweetDict[$0] }
-    }
-}
-
 @available(iOS 16.0, *)
 class FollowingsTweetViewModel: ObservableObject {
     @Published var tweets: [Tweet] = []
@@ -31,6 +16,7 @@ class FollowingsTweetViewModel: ObservableObject {
     }
     
     func fetchTweets(page: Int, pageSize: Int) async {
+        // fetch cached tweets
         let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(
             for: hproseInstance.appUser.mid,
             page: page,
@@ -40,7 +26,7 @@ class FollowingsTweetViewModel: ObservableObject {
         await MainActor.run {
             tweets.mergeTweets(validCached)
         }
-
+        // fetch tweets from server
         if let serverTweets = try? await hproseInstance.fetchTweetFeed(
             user: hproseInstance.appUser,
             pageNumber: page,
@@ -66,3 +52,17 @@ class FollowingsTweetViewModel: ObservableObject {
     }
 }
 
+// MARK: - Tweet Array Extension
+extension Array where Element == Tweet {
+    /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.
+    mutating func mergeTweets(_ newTweets: [Tweet]) {
+        var tweetDict = Dictionary(uniqueKeysWithValues: self.map { ($0.mid, $0) })
+        for tweet in newTweets {
+            tweetDict[tweet.mid] = tweet // Overwrite if exists, insert if not
+        }
+        // Preserve order: existing tweets first, then new ones not already present
+        let existingOrder = self.map { $0.mid }
+        let newOrder = newTweets.map { $0.mid }.filter { !existingOrder.contains($0) }
+        self = existingOrder.compactMap { tweetDict[$0] } + newOrder.compactMap { tweetDict[$0] }
+    }
+}
