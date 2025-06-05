@@ -11,18 +11,18 @@ struct TweetListNotification {
 struct TweetListView<RowView: View>: View {
     // MARK: - Properties
     let title: String
-    let tweetFetcher: @Sendable (Int, Int, Bool) async throws -> [Tweet?]
+    let tweetFetcher: @Sendable (UInt, UInt, Bool) async throws -> [Tweet?]
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     let notifications: [TweetListNotification]
-    private let pageSize: Int = 10
+    private let pageSize: UInt = 10
 
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var tweets: [Tweet]
     @State private var isLoading: Bool = false
     @State private var isLoadingMore: Bool = false
     @State private var hasMoreTweets: Bool = true
-    @State private var currentPage: Int = 0
+    @State private var currentPage: UInt = 0
     @State private var errorMessage: String? = nil
     @State private var showDeleteResult = false
     @State private var deleteResultMessage = ""
@@ -36,7 +36,7 @@ struct TweetListView<RowView: View>: View {
     init(
         title: String,
         tweets: Binding<[Tweet]>,
-        tweetFetcher: @escaping @Sendable (Int, Int, Bool) async throws -> [Tweet?],
+        tweetFetcher: @escaping @Sendable (UInt, UInt, Bool) async throws -> [Tweet?],
         showTitle: Bool = true,
         notifications: [TweetListNotification]? = nil,
         rowView: @escaping (Tweet) -> RowView
@@ -133,7 +133,7 @@ struct TweetListView<RowView: View>: View {
         hasMoreTweets = true
         currentPage = 0
         tweets = []
-        var page = 0
+        var page: UInt = 0
         var totalValidTweets = 0
         var keepLoading = true
         while keepLoading {
@@ -150,7 +150,6 @@ struct TweetListView<RowView: View>: View {
                 // Step 2: Fetch from server
                 let tweetsInBackend = try await tweetFetcher(page, pageSize, false)
                 await MainActor.run {
-                    tweets.mergeTweets(tweetsInBackend.compactMap { $0 })
                     totalValidTweets = tweets.count
                     print("[TweetListView] After backend: \(totalValidTweets) tweets for user: \(hproseInstance.appUser.mid)")
                 }
@@ -191,7 +190,7 @@ struct TweetListView<RowView: View>: View {
         await performInitialLoad()
     }
 
-    func loadMoreTweets(page: Int? = nil) {
+    func loadMoreTweets(page: UInt? = nil) {
         print("[TweetListView] loadMoreTweets called for user: \(hproseInstance.appUser.mid) - hasMoreTweets: \(hasMoreTweets), isLoadingMore: \(isLoadingMore), initialLoadComplete: \(initialLoadComplete), currentPage: \(currentPage)")
         guard hasMoreTweets, !isLoadingMore, initialLoadComplete else { 
             print("[TweetListView] loadMoreTweets guard failed for user: \(hproseInstance.appUser.mid) - hasMoreTweets: \(hasMoreTweets), isLoadingMore: \(isLoadingMore), initialLoadComplete: \(initialLoadComplete)")

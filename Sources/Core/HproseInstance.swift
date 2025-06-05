@@ -135,8 +135,8 @@ final class HproseInstance: ObservableObject {
     
     func fetchComments(
         tweet: Tweet,
-        pageNumber: Int = 0,
-        pageSize: Int = 20
+        pageNumber: UInt = 0,
+        pageSize: UInt = 20
     ) async throws -> [Tweet] {
         try await withRetry {
             let entry = "get_comments"
@@ -180,75 +180,60 @@ final class HproseInstance: ObservableObject {
     /// This function accumulates only non-nil tweets and stops fetching when the backend returns fewer than pageSize items.
     func fetchTweetFeed(
         user: User,
-        pageNumber: Int = 0,
-        pageSize: Int = 20,
+        pageNumber: UInt = 0,
+        pageSize: UInt = 20,
         entry: String = "get_tweet_feed"
-    ) async throws -> [Tweet] {
-        var startRank = UInt(pageNumber * pageSize)
-        var endRank = UInt(startRank + UInt(pageSize))
+    ) async throws -> [Tweet?] {
         return try await withRetry {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            var accumulatedTweets: [Tweet] = []
-            while startRank <= 1000 && accumulatedTweets.count < pageSize {
-                print("[HproseInstance] Fetching tweets from server - startRank: \(startRank), endRank: \(endRank)")
-                let params = [
-                    "aid": appId,
-                    "ver": "last",
-                    "start": startRank,
-                    "end": endRank,
-                    "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
-                    "appuserid": appUser.mid,
-                ]
-                guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
-                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetcTweetFeed"])
-                }
-                print("[HproseInstance] Got \(response.count) tweets from server (including nil)")
-                let validDictionaries = response.compactMap { dict -> [String: Any]? in
-                    guard let dict = dict else { return nil }
-                    return dict
-                }
-                print("[HproseInstance] Got \(validDictionaries.count) valid tweets from server")
-                for dict in validDictionaries {
-                    guard let parsedTweet = Tweet.from(dict: dict) else { continue }
-                    let cached = TweetCacheManager.shared.fetchTweet(mid: parsedTweet.mid)
-                    let tweet: Tweet
-                    if let cached = cached {
-                        await MainActor.run {
-                            cached.favorites = parsedTweet.favorites
-                            cached.favoriteCount = parsedTweet.favoriteCount
-                            cached.bookmarkCount = parsedTweet.bookmarkCount
-                            cached.retweetCount = parsedTweet.retweetCount
-                            cached.commentCount = parsedTweet.commentCount
-                        }
-                        tweet = cached
-                    } else {
-                        TweetCacheManager.shared.saveTweet(parsedTweet, mid: appUser.mid)
-                        tweet = parsedTweet
-                    }
-                    if tweet.author == nil {
-                        let author = try? await getUser(tweet.authorId)
-                        tweet.author = author
-                        if author != nil {
-                            TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid)
-                        }
-                    }
-                    accumulatedTweets.append(tweet)
-                    if accumulatedTweets.count >= pageSize {
-                        print("[HproseInstance] Returning \(accumulatedTweets.count) tweets (reached page size)")
-                        return accumulatedTweets
-                    }
-                }
-                if response.count < pageSize {
-                    print("[HproseInstance] Returning \(accumulatedTweets.count) tweets (end of feed)")
-                    return accumulatedTweets
-                }
-                startRank += UInt(response.count)
-                endRank = startRank + UInt(pageSize)
+            print("[HproseInstance] Fetching tweets from server - pn: \(pageNumber), ps: \(pageSize)")
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "pn": pageNumber,
+                "ps": pageSize,
+                "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
+                "appuserid": appUser.mid,
+            ]
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetcTweetFeed"])
             }
-            print("[HproseInstance] Returning \(accumulatedTweets.count) tweets (reached max rank)")
-            return accumulatedTweets
+            print("[HproseInstance] Got \(response.count) tweets from server (including nil)")
+            
+            var tweets: [Tweet?] = []
+            for item in response {
+                if let tweetDict = item["tweet"] as? [String: Any],
+                   let tweet = Tweet.from(dict: tweetDict) {
+                    tweet.author = try await getUser(tweet.authorId)
+                    
+                    // Update cached tweet
+                    if let cached = TweetCacheManager.shared.fetchTweet(mid: tweet.mid) {
+                        await MainActor.run {
+                            cached.favorites = tweet.favorites
+                            cached.favoriteCount = tweet.favoriteCount
+                            cached.bookmarkCount = tweet.bookmarkCount
+                            cached.retweetCount = tweet.retweetCount
+                            cached.commentCount = tweet.commentCount
+                        }
+                        // Save updated cached tweet back to cache
+                        TweetCacheManager.shared.saveTweet(cached, mid: appUser.mid)
+                        tweets.append(cached)
+                    } else {
+                        TweetCacheManager.shared.saveTweet(tweet, mid: appUser.mid)
+                        tweets.append(tweet)
+                    }
+                } else {
+                    // Cache nil tweet using tid
+                    if let tid = item["tid"] as? String {
+                        TweetCacheManager.shared.saveTweet(nil, mid: tid)
+                    }
+                    tweets.append(nil)
+                }
+            }
+            print("[HproseInstance] Returning \(tweets.count) tweets")
+            return tweets
         }
     }
     
@@ -264,70 +249,57 @@ final class HproseInstance: ObservableObject {
     /// This function accumulates only non-nil tweets and stops fetching when the backend returns fewer than pageSize items.
     func fetchUserTweet(
         user: User,
-        startRank: UInt,
-        endRank: UInt,
+        pageNumber: UInt = 0,
+        pageSize: UInt = 20,
         entry: String = "get_tweets_by_user"
-    ) async throws -> [Tweet] {
-        let pageSize = Int(endRank - startRank + 1)
-        var accumulatedTweets: [Tweet] = []
-        var currentStart = startRank
-        var currentEnd = endRank
+    ) async throws -> [Tweet?] {
         return try await withRetry {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            while accumulatedTweets.count < pageSize {
-                let params = [
-                    "aid": appId,
-                    "ver": "last",
-                    "userid": user.mid,
-                    "start": currentStart,
-                    "end": currentEnd,
-                    "appuserid": appUser.mid,
-                ]
-                guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
-                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
-                }
-                let validDictionaries = response.compactMap { dict -> [String: Any]? in
-                    guard let dict = dict else { return nil }
-                    return dict
-                }
-                for dict in validDictionaries {
-                    guard let parsedTweet = Tweet.from(dict: dict) else { continue }
-                    let cached = TweetCacheManager.shared.fetchTweet(mid: parsedTweet.mid)
-                    let tweet: Tweet
-                    if let cached = cached {
-                        await MainActor.run {
-                            cached.favorites = parsedTweet.favorites
-                            cached.favoriteCount = parsedTweet.favoriteCount
-                            cached.bookmarkCount = parsedTweet.bookmarkCount
-                            cached.retweetCount = parsedTweet.retweetCount
-                            cached.commentCount = parsedTweet.commentCount
-                        }
-                        tweet = cached
-                    } else {
-                        TweetCacheManager.shared.saveTweet(parsedTweet, mid: appUser.mid)
-                        tweet = parsedTweet
-                    }
-                    if tweet.author == nil {
-                        let author = try? await getUser(tweet.authorId)
-                        tweet.author = author
-                        if author != nil {
-                            TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid)
-                        }
-                    }
-                    accumulatedTweets.append(tweet)
-                    if accumulatedTweets.count >= pageSize {
-                        return accumulatedTweets
-                    }
-                }
-                if response.count < pageSize {
-                    return accumulatedTweets
-                }
-                currentStart += UInt(response.count)
-                currentEnd = currentStart + UInt(pageSize) - 1
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": user.mid,
+                "pn": pageNumber,
+                "ps": pageSize,
+                "appuserid": appUser.mid,
+            ]
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
             }
-            return accumulatedTweets
+            
+            var tweets: [Tweet?] = []
+            for item in response {
+                if let tweetDict = item["tweet"] as? [String: Any],
+                   let tweet = Tweet.from(dict: tweetDict) {
+                    tweet.author = try await getUser(tweet.authorId)
+                    
+                    // Update cached tweet
+                    if let cached = TweetCacheManager.shared.fetchTweet(mid: tweet.mid) {
+                        await MainActor.run {
+                            cached.favorites = tweet.favorites
+                            cached.favoriteCount = tweet.favoriteCount
+                            cached.bookmarkCount = tweet.bookmarkCount
+                            cached.retweetCount = tweet.retweetCount
+                            cached.commentCount = tweet.commentCount
+                        }
+                        // Save updated cached tweet back to cache
+                        TweetCacheManager.shared.saveTweet(cached, mid: appUser.mid)
+                        tweets.append(cached)
+                    } else {
+                        TweetCacheManager.shared.saveTweet(tweet, mid: appUser.mid)
+                        tweets.append(tweet)
+                    }
+                } else {
+                    // Cache nil tweet using tid
+                    if let tid = item["tid"] as? String {
+                        TweetCacheManager.shared.saveTweet(nil, mid: tid)
+                    }
+                    tweets.append(nil)
+                }
+            }
+            return tweets
         }
     }
     
@@ -531,8 +503,8 @@ final class HproseInstance: ObservableObject {
     func getUserTweetsByType(
         user: User,
         type: UserContentType,
-        pageNumber: Int = 0,
-        pageSize: Int = 20
+        pageNumber: UInt = 0,
+        pageSize: UInt = 20
     ) async throws -> [Tweet] {
         try await withRetry {
             let entry = "get_user_meta"

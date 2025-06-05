@@ -47,12 +47,12 @@ class TweetCacheManager {
 
 // MARK: - Tweet Caching
 extension TweetCacheManager {
-    func fetchCachedTweets(for userId: String, page: Int, pageSize: Int) -> [Tweet?] {
+    func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt) -> [Tweet?] {
         let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
         request.predicate = NSPredicate(format: "uid == %@", userId)
         request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
-        request.fetchOffset = page * pageSize
-        request.fetchLimit = pageSize
+        request.fetchOffset = Int(page * pageSize)
+        request.fetchLimit = Int(pageSize)
         
         if let cdTweets = try? context.fetch(request) {
             return cdTweets.map { cdTweet in

@@ -7,7 +7,7 @@
 
 @available(iOS 16.0, *)
 class FollowingsTweetViewModel: ObservableObject {
-    @Published var tweets: [Tweet] = []
+    @Published var tweets: [Tweet] = []     // tweet list to be displayed on screen.
     @Published var isLoading: Bool = false
     private let hproseInstance: HproseInstance
     
@@ -15,7 +15,7 @@ class FollowingsTweetViewModel: ObservableObject {
         self.hproseInstance = hproseInstance
     }
     
-    func fetchTweets(page: Int, pageSize: Int) async -> [Tweet?] {
+    func fetchTweets(page: UInt, pageSize: UInt) async -> [Tweet?] {
         // fetch tweets from server
         if let serverTweets = try? await hproseInstance.fetchTweetFeed(
             user: hproseInstance.appUser,
@@ -23,21 +23,11 @@ class FollowingsTweetViewModel: ObservableObject {
             pageSize: pageSize
         ) {
             await MainActor.run {
-                tweets.mergeTweets(serverTweets)
+                tweets.mergeTweets(serverTweets.compactMap{ $0 })
             }
-            // Update cached tweets with server-fetched tweets
-            for tweet in serverTweets {
-                TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid, userId: hproseInstance.appUser.mid)
-            }
-            // If we got fewer tweets than requested, pad with nil to indicate end of feed
-            if serverTweets.count < pageSize {
-                var result = serverTweets.map { Optional($0) }
-                result.append(contentsOf: Array(repeating: nil, count: pageSize - serverTweets.count))
-                return result
-            }
-            return serverTweets.map { Optional($0) }
+            return serverTweets     // including nil
         }
-        return Array(repeating: nil, count: pageSize)
+        return Array(repeating: nil, count: Int(pageSize))
     }
     
     func handleNewTweet(_ tweet: Tweet) {

@@ -13,8 +13,8 @@ class CommentsViewModel: ObservableObject {
     @Published var hasMore: Bool = true
     @Published var showToast: Bool = false
     @Published var toastMessage: String = ""
-    private var currentPage: Int = 0
-    private let pageSize: Int = 20
+    private var currentPage: UInt = 0
+    private let pageSize: UInt = 20
     private let hproseInstance: HproseInstance
     var parentTweet: Tweet
 

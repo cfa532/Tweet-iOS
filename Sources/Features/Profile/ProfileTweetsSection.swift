@@ -15,34 +15,27 @@ class ProfileTweetsViewModel: ObservableObject {
         self.pinnedTweetIds = pinnedTweetIds
     }
     
-    func fetchTweets(page: Int, pageSize: Int) async {
-        // Step 1: Fetch from cache immediately
-        let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(
-            for: user.mid,
-            page: page,
+    func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
+        // Fetch from server
+        let serverTweets = try await hproseInstance.fetchUserTweet(
+            user: user,
+            pageNumber: page,
             pageSize: pageSize
         )
         
-        // Filter out pinned tweets from cache
-        let filteredCached = cachedTweets.filter { $0 != nil && !pinnedTweetIds.contains($0!.mid) }
+        // Filter out pinned tweets from server response
+        let filteredTweets = serverTweets.filter { tweet in
+            if let tweet = tweet {
+                return !pinnedTweetIds.contains(tweet.mid)
+            }
+            return true // Keep nil tweets
+        }
         
         await MainActor.run {
-            self.tweets = filteredCached.compactMap{ $0 }
+            tweets.mergeTweets(filteredTweets.compactMap{ $0 })
         }
         
-        // Step 2: Fetch from server
-        if let serverTweets = try? await hproseInstance.fetchUserTweet(
-            user: user,
-            startRank: UInt(page * pageSize),
-            endRank: UInt((page + 1) * pageSize - 1)
-        ) {
-            // Filter out pinned tweets from server response
-            let filteredServer = serverTweets.filter { !pinnedTweetIds.contains($0.mid) }
-            
-            await MainActor.run {
-                self.tweets = filteredServer
-            }
-        }
+        return serverTweets
     }
     
     func handleNewTweet(_ tweet: Tweet) {
@@ -120,11 +113,11 @@ struct ProfileTweetsSection: View {
                         if isFromCache {
                             // Fetch from cache
                             let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: page, pageSize: size)
+                            viewModel.tweets.mergeTweets(cachedTweets.compactMap { $0 })
                             return cachedTweets
                         } else {
                             // Fetch from server
-                            await viewModel.fetchTweets(page: page, pageSize: size)
-                            return viewModel.tweets.map { Optional($0) }
+                            return try await viewModel.fetchTweets(page: page, pageSize: size)
                         }
                     },
                     showTitle: false,
