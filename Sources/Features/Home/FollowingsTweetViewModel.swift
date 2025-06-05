@@ -17,17 +17,21 @@ class FollowingsTweetViewModel: ObservableObject {
     
     func fetchTweets(page: UInt, pageSize: UInt) async -> [Tweet?] {
         // fetch tweets from server
-        if let serverTweets = try? await hproseInstance.fetchTweetFeed(
-            user: hproseInstance.appUser,
-            pageNumber: page,
-            pageSize: pageSize
-        ) {
+        do {
+            let serverTweets = try await hproseInstance.fetchTweetFeed(
+                user: hproseInstance.appUser,
+                pageNumber: page,
+                pageSize: pageSize
+            )
+            
             await MainActor.run {
                 tweets.mergeTweets(serverTweets.compactMap{ $0 })
             }
             return serverTweets     // including nil
+        } catch {
+            print("[FollowingsTweetViewModel] Error fetching tweets: \(error)")
+            return Array(repeating: nil, count: Int(pageSize))
         }
-        return Array(repeating: nil, count: Int(pageSize))
     }
     
     func handleNewTweet(_ tweet: Tweet) {
