@@ -86,23 +86,34 @@ extension TweetCacheManager {
 
     /// Save a tweet or a nil placeholder to the cache.
     func saveTweet(_ tweet: Tweet?, mid: String, userId: String? = nil) {
-        let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-        request.predicate = NSPredicate(format: "tid == %@", mid)
-        let cdTweet = (try? context.fetch(request).first) ?? CDTweet(context: context)
-        cdTweet.tid = mid
-        cdTweet.uid = userId ?? mid
-        cdTweet.timestamp = Date()
-        cdTweet.timeCached = Date()
-        if let tweet = tweet {
-            cdTweet.isNilPlaceholder = false
-            if let tweetData = try? JSONEncoder().encode(tweet) {
-                cdTweet.tweetData = tweetData
+        context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.predicate = NSPredicate(format: "tid == %@", mid)
+            
+            let cdTweet: CDTweet
+            if let existingTweet = try? context.fetch(request).first {
+                cdTweet = existingTweet
+            } else {
+                cdTweet = CDTweet(context: context)
             }
-        } else {
-            cdTweet.isNilPlaceholder = true
-            cdTweet.tweetData = nil
+            
+            cdTweet.tid = mid
+            cdTweet.uid = userId ?? mid
+            cdTweet.timestamp = Date()
+            cdTweet.timeCached = Date()
+            
+            if let tweet = tweet {
+                cdTweet.isNilPlaceholder = false
+                if let tweetData = try? JSONEncoder().encode(tweet) {
+                    cdTweet.tweetData = tweetData
+                }
+            } else {
+                cdTweet.isNilPlaceholder = true
+                cdTweet.tweetData = nil
+            }
+            
+            try? context.save()
         }
-        try? context.save()
     }
 
     func deleteExpiredTweets() {

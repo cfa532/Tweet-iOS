@@ -113,7 +113,9 @@ struct ProfileTweetsSection: View {
                         if isFromCache {
                             // Fetch from cache
                             let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: page, pageSize: size)
-                            viewModel.tweets.mergeTweets(cachedTweets.compactMap { $0 })
+                            await MainActor.run {
+                                viewModel.tweets.mergeTweets(cachedTweets.compactMap { $0 })
+                            }
                             return cachedTweets
                         } else {
                             // Fetch from server
