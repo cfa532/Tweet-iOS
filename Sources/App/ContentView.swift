@@ -5,6 +5,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var hproseInstance = HproseInstance.shared
     @State private var selectedTab = 0
+    @State private var showComposeSheet = false
     
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -15,21 +16,22 @@ struct ContentView: View {
                 Label("Home", systemImage: "house")
             }
             .tag(0)
-            .onChange(of: selectedTab) { newValue in
-                if newValue == 0 {
-                    // Pop to root when home tab is selected
-                    NotificationCenter.default.post(
-                        name: .popToRoot,
-                        object: nil
-                    )
-                }
-            }
-            
-            ComposeTweetView()
+
+            // Dummy view for Compose tab
+            Color.clear
                 .tabItem {
                     Label("Compose", systemImage: "square.and.pencil")
                 }
                 .tag(1)
+        }
+        .onChange(of: selectedTab) { newValue in
+            if newValue == 1 {
+                showComposeSheet = true
+                selectedTab = 0 // Switch back to Home tab
+            }
+        }
+        .sheet(isPresented: $showComposeSheet) {
+            ComposeTweetView()
         }
         .environmentObject(hproseInstance)
     }

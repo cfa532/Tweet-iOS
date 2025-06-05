@@ -59,6 +59,11 @@ struct HomeView: View {
                 selectedTab = 0
                 resetFollowingsFeed.toggle()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
+                // Reset the feed when user logs in
+                selectedTab = 0
+                resetFollowingsFeed.toggle()
+            }
         }
     }
 }

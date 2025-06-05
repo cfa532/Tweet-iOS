@@ -24,10 +24,10 @@ class ProfileTweetsViewModel: ObservableObject {
         )
         
         // Filter out pinned tweets from cache
-        let filteredCached = cachedTweets.filter { !pinnedTweetIds.contains($0.mid) }
+        let filteredCached = cachedTweets.filter { $0 != nil && !pinnedTweetIds.contains($0!.mid) }
         
         await MainActor.run {
-            self.tweets = filteredCached
+            self.tweets = filteredCached.compactMap{ $0 }
         }
         
         // Step 2: Fetch from server
@@ -43,6 +43,15 @@ class ProfileTweetsViewModel: ObservableObject {
                 self.tweets = filteredServer
             }
         }
+    }
+    
+    func handleNewTweet(_ tweet: Tweet) {
+        tweets.insert(tweet, at: 0)
+    }
+    
+    func handleDeletedTweet(_ tweetId: String) {
+        tweets.removeAll { $0.mid == tweetId }
+        TweetCacheManager.shared.deleteTweet(mid: tweetId)
     }
 }
 
@@ -106,18 +115,16 @@ struct ProfileTweetsSection: View {
                 }
                 TweetListView<TweetItemView>(
                     title: "",
-                    tweetFetcher: { page, size in
-                        print("[ProfileTweetsSection] tweetFetcher called: page=\(page), size=\(size)")
-                        if page == 0 {
-                            await viewModel.fetchTweets(page: page, pageSize: size)
-                            let combined = pinnedTweets + viewModel.tweets
-                            let result = Array(combined.prefix(size))
-                            print("[ProfileTweetsSection] Returning page 0: pinned=\(pinnedTweets.count), regular=\(viewModel.tweets.count), total=\(result.count)")
-                            return result
+                    tweets: $viewModel.tweets,
+                    tweetFetcher: { page, size, isFromCache in
+                        if isFromCache {
+                            // Fetch from cache
+                            let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: page, pageSize: size)
+                            return cachedTweets
                         } else {
+                            // Fetch from server
                             await viewModel.fetchTweets(page: page, pageSize: size)
-                            print("[ProfileTweetsSection] Returning page \(page): tweets=\(viewModel.tweets.count)")
-                            return viewModel.tweets
+                            return viewModel.tweets.map { Optional($0) }
                         }
                     },
                     showTitle: false,
@@ -126,13 +133,13 @@ struct ProfileTweetsSection: View {
                             name: .newTweetCreated,
                             key: "tweet",
                             shouldAccept: { tweet in tweet.authorId == user.mid },
-                            action: { tweets, tweet in tweets.insert(tweet, at: 0) }
+                            action: { tweet in viewModel.handleNewTweet(tweet) }
                         ),
                         TweetListNotification(
                             name: .tweetDeleted,
                             key: "tweetId",
                             shouldAccept: { _ in true },
-                            action: { tweets, tweet in tweets.removeAll { $0?.mid == tweet.mid } }
+                            action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
                         )
                     ],
                     rowView: { tweet in

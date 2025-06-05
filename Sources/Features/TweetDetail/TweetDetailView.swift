@@ -1,31 +1,19 @@
 import SwiftUI
 
-@available(iOS 16.0, *)
-struct FollowingsTweetView: View {
-    @Binding var isLoading: Bool
-    let onAvatarTap: (User) -> Void
-    @Binding var resetTrigger: Bool
-    @Binding var scrollToTopTrigger: Bool
-    @EnvironmentObject private var hproseInstance: HproseInstance
-    @StateObject private var viewModel: FollowingsTweetViewModel
-
-    init(isLoading: Binding<Bool>, onAvatarTap: @escaping (User) -> Void, resetTrigger: Binding<Bool>, scrollToTopTrigger: Binding<Bool>) {
-        self._isLoading = isLoading
-        self.onAvatarTap = onAvatarTap
-        self._resetTrigger = resetTrigger
-        self._scrollToTopTrigger = scrollToTopTrigger
-        self._viewModel = StateObject(wrappedValue: FollowingsTweetViewModel(hproseInstance: HproseInstance.shared))
-    }
+struct TweetDetailView: View {
+    @StateObject private var viewModel = TweetDetailViewModel()
+    @State private var isShowingReplySheet = false
 
     var body: some View {
-        ScrollViewReader { proxy in
+        VStack {
+            // Existing code
             TweetListView<TweetItemView>(
-                title: "Timeline",
+                title: "Replies",
                 tweets: $viewModel.tweets,
                 tweetFetcher: { page, size, isFromCache in
                     if isFromCache {
                         // Fetch from cache
-                        let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(for: hproseInstance.appUser.mid, page: page, pageSize: size)
+                        let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(for: tweet.mid, page: page, pageSize: size)
                         return cachedTweets
                     } else {
                         // Fetch from server
@@ -56,19 +44,17 @@ struct FollowingsTweetView: View {
                     )
                 }
             )
-            .onChange(of: resetTrigger) { newValue in
-                if newValue {
-                    resetTrigger = false
-                }
-            }
-            .onChange(of: scrollToTopTrigger) { newValue in
-                if newValue {
-                    withAnimation {
-                        proxy.scrollTo("top", anchor: .top)
-                    }
-                    scrollToTopTrigger = false
-                }
-            }
+            // Existing code
         }
     }
+
+    private func onAvatarTap(tweet: Tweet) {
+        // Implementation of onAvatarTap
+    }
 }
+
+struct TweetDetailView_Previews: PreviewProvider {
+    static var previews: some View {
+        TweetDetailView()
+    }
+} 

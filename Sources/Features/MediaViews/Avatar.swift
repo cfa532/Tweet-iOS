@@ -17,20 +17,23 @@ struct Avatar: View {
     }
     
     var body: some View {
-        if let avatarUrl = user.avatarUrl {
-            AsyncImage(url: URL(string: avatarUrl)) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Color.gray
-            }
-            .frame(width: size, height: size)
-            .clipShape(Circle())
-        } else {
-            Image("ic_splash")
+        Group {
+            if let avatarUrl = user.avatarUrl {
+                AsyncImage(url: URL(string: avatarUrl)) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Color.gray
+                }
                 .frame(width: size, height: size)
                 .clipShape(Circle())
+            } else {
+                Image("ic_splash")
+                    .frame(width: size, height: size)
+                    .clipShape(Circle())
+            }
         }
+        .id(user.mid) // Force view update when user changes
     }
 }

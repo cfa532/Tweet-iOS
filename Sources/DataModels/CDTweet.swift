@@ -14,6 +14,7 @@ public class CDTweet: NSManagedObject {
     @NSManaged public var timestamp: Date?
     @NSManaged public var tweetData: Data?
     @NSManaged public var timeCached: Date
+    @NSManaged public var isNilPlaceholder: Bool
 }
 
 // MARK: - Core Data Properties

@@ -21,7 +21,7 @@
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
 		4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DC2DD62CCB00A20E19 /* Gadget.swift */; };
 		46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46704DE12DD8CEF7001D69B9 /* MediaType.swift */; };
-		4674940B2DF014820082FAC6 /* CDUser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4674940A2DF014820082FAC6 /* CDUser.swift */; };
+		4674940D2DF08B7E0082FAC6 /* FollowingsTweetViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4674940C2DF08B780082FAC6 /* FollowingsTweetViewModel.swift */; };
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
 		469A99502DEBFBC100954049 /* Tweet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994F2DEBFBC100954049 /* Tweet.swift */; };
@@ -76,7 +76,7 @@
 		4642A1DC2DD62CCB00A20E19 /* Gadget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gadget.swift; sourceTree = "<group>"; };
 		46704DDD2DD72E58001D69B9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Tweet/Info.plist; sourceTree = "<group>"; };
 		46704DE12DD8CEF7001D69B9 /* MediaType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaType.swift; sourceTree = "<group>"; };
-		4674940A2DF014820082FAC6 /* CDUser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDUser.swift; sourceTree = "<group>"; };
+		4674940C2DF08B780082FAC6 /* FollowingsTweetViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowingsTweetViewModel.swift; sourceTree = "<group>"; };
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
 		469A994F2DEBFBC100954049 /* Tweet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tweet.swift; sourceTree = "<group>"; };
@@ -228,7 +228,6 @@
 				46704DE12DD8CEF7001D69B9 /* MediaType.swift */,
 				4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */,
 				4608E2D92DD5CD920051A92D /* User.swift */,
-				4674940A2DF014820082FAC6 /* CDUser.swift */,
 				469A99652DEF38A400954049 /* CDTweet.swift */,
 			);
 			path = DataModels;
@@ -237,6 +236,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A0D /* Home */ = {
 			isa = PBXGroup;
 			children = (
+				4674940C2DF08B780082FAC6 /* FollowingsTweetViewModel.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A25 /* HomeViewModel.swift */,
 				46E5B3352DDA315700AEF31F /* FollowingsTweetView.swift */,
 				46E5B3362DDA315700AEF31F /* RecommendedTweetView.swift */,
@@ -447,7 +447,6 @@
 				46E5B3592DE005EC00AEF31F /* ThumbnailView.swift in Sources */,
 				46E5B3472DDC0CFB00AEF31F /* Avatar.swift in Sources */,
 				4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */,
-				4674940B2DF014820082FAC6 /* CDUser.swift in Sources */,
 				4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */,
 				46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */,
@@ -478,6 +477,7 @@
 				46E5B33C2DDA315700AEF31F /* FollowingsTweetView.swift in Sources */,
 				46E8A7D32DE9D0E700A30FBA /* CommentItemView.swift in Sources */,
 				46E5B3532DDD6A7A00AEF31F /* TweetDetailView.swift in Sources */,
+				4674940D2DF08B7E0082FAC6 /* FollowingsTweetViewModel.swift in Sources */,
 				46E5B33D2DDA315700AEF31F /* TabButton.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

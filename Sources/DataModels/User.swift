@@ -91,7 +91,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             decodedUser.baseUrl = HproseInstance.baseUrl
             updateUserInstance(with: decodedUser)
         }
-        return getInstance(mid: cdUser.mid)
+        return getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
     }
     
     /**

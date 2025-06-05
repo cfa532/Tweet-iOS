@@ -13,7 +13,8 @@ struct TweetDetailView: View {
     @State private var selectedUser: User? = nil
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
-
+    @State private var comments: [Tweet] = []
+    
     init(tweet: Tweet) {
         self.tweet = tweet
     }
@@ -83,34 +84,7 @@ struct TweetDetailView: View {
                     .padding(.bottom, 4)
                 
                 // Comments section using TweetListView
-                TweetListView<CommentItemView>(
-                    title: "Comments",
-                    tweetFetcher: { page, size in
-                        try await hproseInstance.fetchComments(
-                            tweet: displayTweet,
-                            pageNumber: page,
-                            pageSize: size
-                        )
-                    },
-                    showTitle: false,
-                    notifications: [
-                        TweetListNotification(
-                            name: .newCommentAdded,
-                            key: "comment",
-                            shouldAccept: { comment in comment.originalTweetId == displayTweet.mid },
-                            action: { comments, comment in comments.insert(comment, at: 0) }
-                        ),
-                        TweetListNotification(
-                            name: .commentDeleted,
-                            key: "commentId",
-                            shouldAccept: { _ in true },
-                            action: { comments, comment in comments.removeAll { $0?.mid == comment.mid } }
-                        )
-                    ],
-                    rowView: { comment in
-                        CommentItemView(comment: comment, onAvatarTap: { user in selectedUser = user })
-                    }
-                )
+                commentsListView
             }
             .task {
                 if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
@@ -137,12 +111,51 @@ struct TweetDetailView: View {
             }
         }
         // Navigation to another user's profile when an avatar is tapped
+        profileNavigationLink
+    }
+
+    private var commentsListView: some View {
+        TweetListView<CommentItemView>(
+            title: "Comments",
+            tweets: $comments,
+            tweetFetcher: { page, size, isFromCache in
+                try await hproseInstance.fetchComments(
+                    tweet: displayTweet,
+                    pageNumber: page,
+                    pageSize: size
+                )
+            },
+            showTitle: false,
+            notifications: [
+                TweetListNotification(
+                    name: .newCommentAdded,
+                    key: "comment",
+                    shouldAccept: { comment in comment.originalTweetId == displayTweet.mid },
+                    action: { comment in comments.insert(comment, at: 0) }
+                ),
+                TweetListNotification(
+                    name: .commentDeleted,
+                    key: "commentId",
+                    shouldAccept: { _ in true },
+                    action: { comment in comments.removeAll { $0.mid == comment.mid } }
+                )
+            ],
+            rowView: { comment in
+                CommentItemView(comment: comment, onAvatarTap: { user in selectedUser = user })
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var profileNavigationLink: some View {
+        let profileDestination = selectedUser.map { ProfileView(user: $0, onLogout: nil) }
+        let isActiveBinding = Binding(
+            get: { selectedUser != nil },
+            set: { isActive in if !isActive { selectedUser = nil } }
+        )
         NavigationLink(
-            destination: selectedUser.map { ProfileView(user: $0, onLogout: nil) },
-            isActive: Binding(
-                get: { selectedUser != nil },
-                set: { isActive in if !isActive { selectedUser = nil } }
-            )
+            destination: profileDestination,
+            isActive: isActiveBinding
         ) {
             EmptyView()
         }

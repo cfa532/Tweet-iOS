@@ -18,7 +18,9 @@ struct SettingsView: View {
                 Section(header: Text("Account")) {
                     if !hproseInstance.appUser.isGuest {
                         Button("Logout") {
-                            // TODO: Implement logout
+                            hproseInstance.logout()
+                            NotificationCenter.default.post(name: .userDidLogout, object: nil)
+                            dismiss()
                         }
                         .foregroundColor(.red)
                     }

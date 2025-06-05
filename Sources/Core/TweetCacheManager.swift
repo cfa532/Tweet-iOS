@@ -47,7 +47,7 @@ class TweetCacheManager {
 
 // MARK: - Tweet Caching
 extension TweetCacheManager {
-    func fetchCachedTweets(for userId: String, page: Int, pageSize: Int) -> [Tweet] {
+    func fetchCachedTweets(for userId: String, page: Int, pageSize: Int) -> [Tweet?] {
         let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
         request.predicate = NSPredicate(format: "uid == %@", userId)
         request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
@@ -55,7 +55,10 @@ extension TweetCacheManager {
         request.fetchLimit = pageSize
         
         if let cdTweets = try? context.fetch(request) {
-            return cdTweets.compactMap { cdTweet in
+            return cdTweets.map { cdTweet in
+                if cdTweet.isNilPlaceholder {
+                    return nil
+                }
                 if let tweetData = cdTweet.tweetData,
                    let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
                     return tweet
@@ -81,20 +84,24 @@ extension TweetCacheManager {
         return nil
     }
 
-    func saveTweet(_ tweet: Tweet, _ userId: String? = nil) {
+    /// Save a tweet or a nil placeholder to the cache.
+    func saveTweet(_ tweet: Tweet?, mid: String, userId: String? = nil) {
         let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-        request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
+        request.predicate = NSPredicate(format: "tid == %@", mid)
         let cdTweet = (try? context.fetch(request).first) ?? CDTweet(context: context)
-        cdTweet.tid = tweet.mid
-        cdTweet.uid = userId ?? tweet.mid
-        cdTweet.timestamp = tweet.timestamp
+        cdTweet.tid = mid
+        cdTweet.uid = userId ?? mid
+        cdTweet.timestamp = Date()
         cdTweet.timeCached = Date()
-        
-        // Encode tweet to binary data
-        if let tweetData = try? JSONEncoder().encode(tweet) {
-            cdTweet.tweetData = tweetData
+        if let tweet = tweet {
+            cdTweet.isNilPlaceholder = false
+            if let tweetData = try? JSONEncoder().encode(tweet) {
+                cdTweet.tweetData = tweetData
+            }
+        } else {
+            cdTweet.isNilPlaceholder = true
+            cdTweet.tweetData = nil
         }
-        
         try? context.save()
     }
 
@@ -106,6 +113,15 @@ extension TweetCacheManager {
             for tweet in expiredTweets {
                 context.delete(tweet)
             }
+            try? context.save()
+        }
+    }
+
+    func deleteTweet(mid: String) {
+        let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+        request.predicate = NSPredicate(format: "tid == %@", mid)
+        if let cdTweet = try? context.fetch(request).first {
+            context.delete(cdTweet)
             try? context.save()
         }
     }

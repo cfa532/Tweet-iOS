@@ -12,30 +12,6 @@ class ProfileViewModel: ObservableObject {
         self.hproseInstance = hproseInstance
         self.user = user
     }
-    
-    func fetchTweets(page: Int, pageSize: Int) async {
-        // Step 1: Fetch from cache immediately
-        let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(
-            for: user.mid,
-            page: page,
-            pageSize: pageSize
-        )
-        
-        await MainActor.run {
-            self.tweets = cachedTweets
-        }
-        
-        // Step 2: Fetch from server
-        if let serverTweets = try? await hproseInstance.fetchUserTweet(
-            user: user,
-            startRank: UInt(page * pageSize),
-            endRank: UInt((page + 1) * pageSize - 1)
-        ) {
-            await MainActor.run {
-                self.tweets = serverTweets
-            }
-        }
-    }
 }
 
 // MARK: - ProfileView
@@ -85,6 +61,8 @@ struct ProfileView: View {
     /// Controls header visibility
     @State private var isHeaderVisible = true
     @StateObject private var viewModel: ProfileViewModel
+    @State private var bookmarks: [Tweet] = []
+    @State private var favorites: [Tweet] = []
 
     init(user: User, onLogout: (() -> Void)? = nil) {
         self.user = user
@@ -255,15 +233,24 @@ struct ProfileView: View {
 
     @ViewBuilder
     private func bookmarksOrFavoritesListView() -> some View {
+        // Add local state for bookmarks/favorites if not already present
+        let tweetsBinding = tweetListType == .BOOKMARKS ? $bookmarks : $favorites
         TweetListView<TweetItemView>(
             title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",
-            tweetFetcher: { page, size in
-                try await hproseInstance.getUserTweetsByType(
+            tweets: tweetsBinding,
+            tweetFetcher: { page, size, isFromCache in
+                let tweets = try await hproseInstance.getUserTweetsByType(
                     user: user,
                     type: tweetListType,
                     pageNumber: page,
                     pageSize: size
                 )
+                if tweetListType == .BOOKMARKS {
+                    bookmarks = tweets
+                } else {
+                    favorites = tweets
+                }
+                return tweets
             },
             showTitle: true,
             notifications: tweetListType == .BOOKMARKS ? [
@@ -271,26 +258,26 @@ struct ProfileView: View {
                     name: .bookmarkAdded,
                     key: "tweet",
                     shouldAccept: { _ in true },
-                    action: { tweets, tweet in tweets.insert(tweet, at: 0) }
+                    action: { tweet in bookmarks.insert(tweet, at: 0) }
                 ),
                 TweetListNotification(
                     name: .bookmarkRemoved,
                     key: "tweetId",
                     shouldAccept: { _ in true },
-                    action: { tweets, tweet in tweets.removeAll { $0?.mid == tweet.mid } }
+                    action: { tweet in bookmarks.removeAll { $0.mid == tweet.mid } }
                 )
             ] : [
                 TweetListNotification(
                     name: .favoriteAdded,
                     key: "tweet",
                     shouldAccept: { _ in true },
-                    action: { tweets, tweet in tweets.insert(tweet, at: 0) }
+                    action: { tweet in favorites.insert(tweet, at: 0) }
                 ),
                 TweetListNotification(
                     name: .favoriteRemoved,
                     key: "tweetId",
                     shouldAccept: { _ in true },
-                    action: { tweets, tweet in tweets.removeAll { $0?.mid == tweet.mid } }
+                    action: { tweet in favorites.removeAll { $0.mid == tweet.mid } }
                 )
             ],
             rowView: { tweet in

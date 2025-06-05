@@ -16,7 +16,7 @@ struct ComposeTweetView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 VStack(spacing: 0) {
                     TextEditor(text: $viewModel.tweetContent)
@@ -136,5 +136,8 @@ struct ComposeTweetView: View {
             }
             .ignoresSafeArea(.keyboard, edges: .bottom)
         }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(viewModel.tweetContent.count > 0)
     }
 }

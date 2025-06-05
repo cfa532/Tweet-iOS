@@ -4,25 +4,25 @@ struct TweetListNotification {
     let name: Notification.Name
     let key: String
     let shouldAccept: (Tweet) -> Bool
-    let action: (inout [Tweet?], Tweet) -> Void
+    let action: (Tweet) -> Void
 }
 
 @available(iOS 16.0, *)
 struct TweetListView<RowView: View>: View {
     // MARK: - Properties
     let title: String
-    let tweetFetcher: @Sendable (Int, Int) async throws -> [Tweet?]
+    let tweetFetcher: @Sendable (Int, Int, Bool) async throws -> [Tweet?]
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     let notifications: [TweetListNotification]
-    
+    private let pageSize: Int = 10
+
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @State private var tweets: [Tweet?] = []
+    @Binding var tweets: [Tweet]
     @State private var isLoading: Bool = false
     @State private var isLoadingMore: Bool = false
     @State private var hasMoreTweets: Bool = true
     @State private var currentPage: Int = 0
-    private let pageSize: Int = 10
     @State private var errorMessage: String? = nil
     @State private var showDeleteResult = false
     @State private var deleteResultMessage = ""
@@ -35,12 +35,14 @@ struct TweetListView<RowView: View>: View {
     // MARK: - Initialization
     init(
         title: String,
-        tweetFetcher: @escaping @Sendable (Int, Int) async throws -> [Tweet?],
+        tweets: Binding<[Tweet]>,
+        tweetFetcher: @escaping @Sendable (Int, Int, Bool) async throws -> [Tweet?],
         showTitle: Bool = true,
         notifications: [TweetListNotification]? = nil,
         rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
+        self._tweets = tweets
         self.tweetFetcher = tweetFetcher
         self.showTitle = showTitle
         // Default: listen for newTweetCreated and insert at top
@@ -49,13 +51,13 @@ struct TweetListView<RowView: View>: View {
                 name: .newTweetCreated,
                 key: "tweet",
                 shouldAccept: { _ in true },
-                action: { tweets, tweet in tweets.insert(tweet, at: 0) }
+                action: { _ in }
             ),
             TweetListNotification(
                 name: .tweetDeleted,
                 key: "tweetId",
                 shouldAccept: { _ in true },
-                action: { tweets, tweet in tweets.removeAll { $0?.mid == tweet.mid } }
+                action: { _ in }
             )
         ]
         self.rowView = rowView
@@ -67,7 +69,7 @@ struct TweetListView<RowView: View>: View {
             ZStack {
                 ScrollView {
                     TweetListContentView(
-                        tweets: $tweets,
+                        tweets: Binding(get: { tweets.map { Optional($0) } }, set: { _ in }),
                         rowView: { tweet in
                             rowView(tweet)
                         },
@@ -106,24 +108,14 @@ struct TweetListView<RowView: View>: View {
                 EmptyView()
                     .onReceive(NotificationCenter.default.publisher(for: notification.name)) { notif in
                         if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
-                            var tweetsCopy = tweets
-                            notification.action(&tweetsCopy, tweet)
-                            tweets = tweetsCopy
+                            notification.action(tweet)
                         }
                         // Special case: tweetDeleted may send tweetId as String
                         if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
-                            var tweetsCopy = tweets
-                            tweetsCopy.removeAll { $0?.mid == tweetId }
-                            tweets = tweetsCopy
+                            tweets.removeAll { $0.id == tweetId }
+                            TweetCacheManager.shared.deleteTweet(mid: tweetId)
                         }
                     }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
-                if let deletedTweetId = notification.object as? String {
-                    withAnimation {
-                        tweets.removeAll { $0?.mid == deletedTweetId }
-                    }
-                }
             }
         }
     }
@@ -140,19 +132,31 @@ struct TweetListView<RowView: View>: View {
         var keepLoading = true
         while keepLoading {
             do {
-                let moreTweets = try await tweetFetcher(page, pageSize)
-                let validTweets = moreTweets.compactMap { $0 }
-                let allNil = moreTweets.allSatisfy { $0 == nil }
-                let existingIds = Set(tweets.compactMap { $0?.id })
-                let uniqueNew = validTweets.filter { !existingIds.contains($0.id) }
-                tweets.append(contentsOf: uniqueNew)
-                totalValidTweets = tweets.compactMap { $0 }.count
+                // Step 1: Fetch from cache
+                let tweetsInCache = try await tweetFetcher(page, pageSize, true)
+                await MainActor.run {
+                    tweets.mergeTweets(tweetsInCache.compactMap { $0 })
+                    totalValidTweets = tweets.count
+                }
+
+                // Step 2: Fetch from server
+                let tweetsInBackend = try await tweetFetcher(page, pageSize, false)
+                await MainActor.run {
+                    tweets.mergeTweets(tweetsInBackend.compactMap { $0 })
+                    totalValidTweets = tweets.count
+                }
+
+                // Update cache with server-fetched tweets
+                for tweet in tweetsInBackend.compactMap({ $0 }) {
+                    TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid, userId: hproseInstance.appUser.mid)
+                }
+
                 currentPage = page
                 if totalValidTweets > 4 {
-                    hasMoreTweets = moreTweets.count == pageSize && !allNil
+                    hasMoreTweets = tweets.count == pageSize
                     keepLoading = false
-                } else if moreTweets.count < pageSize || allNil {
-                    hasMoreTweets = moreTweets.count == pageSize && !allNil
+                } else if tweets.count < pageSize {
+                    hasMoreTweets = tweets.count == pageSize
                     keepLoading = false
                 } else {
                     page += 1
@@ -174,48 +178,38 @@ struct TweetListView<RowView: View>: View {
     }
 
     func loadMoreTweets(page: Int? = nil) {
-        print("loadMoreTweets called: isLoadingMore=\(isLoadingMore), initialLoadComplete=\(initialLoadComplete), hasMoreTweets=\(hasMoreTweets), currentPage=\(currentPage)")
         guard hasMoreTweets, !isLoadingMore, initialLoadComplete else { return }
         isLoadingMore = true
-        let nextPage = page ?? (currentPage + 1)
+        var nextPage = page ?? (currentPage + 1)
+        let pageSize = self.pageSize
 
         Task {
-            do {
-                let moreTweets = try await tweetFetcher(nextPage, pageSize)
-                await MainActor.run {
-                    let validTweets = moreTweets.compactMap { $0 }
-                    let allNil = moreTweets.allSatisfy { $0 == nil }
-                    let existingIds = Set(tweets.compactMap { $0?.id })
-                    let uniqueNew = validTweets.filter { !existingIds.contains($0.id) }
-
-                    if allNil || uniqueNew.isEmpty {
-                        if moreTweets.count < pageSize {
-                            hasMoreTweets = false
-                            isLoadingMore = false
-                            currentPage = nextPage
-                            return
-                        } else {
-                            // Auto-retry: load next page
-                            isLoadingMore = false
-                            currentPage = nextPage
-                            loadMoreTweets(page: nextPage + 1)
-                            return
-                        }
-                    }
-
-                    tweets.append(contentsOf: uniqueNew)
-                    currentPage = nextPage
-
-                    if moreTweets.count < pageSize {
-                        hasMoreTweets = false
-                    }
-                    isLoadingMore = false
+            // Step 1: Fetch from cache for the given page
+            let tweetsInCache = try? await tweetFetcher(nextPage, pageSize, true)
+            await MainActor.run {
+                // Check if all tweets in the batch are nil
+                let allNil = tweetsInCache?.isEmpty ?? true
+                if allNil {
+                    // Auto load next page if all tweets are nil
+                    nextPage += 1
                 }
-            } catch {
-                print("[TweetListView] Error loading more tweets: \(error)")
-                await MainActor.run {
-                    isLoadingMore = false
-                    errorMessage = error.localizedDescription
+            }
+
+            // Step 2: Fetch from backend
+            let tweetsInBackend = try? await tweetFetcher(nextPage, pageSize, false)
+            await MainActor.run {
+                // Check if the backend batch size is smaller than pageSize
+                if let backendTweets = tweetsInBackend, backendTweets.count < pageSize {
+                    hasMoreTweets = false
+                }
+                isLoadingMore = false
+                currentPage = nextPage
+            }
+
+            // Update cache with server-fetched tweets
+            if let backendTweets = tweetsInBackend {
+                for tweet in backendTweets.compactMap({ $0 }) {
+                    TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid, userId: hproseInstance.appUser.mid)
                 }
             }
         }

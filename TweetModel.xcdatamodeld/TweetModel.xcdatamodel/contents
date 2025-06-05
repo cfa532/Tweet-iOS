@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23788" systemVersion="24F74" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithSwiftData="YES" userDefinedModelVersionIdentifier="">
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23788.4" systemVersion="24F74" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithSwiftData="YES" userDefinedModelVersionIdentifier="">
     <entity name="CDTweet" representedClassName=".CDTweet" syncable="YES">
-        <attribute name="tid" optional="NO" attributeType="String"/>
+        <attribute name="isNilPlaceholder" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="tid" attributeType="String"/>
+        <attribute name="timeCached" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
-        <attribute name="timeCached" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="tweetData" optional="YES" attributeType="Binary"/>
-        <attribute name="uid" optional="NO" attributeType="String"/>
+        <attribute name="uid" attributeType="String"/>
     </entity>
-    <entity name="CDUser" representedClassName=".CDUser" syncable="YES">
-        <attribute name="mid" optional="NO" attributeType="String"/>
-        <attribute name="timeCached" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+    <entity name="CDUser" representedClassName="CDUser" syncable="YES" codeGenerationType="class">
+        <attribute name="mid" attributeType="String"/>
+        <attribute name="timeCached" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="userData" optional="YES" attributeType="Binary"/>
     </entity>
 </model>
