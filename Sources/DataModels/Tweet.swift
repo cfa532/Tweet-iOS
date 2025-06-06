@@ -263,3 +263,9 @@ extension Array where Element == Tweet {
         print("[TweetListView] After merge: \(self.count) tweets")
     }
 }
+
+extension Tweet: Equatable {
+    static func == (lhs: Tweet, rhs: Tweet) -> Bool {
+        return lhs.mid == rhs.mid
+    }
+}
