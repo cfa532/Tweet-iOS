@@ -141,7 +141,7 @@ final class HproseInstance: ObservableObject {
         tweet: Tweet,
         pageNumber: UInt = 0,
         pageSize: UInt = 20
-    ) async throws -> [Tweet] {
+    ) async throws -> [Tweet?] {
         try await withRetry {
             let entry = "get_comments"
             let params = [
@@ -155,17 +155,24 @@ final class HproseInstance: ObservableObject {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchComments"])
             }
-            let comments = response.compactMap { dict -> Tweet? in
-                return Tweet.from(dict: dict)
-            }
-            var tweetsWithAuthors: [Tweet] = []
-            for tweet in comments {
-                let author = try? await getUser(tweet.authorId)
-                tweet.author = author
-                tweetsWithAuthors.append(tweet)
+            
+            // Process each item in the response array, preserving nil positions
+            var tweetsWithAuthors: [Tweet?] = []
+            for item in response {
+                if let dict = item {
+                    if let tweet = Tweet.from(dict: dict) {
+                        let author = try? await getUser(tweet.authorId)
+                        tweet.author = author
+                        tweetsWithAuthors.append(tweet)
+                    } else {
+                        tweetsWithAuthors.append(nil)
+                    }
+                } else {
+                    tweetsWithAuthors.append(nil)
+                }
             }
             return tweetsWithAuthors
         }

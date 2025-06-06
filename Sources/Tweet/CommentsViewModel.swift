@@ -32,7 +32,7 @@ class CommentsViewModel: ObservableObject {
                 pageSize: pageSize
             )
             await MainActor.run {
-                comments = newComments
+                comments = newComments.compactMap{ $0 }
                 hasMore = newComments.count == pageSize
                 isLoading = false
             }
@@ -57,7 +57,7 @@ class CommentsViewModel: ObservableObject {
             )
             await MainActor.run {
                 let existingIds = Set(comments.map { $0.mid })
-                let uniqueNew = moreComments.filter { !existingIds.contains($0.mid) }
+                let uniqueNew = moreComments.compactMap { $0 }.filter { !existingIds.contains($0.mid) }
                 comments.append(contentsOf: uniqueNew)
                 hasMore = moreComments.count == pageSize
                 currentPage = nextPage

@@ -18,7 +18,7 @@ struct CommentListNotification {
 struct CommentListView<RowView: View>: View {
     // MARK: - Properties
     let title: String
-    let commentFetcher: @Sendable (UInt, UInt) async throws -> [Tweet]
+    let commentFetcher: @Sendable (UInt, UInt) async throws -> [Tweet?]
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     let notifications: [CommentListNotification]
@@ -40,7 +40,7 @@ struct CommentListView<RowView: View>: View {
     init(
         title: String,
         comments: Binding<[Tweet]>,
-        commentFetcher: @escaping @Sendable (UInt, UInt) async throws -> [Tweet],
+        commentFetcher: @escaping @Sendable (UInt, UInt) async throws -> [Tweet?],
         showTitle: Bool = true,
         notifications: [CommentListNotification]? = nil,
         rowView: @escaping (Tweet) -> RowView
@@ -113,9 +113,11 @@ struct CommentListView<RowView: View>: View {
             print("[CommentListView] Loading page 0")
             let newComments = try await commentFetcher(0, pageSize)
             await MainActor.run {
-                comments = newComments
-                hasMoreComments = !newComments.isEmpty
-                print("[CommentListView] Loaded \(newComments.count) comments")
+                // Filter out nil comments and add valid ones
+                comments = newComments.compactMap { $0 }
+                // Set hasMoreComments based on whether we got a full page of non-nil comments
+                hasMoreComments = newComments.count >= pageSize
+                print("[CommentListView] Loaded \(comments.count) valid comments out of \(newComments.count) total, hasMoreComments: \(hasMoreComments)")
             }
         } catch {
             print("[CommentListView] Error during initial load: \(error)")
@@ -124,7 +126,7 @@ struct CommentListView<RowView: View>: View {
         
         isLoading = false
         initialLoadComplete = true
-        print("[CommentListView] Initial load complete - total comments: \(comments.count), hasMoreComments: \(hasMoreComments)")
+        print("[CommentListView] Initial load complete - total valid comments: \(comments.count), hasMoreComments: \(hasMoreComments)")
     }
 
     func refreshComments() async {
@@ -151,15 +153,18 @@ struct CommentListView<RowView: View>: View {
                 let newComments = try await commentFetcher(nextPage, pageSize)
                 
                 await MainActor.run {
-                    print("[CommentListView] Got \(newComments.count) comments")
-                    if !newComments.isEmpty {
-                        comments.append(contentsOf: newComments)
-                        hasMoreComments = true
+                    print("[CommentListView] Got \(newComments.count) total comments")
+                    // Filter out nil comments and add valid ones
+                    let validComments = newComments.compactMap { $0 }
+                    if !validComments.isEmpty {
+                        comments.append(contentsOf: validComments)
+                        // Set hasMoreComments based on whether we got a full page of non-nil comments
+                        hasMoreComments = newComments.count >= pageSize
                         currentPage = nextPage
-                        print("[CommentListView] Updated currentPage to \(currentPage)")
+                        print("[CommentListView] Added \(validComments.count) valid comments, updated currentPage to \(currentPage), hasMoreComments: \(hasMoreComments)")
                     } else {
                         hasMoreComments = false
-                        print("[CommentListView] No more comments available")
+                        print("[CommentListView] No more valid comments available")
                     }
                 }
             } catch {
