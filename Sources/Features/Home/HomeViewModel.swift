@@ -60,8 +60,8 @@ struct HomeView: View {
                         TweetCacheManager.shared.clearAllTweets()
                         // Reset all loaded tweets in all view models by toggling reset triggers
                         resetFollowingsFeed.toggle()
-                        // Add similar triggers for other feeds/view models if needed
                     }
+                    try await HproseInstance.shared.initialize()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
@@ -71,6 +71,7 @@ struct HomeView: View {
                         resetFollowingsFeed.toggle()
                         // Add similar triggers for other feeds/view models if needed
                     }
+                    try await HproseInstance.shared.initialize()
                 }
             }
         }

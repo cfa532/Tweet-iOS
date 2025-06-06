@@ -100,16 +100,16 @@ final class HproseInstance: ObservableObject {
                 
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     #if DEBUG
-                        let firstIp = "115.205.181.233:8002"  // for testing
+                        let firstIp = "218.72.53.166:8002"  // for testing
                     #endif
                     
                     HproseInstance.baseUrl = "http://\(firstIp)"
                     client.uri = HproseInstance.baseUrl + "/webapi/"
                     hproseClient = client.useService(HproseService.self) as AnyObject
                     
-                    if !appUser.isGuest, let providerIp = try await getProvider(appUser.mid),
+                    let providerIp = firstIp
+                    if !appUser.isGuest, //let providerIp = try await getProvider(appUser.mid),
                        let user = try await getUser(appUser.mid, baseUrl: "http://\(providerIp)") {
-                        
                         // Valid login user is found, use its provider IP as base.
                         HproseInstance.baseUrl = "http://\(providerIp)"
                         client.uri = HproseInstance.baseUrl + "/webapi/"
@@ -120,9 +120,10 @@ final class HproseInstance: ObservableObject {
                         }
                         return
                     } else {
-                        let user = User.getInstance(mid: Constants.GUEST_ID, baseUrl: HproseInstance.baseUrl)
-                        user.followingList = Gadget.getAlphaIds()
+                        let user = User.getInstance(mid: Constants.GUEST_ID)
                         await MainActor.run {
+                            user.baseUrl = HproseInstance.baseUrl
+                            user.followingList = Gadget.getAlphaIds()
                             _appUser = user
                         }
                         return
@@ -440,7 +441,6 @@ final class HproseInstance: ObservableObject {
                 } else if status == "success" {
                     await MainActor.run {
                         // Update the appUser reference to point to the new user instance
-                        self._appUser = loginUser
                         preferenceHelper?.setUserId(loginUser.mid)
                     }
                     return ["reason": "Success", "status": "success"]
@@ -451,12 +451,6 @@ final class HproseInstance: ObservableObject {
     }
     
     func logout() {
-        // Get the guest user instance
-        let guestUser = User.getInstance(mid: Constants.GUEST_ID)
-        guestUser.followingList = Gadget.getAlphaIds()
-        guestUser.avatar = nil
-        // Update appUser to point to the guest user instance
-        _appUser = guestUser
         preferenceHelper?.setUserId(nil as String?)
     }
     

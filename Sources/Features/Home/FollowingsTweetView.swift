@@ -66,7 +66,6 @@ struct FollowingsTweetView: View {
                         await MainActor.run {
                             viewModel.tweets.removeAll()
                         }
-//                        await viewModel.fetchTweets(page: 0, pageSize: 10)
                     }
                     resetTrigger = false
                 }

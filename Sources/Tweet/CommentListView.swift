@@ -5,3 +5,218 @@
 //  Created by 超方 on 2025/6/6.
 //
 
+import SwiftUI
+
+struct CommentListNotification {
+    let name: Notification.Name
+    let key: String
+    let shouldAccept: (Tweet) -> Bool
+    let action: (Tweet) -> Void
+}
+
+@available(iOS 16.0, *)
+struct CommentListView<RowView: View>: View {
+    // MARK: - Properties
+    let title: String
+    let commentFetcher: @Sendable (UInt, UInt) async throws -> [Tweet]
+    let showTitle: Bool
+    let rowView: (Tweet) -> RowView
+    let notifications: [CommentListNotification]
+    private let pageSize: UInt = 10
+
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @Binding var comments: [Tweet]
+    @State private var isLoading: Bool = false
+    @State private var isLoadingMore: Bool = false
+    @State private var hasMoreComments: Bool = true
+    @State private var currentPage: UInt = 0
+    @State private var errorMessage: String? = nil
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastType: ToastView.ToastType = .info
+    @State private var initialLoadComplete = false
+
+    // MARK: - Initialization
+    init(
+        title: String,
+        comments: Binding<[Tweet]>,
+        commentFetcher: @escaping @Sendable (UInt, UInt) async throws -> [Tweet],
+        showTitle: Bool = true,
+        notifications: [CommentListNotification]? = nil,
+        rowView: @escaping (Tweet) -> RowView
+    ) {
+        self.title = title
+        self._comments = comments
+        self.commentFetcher = commentFetcher
+        self.showTitle = showTitle
+        self.notifications = notifications ?? []
+        self.rowView = rowView
+    }
+
+    // MARK: - Body
+    var body: some View {
+        ScrollViewReader { proxy in
+            ZStack {
+                ScrollView {
+                    CommentListContentView(
+                        comments: $comments,
+                        rowView: { comment in
+                            rowView(comment)
+                        },
+                        hasMoreComments: hasMoreComments,
+                        isLoadingMore: isLoadingMore,
+                        isLoading: isLoading,
+                        initialLoadComplete: initialLoadComplete,
+                        loadMoreComments: { loadMoreComments() }
+                    )
+                }
+                if showToast {
+                    VStack {
+                        Spacer()
+                        ToastView(message: toastMessage, type: toastType)
+                            .padding(.bottom, 40)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.easeInOut, value: showToast)
+                }
+            }
+            .refreshable {
+                await refreshComments()
+            }
+            .task {
+                if comments.isEmpty {
+                    await refreshComments()
+                }
+            }
+            // Listen to all notifications
+            ForEach(Array(notifications.enumerated()), id: \.element.name) { idx, notification in
+                EmptyView()
+                    .onReceive(NotificationCenter.default.publisher(for: notification.name)) { notif in
+                        if let comment = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(comment) {
+                            notification.action(comment)
+                        }
+                    }
+            }
+        }
+    }
+
+    // MARK: - Methods
+    func performInitialLoad() async {
+        print("[CommentListView] Starting initial load")
+        isLoading = true
+        initialLoadComplete = false
+        hasMoreComments = true
+        currentPage = 0
+        comments = []
+        
+        do {
+            print("[CommentListView] Loading page 0")
+            let newComments = try await commentFetcher(0, pageSize)
+            await MainActor.run {
+                comments = newComments
+                hasMoreComments = !newComments.isEmpty
+                print("[CommentListView] Loaded \(newComments.count) comments")
+            }
+        } catch {
+            print("[CommentListView] Error during initial load: \(error)")
+            errorMessage = error.localizedDescription
+        }
+        
+        isLoading = false
+        initialLoadComplete = true
+        print("[CommentListView] Initial load complete - total comments: \(comments.count), hasMoreComments: \(hasMoreComments)")
+    }
+
+    func refreshComments() async {
+        guard !isLoading else { return }
+        initialLoadComplete = false
+        await performInitialLoad()
+    }
+
+    func loadMoreComments(page: UInt? = nil) {
+        print("[CommentListView] loadMoreComments called - hasMoreComments: \(hasMoreComments), isLoadingMore: \(isLoadingMore), initialLoadComplete: \(initialLoadComplete), currentPage: \(currentPage)")
+        guard hasMoreComments, !isLoadingMore, initialLoadComplete else { 
+            print("[CommentListView] loadMoreComments guard failed - hasMoreComments: \(hasMoreComments), isLoadingMore: \(isLoadingMore), initialLoadComplete: \(initialLoadComplete)")
+            return 
+        }
+        
+        let nextPage = page ?? (currentPage + 1)
+        let pageSize = self.pageSize
+        
+        Task {
+            await MainActor.run { isLoadingMore = true }
+            
+            do {
+                print("[CommentListView] Starting to load more comments - page: \(nextPage)")
+                let newComments = try await commentFetcher(nextPage, pageSize)
+                
+                await MainActor.run {
+                    print("[CommentListView] Got \(newComments.count) comments")
+                    if !newComments.isEmpty {
+                        comments.append(contentsOf: newComments)
+                        hasMoreComments = true
+                        currentPage = nextPage
+                        print("[CommentListView] Updated currentPage to \(currentPage)")
+                    } else {
+                        hasMoreComments = false
+                        print("[CommentListView] No more comments available")
+                    }
+                }
+            } catch {
+                print("[CommentListView] Error loading more comments: \(error)")
+                await MainActor.run {
+                    hasMoreComments = false
+                }
+            }
+            
+            await MainActor.run { isLoadingMore = false }
+        }
+    }
+
+    private func showToastWith(message: String, type: ToastView.ToastType) {
+        toastMessage = message
+        toastType = type
+        showToast = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation { showToast = false }
+        }
+    }
+}
+
+@available(iOS 16.0, *)
+struct CommentListContentView<RowView: View>: View {
+    @Binding var comments: [Tweet]
+    let rowView: (Tweet) -> RowView
+    let hasMoreComments: Bool
+    let isLoadingMore: Bool
+    let isLoading: Bool
+    let initialLoadComplete: Bool
+    let loadMoreComments: () -> Void
+    
+    var body: some View {
+        LazyVStack(spacing: 0) {
+            Color.clear.frame(height: 0)
+            ForEach(comments, id: \.mid) { comment in
+                rowView(comment)
+            }
+            // Sentinel view for infinite scroll
+            if hasMoreComments {
+                ProgressView()
+                    .frame(height: 40)
+                    .onAppear {
+                        print("[CommentListContentView] ProgressView appeared - initialLoadComplete: \(initialLoadComplete), isLoadingMore: \(isLoadingMore)")
+                        if initialLoadComplete && !isLoadingMore {
+                            print("[CommentListContentView] Scheduling loadMoreComments")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                if initialLoadComplete && !isLoadingMore {
+                                    print("[CommentListContentView] Calling loadMoreComments")
+                                    loadMoreComments()
+                                }
+                            }
+                        }
+                    }
+            }
+        }
+    }
+}
+

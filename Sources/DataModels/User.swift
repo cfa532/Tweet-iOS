@@ -61,11 +61,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     
     // MARK: - Factory Methods
-    static func getInstance(mid: String, baseUrl: String = HproseInstance.baseUrl) -> User {
+    static func getInstance(mid: String) -> User {
         if let existingUser = userInstances[mid] {
             return existingUser
         }
-        let newUser = User(mid: mid, baseUrl: baseUrl)
+        let newUser = User(mid: mid)
         userInstances[mid] = newUser
         return newUser
     }

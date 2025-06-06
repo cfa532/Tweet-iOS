@@ -83,7 +83,7 @@ struct TweetDetailView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 4)
                 
-                // Comments section using TweetListView
+                // Comments section using CommentListView
                 commentsListView
             }
             .task {
@@ -115,10 +115,10 @@ struct TweetDetailView: View {
     }
 
     private var commentsListView: some View {
-        TweetListView<CommentItemView>(
+        CommentListView<CommentItemView>(
             title: "Comments",
-            tweets: $comments,
-            tweetFetcher: { page, size, isFromCache in
+            comments: $comments,
+            commentFetcher: { page, size in
                 try await hproseInstance.fetchComments(
                     tweet: displayTweet,
                     pageNumber: page,
@@ -127,13 +127,13 @@ struct TweetDetailView: View {
             },
             showTitle: false,
             notifications: [
-                TweetListNotification(
+                CommentListNotification(
                     name: .newCommentAdded,
                     key: "comment",
                     shouldAccept: { comment in comment.originalTweetId == displayTweet.mid },
                     action: { comment in comments.insert(comment, at: 0) }
                 ),
-                TweetListNotification(
+                CommentListNotification(
                     name: .commentDeleted,
                     key: "commentId",
                     shouldAccept: { _ in true },
