@@ -311,34 +311,32 @@ final class HproseInstance: ObservableObject {
         if let cached = TweetCacheManager.shared.fetchTweet(mid: tweetId) {
             return cached
         }
-        return try await withRetry {
-            guard let service = hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-            }
-            let entry = "get_tweet"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "tweetid": tweetId,
-                "appuserid": appUser.mid
-            ]
-            if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
-                if let tweet = Tweet.from(dict: tweetDict) {
-                    let author = try? await getUser(authorId)
-                    tweet.author = author
-                    TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid)
-                    if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
-                        if TweetCacheManager.shared.fetchTweet(mid: origId) == nil {
-                            if let origTweet = try? await getTweet(tweetId: origId, authorId: origAuthorId) {
-                                TweetCacheManager.shared.saveTweet(origTweet, mid: origTweet.mid)
-                            }
+        guard let service = hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        let entry = "get_tweet"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "tweetid": tweetId,
+            "appuserid": appUser.mid
+        ]
+        if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
+            if let tweet = Tweet.from(dict: tweetDict) {
+                let author = try? await getUser(authorId)
+                tweet.author = author
+                TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid)
+                if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
+                    if TweetCacheManager.shared.fetchTweet(mid: origId) == nil {
+                        if let origTweet = try? await getTweet(tweetId: origId, authorId: origAuthorId) {
+                            TweetCacheManager.shared.saveTweet(origTweet, mid: origTweet.mid)
                         }
                     }
-                    return tweet
                 }
+                return tweet
             }
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tweet not found"])
         }
+        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tweet not found"])
     }
     
     func getUserId(_ username: String) async throws -> String? {

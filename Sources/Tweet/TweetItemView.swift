@@ -8,15 +8,15 @@ struct TweetItemView: View {
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
     @State private var showDetail = false
-    @State private var originalTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)
     @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
+    @State private var originalTweet: Tweet?
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if let _ = tweet.originalTweetId {
                 // This is a retweet
-                if let user = originalTweet.author {
+                if let originalTweet = originalTweet, let user = originalTweet.author {
                     Button(action: {
                         if !isInProfile {
                             onAvatarTap?(user)
@@ -26,7 +26,7 @@ struct TweetItemView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
-                if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
+                if let originalTweet = originalTweet, tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
                     // Show original tweet with retweet menu.
                     VStack(alignment: .leading, spacing: 8) {
                         // Original tweet content
@@ -40,9 +40,12 @@ struct TweetItemView: View {
                                 showDetail = true
                             }
                             Spacer(minLength: 0)
-                            TweetMenu(tweet: tweet, isPinned: isPinned)
-                                .zIndex(1)
                         }
+                        .overlay(
+                            TweetMenu(tweet: tweet, isPinned: isPinned)
+                                .zIndex(1),
+                            alignment: .trailing
+                        )
                         TweetItemBodyView(tweet: originalTweet)
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -55,41 +58,46 @@ struct TweetItemView: View {
                             .padding(.leading, -20)
                     }
                 } else {
-                    // Show retweet with content and embedded original tweet
-                    if let user = tweet.author {
-                        Button(action: {
-                            if !isInProfile {
-                                onAvatarTap?(user)
+                    if let originalTweet = originalTweet {
+                        // Show retweet with content and embedded original tweet
+                        if let user = tweet.author {
+                            Button(action: {
+                                if !isInProfile {
+                                    onAvatarTap?(user)
+                                }
+                            }) {
+                                Avatar(user: user)
                             }
-                        }) {
-                            Avatar(user: user)
+                            .buttonStyle(PlainButtonStyle())
                         }
-                        .buttonStyle(PlainButtonStyle())
-                    }
-                    VStack(alignment: .leading) {
-                        HStack {
-                            Group {
-                                TweetItemHeaderView(tweet: tweet)
+                        VStack(alignment: .leading) {
+                            HStack {
+                                Group {
+                                    TweetItemHeaderView(tweet: tweet)
+                                }
+                                .contentShape(Rectangle())
+                                .onTapGesture { showDetail = true }
+                                Spacer(minLength: 0)
                             }
-                            .contentShape(Rectangle())
-                            .onTapGesture { showDetail = true }
-                            Spacer(minLength: 0)
-                            TweetMenu(tweet: tweet, isPinned: isPinned)
-                                .zIndex(1)
+                            .overlay(
+                                TweetMenu(tweet: tweet, isPinned: isPinned)
+                                    .zIndex(1),
+                                alignment: .trailing
+                            )
+                            TweetItemBodyView(tweet: tweet, enableTap: false)
+                                .contentShape(Rectangle())
+                                .onTapGesture { showDetail = true }
+                            // Embedded original tweet
+                            VStack(alignment: .leading, spacing: 8) {
+                                TweetItemView(tweet: originalTweet, isPinned: isPinned)
+                            }
+                            .padding()
+                            .background(Color(.secondarySystemBackground))
+                            .cornerRadius(8)
+                            TweetActionButtonsView(tweet: tweet)
+                                .padding(.top, 8)
+                                .padding(.leading, -8)
                         }
-                        TweetItemBodyView(tweet: tweet, enableTap: false)
-                            .contentShape(Rectangle())
-                            .onTapGesture { showDetail = true }
-                        // Embedded original tweet
-                        VStack(alignment: .leading, spacing: 8) {
-                            TweetItemView(tweet: originalTweet, isPinned: isPinned)
-                        }
-                        .padding()
-                        .background(Color(.secondarySystemBackground))
-                        .cornerRadius(8)
-                        TweetActionButtonsView(tweet: tweet)
-                            .padding(.top, 8)
-                            .padding(.leading, -8)
                     }
                 }
             } else {
@@ -112,9 +120,12 @@ struct TweetItemView: View {
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
                         Spacer(minLength: 0)
-                        TweetMenu(tweet: tweet, isPinned: isPinned)
-                            .zIndex(1)
                     }
+                    .overlay(
+                        TweetMenu(tweet: tweet, isPinned: isPinned)
+                            .zIndex(1),
+                        alignment: .trailing
+                    )
                     TweetItemBodyView(tweet: tweet, enableTap: false)
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
@@ -136,7 +147,7 @@ struct TweetItemView: View {
                 .hidden()
         )
         .task {
-            // most likely target of TweetDetailView is not orignalTweet
+            // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
             if let originalTweetId = tweet.originalTweetId,
                let originalAuthorId = tweet.originalAuthorId {
