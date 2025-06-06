@@ -17,6 +17,7 @@ struct TweetItemHeaderView: View {
     }
 }
 
+@available(iOS 16.0, *)
 struct TweetMenu: View {
     @ObservedObject var tweet: Tweet
     let isPinned: Bool
@@ -24,6 +25,9 @@ struct TweetMenu: View {
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var isCurrentlyPinned: Bool
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastType: ToastView.ToastType = .info
 
     init(tweet: Tweet, isPinned: Bool) {
         self.tweet = tweet
@@ -32,47 +36,63 @@ struct TweetMenu: View {
     }
 
     var body: some View {
-        Menu {
-            if tweet.authorId == appUser.mid {
-                Button(action: {
-                    Task {
-                        if let isPinned = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
-                            isCurrentlyPinned = isPinned
-                            NotificationCenter.default.post(
-                                name: .tweetPinStatusChanged,
-                                object: nil,
-                                userInfo: [
-                                    "tweetId": tweet.mid,
-                                    "isPinned": isPinned
-                                ]
-                            )
+        ZStack {
+            Menu {
+                if tweet.authorId == appUser.mid {
+                    Button(action: {
+                        Task {
+                            if let isPinned = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
+                                isCurrentlyPinned = isPinned
+                                NotificationCenter.default.post(
+                                    name: .tweetPinStatusChanged,
+                                    object: nil,
+                                    userInfo: [
+                                        "tweetId": tweet.mid,
+                                        "isPinned": isPinned
+                                    ]
+                                )
+                            }
+                        }
+                    }) {
+                        if isCurrentlyPinned {
+                            Label("Unpin", systemImage: "pin.slash")
+                        } else {
+                            Label("Pin", systemImage: "pin")
                         }
                     }
-                }) {
-                    if isCurrentlyPinned {
-                        Label("Unpin", systemImage: "pin.slash")
-                    } else {
-                        Label("Pin", systemImage: "pin")
-                    }
-                }
-                Button(role: .destructive) {
-                    // Start deletion in background
-                    Task {
-                        do {
-                            try await deleteTweet(tweet)
-                        } catch {
-                            print("Tweet deletion failed. \(tweet)")
+                    Button(role: .destructive) {
+                        // Start deletion in background
+                        Task {
+                            do {
+                                try await deleteTweet(tweet)
+                            } catch {
+                                print("Tweet deletion failed. \(tweet)")
+                                await MainActor.run {
+                                    toastMessage = "Failed to delete tweet."
+                                    toastType = .error
+                                    showToast = true
+                                }
+                            }
                         }
+                    } label: {
+                        Label("Delete", systemImage: "trash")
                     }
-                } label: {
-                    Label("Delete", systemImage: "trash")
                 }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .foregroundColor(.secondary)
+                    .padding(12)
+                    .contentShape(Rectangle())
             }
-        } label: {
-            Image(systemName: "ellipsis")
-                .foregroundColor(.secondary)
-                .padding(12)
-                .contentShape(Rectangle())
+            if showToast {
+                VStack {
+                    Spacer()
+                    ToastView(message: toastMessage, type: toastType)
+                        .padding(.bottom, 40)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.easeInOut, value: showToast)
+            }
         }
     }
     
@@ -103,6 +123,11 @@ struct TweetMenu: View {
                 name: .tweetRestored,
                 object: tweet.mid
             )
+            await MainActor.run {
+                toastMessage = "Failed to delete tweet."
+                toastType = .error
+                showToast = true
+            }
         }
     }
 }

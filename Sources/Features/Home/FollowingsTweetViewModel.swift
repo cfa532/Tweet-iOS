@@ -43,21 +43,3 @@ class FollowingsTweetViewModel: ObservableObject {
         TweetCacheManager.shared.deleteTweet(mid: tweetId)
     }
 }
-
-// MARK: - Tweet Array Extension
-extension Array where Element == Tweet {
-    /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.
-    mutating func mergeTweets(_ newTweets: [Tweet]) {
-        print("[TweetListView] Merging \(newTweets.count) tweets")
-        // Create a set of existing mids for quick lookup
-        let existingMids = Set(self.map { $0.mid })
-        
-        // Filter out tweets that already exist
-        let uniqueNewTweets = newTweets.filter { !existingMids.contains($0.mid) }
-        
-        // Append new tweets to the end
-        self.append(contentsOf: uniqueNewTweets)
-        
-        print("[TweetListView] After merge: \(self.count) tweets")
-    }
-}
