@@ -55,14 +55,23 @@ struct HomeView: View {
                 })
             }
             .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
-                // Reset the feed when user logs in
-                selectedTab = 0
-                resetFollowingsFeed.toggle()
+                Task {
+                    await MainActor.run {
+                        TweetCacheManager.shared.clearAllTweets()
+                        // Reset all loaded tweets in all view models by toggling reset triggers
+                        resetFollowingsFeed.toggle()
+                        // Add similar triggers for other feeds/view models if needed
+                    }
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
-                // Reset the feed when user logs in
-                selectedTab = 0
-                resetFollowingsFeed.toggle()
+                Task {
+                    await MainActor.run {
+                        TweetCacheManager.shared.clearAllTweets()
+                        resetFollowingsFeed.toggle()
+                        // Add similar triggers for other feeds/view models if needed
+                    }
+                }
             }
         }
     }

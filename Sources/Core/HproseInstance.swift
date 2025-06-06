@@ -109,19 +109,21 @@ final class HproseInstance: ObservableObject {
                     
                     if !appUser.isGuest, let providerIp = try await getProvider(appUser.mid),
                        let user = try await getUser(appUser.mid, baseUrl: "http://\(providerIp)") {
+                        
+                        // Valid login user is found, use its provider IP as base.
                         HproseInstance.baseUrl = "http://\(providerIp)"
                         client.uri = HproseInstance.baseUrl + "/webapi/"
                         hproseClient = client.useService(HproseService.self) as AnyObject
                         let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
                         await MainActor.run {
-                            self.appUser = user.copy(baseUrl: HproseInstance.baseUrl, followingList: followings)
+                            _appUser = user.copy(baseUrl: HproseInstance.baseUrl, followingList: followings)
                         }
                         return
                     } else {
+                        let user = User.getInstance(mid: Constants.GUEST_ID, baseUrl: HproseInstance.baseUrl)
+                        user.followingList = Gadget.getAlphaIds()
                         await MainActor.run {
-                            appUser.baseUrl = HproseInstance.baseUrl
-                            appUser.mid = Constants.GUEST_ID
-                            appUser.followingList = Gadget.getAlphaIds()
+                            _appUser = user
                         }
                         return
                     }
@@ -373,7 +375,7 @@ final class HproseInstance: ObservableObject {
             if baseUrl != appUser.baseUrl {
                 let newClient = HproseHttpClient()
                 newClient.timeout = 60
-                newClient.uri = "http://\(baseUrl)/webapi/"
+                newClient.uri = "\(baseUrl)/webapi/"
                 service = newClient.useService(HproseService.self) as AnyObject
             }
             let entry = "get_user"

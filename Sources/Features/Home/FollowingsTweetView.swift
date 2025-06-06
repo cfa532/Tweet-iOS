@@ -62,6 +62,12 @@ struct FollowingsTweetView: View {
             )
             .onChange(of: resetTrigger) { newValue in
                 if newValue {
+                    Task {
+                        await MainActor.run {
+                            viewModel.tweets.removeAll()
+                        }
+//                        await viewModel.fetchTweets(page: 0, pageSize: 10)
+                    }
                     resetTrigger = false
                 }
             }

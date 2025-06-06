@@ -5,14 +5,17 @@ import BackgroundTasks
 class AppState: ObservableObject {
     @Published var isInitialized = false
     @Published var error: Error?
+    @Published var isLoading = true  // Add loading state
     
     func initialize() async {
+        isLoading = true  // Set loading state at start
         do {
             try await HproseInstance.shared.initialize()
             isInitialized = true
         } catch {
             self.error = error
         }
+        isLoading = false  // Clear loading state when done
     }
 }
 
@@ -36,13 +39,29 @@ struct TweetApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if appState.isInitialized {
-                    ContentView()
-                } else {
+                if appState.isLoading {
+                    // Show loading view during initialization
                     ProgressView("Initializing...")
                         .task {
                             await appState.initialize()
                         }
+                } else if appState.isInitialized {
+                    // Only show content view after initialization is complete
+                    ContentView()
+                } else {
+                    // Show error state if initialization failed
+                    VStack {
+                        Text("Failed to initialize app")
+                        if let error = appState.error {
+                            Text(error.localizedDescription)
+                                .foregroundColor(.red)
+                        }
+                        Button("Retry") {
+                            Task {
+                                await appState.initialize()
+                            }
+                        }
+                    }
                 }
             }
             .alert(isPresented: $showGlobalAlert) {
@@ -100,3 +119,4 @@ struct TweetApp: App {
         }
     }
 } 
+

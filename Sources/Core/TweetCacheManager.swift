@@ -136,6 +136,16 @@ extension TweetCacheManager {
             try? context.save()
         }
     }
+
+    func clearAllTweets() {
+        let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+        if let allTweets = try? context.fetch(request) {
+            for tweet in allTweets {
+                context.delete(tweet)
+            }
+            try? context.save()
+        }
+    }
 }
 
 // MARK: - Tweet <-> Core Data Conversion
