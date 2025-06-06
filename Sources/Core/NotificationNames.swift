@@ -22,6 +22,8 @@ extension Notification.Name {
     /// Posted when a new comment is added
     static let newCommentAdded = Notification.Name("newCommentAdded")
     static let commentDeleted = Notification.Name("commentDeleted")
+    /// Posted when a comment deletion fails and needs to be restored
+    static let commentRestored = Notification.Name("commentRestored")
     
     /// Posted when a tweet is bookmarked
     static let bookmarkAdded = Notification.Name("BookmarkAdded")
