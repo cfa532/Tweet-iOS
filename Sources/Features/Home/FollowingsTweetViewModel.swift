@@ -23,7 +23,6 @@ class FollowingsTweetViewModel: ObservableObject {
                 pageNumber: page,
                 pageSize: pageSize
             )
-            
             await MainActor.run {
                 tweets.mergeTweets(serverTweets.compactMap{ $0 })
             }

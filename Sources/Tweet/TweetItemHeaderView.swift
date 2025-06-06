@@ -100,7 +100,8 @@ struct TweetMenu: View {
         // Post notification for optimistic UI update
         NotificationCenter.default.post(
             name: .tweetDeleted,
-            object: tweet.mid
+            object: nil,
+            userInfo: ["tweetId": tweet.mid]
         )
         
         // Attempt actual deletion
@@ -121,7 +122,8 @@ struct TweetMenu: View {
             // If deletion fails, post restoration notification
             NotificationCenter.default.post(
                 name: .tweetRestored,
-                object: tweet.mid
+                object: nil,
+                userInfo: ["tweetId": tweet.mid]
             )
             await MainActor.run {
                 toastMessage = "Failed to delete tweet."

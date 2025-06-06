@@ -239,6 +239,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     }
 }
 
+
 // MARK: - Tweet Array Extension
 extension Array where Element == Tweet {
     /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.
@@ -246,13 +247,12 @@ extension Array where Element == Tweet {
         print("[TweetListView] Merging \(newTweets.count) tweets")
         // Create a set of existing mids for quick lookup
         let existingMids = Set(self.map { $0.mid })
-        
         // Filter out tweets that already exist
         let uniqueNewTweets = newTweets.filter { !existingMids.contains($0.mid) }
-        
-        // Append new tweets to the end
         self.append(contentsOf: uniqueNewTweets)
-        
+        // Remove any accidental duplicates (defensive)
+        var seen = Set<String>()
+        self = self.filter { seen.insert($0.mid).inserted }
         print("[TweetListView] After merge: \(self.count) tweets")
     }
 }

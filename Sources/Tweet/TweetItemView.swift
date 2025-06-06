@@ -31,41 +31,28 @@ struct TweetItemView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         // Original tweet content
                         HStack(alignment: .top, spacing: 8) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                // Retweet header
-                                HStack(spacing: 4) {
-                                    Image(systemName: "arrow.2.squarepath")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Text("Forwarded by \(tweet.author?.username ?? "")")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                HStack(alignment: .top) {
-                                    Group {
-                                        TweetItemHeaderView(tweet: originalTweet)
-                                    }
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        detailTweet = originalTweet
-                                        showDetail = true
-                                    }
-                                    Spacer(minLength: 0)
-                                    TweetMenu(tweet: tweet, isPinned: isPinned)
-                                        .zIndex(1)
-                                }
-                                TweetItemBodyView(tweet: originalTweet)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        detailTweet = originalTweet
-                                        showDetail = true
-                                    }
-                                    .padding(.top, 4)
-                                TweetActionButtonsView(tweet: originalTweet)
-                                    .padding(.top, 8)
-                                    .padding(.leading, -20)
+                            Group {
+                                TweetItemHeaderView(tweet: originalTweet)
                             }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                detailTweet = originalTweet
+                                showDetail = true
+                            }
+                            Spacer(minLength: 0)
+                            TweetMenu(tweet: tweet, isPinned: isPinned)
+                                .zIndex(1)
                         }
+                        TweetItemBodyView(tweet: originalTweet)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                detailTweet = originalTweet
+                                showDetail = true
+                            }
+                            .padding(.top, 4)
+                        TweetActionButtonsView(tweet: originalTweet)
+                            .padding(.top, 8)
+                            .padding(.leading, -20)
                     }
                 } else {
                     // Show retweet with content and embedded original tweet

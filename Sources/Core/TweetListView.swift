@@ -291,11 +291,8 @@ struct TweetListContentView<RowView: View>: View {
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0)
-            ForEach(tweets.indices, id: \ .self) { index in
-                if let tweet = tweets[index] {
-                    rowView(tweet)
-                        .id(index == tweets.firstIndex(where: { $0 != nil }) ? "top" : tweet.id)
-                }
+            ForEach(tweets.compactMap { $0 }, id: \ .mid) { tweet in
+                rowView(tweet)
             }
             // Sentinel view for infinite scroll
             if hasMoreTweets {
