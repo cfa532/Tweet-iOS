@@ -90,20 +90,16 @@ struct TweetActionButtonsView: View {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
-                    Task { @MainActor in
+                    Task {
                         // Optimistic UI update
                         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
                         var newFavorites = tweet.favorites ?? [false, false, false]
                         newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
-                        tweet.favorites = newFavorites
-                        tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
-                        
-                        if let updatedTweet = try? await hproseInstance.toggleFavorite(tweet) {
-                            if updatedTweet.favorites != tweet.favorites || updatedTweet.favoriteCount != tweet.favoriteCount {
-                                tweet.favorites = updatedTweet.favorites
-                                tweet.favoriteCount = updatedTweet.favoriteCount
-                            }
+                        await MainActor.run {
+                            tweet.favorites = newFavorites
+                            tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
                         }
+                        _ = try? await hproseInstance.toggleFavorite(tweet)
                     }
                 }
             }) {
@@ -129,7 +125,6 @@ struct TweetActionButtonsView: View {
                         var newFavorites = tweet.favorites ?? [false, false, false]
                         newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
                         
-                        // Update on main thread
                         await MainActor.run {
                             self.tweet.favorites = newFavorites
                             self.tweet.bookmarkCount = (self.tweet.bookmarkCount ?? 0) + (wasBookmarked ? -1 : 1)

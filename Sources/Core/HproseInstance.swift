@@ -646,9 +646,11 @@ final class HproseInstance: ObservableObject {
                let favoriteCount = response["count"] as? Int {
                 var favorites = tweet.favorites ?? [false, false, false]
                 favorites[UserActions.FAVORITE.rawValue] = isFavorite
-                let updatedTweet = tweet.copy(favorites: favorites, favoriteCount: favoriteCount)
+                let updatedFavorites = favorites
                 return await MainActor.run {
-                    updatedTweet
+                    tweet.favorites = updatedFavorites
+                    tweet.favoriteCount = favoriteCount
+                    return tweet
                 }
             }
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: No favorite info"])
