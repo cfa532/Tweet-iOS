@@ -73,7 +73,7 @@ final class HproseInstance: ObservableObject {
         self.preferenceHelper = PreferenceHelper()
         
         await MainActor.run {
-            _appUser = User.getInstance(mid: Constants.GUEST_ID)
+            _appUser = User.getInstance(mid: preferenceHelper?.getUserId() ?? Constants.GUEST_ID)
             _appUser.baseUrl = preferenceHelper?.getAppUrls().first ?? ""
             _appUser.followingList = Gadget.getAlphaIds()
         }
@@ -102,28 +102,29 @@ final class HproseInstance: ObservableObject {
                     #if DEBUG
                         let firstIp = "115.205.181.233:8002"  // for testing
                     #endif
+                    
                     HproseInstance.baseUrl = "http://\(firstIp)"
-                    await MainActor.run {
-                        appUser.baseUrl = "http://\(firstIp)"
-                    }
-                    client.uri = appUser.baseUrl!+"/webapi/"
+                    client.uri = HproseInstance.baseUrl + "/webapi/"
                     hproseClient = client.useService(HproseService.self) as AnyObject
                     
-                    if let userId = preferenceHelper?.getUserId(), userId != Constants.GUEST_ID,
-                       let providerIp = try await getProvider(userId) {
-                        if let user = try await getUser(userId, baseUrl: "http://\(providerIp)") {
-                            HproseInstance.baseUrl = "http://\(firstIp)"
-                            await MainActor.run {
-                                self.appUser = user
-                                appUser.baseUrl = "http://\(providerIp)"
-                            }
-                            return
+                    if !appUser.isGuest, let providerIp = try await getProvider(appUser.mid),
+                       let user = try await getUser(appUser.mid, baseUrl: "http://\(providerIp)") {
+                        HproseInstance.baseUrl = "http://\(providerIp)"
+                        client.uri = HproseInstance.baseUrl + "/webapi/"
+                        hproseClient = client.useService(HproseService.self) as AnyObject
+                        let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                        await MainActor.run {
+                            self.appUser = user.copy(baseUrl: HproseInstance.baseUrl, followingList: followings)
                         }
+                        return
+                    } else {
+                        await MainActor.run {
+                            appUser.baseUrl = HproseInstance.baseUrl
+                            appUser.mid = Constants.GUEST_ID
+                            appUser.followingList = Gadget.getAlphaIds()
+                        }
+                        return
                     }
-                    await MainActor.run {
-                        appUser.followingList = Gadget.getAlphaIds()
-                    }
-                    return
                 }
             } catch {
                 print("Error processing URL \(url): \(error)")
@@ -435,13 +436,7 @@ final class HproseInstance: ObservableObject {
                     }
                     return ["reason": "Unknown error occurred", "status": "failure"]
                 } else if status == "success" {
-                    let followings = try? await getFollows(user: loginUser, entry: .FOLLOWING)
-                    let followers = try? await getFollows(user: loginUser, entry: .FOLLOWER)
-                    
                     await MainActor.run {
-                        // After user login and appUser is set, fetch following and follower lists
-                        loginUser.followingList = followings
-                        loginUser.fansList = followers
                         // Update the appUser reference to point to the new user instance
                         self._appUser = loginUser
                         preferenceHelper?.setUserId(loginUser.mid)
