@@ -15,6 +15,11 @@ struct TweetDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var comments: [Tweet] = []
     
+    // Toast states
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastType: ToastView.ToastType = .info
+    
     init(tweet: Tweet) {
         self.tweet = tweet
     }
@@ -110,6 +115,39 @@ struct TweetDetailView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notification in
+            if let comment = notification.userInfo?["comment"] as? Tweet,
+               comment.originalTweetId == displayTweet.mid {
+                showToast(message: "Comment posted successfully", type: .success)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .commentDeleted)) { notification in
+            if let commentId = notification.userInfo?["commentId"] as? String {
+                showToast(message: "Comment deleted successfully. \(commentId)", type: .success)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .backgroundUploadFailed)) { notification in
+            if let error = notification.userInfo?["error"] as? Error {
+                showToast(message: "Failed to post comment: \(error.localizedDescription)", type: .error)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .commentUploadStarted)) { notification in
+            if let message = notification.userInfo?["message"] as? String {
+                showToast(message: message, type: .info)
+            }
+        }
+        .overlay(
+            Group {
+                if showToast {
+                    VStack {
+                        Spacer()
+                        ToastView(message: toastMessage, type: toastType)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    .padding(.bottom, 32)
+                }
+            }
+        )
         // Navigation to another user's profile when an avatar is tapped
         profileNavigationLink
     }
@@ -160,6 +198,20 @@ struct TweetDetailView: View {
             EmptyView()
         }
         .hidden()
+    }
+
+    private func showToast(message: String, type: ToastView.ToastType) {
+        toastMessage = message
+        toastType = type
+        withAnimation {
+            showToast = true
+        }
+        // Hide toast after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation {
+                showToast = false
+            }
+        }
     }
 }
 

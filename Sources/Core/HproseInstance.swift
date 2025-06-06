@@ -1278,17 +1278,50 @@ final class HproseInstance: ObservableObject {
             do {
                 let comment = comment
                 var uploadedAttachments: [MimeiFileType] = []
-                let itemPairs = itemData.chunked(into: 2)
-                for pair in itemPairs {
-                    let pairAttachments = try await self.uploadItemPair(pair)
-                    uploadedAttachments.append(contentsOf: pairAttachments)
+                
+                // Post notification that comment upload is starting
+                if !itemData.isEmpty {
+                    await MainActor.run {
+                        NotificationCenter.default.post(
+                            name: .commentUploadStarted,
+                            object: nil,
+                            userInfo: ["message": "Uploading comment with attachments..."]
+                        )
+                    }
                 }
+                
+                let itemPairs = itemData.chunked(into: 2)
+                for (index, pair) in itemPairs.enumerated() {
+                    do {
+                        let pairAttachments = try await self.uploadItemPair(pair)
+                        uploadedAttachments.append(contentsOf: pairAttachments)
+                    } catch {
+                        print("Error uploading pair \(index + 1): \(error)")
+                        await MainActor.run {
+                            NotificationCenter.default.post(
+                                name: .backgroundUploadFailed,
+                                object: nil,
+                                userInfo: ["error": error]
+                            )
+                        }
+                        return
+                    }
+                }
+                
                 if itemData.count != uploadedAttachments.count {
                     let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
-                    NotificationCenter.default.post(name: .backgroundUploadFailed, object: nil, userInfo: ["error": error])
+                    await MainActor.run {
+                        NotificationCenter.default.post(
+                            name: .backgroundUploadFailed,
+                            object: nil,
+                            userInfo: ["error": error]
+                        )
+                    }
                     return
                 }
+                
                 comment.attachments = uploadedAttachments
+                
                 if let newComment = try await self.addComment(comment, to: tweet) {
                     await MainActor.run {
                         // Notify observers about both the updated tweet and new comment
@@ -1300,10 +1333,22 @@ final class HproseInstance: ObservableObject {
                     }
                 } else {
                     let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment returned nil"])
-                    NotificationCenter.default.post(name: .backgroundUploadFailed, object: nil, userInfo: ["error": error])
+                    await MainActor.run {
+                        NotificationCenter.default.post(
+                            name: .backgroundUploadFailed,
+                            object: nil,
+                            userInfo: ["error": error]
+                        )
+                    }
                 }
             } catch {
-                NotificationCenter.default.post(name: .backgroundUploadFailed, object: nil, userInfo: ["error": error])
+                await MainActor.run {
+                    NotificationCenter.default.post(
+                        name: .backgroundUploadFailed,
+                        object: nil,
+                        userInfo: ["error": error]
+                    )
+                }
             }
         }
     }
