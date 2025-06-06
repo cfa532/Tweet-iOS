@@ -682,9 +682,11 @@ final class HproseInstance: ObservableObject {
                let bookmarkCount = response["count"] as? Int {
                 var favorites = tweet.favorites ?? [false, false, false]
                 favorites[UserActions.BOOKMARK.rawValue] = hasBookmarked
-                let updatedTweet = tweet.copy(favorites: favorites, bookmarkCount: bookmarkCount)
+                let updatedFavorites = favorites
                 return await MainActor.run {
-                    updatedTweet
+                    tweet.favorites = updatedFavorites
+                    tweet.bookmarkCount = bookmarkCount
+                    return tweet
                 }
             }
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: No bookmark info"])

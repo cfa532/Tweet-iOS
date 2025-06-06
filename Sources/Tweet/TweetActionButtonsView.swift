@@ -90,25 +90,18 @@ struct TweetActionButtonsView: View {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
-                    // Optimistic UI update
-                    let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
-                    var newFavorites = tweet.favorites ?? [false, false, false]
-                    newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
-                    tweet.favorites = newFavorites
-                    tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
-                    // Post notification for favorite add/remove
-                    if wasFavorite {
-                        NotificationCenter.default.post(name: .favoriteRemoved, object: nil, userInfo: ["tweetId": tweet.mid])
-                    } else {
-                        NotificationCenter.default.post(name: .favoriteAdded, object: nil, userInfo: ["tweet": tweet])
-                    }
-                    Task {
+                    Task { @MainActor in
+                        // Optimistic UI update
+                        let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
+                        var newFavorites = tweet.favorites ?? [false, false, false]
+                        newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
+                        tweet.favorites = newFavorites
+                        tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
+                        
                         if let updatedTweet = try? await hproseInstance.toggleFavorite(tweet) {
-                            await MainActor.run {
-                                if updatedTweet.favorites != tweet.favorites || updatedTweet.favoriteCount != tweet.favoriteCount {
-                                    tweet.favorites = updatedTweet.favorites
-                                    tweet.favoriteCount = updatedTweet.favoriteCount
-                                }
+                            if updatedTweet.favorites != tweet.favorites || updatedTweet.favoriteCount != tweet.favoriteCount {
+                                tweet.favorites = updatedTweet.favorites
+                                tweet.favoriteCount = updatedTweet.favoriteCount
                             }
                         }
                     }
@@ -116,7 +109,6 @@ struct TweetActionButtonsView: View {
             }) {
                 HStack(spacing: 4) {
                     Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
-//                        .foregroundColor(tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? .red : .primary)
                         .frame(width: 20)
                     if let count = tweet.favoriteCount, count > 0 {
                         Text("\(count)")
@@ -131,27 +123,18 @@ struct TweetActionButtonsView: View {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
-                    // Optimistic UI update
-                    let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
-                    var newFavorites = tweet.favorites ?? [false, false, false]
-                    newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
-                    tweet.favorites = newFavorites
-                    tweet.bookmarkCount = (tweet.bookmarkCount ?? 0) + (wasBookmarked ? -1 : 1)
-                    // Post notification for bookmark add/remove
-                    if wasBookmarked {
-                        NotificationCenter.default.post(name: .bookmarkRemoved, object: nil, userInfo: ["tweetId": tweet.mid])
-                    } else {
-                        NotificationCenter.default.post(name: .bookmarkAdded, object: nil, userInfo: ["tweet": tweet])
-                    }
                     Task {
-                        if let updatedTweet = try? await hproseInstance.toggleBookmark(tweet) {
-                            await MainActor.run {
-                                if updatedTweet.favorites != tweet.favorites || updatedTweet.bookmarkCount != tweet.bookmarkCount {
-                                    tweet.favorites = updatedTweet.favorites
-                                    tweet.bookmarkCount = updatedTweet.bookmarkCount
-                                }
-                            }
+                        // Optimistic UI update
+                        let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
+                        var newFavorites = tweet.favorites ?? [false, false, false]
+                        newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
+                        
+                        // Update on main thread
+                        await MainActor.run {
+                            self.tweet.favorites = newFavorites
+                            self.tweet.bookmarkCount = (self.tweet.bookmarkCount ?? 0) + (wasBookmarked ? -1 : 1)
                         }
+                        _ = try? await hproseInstance.toggleBookmark(tweet)
                     }
                 }
             }) {
