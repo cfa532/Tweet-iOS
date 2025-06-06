@@ -1281,13 +1281,7 @@ final class HproseInstance: ObservableObject {
                 
                 // Post notification that comment upload is starting
                 if !itemData.isEmpty {
-                    await MainActor.run {
-                        NotificationCenter.default.post(
-                            name: .commentUploadStarted,
-                            object: nil,
-                            userInfo: ["message": "Uploading comment with attachments..."]
-                        )
-                    }
+                    print("Uploading comment with attachments...")
                 }
                 
                 let itemPairs = itemData.chunked(into: 2)

@@ -89,13 +89,19 @@ struct CommentListView<RowView: View>: View {
                 }
             }
             // Listen to all notifications
-            ForEach(Array(notifications.enumerated()), id: \.element.name) { idx, notification in
-                EmptyView()
-                    .onReceive(NotificationCenter.default.publisher(for: notification.name)) { notif in
-                        if let comment = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(comment) {
-                            notification.action(comment)
-                        }
-                    }
+            .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notif in
+                if let comment = notif.userInfo?["comment"] as? Tweet,
+                   let notification = notifications.first(where: { $0.name == .newCommentAdded }),
+                   notification.shouldAccept(comment) {
+                    notification.action(comment)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .commentDeleted)) { notif in
+                if let comment = notif.userInfo?["commentId"] as? Tweet,
+                   let notification = notifications.first(where: { $0.name == .commentDeleted }),
+                   notification.shouldAccept(comment) {
+                    notification.action(comment)
+                }
             }
         }
     }

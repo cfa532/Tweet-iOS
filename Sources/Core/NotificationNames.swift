@@ -42,5 +42,4 @@ extension Notification.Name {
     static let tweetDeletdFailed = Notification.Name("TweetDeletdFailed")
     static let commentPublishFailed = Notification.Name("CommentPublishFailed")
     static let commentDeleteFailed = Notification.Name("CommentDeleteFailed")
-    static let commentUploadStarted = Notification.Name("commentUploadStarted")
 }

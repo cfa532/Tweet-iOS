@@ -157,7 +157,7 @@ struct CommentComposeView: View {
             content: trimmedContent,
             timestamp: Date(),
             originalTweetId: isQuoting ? tweet.mid : nil,
-            originalAuthorId: isQuoting ? tweet.authorId : nil,
+            originalAuthorId: isQuoting ? tweet.authorId : nil
         )
         
         // Prepare item data
@@ -210,11 +210,6 @@ struct CommentComposeView: View {
                 self.error = error
                 return
             }
-        }
-        
-        // Add optimistic comment to the list, if it has no attachment.
-        if itemData.count == 0 {
-            commentsVM.addComment(comment)
         }
         
         print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")

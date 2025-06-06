@@ -115,27 +115,6 @@ struct TweetDetailView: View {
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notification in
-            if let comment = notification.userInfo?["comment"] as? Tweet,
-               comment.originalTweetId == displayTweet.mid {
-                showToast(message: "Comment posted successfully", type: .success)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .commentDeleted)) { notification in
-            if let commentId = notification.userInfo?["commentId"] as? String {
-                showToast(message: "Comment deleted successfully. \(commentId)", type: .success)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .backgroundUploadFailed)) { notification in
-            if let error = notification.userInfo?["error"] as? Error {
-                showToast(message: "Failed to post comment: \(error.localizedDescription)", type: .error)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .commentUploadStarted)) { notification in
-            if let message = notification.userInfo?["message"] as? String {
-                showToast(message: message, type: .info)
-            }
-        }
         .overlay(
             Group {
                 if showToast {
@@ -168,7 +147,7 @@ struct TweetDetailView: View {
                 CommentListNotification(
                     name: .newCommentAdded,
                     key: "comment",
-                    shouldAccept: { comment in comment.originalTweetId == displayTweet.mid },
+                    shouldAccept: { _ in true },
                     action: { comment in comments.insert(comment, at: 0) }
                 ),
                 CommentListNotification(
