@@ -24,7 +24,6 @@ struct TweetMenu: View {
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var isCurrentlyPinned: Bool
-    @Environment(\.isDetailView) private var isDetailView
 
     init(tweet: Tweet, isPinned: Bool) {
         self.tweet = tweet
@@ -105,17 +104,5 @@ struct TweetMenu: View {
                 object: tweet.mid
             )
         }
-    }
-}
-
-// Add environment key for detail view
-private struct IsDetailViewKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
-extension EnvironmentValues {
-    var isDetailView: Bool {
-        get { self[IsDetailViewKey.self] }
-        set { self[IsDetailViewKey.self] = newValue }
     }
 }
