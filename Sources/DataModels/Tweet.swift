@@ -258,8 +258,8 @@ extension Array where Element == Tweet {
             uniqueTweets[tweet.mid] = tweet
         }
         
-        // Convert back to array while preserving order
-        self = Array(uniqueTweets.values)
+        // Convert back to array and sort by timestamp in descending order
+        self = Array(uniqueTweets.values).sorted { $0.timestamp > $1.timestamp }
         print("[TweetListView] After merge: \(self.count) tweets")
     }
 }
