@@ -245,14 +245,21 @@ extension Array where Element == Tweet {
     /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.
     mutating func mergeTweets(_ newTweets: [Tweet]) {
         print("[TweetListView] Merging \(newTweets.count) tweets")
-        // Create a set of existing mids for quick lookup
-        let existingMids = Set(self.map { $0.mid })
-        // Filter out tweets that already exist
-        let uniqueNewTweets = newTweets.filter { !existingMids.contains($0.mid) }
-        self.append(contentsOf: uniqueNewTweets)
-        // Remove any accidental duplicates (defensive)
-        var seen = Set<String>()
-        self = self.filter { seen.insert($0.mid).inserted }
+        // Create a dictionary to track unique tweets by their mid
+        var uniqueTweets: [String: Tweet] = [:]
+        
+        // Add existing tweets to dictionary
+        for tweet in self {
+            uniqueTweets[tweet.mid] = tweet
+        }
+        
+        // Add new tweets, overwriting existing ones if they have the same mid
+        for tweet in newTweets {
+            uniqueTweets[tweet.mid] = tweet
+        }
+        
+        // Convert back to array while preserving order
+        self = Array(uniqueTweets.values)
         print("[TweetListView] After merge: \(self.count) tweets")
     }
 }
