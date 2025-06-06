@@ -648,9 +648,7 @@ final class HproseInstance: ObservableObject {
                 favorites[UserActions.FAVORITE.rawValue] = isFavorite
                 let updatedFavorites = favorites
                 return await MainActor.run {
-                    tweet.favorites = updatedFavorites
-                    tweet.favoriteCount = favoriteCount
-                    return tweet
+                    return tweet.copy(favorites: updatedFavorites, favoriteCount: favoriteCount)
                 }
             }
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: No favorite info"])
@@ -686,9 +684,7 @@ final class HproseInstance: ObservableObject {
                 favorites[UserActions.BOOKMARK.rawValue] = hasBookmarked
                 let updatedFavorites = favorites
                 return await MainActor.run {
-                    tweet.favorites = updatedFavorites
-                    tweet.bookmarkCount = bookmarkCount
-                    return tweet
+                    return tweet.copy(favorites: updatedFavorites, bookmarkCount: bookmarkCount)
                 }
             }
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: No bookmark info"])
