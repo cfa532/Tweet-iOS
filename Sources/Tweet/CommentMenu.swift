@@ -14,47 +14,43 @@ struct CommentMenu: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @State private var showToast = false
-    @State private var toastMessage = ""
-    @State private var toastType: ToastView.ToastType = .info
+    @State private var showAlert = false
+    @State private var alertMessage = ""
+    @State private var isDeleting = false
 
     var body: some View {
-        ZStack {
-            Menu {
-                if comment.authorId == appUser.mid {
-                    Button(role: .destructive) {
-                        // Start deletion in background
-                        Task {
-                            do {
-                                try await deleteComment(comment)
-                            } catch {
-                                print("Comment deletion failed. \(comment)")
-                                await MainActor.run {
-                                    toastMessage = "Failed to delete comment."
-                                    toastType = .error
-                                    showToast = true
-                                }
+        Menu {
+            if comment.authorId == appUser.mid {
+                Button(role: .destructive) {
+                    isDeleting = true
+                    // Start deletion in background
+                    Task {
+                        do {
+                            try await deleteComment(comment)
+                        } catch {
+                            print("Comment deletion failed. \(comment)")
+                            await MainActor.run {
+                                alertMessage = "Failed to delete comment."
+                                showAlert = true
                             }
                         }
-                    } label: {
-                        Label("Delete", systemImage: "trash")
+                        isDeleting = false
                     }
+                } label: {
+                    Label("Delete", systemImage: "trash")
                 }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .foregroundColor(.secondary)
-                    .padding(12)
-                    .contentShape(Rectangle())
+                .disabled(isDeleting)
             }
-            if showToast {
-                VStack {
-                    Spacer()
-                    ToastView(message: toastMessage, type: toastType)
-                        .padding(.bottom, 40)
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .animation(.easeInOut, value: showToast)
-            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .foregroundColor(.secondary)
+                .padding(12)
+                .contentShape(Rectangle())
+        }
+        .alert("Delete Comment", isPresented: $showAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(alertMessage)
         }
     }
     
@@ -63,9 +59,11 @@ struct CommentMenu: View {
         NotificationCenter.default.post(
             name: .commentDeleted,
             object: nil,
-            userInfo: ["commentId": comment.mid]
+            userInfo: ["comment": comment]
         )
-        
+        await MainActor.run {
+            parentTweet.commentCount = max(0, (parentTweet.commentCount ?? 1) - 1)
+        }
         // Attempt actual deletion
         if let response = try? await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid),
            let commentId = response["commentId"] as? String,
@@ -81,13 +79,9 @@ struct CommentMenu: View {
             NotificationCenter.default.post(
                 name: .commentRestored,
                 object: nil,
-                userInfo: ["commentId": comment.mid]
+                userInfo: ["comment": comment]
             )
-            await MainActor.run {
-                toastMessage = "Failed to delete comment."
-                toastType = .error
-                showToast = true
-            }
+            throw NSError(domain: "CommentService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete comment"])
         }
     }
 }

@@ -138,7 +138,7 @@ final class HproseInstance: ObservableObject {
     }
     
     func fetchComments(
-        tweet: Tweet,
+        _ parentTweet: Tweet,
         pageNumber: UInt = 0,
         pageSize: UInt = 20
     ) async throws -> [Tweet?] {
@@ -147,7 +147,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "tweetid": tweet.mid,
+                "tweetid": parentTweet.mid,
                 "appuserid": appUser.mid,
                 "pn": pageNumber,
                 "ps": pageSize,
@@ -163,11 +163,14 @@ final class HproseInstance: ObservableObject {
             var tweetsWithAuthors: [Tweet?] = []
             for item in response {
                 if let dict = item {
-                    if let tweet = Tweet.from(dict: dict) {
-                        let author = try? await getUser(tweet.authorId)
-                        tweet.author = author
-                        tweetsWithAuthors.append(tweet)
-                    } else {
+                    do {
+                        let comment = try await MainActor.run {
+                            return try Tweet.from(dict: dict)
+                        }
+                        comment.author = try? await getUser(comment.authorId)
+                        tweetsWithAuthors.append(comment)
+                    } catch {
+                        print("Error processing comment: \(error)")
                         tweetsWithAuthors.append(nil)
                     }
                 } else {
@@ -215,25 +218,16 @@ final class HproseInstance: ObservableObject {
             
             var tweets: [Tweet?] = []
             for item in response {
-                if let tweetDict = item["tweet"] as? [String: Any],
-                   let tweet = Tweet.from(dict: tweetDict) {
-                    tweet.author = try await getUser(tweet.authorId)
-                    
-                    // Update cached tweet
-                    if let cached = TweetCacheManager.shared.fetchTweet(mid: tweet.mid) {
-                        await MainActor.run {
-                            cached.favorites = tweet.favorites
-                            cached.favoriteCount = tweet.favoriteCount
-                            cached.bookmarkCount = tweet.bookmarkCount
-                            cached.retweetCount = tweet.retweetCount
-                            cached.commentCount = tweet.commentCount
-                        }
-                        // Save updated cached tweet back to cache
-                        TweetCacheManager.shared.saveTweet(cached, mid: appUser.mid)
-                        tweets.append(cached)
-                    } else {
+                if let tweetDict = item["tweet"] as? [String: Any] {
+                    do {
+                        let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
+                        tweet.author = try await getUser(tweet.authorId)
+                        // Save tweet back to cache
                         TweetCacheManager.shared.saveTweet(tweet, mid: appUser.mid)
                         tweets.append(tweet)
+                    } catch {
+                        print("Error processing tweet: \(error)")
+                        tweets.append(nil)
                     }
                 } else {
                     // Cache nil tweet using tid
@@ -282,25 +276,16 @@ final class HproseInstance: ObservableObject {
             
             var tweets: [Tweet?] = []
             for item in response {
-                if let tweetDict = item["tweet"] as? [String: Any],
-                   let tweet = Tweet.from(dict: tweetDict) {
-                    tweet.author = try await getUser(tweet.authorId)
-                    
-                    // Update cached tweet
-                    if let cached = TweetCacheManager.shared.fetchTweet(mid: tweet.mid) {
-                        await MainActor.run {
-                            cached.favorites = tweet.favorites
-                            cached.favoriteCount = tweet.favoriteCount
-                            cached.bookmarkCount = tweet.bookmarkCount
-                            cached.retweetCount = tweet.retweetCount
-                            cached.commentCount = tweet.commentCount
-                        }
-                        // Save updated cached tweet back to cache
-                        TweetCacheManager.shared.saveTweet(cached, mid: appUser.mid)
-                        tweets.append(cached)
-                    } else {
+                if let tweetDict = item["tweet"] as? [String: Any] {
+                    do {
+                        let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
+                        tweet.author = try await getUser(tweet.authorId)
+                        // Save tweet back to cache
                         TweetCacheManager.shared.saveTweet(tweet, mid: appUser.mid)
                         tweets.append(tweet)
+                    } catch {
+                        print("Error processing tweet: \(error)")
+                        tweets.append(nil)
                     }
                 } else {
                     // Cache nil tweet using tid
@@ -319,7 +304,7 @@ final class HproseInstance: ObservableObject {
         authorId: String,
         nodeUrl: String? = nil
     )  async throws -> Tweet? {
-        if let cached = TweetCacheManager.shared.fetchTweet(mid: tweetId) {
+        if let cached = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
             return cached
         }
         guard let service = hproseClient else {
@@ -333,18 +318,21 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid
         ]
         if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
-            if let tweet = Tweet.from(dict: tweetDict) {
-                let author = try? await getUser(authorId)
-                tweet.author = author
+            do {
+                let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
+                tweet.author = try? await getUser(authorId)
                 TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid)
+                
                 if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
-                    if TweetCacheManager.shared.fetchTweet(mid: origId) == nil {
+                    if await TweetCacheManager.shared.fetchTweet(mid: origId) == nil {
                         if let origTweet = try? await getTweet(tweetId: origId, authorId: origAuthorId) {
                             TweetCacheManager.shared.saveTweet(origTweet, mid: origTweet.mid)
                         }
                     }
                 }
                 return tweet
+            } catch {
+                print("Error processing tweet: \(error)")
             }
         }
         throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tweet not found"])
@@ -531,31 +519,15 @@ final class HproseInstance: ObservableObject {
             }
             var tweetsWithAuthors: [Tweet] = []
             for item in validDictionaries {
-                if let tweet = Tweet.from(dict: item) {
-                    // Check cache
-                    let cached = TweetCacheManager.shared.fetchTweet(mid: tweet.mid)
-                    let tweetToUse: Tweet
-                    if let cached = cached {
-                        await MainActor.run {
-                            cached.favorites = tweet.favorites
-                            cached.favoriteCount = tweet.favoriteCount
-                            cached.bookmarkCount = tweet.bookmarkCount
-                            cached.retweetCount = tweet.retweetCount
-                            cached.commentCount = tweet.commentCount
-                        }
-                        tweetToUse = cached
-                    } else {
-                        TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid)
-                        tweetToUse = tweet
+                do {
+                    let tweet = try await MainActor.run { return try Tweet.from(dict: item) }
+                    if (tweet.author == nil) {
+                        tweet.author = try? await getUser(tweet.authorId)
                     }
-                    if tweetToUse.author == nil {
-                        let author = try? await getUser(tweetToUse.authorId)
-                        tweetToUse.author = author
-                        if author != nil {
-                            TweetCacheManager.shared.saveTweet(tweetToUse, mid: tweetToUse.mid)
-                        }
-                    }
-                    tweetsWithAuthors.append(tweetToUse)
+                    TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid)
+                    tweetsWithAuthors.append(tweet)
+                } catch {
+                    print("Error processing tweet: \(error)")
                 }
             }
             return tweetsWithAuthors
@@ -734,15 +706,8 @@ final class HproseInstance: ObservableObject {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any],
-               let updatedOriginalTweet = Tweet.from(dict: tweetDict) {
-                await MainActor.run {
-                    tweet.favorites = updatedOriginalTweet.favorites
-                    tweet.retweetCount = updatedOriginalTweet.retweetCount
-                    tweet.favoriteCount = updatedOriginalTweet.favoriteCount
-                    tweet.bookmarkCount = updatedOriginalTweet.bookmarkCount
-                    tweet.commentCount = updatedOriginalTweet.commentCount
-                }
+            if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
+                try await MainActor.run { try tweet.update(from: tweetDict) }
             } else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "updateRetweetCount: No response"])
             }
@@ -776,8 +741,7 @@ final class HproseInstance: ObservableObject {
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
-            let commentWithoutAuthor = comment.copy()
-            commentWithoutAuthor.author = nil
+            comment.author = nil
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
@@ -792,13 +756,12 @@ final class HproseInstance: ObservableObject {
             }
             if let commentId = response["commentId"] as? String,
                let count = response["count"] as? Int {
-                let newComment = comment
-                newComment.mid = commentId
-                newComment.author = try? await getUser(newComment.authorId)
-                return await MainActor.run {
-                    _ = tweet.copy(commentCount: count)
-                    return newComment
+                await MainActor.run {
+                    comment.mid = commentId
+                    comment.author = appUser
+                    tweet.commentCount = count
                 }
+                return comment
             }
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: No commentId or count"])
         }
@@ -1168,13 +1131,12 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             // Create a copy of the tweet and remove its author attribute
-            let tweetForServer = tweet.copy() // Assuming Tweet has a copy() method
-            tweetForServer.author = nil
+            tweet.author = nil
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
                 "hostid": "ReyCUFHHZmk0N5w_wxUeEuoY5Xr",
-                "tweet": String(data: try JSONEncoder().encode(tweetForServer), encoding: .utf8) ?? ""
+                "tweet": String(data: try JSONEncoder().encode(tweet), encoding: .utf8) ?? ""
             ]
             
             let rawResponse = service.runMApp("add_tweet", params, nil)
@@ -1390,14 +1352,12 @@ final class HproseInstance: ObservableObject {
             }
             var result: [[String: Any]] = []
             for dict in response {
-                if let tweetDict = dict["tweet"] as? [String: Any],
-                   let tweet = Tweet.from(dict: tweetDict) {
-                    let tweetWithAuthor = tweet
-                    let author = try? await getUser(tweet.authorId)
-                    tweetWithAuthor.author = author
+                if let tweetDict = dict["tweet"] as? [String: Any] {
+                    let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
+                    tweet.author = try? await getUser(tweet.authorId)
                     let timePinned = dict["timestamp"]
                     result.append([
-                        "tweet": tweetWithAuthor,
+                        "tweet": tweet,
                         "timePinned": timePinned as Any
                     ])
                 }

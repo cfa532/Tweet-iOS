@@ -97,7 +97,7 @@ struct CommentListView<RowView: View>: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .commentDeleted)) { notif in
-                if let comment = notif.userInfo?["commentId"] as? Tweet,
+                if let comment = notif.userInfo?["comment"] as? Tweet,
                    let notification = notifications.first(where: { $0.name == .commentDeleted }),
                    notification.shouldAccept(comment) {
                     notification.action(comment)

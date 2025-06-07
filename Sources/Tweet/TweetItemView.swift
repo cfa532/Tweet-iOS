@@ -14,7 +14,7 @@ struct TweetItemView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            if let _ = tweet.originalTweetId {
+            if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
                 // This is a retweet
                 if let originalTweet = originalTweet, let user = originalTweet.author {
                     Button(action: {

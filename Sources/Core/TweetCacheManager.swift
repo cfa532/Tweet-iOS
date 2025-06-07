@@ -47,7 +47,7 @@ class TweetCacheManager {
 
 // MARK: - Tweet Caching
 extension TweetCacheManager {
-    func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt) -> [Tweet?] {
+    func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt) async -> [Tweet?] {
         let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
         request.predicate = NSPredicate(format: "uid == %@", userId)
         request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
@@ -55,31 +55,50 @@ extension TweetCacheManager {
         request.fetchLimit = Int(pageSize)
         
         if let cdTweets = try? context.fetch(request) {
-            return cdTweets.map { cdTweet in
+            var tweets: [Tweet?] = []
+            for cdTweet in cdTweets {
                 if cdTweet.isNilPlaceholder {
-                    return nil
+                    tweets.append(nil)
+                    continue
                 }
                 if let tweetData = cdTweet.tweetData,
-                   let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
-                    return tweet
+                   let tweetDict = try? JSONSerialization.jsonObject(with: tweetData) as? [String: Any] {
+                    do {
+                        let tweet = try await MainActor.run {
+                            try Tweet.from(dict: tweetDict)
+                        }
+                        tweets.append(tweet)
+                    } catch {
+                        print("Error processing tweet: \(error)")
+                        tweets.append(nil)
+                    }
+                } else {
+                    tweets.append(nil)
                 }
-                return nil
             }
+            return tweets
         }
         return []
     }
 
-    func fetchTweet(mid: String) -> Tweet? {
+    func fetchTweet(mid: String) async -> Tweet? {
         let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
         request.predicate = NSPredicate(format: "tid == %@", mid)
         
         // First, get the tweet and convert it
         if let cdTweet = try? context.fetch(request).first {
-            let tweet = Tweet.from(cdTweet: cdTweet)
-            // Then update the cache time in a separate operation
-            cdTweet.timeCached = Date()
-            try? context.save()
-            return tweet
+            do {
+                let tweet = try await MainActor.run {
+                    try Tweet.from(cdTweet: cdTweet)
+                }
+                // Then update the cache time in a separate operation
+                cdTweet.timeCached = Date()
+                try? context.save()
+                return tweet
+            } catch {
+                print("Error processing tweet: \(error)")
+                return nil
+            }
         }
         return nil
     }
@@ -104,7 +123,9 @@ extension TweetCacheManager {
             
             if let tweet = tweet {
                 cdTweet.isNilPlaceholder = false
-                if let tweetData = try? JSONEncoder().encode(tweet) {
+                // Convert tweet to dictionary for storage
+                if let tweetDict = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(tweet)) as? [String: Any],
+                   let tweetData = try? JSONSerialization.data(withJSONObject: tweetDict) {
                     cdTweet.tweetData = tweetData
                 }
             } else {
@@ -150,19 +171,20 @@ extension TweetCacheManager {
 
 // MARK: - Tweet <-> Core Data Conversion
 extension Tweet {
-    static func from(cdTweet: CDTweet) -> Tweet {
+    static func from(cdTweet: CDTweet) throws -> Tweet {
         if let tweetData = cdTweet.tweetData,
-           let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
-            return tweet
+           let tweetDict = try? JSONSerialization.jsonObject(with: tweetData) as? [String: Any] {
+            return try Tweet.from(dict: tweetDict)
         }
         
-        // Fallback to basic properties if decoding fails
-        return Tweet(
-            mid: cdTweet.tid,
-            authorId: Constants.GUEST_ID,
-            content: nil,
-            timestamp: Date()
-        )
+        throw NSError(domain: "TweetCacheManager", code: -1, 
+                     userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])
+    }
+    
+    static func from(cdTweet: CDTweet) async throws -> Tweet {
+        return try await MainActor.run {
+            try from(cdTweet: cdTweet)
+        }
     }
 }
 

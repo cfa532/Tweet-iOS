@@ -1,6 +1,56 @@
 import Foundation
 
 class Tweet: Identifiable, Codable, ObservableObject {
+    // MARK: - Singleton
+    private static var instances: [String: Tweet] = [:]
+    private static let instanceLock = NSLock()
+    
+    private static func getInstance(mid: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
+                          originalTweetId: String? = nil, originalAuthorId: String? = nil, author: User? = nil,
+                          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
+                          commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
+                          downloadable: Bool? = nil) -> Tweet {
+        instanceLock.lock()
+        defer { instanceLock.unlock() }
+        
+        if let existingInstance = instances[mid] {
+            // Update existing instance with new values
+            if let content = content { existingInstance.content = content }
+            if let title = title { existingInstance.title = title }
+            if let author = author { existingInstance.author = author }
+            if let favorites = favorites { existingInstance.favorites = favorites }
+            existingInstance.favoriteCount = favoriteCount
+            existingInstance.bookmarkCount = bookmarkCount
+            existingInstance.retweetCount = retweetCount
+            existingInstance.commentCount = commentCount
+            if let attachments = attachments { existingInstance.attachments = attachments }
+            if let isPrivate = isPrivate { existingInstance.isPrivate = isPrivate }
+            if let downloadable = downloadable { existingInstance.downloadable = downloadable }
+            return existingInstance
+        }
+        
+        let newInstance = Tweet(mid: mid, authorId: authorId, content: content, timestamp: timestamp, title: title,
+                              originalTweetId: originalTweetId, originalAuthorId: originalAuthorId, author: author,
+                              favorites: favorites, favoriteCount: favoriteCount, bookmarkCount: bookmarkCount,
+                              retweetCount: retweetCount, commentCount: commentCount, attachments: attachments,
+                              isPrivate: isPrivate, downloadable: downloadable)
+        instances[mid] = newInstance
+        return newInstance
+    }
+    
+    static func clearInstance(mid: String) {
+        instanceLock.lock()
+        defer { instanceLock.unlock() }
+        instances.removeValue(forKey: mid)
+    }
+    
+    static func clearAllInstances() {
+        instanceLock.lock()
+        defer { instanceLock.unlock() }
+        instances.removeAll()
+    }
+    
+    // MARK: - Properties
     var id: String { mid }  // Computed property that returns mid
     var mid: String
     let authorId: String // mid of the author
@@ -141,10 +191,68 @@ class Tweet: Identifiable, Codable, ObservableObject {
     
     // MARK: - Factory Methods
     
+    /// Updates the tweet instance with values from a dictionary
+    /// - Parameter dict: Dictionary containing tweet data
+    /// - Throws: DecodingError if the dictionary cannot be converted to a Tweet
+    func update(from dict: [String: Any]) throws {
+        do {
+            // Create a new dictionary with validated fields and proper mapping
+            var validatedDict = dict
+            
+            // Convert timestamp from string to Date
+            if let timestampStr = dict["timestamp"] as? String,
+               let timestampMillis = Double(timestampStr) {
+                // Update the dictionary with the timestamp in milliseconds
+                validatedDict["timestamp"] = timestampMillis
+            }
+            
+            // Convert dictionary to JSON data
+            let jsonData = try JSONSerialization.data(withJSONObject: validatedDict, options: [])
+            
+            // Decode the JSON data into a temporary Tweet object
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            
+            let tempTweet = try decoder.decode(Tweet.self, from: jsonData)
+            
+            // Update this instance with the new values
+            if let content = tempTweet.content { self.content = content }
+            if let title = tempTweet.title { self.title = title }
+            if let author = tempTweet.author { self.author = author }
+            if let favorites = tempTweet.favorites { self.favorites = favorites }
+            self.favoriteCount = tempTweet.favoriteCount
+            self.bookmarkCount = tempTweet.bookmarkCount
+            self.retweetCount = tempTweet.retweetCount
+            self.commentCount = tempTweet.commentCount
+            if let attachments = tempTweet.attachments { self.attachments = attachments }
+            if let isPrivate = tempTweet.isPrivate { self.isPrivate = isPrivate }
+            if let downloadable = tempTweet.downloadable { self.downloadable = downloadable }
+            self.timestamp = tempTweet.timestamp
+        } catch {
+            print("Error updating tweet from dictionary: \(error)")
+            if let decodingError = error as? DecodingError {
+                switch decodingError {
+                case .keyNotFound(let key, let context):
+                    print("Missing key: \(key.stringValue), context: \(context.debugDescription)")
+                case .typeMismatch(let type, let context):
+                    print("Type mismatch: expected \(type), context: \(context.debugDescription)")
+                case .valueNotFound(let type, let context):
+                    print("Value not found: expected \(type), context: \(context.debugDescription)")
+                case .dataCorrupted(let context):
+                    print("Data corrupted: \(context.debugDescription)")
+                @unknown default:
+                    print("Unknown decoding error")
+                }
+            }
+            throw error
+        }
+    }
+    
     /// Creates a Tweet from a dictionary returned by the network call
     /// - Parameter dict: Dictionary containing tweet data
-    /// - Returns: A Tweet object if successful, nil if conversion fails
-    static func from(dict: [String: Any]) -> Tweet? {
+    /// - Returns: A Tweet object if successful
+    /// - Throws: DecodingError if the dictionary cannot be converted to a Tweet
+    static func from(dict: [String: Any]) throws -> Tweet {
         do {
             // Create a new dictionary with validated fields and proper mapping
             var validatedDict = dict
@@ -163,7 +271,18 @@ class Tweet: Identifiable, Codable, ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .millisecondsSince1970
             
-            return try decoder.decode(Tweet.self, from: jsonData)
+            let tweet = try decoder.decode(Tweet.self, from: jsonData)
+            return getInstance(mid: tweet.mid, authorId: tweet.authorId, content: tweet.content,
+                             timestamp: tweet.timestamp, title: tweet.title,
+                             originalTweetId: tweet.originalTweetId, originalAuthorId: tweet.originalAuthorId,
+                             author: tweet.author, favorites: tweet.favorites,
+                             favoriteCount: tweet.favoriteCount ?? 0,
+                             bookmarkCount: tweet.bookmarkCount ?? 0,
+                             retweetCount: tweet.retweetCount ?? 0,
+                             commentCount: tweet.commentCount ?? 0,
+                             attachments: tweet.attachments,
+                             isPrivate: tweet.isPrivate,
+                             downloadable: tweet.downloadable)
         } catch {
             print("Error converting dictionary to Tweet: \(error)")
             if let decodingError = error as? DecodingError {
@@ -180,7 +299,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
                     print("Unknown decoding error")
                 }
             }
-            return nil
+            throw error
         }
     }
     
@@ -211,19 +330,24 @@ class Tweet: Identifiable, Codable, ObservableObject {
         isPrivate: Bool? = nil,
         downloadable: Bool? = nil
     ) -> Tweet {
-        let copy = self
-        if let content = content { copy.content = content }
-        if let title = title { copy.title = title }
-        if let author = author { copy.author = author }
-        if let favorites = favorites { copy.favorites = favorites }
-        if let favoriteCount = favoriteCount { copy.favoriteCount = favoriteCount }
-        if let bookmarkCount = bookmarkCount { copy.bookmarkCount = bookmarkCount }
-        if let retweetCount = retweetCount { copy.retweetCount = retweetCount }
-        if let commentCount = commentCount { copy.commentCount = commentCount }
-        if let attachments = attachments { copy.attachments = attachments }
-        if let isPrivate = isPrivate { copy.isPrivate = isPrivate }
-        if let downloadable = downloadable { copy.downloadable = downloadable }
-        return copy
+        return Tweet.getInstance(
+            mid: self.mid,
+            authorId: self.authorId,
+            content: content ?? self.content,
+            timestamp: self.timestamp,
+            title: title ?? self.title,
+            originalTweetId: self.originalTweetId,
+            originalAuthorId: self.originalAuthorId,
+            author: author ?? self.author,
+            favorites: favorites ?? self.favorites,
+            favoriteCount: favoriteCount ?? self.favoriteCount ?? 0,
+            bookmarkCount: bookmarkCount ?? self.bookmarkCount ?? 0,
+            retweetCount: retweetCount ?? self.retweetCount ?? 0,
+            commentCount: commentCount ?? self.commentCount ?? 0,
+            attachments: attachments ?? self.attachments,
+            isPrivate: isPrivate ?? self.isPrivate,
+            downloadable: downloadable ?? self.downloadable
+        )
     }
     
     /// Checks if this tweet is pinned based on a list of pinned tweets

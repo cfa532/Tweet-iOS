@@ -25,7 +25,7 @@ struct FollowingsTweetView: View {
                 tweetFetcher: { page, size, isFromCache in
                     if isFromCache {
                         // Fetch from cache
-                        let cachedTweets = TweetCacheManager.shared.fetchCachedTweets(
+                        let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                             for: hproseInstance.appUser.mid, page: page, pageSize: size)
                         await MainActor.run {
                             viewModel.tweets.mergeTweets(cachedTweets.compactMap { $0 })

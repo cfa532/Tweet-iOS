@@ -33,6 +33,7 @@ class FollowingsTweetViewModel: ObservableObject {
         }
     }
     
+    // optimistic UI update
     func handleNewTweet(_ tweet: Tweet) {
         tweets.insert(tweet, at: 0)
     }

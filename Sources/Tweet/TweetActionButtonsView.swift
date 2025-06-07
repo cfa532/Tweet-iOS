@@ -143,8 +143,8 @@ struct TweetActionButtonsView: View {
                 }
                 .frame(width: 48, alignment: .leading)
             }
-            Spacer(minLength: 0)
             // Share button
+            Spacer(minLength: 16)
             Button(action: {
                 showShareSheet = true
             }) {
@@ -152,7 +152,6 @@ struct TweetActionButtonsView: View {
                     .frame(width: 20)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .padding(.leading, 40)
         }
         .foregroundColor(.secondary)
         .padding(.trailing, 4)

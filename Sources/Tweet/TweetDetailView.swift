@@ -137,7 +137,7 @@ struct TweetDetailView: View {
             comments: $comments,
             commentFetcher: { page, size in
                 try await hproseInstance.fetchComments(
-                    tweet: displayTweet,
+                    displayTweet,
                     pageNumber: page,
                     pageSize: size
                 )
@@ -152,7 +152,7 @@ struct TweetDetailView: View {
                 ),
                 CommentListNotification(
                     name: .commentDeleted,
-                    key: "commentId",
+                    key: "comment",
                     shouldAccept: { _ in true },
                     action: { comment in comments.removeAll { $0.mid == comment.mid } }
                 )

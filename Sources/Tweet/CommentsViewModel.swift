@@ -27,7 +27,7 @@ class CommentsViewModel: ObservableObject {
         await MainActor.run { isLoading = true; currentPage = 0 }
         do {
             let newComments = try await hproseInstance.fetchComments(
-                tweet: parentTweet,
+                parentTweet,
                 pageNumber: 0,
                 pageSize: pageSize
             )
@@ -51,7 +51,7 @@ class CommentsViewModel: ObservableObject {
         let nextPage = currentPage + 1
         do {
             let moreComments = try await hproseInstance.fetchComments(
-                tweet: parentTweet,
+                parentTweet,
                 pageNumber: nextPage,
                 pageSize: pageSize
             )
