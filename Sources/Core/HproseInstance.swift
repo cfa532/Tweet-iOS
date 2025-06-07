@@ -277,7 +277,7 @@ final class HproseInstance: ObservableObject {
                         let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                         tweet.author = try await getUser(tweet.authorId)
                         // Save tweet back to cache
-                        TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
+//                        TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
                         tweets.append(tweet)
                     } catch {
                         print("Error processing tweet: \(error)")

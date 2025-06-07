@@ -101,12 +101,12 @@ extension TweetCacheManager {
 
     /// Save a tweet to the cache. If tweet is nil, do nothing. To remove a tweet, use deleteTweet.
     func saveTweet(_ tweet: Tweet, userId: String) {
-        if let tweetData = try? JSONEncoder().encode(tweet),
-           let tweetJson = String(data: tweetData, encoding: .utf8) {
-            print("Saving coredata tweet: \(tweetJson)")
-        } else {
-            print("Saving coredata tweet: <failed to encode tweet>")
-        }
+//        if let tweetData = try? JSONEncoder().encode(tweet),
+//           let tweetJson = String(data: tweetData, encoding: .utf8) {
+//            print("Saving coredata tweet: \(tweetJson)")
+//        } else {
+//            print("Saving coredata tweet: <failed to encode tweet>")
+//        }
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
