@@ -39,10 +39,9 @@ struct CommentItemView: View {
                 TweetItemBodyView(tweet: comment, enableTap: false)
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
-                    .padding(.top, 4)
+                    .padding(.top, -12)
                 TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
                     .padding(.top, 8)
-                    .padding(.leading, -8)
             }
         }
         .padding()

@@ -50,7 +50,7 @@ struct TweetItemView: View {
                         }
 
                         TweetItemBodyView(tweet: originalTweet)
-                            .padding(.top, -8)
+                            .padding(.top, -12)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 detailTweet = originalTweet
@@ -80,7 +80,7 @@ struct TweetItemView: View {
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
                         TweetItemBodyView(tweet: tweet, enableTap: false)
-                            .padding(.top, -8)
+                            .padding(.top, -12)
                             .contentShape(Rectangle())
                             .onTapGesture { showDetail = true }
                         
@@ -116,7 +116,7 @@ struct TweetItemView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
                     TweetItemBodyView(tweet: tweet, enableTap: false)
-                        .padding(.top, -8)
+                        .padding(.top, -12)
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
                     
