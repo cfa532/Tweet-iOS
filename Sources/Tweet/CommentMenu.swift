@@ -20,7 +20,7 @@ struct CommentMenu: View {
 
     var body: some View {
         Menu {
-            if comment.authorId == appUser.mid || parentTweet.authorId == appUser.mid || true {
+            if comment.authorId == appUser.mid || parentTweet.authorId == appUser.mid {
                 Button(role: .destructive) {
                     isDeleting = true
                     // Start deletion in background
