@@ -138,7 +138,12 @@ struct ProfileTweetsSection: View {
                             tweet: tweet,
                             isPinned: pinnedTweetIds.contains(tweet.mid),
                             isInProfile: true,
-                            onAvatarTap: { user in onUserSelect(user) }
+                            onAvatarTap: { user in onUserSelect(user) },
+                            onRemove: { tweetId in
+                                if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {
+                                    viewModel.tweets.remove(at: idx)
+                                }
+                            }
                         )
                     }
                 )

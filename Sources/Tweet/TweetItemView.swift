@@ -132,6 +132,7 @@ struct TweetItemView: View {
                 .hidden()
         )
         .task {
+            // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
             if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
                 if let t = try? await hproseInstance.getTweet(
