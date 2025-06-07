@@ -37,7 +37,7 @@ struct UserListView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: 8) {
                     Color.clear.frame(height: 0).id("top")
                     ForEach(users) { user in
                         UserRowView(
@@ -174,7 +174,6 @@ struct UserListView: View {
             let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
             fetchedUsers.append(cachedUser)
 
-            
             // If not in cache, fetch from server
             do {
                 let user = try await hproseInstance.getUser(userId)
@@ -199,29 +198,61 @@ struct UserRowView: View {
     let onFollowToggle: ((User) async -> Void)?
     let onTap: ((User) -> Void)?
     @State private var isFollowing: Bool = false
+    @State private var showFullProfile: Bool = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
         Button {
             onTap?(user)
         } label: {
-            HStack {
+            HStack(alignment: .top, spacing: 12) {
                 NavigationLink(destination: ProfileView(user: user, onLogout: nil)) {
-                    Avatar(user: user, size: 40)
+                    Avatar(user: user, size: 44)
                 }
                 .buttonStyle(PlainButtonStyle())
-                .padding(.trailing, 8)
-                
+
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(user.name ?? "User Name")
-                        .font(.headline)
-                    Text("@\(user.username ?? "username")")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
+                    HStack {
+                        Text(user.name ?? "User Name")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("@\(user.username ?? "username")")
+                            .font(.system(size: 15))
+                            .foregroundColor(.gray)
+                    }
+                    if let profile = user.profile, !profile.isEmpty {
+                        Group {
+                            if showFullProfile {
+                                Text(profile)
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(3)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Button("Show less") {
+                                    showFullProfile = false
+                                }
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                                .buttonStyle(.plain)
+                            } else {
+                                Text(profile)
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if profile.count > 80 {
+                                    Button("...") {
+                                        showFullProfile = true
+                                    }
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
                 }
-                
                 Spacer()
-                
                 if let onFollowToggle = onFollowToggle {
                     Button {
                         Task {
@@ -230,8 +261,9 @@ struct UserRowView: View {
                         }
                     } label: {
                         Text(isFollowing ? "Unfollow" : "Follow")
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 6)
+                            .font(.system(size: 13, weight: .medium))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
                             .background(
                                 RoundedRectangle(cornerRadius: 8)
                                     .stroke(isFollowing ? Color.red : Color.blue, lineWidth: 1)
@@ -240,12 +272,13 @@ struct UserRowView: View {
                     }
                 }
             }
-            .padding()
-            .background(Color(.systemBackground))
+            .padding(.horizontal)
+            // Remove or set to .padding(.vertical, 0) for minimal gap
         }
         .buttonStyle(PlainButtonStyle())
         .onAppear {
             isFollowing = hproseInstance.appUser.followingList?.contains(user.mid) ?? false
         }
+        .padding(.vertical, 2)
     }
-} 
+}

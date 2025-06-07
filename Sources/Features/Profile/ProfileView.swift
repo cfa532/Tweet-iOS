@@ -224,7 +224,7 @@ struct ProfileView: View {
                         if let avatarUrl = user.avatar, !avatarUrl.isEmpty {
                             Avatar(user: user, size: 24)
                         }
-                        Text(user.username ?? user.name ?? "User")
+                        Text(user.username ?? user.name ?? "No One")
                             .font(.headline)
                     }
                 }
