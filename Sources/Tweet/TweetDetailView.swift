@@ -167,7 +167,9 @@ struct TweetDetailView: View {
                     name: .newCommentAdded,
                     key: "comment",
                     shouldAccept: { _ in true },
-                    action: { comment in comments.insert(comment, at: 0) }
+                    action: { comment in
+                        comments.insert(comment, at: 0)
+                    }
                 ),
                 CommentListNotification(
                     name: .commentDeleted,

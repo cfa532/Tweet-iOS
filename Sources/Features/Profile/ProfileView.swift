@@ -258,7 +258,9 @@ struct ProfileView: View {
                     name: .bookmarkAdded,
                     key: "tweet",
                     shouldAccept: { _ in true },
-                    action: { tweet in bookmarks.insert(tweet, at: 0) }
+                    action: { tweet in
+                        bookmarks.insert(tweet, at: 0)
+                    }
                 ),
                 TweetListNotification(
                     name: .bookmarkRemoved,
@@ -271,7 +273,9 @@ struct ProfileView: View {
                     name: .favoriteAdded,
                     key: "tweet",
                     shouldAccept: { _ in true },
-                    action: { tweet in favorites.insert(tweet, at: 0) }
+                    action: { tweet in
+                        favorites.insert(tweet, at: 0)
+                    }
                 ),
                 TweetListNotification(
                     name: .favoriteRemoved,

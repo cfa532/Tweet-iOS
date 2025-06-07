@@ -72,8 +72,10 @@ class CommentsViewModel: ObservableObject {
         }
     }
 
-    func addComment(_ comment: Tweet) {
-        comments.insert(comment, at: 0)
+    func addComment(_ comment: Tweet?) {
+        if let comment = comment {
+            comments.insert(comment, at: 0)
+        }
     }
 
     func removeComment(_ comment: Tweet) {
