@@ -321,7 +321,7 @@ final class HproseInstance: ObservableObject {
             do {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 tweet.author = try? await getUser(authorId)
-                TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
                 
                 if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
                     if await TweetCacheManager.shared.fetchTweet(mid: origId) == nil {
