@@ -20,7 +20,7 @@ struct CommentMenu: View {
 
     var body: some View {
         Menu {
-            if comment.authorId == appUser.mid {
+            if comment.authorId == appUser.mid || parentTweet.authorId == appUser.mid || true {
                 Button(role: .destructive) {
                     isDeleting = true
                     // Start deletion in background
@@ -30,7 +30,7 @@ struct CommentMenu: View {
                         } catch {
                             print("Comment deletion failed. \(comment)")
                             await MainActor.run {
-                                alertMessage = "Failed to delete comment."
+                                alertMessage = "Failed to delete comment. \(error)"
                                 showAlert = true
                             }
                         }
@@ -68,7 +68,7 @@ struct CommentMenu: View {
         if let response = try? await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid),
            let commentId = response["commentId"] as? String,
            let count = response["count"] as? Int {
-            print("Successfully deleted comment: \(commentId)")
+            print("Successfully deleted comment: \(commentId) \(count)")
             
             // Update parent tweet's comment count
             await MainActor.run {

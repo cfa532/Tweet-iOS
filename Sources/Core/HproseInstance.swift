@@ -775,7 +775,6 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "authorid": appUser.mid,
                 "tweetid": parentTweet.mid,
                 "hostid": parentTweet.author?.hostIds?.first as Any,
                 "commentid": commentId,

@@ -9,12 +9,12 @@ import SwiftUI
 
 @available(iOS 16.0, *)
 struct CommentItemView: View {
+    @ObservedObject var parentTweet: Tweet
     @ObservedObject var comment: Tweet
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
     var commentsVM: CommentsViewModel? = nil
     @State private var showDetail = false
-    @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
@@ -32,7 +32,7 @@ struct CommentItemView: View {
             VStack(alignment: .leading) {
                 HStack {
                     TweetItemHeaderView(tweet: comment)
-                    CommentMenu(comment: comment, parentTweet: detailTweet)
+                    CommentMenu(comment: comment, parentTweet: parentTweet)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { showDetail = true }
@@ -47,15 +47,12 @@ struct CommentItemView: View {
         .padding()
         .background(Color(.systemBackground))
         .background(
-            NavigationLink(destination: TweetDetailView(tweet: detailTweet),
+            NavigationLink(destination: TweetDetailView(tweet: comment),
                            isActive: $showDetail) {
                 EmptyView()
             }
                 .hidden()
         )
-        .task {
-            detailTweet = comment
-        }
     }
 }
 

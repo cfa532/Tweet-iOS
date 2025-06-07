@@ -179,7 +179,11 @@ struct TweetDetailView: View {
                 )
             ],
             rowView: { comment in
-                CommentItemView(comment: comment, onAvatarTap: { user in selectedUser = user })
+                CommentItemView(
+                    parentTweet: tweet,
+                    comment: comment,
+                    onAvatarTap: { user in selectedUser = user }
+                )
             }
         )
     }
