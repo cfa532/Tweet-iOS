@@ -56,7 +56,12 @@ struct FollowingsTweetView: View {
                     TweetItemView(
                         tweet: tweet,
                         isInProfile: false,
-                        onAvatarTap: onAvatarTap
+                        onAvatarTap: onAvatarTap,
+                        onRemove: { tweetId in
+                            if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {
+                                viewModel.tweets.remove(at: idx)
+                            }
+                        }
                     )
                 }
             )

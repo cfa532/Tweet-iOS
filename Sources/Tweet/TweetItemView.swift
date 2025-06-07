@@ -12,6 +12,7 @@ struct TweetItemView: View {
     @State private var originalTweet: Tweet?
     @State private var refreshTimer: Timer?
     @EnvironmentObject private var hproseInstance: HproseInstance
+    var onRemove: ((String) -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -131,7 +132,6 @@ struct TweetItemView: View {
                 .hidden()
         )
         .task {
-            // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
             if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
                 if let t = try? await hproseInstance.getTweet(
@@ -140,6 +140,10 @@ struct TweetItemView: View {
                 ) {
                     originalTweet = t
                     detailTweet = t
+                } else {
+                    // Could not fetch original tweet, remove this tweet from the list
+                    onRemove?(tweet.mid)
+                    return
                 }
             }
             
