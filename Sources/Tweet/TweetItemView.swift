@@ -139,6 +139,7 @@ struct TweetItemView: View {
                     authorId: originalAuthorId
                 ) {
                     originalTweet = t
+                    detailTweet = t
                 }
             }
             
