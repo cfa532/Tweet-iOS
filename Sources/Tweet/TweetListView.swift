@@ -156,11 +156,6 @@ struct TweetListView<RowView: View>: View {
                     print("[TweetListView] After backend: \(totalValidTweets) tweets for user: \(hproseInstance.appUser.mid)")
                 }
 
-                // Update cache with server-fetched tweets
-                for tweet in tweetsInBackend.compactMap({ $0 }) {
-                    TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid, userId: hproseInstance.appUser.mid)
-                }
-
                 currentPage = page
                 if hasValidTweet {
                     if totalValidTweets > 4 {
@@ -232,10 +227,6 @@ struct TweetListView<RowView: View>: View {
                         hasMoreTweets = true
                         currentPage = nextPage
                         print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
-                    }
-                    // Update cache with server-fetched tweets
-                    for tweet in tweetsInBackend.compactMap({ $0 }) {
-                        TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid, userId: hproseInstance.appUser.mid)
                     }
                 } else if tweetsInBackend.isEmpty {
                     await MainActor.run {

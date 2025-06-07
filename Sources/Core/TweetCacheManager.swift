@@ -57,10 +57,6 @@ extension TweetCacheManager {
         if let cdTweets = try? context.fetch(request) {
             var tweets: [Tweet?] = []
             for cdTweet in cdTweets {
-                if cdTweet.isNilPlaceholder {
-                    tweets.append(nil)
-                    continue
-                }
                 if let tweetData = cdTweet.tweetData,
                    let tweetDict = try? JSONSerialization.jsonObject(with: tweetData) as? [String: Any] {
                     do {
@@ -103,36 +99,31 @@ extension TweetCacheManager {
         return nil
     }
 
-    /// Save a tweet or a nil placeholder to the cache.
-    func saveTweet(_ tweet: Tweet?, mid: String, userId: String) {
+    /// Save a tweet to the cache. If tweet is nil, do nothing. To remove a tweet, use deleteTweet.
+    func saveTweet(_ tweet: Tweet, userId: String) {
+        if let tweetData = try? JSONEncoder().encode(tweet),
+           let tweetJson = String(data: tweetData, encoding: .utf8) {
+            print("Saving coredata tweet: \(tweetJson)")
+        } else {
+            print("Saving coredata tweet: <failed to encode tweet>")
+        }
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-            request.predicate = NSPredicate(format: "tid == %@", mid)
-            
+            request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
             let cdTweet: CDTweet
             if let existingTweet = try? context.fetch(request).first {
                 cdTweet = existingTweet
             } else {
                 cdTweet = CDTweet(context: context)
             }
-            
-            cdTweet.tid = mid
+            cdTweet.tid = tweet.mid
             cdTweet.uid = userId
-            cdTweet.timestamp = Date()
+            cdTweet.timestamp = tweet.timestamp
             cdTweet.timeCached = Date()
-            
-            if let tweet = tweet {
-                cdTweet.isNilPlaceholder = false
-                // Convert tweet to dictionary for storage
-                if let tweetDict = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(tweet)) as? [String: Any],
-                   let tweetData = try? JSONSerialization.data(withJSONObject: tweetDict) {
-                    cdTweet.tweetData = tweetData
-                }
-            } else {
-                cdTweet.isNilPlaceholder = true
-                cdTweet.tweetData = nil
+            if let tweetDict = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(tweet)) as? [String: Any],
+               let tweetData = try? JSONSerialization.data(withJSONObject: tweetDict) {
+                cdTweet.tweetData = tweetData
             }
-            
             try? context.save()
         }
     }
@@ -215,19 +206,20 @@ extension TweetCacheManager {
     }
 
     func saveUser(_ user: User) {
+        if let userData = try? JSONEncoder().encode(user),
+           let userJson = String(data: userData, encoding: .utf8) {
+            print("Saving coredata user: \(userJson)")
+        } else {
+            print("Saving coredata user: <failed to encode user>")
+        }
         let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
         request.predicate = NSPredicate(format: "mid == %@", user.mid)
         let cdUser = (try? context.fetch(request).first) ?? CDUser(context: context)
-        
-        // Update essential properties
         cdUser.mid = user.mid
         cdUser.timeCached = Date()
-        
-        // Encode full user data
         if let userData = try? JSONEncoder().encode(user) {
             cdUser.userData = userData
         }
-        
         try? context.save()
     }
 
