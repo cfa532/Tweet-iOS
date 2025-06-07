@@ -109,7 +109,6 @@ struct CommentListView<RowView: View>: View {
     // MARK: - Methods
     func performInitialLoad() async {
         print("[CommentListView] Starting initial load")
-        isLoading = true
         initialLoadComplete = false
         hasMoreComments = true
         currentPage = 0
@@ -121,8 +120,8 @@ struct CommentListView<RowView: View>: View {
             await MainActor.run {
                 // Filter out nil comments and add valid ones
                 comments = newComments.compactMap { $0 }
-                // Set hasMoreComments based on whether we got a full page of non-nil comments
-                hasMoreComments = newComments.count >= pageSize
+                // Set hasMoreComments based on whether we got a full page (including nils)
+                hasMoreComments = newComments.count == pageSize
                 print("[CommentListView] Loaded \(comments.count) valid comments out of \(newComments.count) total, hasMoreComments: \(hasMoreComments)")
             }
         } catch {
@@ -130,15 +129,16 @@ struct CommentListView<RowView: View>: View {
             errorMessage = error.localizedDescription
         }
         
-        isLoading = false
         initialLoadComplete = true
         print("[CommentListView] Initial load complete - total valid comments: \(comments.count), hasMoreComments: \(hasMoreComments)")
     }
 
     func refreshComments() async {
         guard !isLoading else { return }
+        isLoading = true
         initialLoadComplete = false
         await performInitialLoad()
+        isLoading = false
     }
 
     func loadMoreComments(page: UInt? = nil) {
@@ -157,21 +157,17 @@ struct CommentListView<RowView: View>: View {
             do {
                 print("[CommentListView] Starting to load more comments - page: \(nextPage)")
                 let newComments = try await commentFetcher(nextPage, pageSize)
-                
                 await MainActor.run {
                     print("[CommentListView] Got \(newComments.count) total comments")
                     // Filter out nil comments and add valid ones
                     let validComments = newComments.compactMap { $0 }
                     if !validComments.isEmpty {
                         comments.append(contentsOf: validComments)
-                        // Set hasMoreComments based on whether we got a full page of non-nil comments
-                        hasMoreComments = newComments.count >= pageSize
-                        currentPage = nextPage
-                        print("[CommentListView] Added \(validComments.count) valid comments, updated currentPage to \(currentPage), hasMoreComments: \(hasMoreComments)")
-                    } else {
-                        hasMoreComments = false
-                        print("[CommentListView] No more valid comments available")
                     }
+                    // Set hasMoreComments based on whether we got a full page (including nils)
+                    hasMoreComments = newComments.count == pageSize
+                    currentPage = nextPage
+                    print("[CommentListView] Added \(validComments.count) valid comments, updated currentPage to \(currentPage), hasMoreComments: \(hasMoreComments)")
                 }
             } catch {
                 print("[CommentListView] Error loading more comments: \(error)")
