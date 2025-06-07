@@ -54,9 +54,9 @@ struct TweetItemBodyView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
             if let content = tweet.content, !content.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading) {
                     Text(content)
                         .font(.body)
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -15,9 +15,9 @@ struct TweetItemView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
+            if let originalTweet = originalTweet {
                 // This is a retweet
-                if let originalTweet = originalTweet, let user = originalTweet.author {
+                if let user = originalTweet.author {
                     Button(action: {
                         if !isInProfile {
                             onAvatarTap?(user)
@@ -27,78 +27,69 @@ struct TweetItemView: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
-                if let originalTweet = originalTweet, tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
+                if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
                     // Show original tweet with retweet menu.
-                    VStack(alignment: .leading, spacing: 8) {
-                        // Original tweet content
-                        HStack(alignment: .top, spacing: 8) {
-                            Group {
-                                TweetItemHeaderView(tweet: originalTweet)
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                detailTweet = originalTweet
-                                showDetail = true
-                            }
-                            Spacer(minLength: 0)
+                    VStack(alignment: .leading, spacing: 4) {
+                        // Retweet header
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.2.squarepath")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Forwarded by \(String(describing: tweet.author?.name ?? tweet.author?.username))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
-                        .overlay(
+                        HStack(alignment: .top) {
+                            TweetItemHeaderView(tweet: originalTweet)
                             TweetMenu(tweet: tweet, isPinned: isPinned)
-                                .zIndex(1),
-                            alignment: .trailing
-                        )
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            detailTweet = originalTweet
+                            showDetail = true
+                        }
                         TweetItemBodyView(tweet: originalTweet)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 detailTweet = originalTweet
                                 showDetail = true
                             }
-                            .padding(.top, 4)
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
-                            .padding(.leading, -20)
                     }
                 } else {
-                    if let originalTweet = originalTweet {
-                        // Show retweet with content and embedded original tweet
-                        if let user = tweet.author {
-                            Button(action: {
-                                if !isInProfile {
-                                    onAvatarTap?(user)
-                                }
-                            }) {
-                                Avatar(user: user)
+                    // Show retweet with content and embedded original tweet
+                    if let user = tweet.author {
+                        Button(action: {
+                            if !isInProfile {
+                                onAvatarTap?(user)
                             }
-                            .buttonStyle(PlainButtonStyle())
+                        }) {
+                            Avatar(user: user)
                         }
-                        VStack(alignment: .leading) {
-                            HStack {
-                                Group {
-                                    TweetItemHeaderView(tweet: tweet)
-                                }
-                                .contentShape(Rectangle())
-                                .onTapGesture { showDetail = true }
-                                Spacer(minLength: 0)
-                            }
-                            .overlay(
-                                TweetMenu(tweet: tweet, isPinned: isPinned)
-                                    .zIndex(1),
-                                alignment: .trailing
-                            )
-                            TweetItemBodyView(tweet: tweet, enableTap: false)
-                                .contentShape(Rectangle())
-                                .onTapGesture { showDetail = true }
-                            // Embedded original tweet
-                            VStack(alignment: .leading, spacing: 8) {
-                                TweetItemView(tweet: originalTweet, isPinned: isPinned)
-                            }
-                            .padding()
-                            .background(Color(.secondarySystemBackground))
-                            .cornerRadius(8)
-                            TweetActionButtonsView(tweet: tweet)
-                                .padding(.top, 8)
-                                .padding(.leading, -8)
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                    VStack(alignment: .leading) {
+                        HStack {
+                            TweetItemHeaderView(tweet: tweet)
+                            TweetMenu(tweet: tweet, isPinned: isPinned)
                         }
+                        .contentShape(Rectangle())
+                        .onTapGesture { showDetail = true }
+                        TweetItemBodyView(tweet: tweet, enableTap: false)
+                            .contentShape(Rectangle())
+                            .onTapGesture { showDetail = true }
+                        
+                        // Embedded original tweet
+                        VStack(alignment: .leading, spacing: 8) {
+                            TweetItemView(tweet: originalTweet, isPinned: isPinned)
+                        }
+                        .padding()
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(8)
+                        
+                        TweetActionButtonsView(tweet: tweet)
+                            .padding(.top, 8)
                     }
                 }
             } else {
@@ -115,25 +106,17 @@ struct TweetItemView: View {
                 }
                 VStack(alignment: .leading) {
                     HStack {
-                        Group {
-                            TweetItemHeaderView(tweet: tweet)
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture { showDetail = true }
-                        Spacer(minLength: 0)
-                    }
-                    .overlay(
+                        TweetItemHeaderView(tweet: tweet)
                         TweetMenu(tweet: tweet, isPinned: isPinned)
-                            .zIndex(1),
-                        alignment: .trailing
-                    )
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { showDetail = true }
                     TweetItemBodyView(tweet: tweet, enableTap: false)
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
-                        .padding(.top, 4)
+                    
                     TweetActionButtonsView(tweet: tweet)
                         .padding(.top, 8)
-                        .padding(.leading, -8)
                 }
             }
         }
@@ -150,18 +133,12 @@ struct TweetItemView: View {
         .task {
             // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
-            if let originalTweetId = tweet.originalTweetId,
-               let originalAuthorId = tweet.originalAuthorId {
-                // should have checked if originalTweet is in the tweets already
-                do {
-                    if let t = try await hproseInstance.getTweet(
-                        tweetId: originalTweetId,
-                        authorId: originalAuthorId
-                    ) {
-                        originalTweet = t
-                    }
-                } catch {
-                    print("Error loading original tweet: \(error)")
+            if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
+                if let t = try? await hproseInstance.getTweet(
+                    tweetId: originalTweetId,
+                    authorId: originalAuthorId
+                ) {
+                    originalTweet = t
                 }
             }
             
