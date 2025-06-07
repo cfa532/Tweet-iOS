@@ -45,7 +45,7 @@ struct UserListView: View {
                             onFollowToggle: onFollowToggle,
                             onTap: onUserTap
                         )
-                        .id(user.id)
+                        .id(user.mid)
                     }
                     if hasMoreUsers {
                         ProgressView()
@@ -207,16 +207,16 @@ struct UserRowView: View {
         } label: {
             HStack(alignment: .top, spacing: 12) {
                 NavigationLink(destination: ProfileView(user: user, onLogout: nil)) {
-                    Avatar(user: user, size: 44)
+                    Avatar(user: user, size: 40)
                 }
                 .buttonStyle(PlainButtonStyle())
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text(user.name ?? "User Name")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: 14, weight: .semibold))
                         Text("@\(user.username ?? "username")")
-                            .font(.system(size: 15))
+                            .font(.system(size: 12))
                             .foregroundColor(.gray)
                     }
                     if let profile = user.profile, !profile.isEmpty {
@@ -226,7 +226,6 @@ struct UserRowView: View {
                                     .font(.footnote)
                                     .foregroundColor(.secondary)
                                     .lineLimit(3)
-                                    .fixedSize(horizontal: false, vertical: true)
                                 Button("Show less") {
                                     showFullProfile = false
                                 }
@@ -239,7 +238,6 @@ struct UserRowView: View {
                                     .foregroundColor(.secondary)
                                     .lineLimit(1)
                                     .truncationMode(.tail)
-                                    .fixedSize(horizontal: false, vertical: true)
                                 if profile.count > 80 {
                                     Button("...") {
                                         showFullProfile = true
@@ -273,12 +271,11 @@ struct UserRowView: View {
                 }
             }
             .padding(.horizontal)
-            // Remove or set to .padding(.vertical, 0) for minimal gap
         }
         .buttonStyle(PlainButtonStyle())
         .onAppear {
             isFollowing = hproseInstance.appUser.followingList?.contains(user.mid) ?? false
         }
-        .padding(.vertical, 2)
+        // Remove .padding(.vertical, 2) for minimal row height
     }
 }
