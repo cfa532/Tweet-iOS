@@ -31,12 +31,11 @@ struct TweetItemView: View {
                 if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
                     // Show original tweet with retweet menu.
                     VStack(alignment: .leading, spacing: 4) {
-                        // Retweet header
                         HStack(spacing: 4) {
                             Image(systemName: "arrow.2.squarepath")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text("Forwarded by \(String(describing: tweet.author?.name ?? tweet.author?.username))")
+                            Text("Forwarded by \(tweet.author?.name ?? tweet.author?.username ?? "")")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -49,12 +48,15 @@ struct TweetItemView: View {
                             detailTweet = originalTweet
                             showDetail = true
                         }
+
                         TweetItemBodyView(tweet: originalTweet)
+                            .padding(.top, -8)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 detailTweet = originalTweet
                                 showDetail = true
                             }
+
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
                     }
@@ -78,6 +80,7 @@ struct TweetItemView: View {
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
                         TweetItemBodyView(tweet: tweet, enableTap: false)
+                            .padding(.top, -8)
                             .contentShape(Rectangle())
                             .onTapGesture { showDetail = true }
                         
@@ -113,6 +116,7 @@ struct TweetItemView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
                     TweetItemBodyView(tweet: tweet, enableTap: false)
+                        .padding(.top, -8)
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
                     
