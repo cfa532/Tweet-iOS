@@ -160,7 +160,7 @@ final class HproseInstance: ObservableObject {
             }
             
             // Process each item in the response array, preserving nil positions
-            var tweetsWithAuthors: [Tweet?] = []
+            var commentsWithAuthors: [Tweet?] = []
             for item in response {
                 if let dict = item {
                     do {
@@ -168,16 +168,16 @@ final class HproseInstance: ObservableObject {
                             return try Tweet.from(dict: dict)
                         }
                         comment.author = try? await getUser(comment.authorId)
-                        tweetsWithAuthors.append(comment)
+                        commentsWithAuthors.append(comment)
                     } catch {
                         print("Error processing comment: \(error)")
-                        tweetsWithAuthors.append(nil)
+                        commentsWithAuthors.append(nil)
                     }
                 } else {
-                    tweetsWithAuthors.append(nil)
+                    commentsWithAuthors.append(nil)
                 }
             }
-            return tweetsWithAuthors
+            return commentsWithAuthors
         }
     }
     
