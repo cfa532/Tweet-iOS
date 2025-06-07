@@ -247,9 +247,9 @@ struct ProfileView: View {
                     pageSize: size
                 )
                 if tweetListType == .BOOKMARKS {
-                    bookmarks = tweets
+                    bookmarks.mergeTweets( tweets.compactMap{ $0 } )
                 } else {
-                    favorites = tweets
+                    favorites.mergeTweets( tweets.compactMap{ $0 } )
                 }
                 return tweets
             },

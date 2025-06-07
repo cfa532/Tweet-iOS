@@ -489,7 +489,7 @@ final class HproseInstance: ObservableObject {
         type: UserContentType,
         pageNumber: UInt = 0,
         pageSize: UInt = 20
-    ) async throws -> [Tweet] {
+    ) async throws -> [Tweet?] {
         try await withRetry {
             let entry = "get_user_meta"
             let params = [
@@ -513,21 +513,22 @@ final class HproseInstance: ObservableObject {
             guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
             }
-            let validDictionaries = response.compactMap { dict -> [String: Any]? in
-                guard let dict = dict else { return nil }
-                return dict
-            }
-            var tweetsWithAuthors: [Tweet] = []
-            for item in validDictionaries {
-                do {
-                    let tweet = try await MainActor.run { return try Tweet.from(dict: item) }
-                    if (tweet.author == nil) {
-                        tweet.author = try? await getUser(tweet.authorId)
+            var tweetsWithAuthors: [Tweet?] = []
+            for dict in response {
+                if let item = dict {
+                    do {
+                        let tweet = try await MainActor.run { return try Tweet.from(dict: item) }
+                        if (tweet.author == nil) {
+                            tweet.author = try? await getUser(tweet.authorId)
+                        }
+                        TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                        tweetsWithAuthors.append(tweet)
+                    } catch {
+                        print("Error processing tweet: \(error)")
+                        tweetsWithAuthors.append(nil)
                     }
-                    TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
-                    tweetsWithAuthors.append(tweet)
-                } catch {
-                    print("Error processing tweet: \(error)")
+                } else {
+                    tweetsWithAuthors.append(nil)
                 }
             }
             return tweetsWithAuthors
