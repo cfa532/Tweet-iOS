@@ -153,6 +153,7 @@ struct ProfileView: View {
                     previousScrollOffset = offset
                 }
             )
+            .id(user.mid)
         }
         .sheet(isPresented: $showEditSheet) {
             RegistrationView(mode: .edit, user: user, onSubmit: { username, password, alias, profile, hostId in

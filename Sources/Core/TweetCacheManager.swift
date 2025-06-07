@@ -104,7 +104,7 @@ extension TweetCacheManager {
     }
 
     /// Save a tweet or a nil placeholder to the cache.
-    func saveTweet(_ tweet: Tweet?, mid: String, userId: String? = nil) {
+    func saveTweet(_ tweet: Tweet?, mid: String, userId: String) {
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", mid)
@@ -117,7 +117,7 @@ extension TweetCacheManager {
             }
             
             cdTweet.tid = mid
-            cdTweet.uid = userId ?? mid
+            cdTweet.uid = userId
             cdTweet.timestamp = Date()
             cdTweet.timeCached = Date()
             

@@ -109,8 +109,21 @@ struct ProfileTweetsSection: View {
                         if isFromCache {
                             // Fetch from cache
                             let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: page, pageSize: size)
+                            print("[DEBUG] Fetching cached tweets for user: \(user.mid)")
+                            for tweet in cachedTweets {
+                                if let t = tweet {
+                                    print("[DEBUG] Cached tweet authorId: \(t.authorId), mid: \(t.mid)")
+                                }
+                            }
                             await MainActor.run {
-                                viewModel.tweets.mergeTweets(cachedTweets.compactMap { $0 })
+                                viewModel.tweets.mergeTweets(cachedTweets.compactMap { tweet in
+                                    if let t = tweet, t.authorId == user.mid {
+                                        print("[DEBUG] Merging tweet mid: \(t.mid) for user: \(t.authorId)")
+                                        return t
+                                    } else {
+                                        return nil
+                                    }
+                                })
                             }
                             return cachedTweets
                         } else {
@@ -152,6 +165,9 @@ struct ProfileTweetsSection: View {
             .frame(maxHeight: .infinity)
             .refreshable {
                 await onPinnedTweetsRefresh()
+            }
+            .onChange(of: user.mid) { _ in
+                viewModel.tweets.removeAll()
             }
         }
     }

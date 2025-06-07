@@ -223,7 +223,7 @@ final class HproseInstance: ObservableObject {
                         let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                         tweet.author = try await getUser(tweet.authorId)
                         // Save tweet back to cache
-                        TweetCacheManager.shared.saveTweet(tweet, mid: appUser.mid)
+                        TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid, userId: appUser.mid)
                         tweets.append(tweet)
                     } catch {
                         print("Error processing tweet: \(error)")
@@ -232,7 +232,7 @@ final class HproseInstance: ObservableObject {
                 } else {
                     // Cache nil tweet using tid
                     if let tid = item["tid"] as? String {
-                        TweetCacheManager.shared.saveTweet(nil, mid: tid)
+                        TweetCacheManager.shared.saveTweet(nil, mid: tid, userId: appUser.mid)
                     }
                     tweets.append(nil)
                 }
@@ -281,7 +281,7 @@ final class HproseInstance: ObservableObject {
                         let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                         tweet.author = try await getUser(tweet.authorId)
                         // Save tweet back to cache
-                        TweetCacheManager.shared.saveTweet(tweet, mid: appUser.mid)
+                        TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid, userId: user.mid)
                         tweets.append(tweet)
                     } catch {
                         print("Error processing tweet: \(error)")
@@ -290,7 +290,7 @@ final class HproseInstance: ObservableObject {
                 } else {
                     // Cache nil tweet using tid
                     if let tid = item["tid"] as? String {
-                        TweetCacheManager.shared.saveTweet(nil, mid: tid)
+                        TweetCacheManager.shared.saveTweet(nil, mid: tid, userId: user.mid)
                     }
                     tweets.append(nil)
                 }
@@ -328,12 +328,12 @@ final class HproseInstance: ObservableObject {
             do {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 tweet.author = try? await getUser(authorId)
-                TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid)
+                TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid, userId: appUser.mid)
                 
                 if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
                     if await TweetCacheManager.shared.fetchTweet(mid: origId) == nil {
                         if let origTweet = try? await getTweet(tweetId: origId, authorId: origAuthorId) {
-                            TweetCacheManager.shared.saveTweet(origTweet, mid: origTweet.mid)
+                            TweetCacheManager.shared.saveTweet(origTweet, mid: origTweet.mid, userId: origAuthorId)
                         }
                     }
                 }
@@ -531,7 +531,7 @@ final class HproseInstance: ObservableObject {
                     if (tweet.author == nil) {
                         tweet.author = try? await getUser(tweet.authorId)
                     }
-                    TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid)
+                    TweetCacheManager.shared.saveTweet(tweet, mid: tweet.mid, userId: user.mid)
                     tweetsWithAuthors.append(tweet)
                 } catch {
                     print("Error processing tweet: \(error)")

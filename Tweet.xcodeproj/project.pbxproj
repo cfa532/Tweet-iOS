@@ -32,7 +32,6 @@
 		469A99572DEC744200954049 /* ProfileStatsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99532DEC744200954049 /* ProfileStatsSection.swift */; };
 		469A995F2DEF300900954049 /* TweetCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A995E2DEF300900954049 /* TweetCacheManager.swift */; };
 		469A99622DEF318C00954049 /* TweetModel.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 469A99602DEF318C00954049 /* TweetModel.xcdatamodeld */; };
-		469A99662DEF38AE00954049 /* CDTweet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99652DEF38A400954049 /* CDTweet.swift */; };
 		46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */; };
 		46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32A2DDA038E00AEF31F /* AppConfig.swift */; };
 		46E5B32D2DDA045B00AEF31F /* AppHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32C2DDA045B00AEF31F /* AppHeaderView.swift */; };
@@ -89,7 +88,6 @@
 		469A99542DEC744200954049 /* ProfileTweetsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTweetsSection.swift; sourceTree = "<group>"; };
 		469A995E2DEF300900954049 /* TweetCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetCacheManager.swift; sourceTree = "<group>"; };
 		469A99612DEF318C00954049 /* TweetModel.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = TweetModel.xcdatamodel; sourceTree = "<group>"; };
-		469A99652DEF38A400954049 /* CDTweet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDTweet.swift; sourceTree = "<group>"; };
 		46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProfileView.swift; path = Sources/Features/Profile/ProfileView.swift; sourceTree = SOURCE_ROOT; };
 		46E5B32A2DDA038E00AEF31F /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		46E5B32C2DDA045B00AEF31F /* AppHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppHeaderView.swift; sourceTree = "<group>"; };
@@ -231,7 +229,6 @@
 				46704DE12DD8CEF7001D69B9 /* MediaType.swift */,
 				4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */,
 				4608E2D92DD5CD920051A92D /* User.swift */,
-				469A99652DEF38A400954049 /* CDTweet.swift */,
 			);
 			path = DataModels;
 			sourceTree = "<group>";
@@ -462,7 +459,6 @@
 				1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */,
 				469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */,
 				46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */,
-				469A99662DEF38AE00954049 /* CDTweet.swift in Sources */,
 				46E5B3652DE21A3400AEF31F /* UserListView.swift in Sources */,
 				469A995F2DEF300900954049 /* TweetCacheManager.swift in Sources */,
 				46E5B36A2DE35E0A00AEF31F /* ProfileStatsView.swift in Sources */,
