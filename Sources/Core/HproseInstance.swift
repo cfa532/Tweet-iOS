@@ -303,10 +303,17 @@ final class HproseInstance: ObservableObject {
         tweetId: String,
         authorId: String,
         nodeUrl: String? = nil
-    )  async throws -> Tweet? {
+    ) async throws -> Tweet? {
         if let cached = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
             return cached
         }
+        return try await refreshTweet(tweetId: tweetId, authorId: authorId)
+    }
+    
+    func refreshTweet(
+        tweetId: String,
+        authorId: String,
+    ) async throws -> Tweet? {
         guard let service = hproseClient else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }

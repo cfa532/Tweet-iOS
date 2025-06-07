@@ -11,6 +11,7 @@ struct TweetDetailView: View {
     @State private var pinnedTweets: [[String: Any]] = []
     @State private var originalTweet: Tweet?
     @State private var selectedUser: User? = nil
+    @State private var refreshTimer: Timer?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     @State private var comments: [Tweet] = []
@@ -92,9 +93,22 @@ struct TweetDetailView: View {
                 commentsListView
             }
             .task {
+                // Initial load of original tweet
                 if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
                     if let originalTweet = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
                         self.originalTweet = originalTweet
+                    }
+                }
+                
+                // Initial refresh after 2 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    refreshTweet()
+                }
+                
+                // Set up periodic refresh every 5 minutes
+                refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
+                    Task { @MainActor in
+                        refreshTweet()
                     }
                 }
             }
@@ -127,6 +141,11 @@ struct TweetDetailView: View {
                 }
             }
         )
+        .onDisappear {
+            // Clean up timer when view disappears
+            refreshTimer?.invalidate()
+            refreshTimer = nil
+        }
         // Navigation to another user's profile when an avatar is tapped
         profileNavigationLink
     }
@@ -189,6 +208,24 @@ struct TweetDetailView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             withAnimation {
                 showToast = false
+            }
+        }
+    }
+
+    private func refreshTweet() {
+        Task {
+            do {
+                print("Refreshing tweet detail. \(tweet.mid)")
+                if let refreshedTweet = try await hproseInstance.refreshTweet(
+                    tweetId: tweet.mid,
+                    authorId: tweet.authorId
+                ) {
+                    try await MainActor.run {
+                        try tweet.update(from: refreshedTweet)
+                    }
+                }
+            } catch {
+                print("Error refreshing tweet: \(error)")
             }
         }
     }

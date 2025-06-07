@@ -191,6 +191,24 @@ class Tweet: Identifiable, Codable, ObservableObject {
     
     // MARK: - Factory Methods
     
+    /// Updates the tweet instance with values from another tweet
+    /// - Parameter other: Tweet object containing the new values
+    /// - Throws: DecodingError if the update fails
+    func update(from other: Tweet) throws {
+        // Update all properties except author
+        if let content = other.content { self.content = content }
+        if let title = other.title { self.title = title }
+        if let favorites = other.favorites { self.favorites = favorites }
+        self.favoriteCount = other.favoriteCount
+        self.bookmarkCount = other.bookmarkCount
+        self.retweetCount = other.retweetCount
+        self.commentCount = other.commentCount
+        if let attachments = other.attachments { self.attachments = attachments }
+        if let isPrivate = other.isPrivate { self.isPrivate = isPrivate }
+        if let downloadable = other.downloadable { self.downloadable = downloadable }
+        self.timestamp = other.timestamp
+    }
+    
     /// Updates the tweet instance with values from a dictionary
     /// - Parameter dict: Dictionary containing tweet data
     /// - Throws: DecodingError if the dictionary cannot be converted to a Tweet

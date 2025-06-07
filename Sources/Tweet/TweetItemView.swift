@@ -10,6 +10,7 @@ struct TweetItemView: View {
     @State private var showDetail = false
     @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
     @State private var originalTweet: Tweet?
+    @State private var refreshTimer: Timer?
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
@@ -163,6 +164,30 @@ struct TweetItemView: View {
                     print("Error loading original tweet: \(error)")
                 }
             }
+            
+            // Start refresh timer
+            refreshTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                Task {
+                    do {
+                        if let refreshedTweet = try await hproseInstance.refreshTweet(
+                            tweetId: tweet.mid,
+                            authorId: tweet.authorId
+                        ) {
+                            // Update the tweet with refreshed data
+                            try await MainActor.run {
+                                try tweet.update(from: refreshedTweet)
+                            }
+                        }
+                    } catch {
+                        print("Error refreshing tweet: \(error)")
+                    }
+                }
+            }
+        }
+        .onDisappear {
+            // Cancel timer when view disappears
+            refreshTimer?.invalidate()
+            refreshTimer = nil
         }
     }
 }
