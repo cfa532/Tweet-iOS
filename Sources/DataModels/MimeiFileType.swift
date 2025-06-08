@@ -51,7 +51,7 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
     }
     
     func getUrl(_ baseUrl: String) -> URL? {
-        let path = mid.count > 27 ? "\(baseUrl)/ipfs/\(mid)" : "\(baseUrl)/mm/\(mid)"
+        let path = mid.count > Constants.MIMEI_ID_LENGTH ? "\(baseUrl)/ipfs/\(mid)" : "\(baseUrl)/mm/\(mid)"
         return URL(string: path)
     }
     
