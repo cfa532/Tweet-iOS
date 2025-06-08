@@ -78,8 +78,11 @@ struct RegistrationView: View {
                                         if let data = try await item.loadTransferable(type: Data.self) {
                                             let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
                                             let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
-                                            if let uploaded = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName), !uploaded.mid.isEmpty {
-                                                avatarId = uploaded.mid
+                                            if let uploaded = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName, referenceId: hproseInstance.appUser.mid), !uploaded.mid.isEmpty {
+                                                try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
+                                                await MainActor.run {
+                                                    hproseInstance.appUser.avatar = uploaded.mid
+                                                }
                                             } else {
                                                 avatarUploadError = "Failed to upload avatar."
                                             }
@@ -174,8 +177,8 @@ struct RegistrationView: View {
                                 .contentShape(Rectangle())
                                 .onTapGesture { focusedField = .hostId }
                                 .onChange(of: hostId) { newValue in
-                                    if newValue.count > 17 {
-                                        hostId = String(newValue.prefix(17))
+                                    if newValue.count > Constants.MIMEI_ID_LENGTH {
+                                        hostId = String(newValue.prefix(Constants.MIMEI_ID_LENGTH))
                                     }
                                 }
                         }
@@ -199,6 +202,16 @@ struct RegistrationView: View {
                 .padding()
             }
             .navigationBarItems(trailing: Button("Close") { dismiss() })
+            .onAppear {
+                let appUser = hproseInstance.appUser
+                if !appUser.isGuest {
+                    username = appUser.username ?? ""
+                    alias = appUser.name ?? ""
+                    profile = appUser.profile ?? ""
+                    hostId = appUser.hostIds?.first ?? ""
+                    avatarId = appUser.avatar
+                }
+            }
         }
     }
 
@@ -208,27 +221,35 @@ struct RegistrationView: View {
             errorMessage = "Username is required."
             return
         }
-        if password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && hproseInstance.appUser.isGuest {
             errorMessage = "Password is required."
             return
         }
-        if hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != 0 && hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != 17 {
-            errorMessage = "Host ID must be 17 characters if provided."
+        if hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != 0 && hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != Constants.MIMEI_ID_LENGTH {
+            errorMessage = "Host ID must be \(Constants.MIMEI_ID_LENGTH) characters if provided."
             return
         }
         if hproseInstance.appUser.isGuest {
+            // Registration: password required and must match
             if password != confirmPassword {
                 errorMessage = "Passwords do not match."
                 return
             }
         } else {
+            // Edit: password optional, but if provided, must match confirm
             if !password.isEmpty && password != confirmPassword {
                 errorMessage = "Passwords do not match."
                 return
             }
         }
         errorMessage = nil
-        onSubmit(username, password.isEmpty ? nil : password, alias.isEmpty ? nil : alias, profile.isEmpty ? nil : profile, hostId)
+        onSubmit(
+            username,
+            password.isEmpty ? nil : password,
+            alias.isEmpty ? nil : alias,
+            profile.isEmpty ? nil : profile,
+            hostId
+        )
         dismiss()
     }
 }
