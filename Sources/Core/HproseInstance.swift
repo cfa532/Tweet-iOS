@@ -211,14 +211,14 @@ final class HproseInstance: ObservableObject {
                 "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
                 "appuserid": appUser.mid,
             ]
-            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetcTweetFeed"])
             }
             print("[HproseInstance] Got \(response.count) tweets from server (including nil)")
             
             var tweets: [Tweet?] = []
             for item in response {
-                if let tweetDict = item["tweet"] as? [String: Any] {
+                if let tweetDict = item {
                     do {
                         let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                         tweet.author = try await getUser(tweet.authorId)
@@ -266,13 +266,13 @@ final class HproseInstance: ObservableObject {
                 "ps": pageSize,
                 "appuserid": appUser.mid,
             ]
-            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
             }
             
             var tweets: [Tweet?] = []
             for item in response {
-                if let tweetDict = item["tweet"] as? [String: Any] {
+                if let tweetDict = item{
                     do {
                         let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                         tweet.author = try await getUser(tweet.authorId)

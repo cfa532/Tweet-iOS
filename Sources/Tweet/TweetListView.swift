@@ -130,7 +130,6 @@ struct TweetListView<RowView: View>: View {
         print("[TweetListView] Starting initial load for user: \(hproseInstance.appUser.mid)")
         isLoading = true
         initialLoadComplete = false
-        hasMoreTweets = true
         currentPage = 0
         tweets = []
         var page: UInt = 0
@@ -154,23 +153,21 @@ struct TweetListView<RowView: View>: View {
                     tweets.mergeTweets(tweetsInBackend.compactMap { $0 })
                     totalValidTweets = tweets.count
                     print("[TweetListView] After backend: \(totalValidTweets) tweets for user: \(hproseInstance.appUser.mid)")
-                    hasMoreTweets = tweetsInBackend.count == pageSize
                 }
 
                 currentPage = page
                 if hasValidTweet {
                     if totalValidTweets > 4 {
-                        hasMoreTweets = true
                         keepLoading = false
                         print("[TweetListView] Stopping initial load - enough tweets for user: \(hproseInstance.appUser.mid), hasMoreTweets: \(hasMoreTweets)")
-                    } else if tweets.count < pageSize {
-                        hasMoreTweets = false
+                    } else if tweetsInBackend.count < pageSize {
                         keepLoading = false
+                        hasMoreTweets = false
                         print("[TweetListView] Stopping initial load - not enough tweets for user: \(hproseInstance.appUser.mid), hasMoreTweets: \(hasMoreTweets)")
                     } else {
                         page += 1
                     }
-                } else if tweetsInBackend.isEmpty {
+                } else if tweetsInBackend.count < pageSize {
                     hasMoreTweets = false
                     keepLoading = false
                     print("[TweetListView] Stopping initial load - backend returned empty for user: \(hproseInstance.appUser.mid), hasMoreTweets: \(hasMoreTweets)")
@@ -225,15 +222,12 @@ struct TweetListView<RowView: View>: View {
                     await MainActor.run {
                         print("[TweetListView] Got \(tweetsInBackend.count) tweets from backend for user: \(hproseInstance.appUser.mid)")
                         tweets.mergeTweets(tweetsInBackend.compactMap { $0 })
-                        hasMoreTweets = tweetsInBackend.count == pageSize
                         currentPage = nextPage
                         print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
                     }
-                } else if tweetsInBackend.isEmpty {
-                    await MainActor.run {
-                        hasMoreTweets = false
-                        print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
-                    }
+                } else if tweetsInBackend.count < pageSize {
+                    hasMoreTweets = false
+                    print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
                 } else {
                     // All tweets are nil, auto-increment and try again
                     print("[TweetListView] All tweets nil for page \(nextPage), auto-incrementing page")
@@ -243,9 +237,7 @@ struct TweetListView<RowView: View>: View {
                 }
             } catch {
                 print("[TweetListView] Error loading more tweets: \(error)")
-                await MainActor.run {
-                    hasMoreTweets = false
-                }
+                hasMoreTweets = false
             }
             
             await MainActor.run { isLoadingMore = false }
