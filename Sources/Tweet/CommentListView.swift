@@ -151,7 +151,7 @@ struct CommentListView<RowView: View>: View {
         let pageSize = self.pageSize
         
         Task {
-            await MainActor.run { isLoadingMore = true }
+            if initialLoadComplete { isLoadingMore = true }
             
             do {
                 print("[CommentListView] Starting to load more comments - page: \(nextPage)")
