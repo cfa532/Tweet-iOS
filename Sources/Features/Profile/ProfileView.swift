@@ -246,10 +246,12 @@ struct ProfileView: View {
                     pageNumber: page,
                     pageSize: size
                 )
-                if tweetListType == .BOOKMARKS {
-                    bookmarks.mergeTweets( tweets.compactMap{ $0 } )
-                } else {
-                    favorites.mergeTweets( tweets.compactMap{ $0 } )
+                await MainActor.run {
+                    if tweetListType == .BOOKMARKS {
+                        bookmarks.mergeTweets( tweets.compactMap{ $0 } )
+                    } else {
+                        favorites.mergeTweets( tweets.compactMap{ $0 } )
+                    }
                 }
                 return tweets
             },

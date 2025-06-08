@@ -204,7 +204,7 @@ struct TweetListView<RowView: View>: View {
         let pageSize = self.pageSize
         
         Task {
-            await MainActor.run { isLoadingMore = true }
+            if initialLoadComplete { isLoadingMore = true }
             
             do {
                 print("[TweetListView] Starting to load more tweets - page: \(nextPage) for user: \(hproseInstance.appUser.mid)")
