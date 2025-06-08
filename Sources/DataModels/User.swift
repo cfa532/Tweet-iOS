@@ -4,6 +4,7 @@ import Combine
 enum Constants {
     static let GUEST_ID = "000000000000000000000000000"
     static let MAX_TWEET_SIZE = 28000
+    static let MIMEI_ID_LENGTH = 27
 }
 
 enum UserContentType: String {
@@ -231,45 +232,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     var avatarUrl: String? {
         if let avatar = avatar, let baseUrl = baseUrl {
-            return avatar.count > 27 ? "\(baseUrl)/ipfs/\(avatar)" :  "\(baseUrl)/mm/\(avatar)"
+            return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(baseUrl)/ipfs/\(avatar)" :  "\(baseUrl)/mm/\(avatar)"
         }
         return nil
     }
-    
-    func copy(baseUrl: String? = nil, followingList: [String]? = nil) -> User {
-        let copy = User(mid: self.mid, baseUrl: baseUrl ?? self.baseUrl)
-        copy.writableUrl = self.writableUrl
-        copy.name = self.name
-        copy.username = self.username
-        copy.password = self.password
-        copy.avatar = self.avatar
-        copy.email = self.email
-        copy.profile = self.profile
-        copy.timestamp = self.timestamp
-        copy.lastLogin = self.lastLogin
-        copy.cloudDrivePort = self.cloudDrivePort
-        
-        copy.tweetCount = self.tweetCount
-        copy.followingCount = self.followingCount
-        copy.followersCount = self.followersCount
-        copy.bookmarksCount = self.bookmarksCount
-        copy.favoritesCount = self.favoritesCount
-        copy.commentsCount = self.commentsCount
-        
-        copy.hostIds = self.hostIds
-        copy.publicKey = self.publicKey
-        
-        copy.fansList = self.fansList
-        copy.followingList = followingList ?? self.followingList
-        copy.bookmarkedTweets = self.bookmarkedTweets
-        copy.favoriteTweets = self.favoriteTweets
-        copy.repliedTweets = self.repliedTweets
-        copy.commentsList = self.commentsList
-        copy.topTweets = self.topTweets
-        
-        return copy
-    }
-    
+
     // MARK: - Hashable
     static func == (lhs: User, rhs: User) -> Bool {
         return lhs.mid == rhs.mid
@@ -277,5 +244,20 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(mid)
+    }
+    
+    // MARK: - Writable URL Resolution
+    /// Returns the writable URL for the user, resolving via hostIds if needed
+    func resolvedWritableUrl() async throws -> String? {
+        if let writableUrl = self.writableUrl, !writableUrl.isEmpty {
+            return writableUrl
+        }
+        if let hostId = self.hostIds?.first, !hostId.isEmpty {
+            if let hostIP = await HproseInstance.shared.getHostIP(hostId) {
+                self.writableUrl = "http://\(hostIP)"
+                return self.writableUrl
+            }
+        }
+        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No writable url available"])
     }
 }
