@@ -168,11 +168,11 @@ struct TweetListView<RowView: View>: View {
                         page += 1
                     }
                 } else if tweetsInBackend.count < pageSize {
-                    hasMoreTweets = false
                     keepLoading = false
+                    hasMoreTweets = false
                     print("[TweetListView] Stopping initial load - backend returned empty for user: \(hproseInstance.appUser.mid), hasMoreTweets: \(hasMoreTweets)")
                 } else {
-                    // All tweets are nil, auto-increment page and try again
+                    // All tweets are nil and not at the end, auto-increment page and try again
                     print("[TweetListView] All tweets nil for page \(page), auto-incrementing page")
                     page += 1
                 }

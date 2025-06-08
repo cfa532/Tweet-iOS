@@ -110,7 +110,6 @@ struct CommentListView<RowView: View>: View {
     func performInitialLoad() async {
         print("[CommentListView] Starting initial load")
         initialLoadComplete = false
-        hasMoreComments = true
         currentPage = 0
         comments = []
         
@@ -121,7 +120,7 @@ struct CommentListView<RowView: View>: View {
                 // Filter out nil comments and add valid ones
                 comments = newComments.compactMap { $0 }
                 // Set hasMoreComments based on whether we got a full page (including nils)
-                hasMoreComments = newComments.count == pageSize
+                hasMoreComments = newComments.count >= pageSize
                 print("[CommentListView] Loaded \(comments.count) valid comments out of \(newComments.count) total, hasMoreComments: \(hasMoreComments)")
             }
         } catch {
@@ -165,7 +164,7 @@ struct CommentListView<RowView: View>: View {
                         comments.append(contentsOf: validComments)
                     }
                     // Set hasMoreComments based on whether we got a full page (including nils)
-                    hasMoreComments = newComments.count == pageSize
+                    hasMoreComments = newComments.count >= pageSize
                     currentPage = nextPage
                     print("[CommentListView] Added \(validComments.count) valid comments, updated currentPage to \(currentPage), hasMoreComments: \(hasMoreComments)")
                 }
