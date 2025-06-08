@@ -6,17 +6,12 @@
 //
 
 import SwiftUI
+import PhotosUI
 
-enum UserFormMode {
-    case register
-    case edit
-}
-
+@available(iOS 16.0, *)
 struct RegistrationView: View {
     @Environment(\.dismiss) private var dismiss
-    let mode: UserFormMode
-    var user: User?
-    var onSubmit: (String, String?, String?, String?, String) -> Void // username, password, alias, profile, hostId
+    var onSubmit: (String, String?, String?, String?, String?) -> Void // username, password, alias, profile, hostId, avatarId
 
     @State private var username: String = ""
     @State private var password: String = ""
@@ -27,61 +22,114 @@ struct RegistrationView: View {
     @State private var showPasswordConfirm: Bool = false
     @State private var errorMessage: String?
     @FocusState private var focusedField: Field?
+    @State private var avatarId: String? = nil
+    @State private var showImagePicker = false
+    @State private var selectedPhoto: PhotosPickerItem? = nil
+    @State private var isUploadingAvatar = false
+    @State private var avatarUploadError: String? = nil
+    @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
         case username, password, confirmPassword, alias, profile, hostId
     }
 
-    init(mode: UserFormMode, user: User? = nil, onSubmit: @escaping (String, String?, String?, String?, String) -> Void) {
-        self.mode = mode
-        self.user = user
+    init(onSubmit: @escaping (String, String?, String?, String?, String?) -> Void) {
         self.onSubmit = onSubmit
-        // Prefill fields in edit mode
-        if let user = user, mode == .edit {
-            _username = State(initialValue: user.username ?? "")
-            _alias = State(initialValue: user.name ?? "")
-            _profile = State(initialValue: user.profile ?? "")
-            _hostId = State(initialValue: user.hostIds?.first ?? "")
-        }
     }
 
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
-                    Text(mode == .register ? "Create Account" : "Edit Profile")
-                        .font(.title)
-                        .fontWeight(.bold)
+                    if !hproseInstance.appUser.isGuest {
+                        VStack {
+                            ZStack(alignment: .bottomTrailing) {
+                                Avatar(user: hproseInstance.appUser, size: 80)
+                                    .onTapGesture { showImagePicker = true }
+                                    .overlay(
+                                        Group {
+                                            if isUploadingAvatar {
+                                                ProgressView()
+                                                    .frame(width: 80, height: 80)
+                                                    .background(Color.black.opacity(0.3))
+                                                    .clipShape(Circle())
+                                            }
+                                        }
+                                    )
+                                Image(systemName: "camera.fill")
+                                    .foregroundColor(.white)
+                                    .background(Circle().fill(Color.blue).frame(width: 28, height: 28))
+                                    .offset(x: -8, y: -8)
+                            }
+                            if let avatarUploadError = avatarUploadError {
+                                Text(avatarUploadError)
+                                    .foregroundColor(.red)
+                                    .font(.caption)
+                            }
+                        }
+                        .padding(.bottom, 8)
+                        .photosPicker(isPresented: $showImagePicker, selection: $selectedPhoto, matching: .images)
+                        .onChange(of: selectedPhoto) { newItem in
+                            if let item = newItem {
+                                Task {
+                                    isUploadingAvatar = true
+                                    avatarUploadError = nil
+                                    do {
+                                        if let data = try await item.loadTransferable(type: Data.self) {
+                                            let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+                                            let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
+                                            if let uploaded = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName), !uploaded.mid.isEmpty {
+                                                avatarId = uploaded.mid
+                                            } else {
+                                                avatarUploadError = "Failed to upload avatar."
+                                            }
+                                        } else {
+                                            avatarUploadError = "Failed to load image data."
+                                        }
+                                    } catch {
+                                        avatarUploadError = error.localizedDescription
+                                    }
+                                    isUploadingAvatar = false
+                                }
+                            }
+                        }
+                    }
 
                     Group {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Username")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            HStack {
+                                Text("Username *")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
                             TextField("Username", text: $username)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .autocapitalization(.none)
-                                .disabled(mode == .edit) // Username cannot be changed
+                                .disabled(!hproseInstance.appUser.isGuest) // Username cannot be changed
                                 .focused($focusedField, equals: .username)
                                 .contentShape(Rectangle())
                                 .onTapGesture { focusedField = .username }
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Password")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            HStack {
+                                Text("Password *")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
                             SecureField("Password", text: $password)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .password)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     focusedField = .password
-                                    if mode == .edit { showPasswordConfirm = true }
+                                    if !hproseInstance.appUser.isGuest { showPasswordConfirm = true }
                                 }
                         }
 
-                        if mode == .register || (mode == .edit && !password.isEmpty) {
+                        if hproseInstance.appUser.isGuest || !password.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Confirm Password")
                                     .font(.caption)
@@ -117,10 +165,10 @@ struct RegistrationView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Host ID (17 chars)")
+                            Text("Host ID (optional)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            TextField("Host ID (17 chars)", text: $hostId)
+                            TextField("", text: $hostId)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .hostId)
                                 .contentShape(Rectangle())
@@ -140,7 +188,7 @@ struct RegistrationView: View {
                     }
 
                     Button(action: handleSubmit) {
-                        Text(mode == .register ? "Register" : "Save")
+                        Text(hproseInstance.appUser.isGuest ? "Create Account" : "Save")
                             .frame(maxWidth: .infinity)
                             .padding()
                             .background(Color.blue)
@@ -160,20 +208,20 @@ struct RegistrationView: View {
             errorMessage = "Username is required."
             return
         }
-        if hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != 17 {
-            errorMessage = "Host ID must be 17 characters."
+        if password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            errorMessage = "Password is required."
             return
         }
-        if mode == .register {
-            if password.isEmpty {
-                errorMessage = "Password is required."
-                return
-            }
+        if hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != 0 && hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != 17 {
+            errorMessage = "Host ID must be 17 characters if provided."
+            return
+        }
+        if hproseInstance.appUser.isGuest {
             if password != confirmPassword {
                 errorMessage = "Passwords do not match."
                 return
             }
-        } else if mode == .edit {
+        } else {
             if !password.isEmpty && password != confirmPassword {
                 errorMessage = "Passwords do not match."
                 return

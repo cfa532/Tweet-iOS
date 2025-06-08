@@ -53,11 +53,38 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     var id: String { mid }  // Computed property that returns mid
     
     // MARK: - Initialization
-    private init(mid: String = Constants.GUEST_ID, baseUrl: String? = nil) {
+    init(
+        mid: String = Constants.GUEST_ID,
+        baseUrl: String? = nil,
+        name: String? = nil,
+        username: String? = nil,
+        password: String? = nil,
+        avatar: String? = nil,
+        email: String? = nil,
+        profile: String? = nil,
+        cloudDrivePort: Int? = nil,
+        hostIds: [String]? = nil,
+        publicKey: String? = nil
+    ) {
         self.mid = mid
         self.baseUrl = baseUrl
-        self.timestamp = Date()
-        self.tweetCount = 0
+        self.name = name
+        self.username = username
+        self.password = password
+        self.avatar = avatar
+        self.email = email
+        self.profile = profile
+        self.timestamp = Date.now
+        self.lastLogin = Date.now
+        self.cloudDrivePort = cloudDrivePort
+        self.tweetCount = nil
+        self.followingCount = nil
+        self.followersCount = nil
+        self.bookmarksCount = nil
+        self.favoritesCount = nil
+        self.commentsCount = nil
+        self.hostIds = hostIds
+        self.publicKey = publicKey
     }
     
     // MARK: - Factory Methods

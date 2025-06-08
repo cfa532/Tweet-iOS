@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+@available(iOS 16.0, *)
 struct LoginView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -89,13 +90,31 @@ struct LoginView: View {
                 dismiss()
             })
             .sheet(isPresented: $showRegistration) {
-                RegistrationView(mode: .register, onSubmit: { username, password, alias, profile, hostId in
-                    // TODO: Implement registration logic here
-                })
+                RegistrationView { (username: String, password: String?, alias: String?, profile: String?, hostId: String?) in
+                    Task {
+                        do {
+                            let success = try await hproseInstance.registerUser(
+                                username: username,
+                                passsword: password ?? "",
+                                alias: alias ?? "",
+                                profile: profile ?? "",
+                                hostId: (hostId?.isEmpty ?? true) ? nil : hostId
+                            )
+                            if success {
+                                showSuccess = true
+                                showRegistration = false
+                            } else {
+                                errorMessage = "Registration failed."
+                            }
+                        } catch {
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                }
             }
-            .alert("Login Successful", isPresented: $showSuccess) {
+            .alert("Login Successful. Wait for a few minutes before login.", isPresented: $showSuccess) {
                 Button("OK") {
-                    dismiss()
+//                    dismiss()
                 }
             } message: {
                 Text("Welcome back!")

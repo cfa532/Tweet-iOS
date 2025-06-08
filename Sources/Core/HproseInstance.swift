@@ -1038,7 +1038,7 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    // MARK: - Background Task Registration
+    // MARK: - Background Tasks
     static func handleBackgroundTask(task: BGProcessingTask) {
         // Schedule the next background task
         scheduleNextBackgroundTask()
@@ -1135,7 +1135,7 @@ final class HproseInstance: ObservableObject {
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
-                "hostid": "ReyCUFHHZmk0N5w_wxUeEuoY5Xr",
+                "hostid": appUser.hostIds?.first as Any,
                 "tweet": String(data: try JSONEncoder().encode(tweet), encoding: .utf8) ?? ""
             ]
             
@@ -1364,5 +1364,83 @@ final class HproseInstance: ObservableObject {
             }
             return result
         }
+    }
+    
+    func registerUser(
+        username: String,
+        passsword: String,
+        alias: String?,
+        profile: String,
+        hostId: String? = nil
+    ) async throws -> Bool {
+        guard let service = hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        let newUser = User.getInstance(mid: Constants.GUEST_ID)
+        await MainActor.run {
+            newUser.username = username
+            newUser.password = passsword
+            newUser.name = alias
+            newUser.profile = profile
+            if let hostId = hostId, !hostId.isEmpty {
+                newUser.hostIds = [hostId]
+            } else {
+                newUser.hostIds = nil
+            }
+        }
+        let entry = "register"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "user": String(data: try JSONEncoder().encode(newUser), encoding: .utf8) ?? ""
+        ]
+        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
+        }
+        if let result = response["status"] as? String {
+            if result == "success" {
+                return true
+            } else {
+                throw NSError(domain: "hproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: response["reason"] as? String ?? "Unknown registration error."])
+            }
+        }
+        return false
+    }
+    
+    func updateUserCore(
+        user: User,
+        password: String? = nil,
+        alias: String? = nil,
+        profile: String? = nil,
+        hostId: String? = nil,
+        avatar: String? = nil
+    ) async throws -> Bool {
+        guard let service = hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        let newUser = User(mid: user.mid, name: alias, password: password, avatar: avatar, profile: profile)
+        if let hostId = hostId, !hostId.isEmpty {
+            newUser.hostIds = [hostId]
+        } else {
+            newUser.hostIds = nil
+        }
+
+        let entry = "set_author_core_data"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "user": String(data: try JSONEncoder().encode(newUser), encoding: .utf8) ?? ""
+        ]
+        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
+        }
+        if let result = response["status"] as? String {
+            if result == "success" {
+                return true
+            } else {
+                throw NSError(domain: "hproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: response["reason"] as? String ?? "Unknown registration error."])
+            }
+        }
+        return false
     }
 }

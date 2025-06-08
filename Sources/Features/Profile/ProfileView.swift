@@ -1,19 +1,5 @@
 import SwiftUI
 
-// MARK: - ProfileViewModel
-@available(iOS 16.0, *)
-class ProfileViewModel: ObservableObject {
-    @Published var tweets: [Tweet] = []
-    @Published var isLoading: Bool = false
-    private let hproseInstance: HproseInstance
-    private let user: User
-    
-    init(hproseInstance: HproseInstance, user: User) {
-        self.hproseInstance = hproseInstance
-        self.user = user
-    }
-}
-
 // MARK: - ProfileView
 /// A view that displays a user's profile, including their tweets, pinned tweets, and user information.
 /// This view handles both the current user's profile and other users' profiles.
@@ -60,14 +46,12 @@ struct ProfileView: View {
     @State private var previousScrollOffset: CGFloat = 0
     /// Controls header visibility
     @State private var isHeaderVisible = true
-    @StateObject private var viewModel: ProfileViewModel
     @State private var bookmarks: [Tweet] = []
     @State private var favorites: [Tweet] = []
 
     init(user: User, onLogout: (() -> Void)? = nil) {
         self.user = user
         self.onLogout = onLogout
-        self._viewModel = StateObject(wrappedValue: ProfileViewModel(hproseInstance: HproseInstance.shared, user: user))
     }
 
     // MARK: - Computed Properties
@@ -156,7 +140,7 @@ struct ProfileView: View {
             .id(user.mid)
         }
         .sheet(isPresented: $showEditSheet) {
-            RegistrationView(mode: .edit, user: user, onSubmit: { username, password, alias, profile, hostId in
+            RegistrationView(onSubmit: { username, password, alias, profile, hostId in
                 // TODO: Implement user update logic here
             })
         }
