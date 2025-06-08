@@ -142,6 +142,11 @@ struct ProfileView: View {
         .sheet(isPresented: $showEditSheet) {
             RegistrationView(onSubmit: { username, password, alias, profile, hostId in
                 // TODO: Implement user update logic here
+                Task {
+                    try? await hproseInstance.updateUserCore(
+                        password: password, alias: alias, profile: profile, hostId: hostId
+                    )
+                }
             })
         }
         .fullScreenCover(isPresented: $showAvatarFullScreen) {
