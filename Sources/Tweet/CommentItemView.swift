@@ -47,7 +47,7 @@ struct CommentItemView: View {
         .padding()
         .background(Color(.systemBackground))
         .background(
-            NavigationLink(destination: TweetDetailView(tweet: comment),
+            NavigationLink(destination: CommentDetailView(comment: comment, parentTweet: parentTweet),
                            isActive: $showDetail) {
                 EmptyView()
             }
