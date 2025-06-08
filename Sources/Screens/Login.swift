@@ -95,7 +95,7 @@ struct LoginView: View {
                         do {
                             let success = try await hproseInstance.registerUser(
                                 username: username,
-                                passsword: password ?? "",
+                                password: password ?? "",
                                 alias: alias ?? "",
                                 profile: profile ?? "",
                                 hostId: (hostId?.isEmpty ?? true) ? nil : hostId
