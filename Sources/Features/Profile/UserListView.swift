@@ -200,7 +200,6 @@ struct UserRowView: View {
     @State private var isFollowing: Bool = false
     @State private var showFullProfile: Bool = false
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @EnvironmentObject private var appUserStore: AppUserStore
 
     var body: some View {
         Button {
@@ -276,7 +275,7 @@ struct UserRowView: View {
         .buttonStyle(PlainButtonStyle())
         .onAppear {
             Task {
-                isFollowing = await appUserStore.appUser.followingList?.contains(user.mid) ?? false
+                isFollowing = AppUser.shared.followingList?.contains(user.mid) ?? false
             }
         }
         // Remove .padding(.vertical, 2) for minimal row height

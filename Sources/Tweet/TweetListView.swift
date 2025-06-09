@@ -10,7 +10,6 @@ struct TweetListNotification {
 @available(iOS 16.0, *)
 struct TweetListView<RowView: View>: View {
     // MARK: - Properties
-    @StateObject private var appUserStore = AppUserStore.shared
     @State private var tweets: [Tweet] = []
     @State private var isLoading = false
     @State private var isLoadingMore = false
@@ -44,7 +43,7 @@ struct TweetListView<RowView: View>: View {
         do {
             // Step 1: Fetch from cache
             let tweetsInCache = try await tweetFetcher(0, pageSize, true)
-            let appUser = await appUserStore.appUser
+            let appUser = AppUser.shared
             
             await MainActor.run {
                 tweets.mergeTweets(tweetsInCache.compactMap { $0 })

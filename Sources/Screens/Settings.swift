@@ -10,14 +10,12 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @EnvironmentObject private var appUserStore: AppUserStore
-    @State private var isGuest: Bool = true
     
     var body: some View {
         NavigationView {
             List {
                 Section(header: Text("Account")) {
-                    if !isGuest {
+                    if !AppUser.shared.isGuest {
                         Button("Logout") {
                             Task {
                                 await hproseInstance.logout()
@@ -47,10 +45,6 @@ struct SettingsView: View {
             .navigationBarItems(trailing: Button("Done") {
                 dismiss()
             })
-            .task {
-                let user = await appUserStore.getAppUser()
-                isGuest = user.isGuest
-            }
         }
     }
 }

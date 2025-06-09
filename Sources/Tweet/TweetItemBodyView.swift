@@ -80,8 +80,7 @@ struct TweetItemBodyView: View {
         .onTapGesture {
             if enableTap {
                 Task {
-                    let appUser = await AppUserStore.shared.appUser
-                    if appUser.isGuest {
+                    if AppUser.shared.isGuest {
                         showLoginSheet = true
                     } else {
                         onTap()

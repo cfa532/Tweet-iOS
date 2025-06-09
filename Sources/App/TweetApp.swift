@@ -23,7 +23,6 @@ class AppState: ObservableObject {
 @main
 struct TweetApp: App {
     @StateObject private var appState = AppState()
-    @StateObject private var appUserStore = AppUserStore.shared
     @State private var showGlobalAlert = false
     @State private var globalAlertMessage = ""
     
@@ -68,7 +67,6 @@ struct TweetApp: App {
                     }
                 }
             }
-            .environmentObject(appUserStore)
             .alert(isPresented: $showGlobalAlert) {
                 Alert(title: Text("Error"), message: Text(globalAlertMessage), dismissButton: .default(Text("OK")))
             }

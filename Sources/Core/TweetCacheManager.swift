@@ -211,7 +211,7 @@ extension TweetCacheManager {
         }
         
         // If no cached user is found, return a new instance
-        return await User.getInstance(mid: mid)
+        return User.getInstance(mid: mid)
     }
     
     func shouldRefreshUser(mid: String) -> Bool {

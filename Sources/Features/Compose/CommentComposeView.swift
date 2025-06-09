@@ -11,7 +11,6 @@ struct CommentComposeView: View {
     @State private var isQuoting = false
     @State private var selectedItems: [PhotosPickerItem] = []
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @EnvironmentObject private var appUserStore: AppUserStore
 
     var body: some View {
         NavigationView {
@@ -152,9 +151,9 @@ struct CommentComposeView: View {
         }
         
         // Create comment object
-        let comment = await Tweet(
+        let comment = Tweet(
             mid: Constants.GUEST_ID,                // placeholder Mimei Id
-            authorId: appUserStore.appUser.mid,
+            authorId: AppUser.shared.mid,
             content: trimmedContent,
             timestamp: Date(),
             originalTweetId: isQuoting ? tweet.mid : nil,

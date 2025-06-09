@@ -5,9 +5,7 @@ struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
     @State private var showProfile = false
-    @EnvironmentObject private var appUserStore: AppUserStore
     @EnvironmentObject var hproseInstance: HproseInstance
-    @State private var currentUser: User?
     
     var onAppIconTap: () -> Void = {}
     
@@ -15,12 +13,12 @@ struct AppHeaderView: View {
         HStack {
             // Left: User Avatar
             NavigationLink {
-                if let user = currentUser {
-                    ProfileView(user: user)
-                }
+
+                    ProfileView(user: AppUser.shared)
+
             } label: {
                 HStack {
-                    if let avatar = currentUser?.avatar {
+                    if let avatar = AppUser.shared.avatar {
                         AsyncImage(url: URL(string: avatar)) { image in
                             image
                                 .resizable()
@@ -39,9 +37,6 @@ struct AppHeaderView: View {
                             .frame(width: 32, height: 32)
                             .foregroundColor(.gray)
                     }
-                    Text(currentUser?.name ?? "No One")
-                        .font(.headline)
-                        .foregroundColor(.primary)
                 }
             }
             
@@ -73,9 +68,6 @@ struct AppHeaderView: View {
         }
         .sheet(isPresented: $isSettingsSheetPresented) {
             SettingsView()
-        }
-        .task {
-            currentUser = await appUserStore.appUser
         }
     }
 }

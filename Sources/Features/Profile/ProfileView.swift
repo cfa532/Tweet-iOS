@@ -54,7 +54,7 @@ struct ProfileView: View {
     @State private var isHeaderVisible = true
     @State private var bookmarks: [Tweet] = []
     @State private var favorites: [Tweet] = []
-    @State private var appUser: User = User(mid: Constants.GUEST_ID)
+    @State private var appUser: User = AppUser.shared
 
     init(user: User, onLogout: (() -> Void)? = nil) {
         self.user = user
@@ -160,7 +160,6 @@ struct ProfileView: View {
                 isLoading = false
                 didLoad = true
             }
-            appUser = await AppUserStore.shared.getAppUser()
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
             if let _ = notification.userInfo?["tweetId"] as? String,

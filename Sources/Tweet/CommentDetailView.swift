@@ -19,7 +19,6 @@ struct CommentDetailView: View {
     @State private var selectedUser: User? = nil
     @State private var refreshTimer: Timer?
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @EnvironmentObject private var appUserStore: AppUserStore
     @Environment(\.dismiss) private var dismiss
     @State private var replies: [Tweet] = []
     

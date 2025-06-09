@@ -28,7 +28,7 @@ struct RegistrationView: View {
     @State private var isUploadingAvatar = false
     @State private var avatarUploadError: String? = nil
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @State private var appUser: User = User(mid: Constants.GUEST_ID)
+    private let appUser = AppUser.shared
 
     enum Field: Hashable {
         case username, password, confirmPassword, alias, profile, hostId
@@ -189,9 +189,6 @@ struct RegistrationView: View {
             .onAppear {
                 loadUserData()
             }
-            .task {
-                appUser = await AppUserStore.shared.getAppUser()
-            }
         }
     }
 
@@ -206,7 +203,7 @@ struct RegistrationView: View {
                     fileName: fileName,
                     referenceId: appUser.mid), !uploaded.mid.isEmpty {
                     try await hproseInstance.setUserAvatar(user: appUser, avatar: uploaded.mid)
-                    await AppUserStore.shared.updateAppUser(appUser)
+                    await MainActor.run { AppUser.shared.avatar = uploaded.mid }
                 }
             }
         } catch {

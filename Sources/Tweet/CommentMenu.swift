@@ -12,7 +12,7 @@ struct CommentMenu: View {
     @ObservedObject var comment: Tweet
     @ObservedObject var parentTweet: Tweet
     @Environment(\.dismiss) private var dismiss
-    @State private var appUser: User = User(mid: Constants.GUEST_ID)
+    @State private var appUser: User = AppUser.shared
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var showAlert = false
     @State private var alertMessage = ""
@@ -51,9 +51,6 @@ struct CommentMenu: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(alertMessage)
-        }
-        .task {
-            appUser = await AppUserStore.shared.getAppUser()
         }
     }
     

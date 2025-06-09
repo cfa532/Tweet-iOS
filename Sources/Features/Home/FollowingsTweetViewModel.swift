@@ -11,18 +11,16 @@ class FollowingsTweetViewModel: ObservableObject {
     @Published var tweets: [Tweet] = []     // tweet list to be displayed on screen.
     @Published var isLoading: Bool = false
     var hproseInstance: HproseInstance
-    var appUserStore: AppUserStore
     
-    init(hproseInstance: HproseInstance, appUserStore: AppUserStore) {
+    init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
-        self.appUserStore = appUserStore
     }
     
     func fetchTweets(page: UInt, pageSize: UInt) async -> [Tweet?] {
         // fetch tweets from server
         do {
             let serverTweets = try await hproseInstance.fetchTweetFeed(
-                user: appUserStore.appUser,
+                user: AppUser.shared,
                 pageNumber: page,
                 pageSize: pageSize
             )

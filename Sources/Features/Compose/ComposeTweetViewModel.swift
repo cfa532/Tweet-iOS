@@ -38,11 +38,9 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var toastType: ToastView.ToastType = .error
     
     private let hproseInstance: HproseInstance
-    private let appUserStore: AppUserStore
     
-    init(hproseInstance: HproseInstance, appUserStore: AppUserStore = .shared) {
+    init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
-        self.appUserStore = appUserStore
     }
     
     var canPostTweet: Bool {
@@ -60,9 +58,9 @@ class ComposeTweetViewModel: ObservableObject {
         defer { isUploading = false }
         
         do {
-            let tweet = await Tweet(
+            let tweet = Tweet(
                 mid: Constants.GUEST_ID,
-                authorId: appUserStore.appUser.mid,
+                authorId: AppUser.shared.mid,
                 content: content,
                 title: title.isEmpty ? nil : title
             )

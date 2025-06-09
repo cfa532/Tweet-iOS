@@ -14,7 +14,7 @@ struct TweetActionButtonsView: View {
     @State private var showShareSheet = false
     @State private var showLoginSheet = false
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @State private var appUser: User = User(mid: Constants.GUEST_ID)
+    @State private var appUser: User = AppUser.shared
 
     private func handleGuestAction() {
         if appUser.isGuest {
@@ -169,9 +169,6 @@ struct TweetActionButtonsView: View {
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
-        }
-        .task {
-            appUser = await AppUserStore.shared.getAppUser()
         }
     }
 

@@ -7,7 +7,6 @@ struct FollowingsTweetView: View {
     @Binding var resetTrigger: Bool
     @Binding var scrollToTopTrigger: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
-    @EnvironmentObject private var appUserStore: AppUserStore
     @StateObject private var viewModel: FollowingsTweetViewModel
     @State private var appUser: User = User(mid: Constants.GUEST_ID)
 
@@ -18,8 +17,7 @@ struct FollowingsTweetView: View {
         self._scrollToTopTrigger = scrollToTopTrigger
         // Initialize with empty instances, will be updated in onAppear
         self._viewModel = StateObject(wrappedValue: FollowingsTweetViewModel(
-            hproseInstance: HproseInstance.shared,
-            appUserStore: AppUserStore.shared
+            hproseInstance: HproseInstance.shared
         ))
     }
 
@@ -43,7 +41,7 @@ struct FollowingsTweetView: View {
                     if isFromCache {
                         // Fetch from cache
                         let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-                            for: appUserStore.appUser.mid, page: page, pageSize: size)
+                            for: AppUser.shared.mid, page: page, pageSize: size)
                         await MainActor.run {
                             viewModel.tweets.mergeTweets(cachedTweets.compactMap { $0 })
                         }
@@ -87,13 +85,9 @@ struct FollowingsTweetView: View {
                     scrollToTopTrigger = false
                 }
             }
-            .task {
-                appUser = await AppUserStore.shared.getAppUser()
-            }
             .onAppear {
                 // Update view model with the actual environment objects
                 viewModel.hproseInstance = hproseInstance
-                viewModel.appUserStore = appUserStore
             }
         }
     }
