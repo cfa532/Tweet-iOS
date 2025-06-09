@@ -28,6 +28,7 @@ struct RegistrationView: View {
     @State private var isUploadingAvatar = false
     @State private var avatarUploadError: String? = nil
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var appUser: User = User(mid: Constants.GUEST_ID)
 
     enum Field: Hashable {
         case username, password, confirmPassword, alias, profile, hostId
@@ -41,10 +42,10 @@ struct RegistrationView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
-                    if !hproseInstance.appUser.isGuest {
+                    if !appUser.isGuest {
                         VStack {
                             ZStack(alignment: .bottomTrailing) {
-                                Avatar(user: hproseInstance.appUser, size: 80)
+                                Avatar(user: appUser, size: 80)
                                     .onTapGesture { showImagePicker = true }
                                     .overlay(
                                         Group {
@@ -74,24 +75,7 @@ struct RegistrationView: View {
                                 Task {
                                     isUploadingAvatar = true
                                     avatarUploadError = nil
-                                    do {
-                                        if let data = try await item.loadTransferable(type: Data.self) {
-                                            let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                                            let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
-                                            if let uploaded = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName, referenceId: hproseInstance.appUser.mid), !uploaded.mid.isEmpty {
-                                                try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
-                                                await MainActor.run {
-                                                    hproseInstance.appUser.avatar = uploaded.mid
-                                                }
-                                            } else {
-                                                avatarUploadError = "Failed to upload avatar."
-                                            }
-                                        } else {
-                                            avatarUploadError = "Failed to load image data."
-                                        }
-                                    } catch {
-                                        avatarUploadError = error.localizedDescription
-                                    }
+                                    await uploadAvatar(item)
                                     isUploadingAvatar = false
                                 }
                             }
@@ -109,7 +93,7 @@ struct RegistrationView: View {
                             TextField("Username", text: $username)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .autocapitalization(.none)
-                                .disabled(!hproseInstance.appUser.isGuest) // Username cannot be changed
+                                .disabled(!appUser.isGuest) // Username cannot be changed
                                 .focused($focusedField, equals: .username)
                                 .contentShape(Rectangle())
                                 .onTapGesture { focusedField = .username }
@@ -128,11 +112,11 @@ struct RegistrationView: View {
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     focusedField = .password
-                                    if !hproseInstance.appUser.isGuest { showPasswordConfirm = true }
+                                    if !appUser.isGuest { showPasswordConfirm = true }
                                 }
                         }
 
-                        if hproseInstance.appUser.isGuest || !password.isEmpty {
+                        if appUser.isGuest || !password.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Confirm Password")
                                     .font(.caption)
@@ -191,7 +175,7 @@ struct RegistrationView: View {
                     }
 
                     Button(action: handleSubmit) {
-                        Text(hproseInstance.appUser.isGuest ? "Create Account" : "Save")
+                        Text(appUser.isGuest ? "Create Account" : "Save")
                             .frame(maxWidth: .infinity)
                             .padding()
                             .background(Color.blue)
@@ -203,15 +187,51 @@ struct RegistrationView: View {
             }
             .navigationBarItems(trailing: Button("Close") { dismiss() })
             .onAppear {
-                let appUser = hproseInstance.appUser
-                if !appUser.isGuest {
-                    username = appUser.username ?? ""
-                    alias = appUser.name ?? ""
-                    profile = appUser.profile ?? ""
-                    hostId = appUser.hostIds?.first ?? ""
-                    avatarId = appUser.avatar
+                loadUserData()
+            }
+            .task {
+                appUser = await AppUserStore.shared.getAppUser()
+            }
+        }
+    }
+
+    private func uploadAvatar(_ item: PhotosPickerItem) async {
+        do {
+            if let data = try await item.loadTransferable(type: Data.self) {
+                let typeIdentifier = item.supportedContentTypes.first?.identifier ?? ""
+                let fileName = typeIdentifier.components(separatedBy: ".").last ?? "image"
+                if let uploaded = try await hproseInstance.uploadToIPFS(
+                    data: data,
+                    typeIdentifier: typeIdentifier,
+                    fileName: fileName,
+                    referenceId: appUser.mid), !uploaded.mid.isEmpty {
+                    try await hproseInstance.setUserAvatar(user: appUser, avatar: uploaded.mid)
+                    await AppUserStore.shared.updateAppUser(appUser)
                 }
             }
+        } catch {
+            print("Error uploading avatar: \(error)")
+        }
+    }
+
+    private var isFormValid: Bool {
+        if appUser.isGuest {
+            return !username.isEmpty && !password.isEmpty
+        }
+        return !username.isEmpty && (!password.isEmpty || !confirmPassword.isEmpty)
+    }
+
+    private var submitButtonTitle: String {
+        appUser.isGuest ? "Create Account" : "Save"
+    }
+
+    private func loadUserData() {
+        if !appUser.isGuest {
+            username = appUser.username ?? ""
+            alias = appUser.name ?? ""
+            profile = appUser.profile ?? ""
+            hostId = appUser.hostIds?.first ?? ""
+            avatarId = appUser.avatar
         }
     }
 
@@ -221,7 +241,7 @@ struct RegistrationView: View {
             errorMessage = "Username is required."
             return
         }
-        if password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && hproseInstance.appUser.isGuest {
+        if password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && appUser.isGuest {
             errorMessage = "Password is required."
             return
         }
@@ -229,7 +249,7 @@ struct RegistrationView: View {
             errorMessage = "Host ID must be \(Constants.MIMEI_ID_LENGTH) characters if provided."
             return
         }
-        if hproseInstance.appUser.isGuest {
+        if appUser.isGuest {
             // Registration: password required and must match
             if password != confirmPassword {
                 errorMessage = "Passwords do not match."

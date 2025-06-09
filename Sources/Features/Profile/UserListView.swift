@@ -171,7 +171,7 @@ struct UserListView: View {
         
         for userId in userIds {
             // First check if user is in Core Data cache
-            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+            let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
             fetchedUsers.append(cachedUser)
 
             // If not in cache, fetch from server
@@ -200,6 +200,7 @@ struct UserRowView: View {
     @State private var isFollowing: Bool = false
     @State private var showFullProfile: Bool = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @EnvironmentObject private var appUserStore: AppUserStore
 
     var body: some View {
         Button {
@@ -274,7 +275,9 @@ struct UserRowView: View {
         }
         .buttonStyle(PlainButtonStyle())
         .onAppear {
-            isFollowing = hproseInstance.appUser.followingList?.contains(user.mid) ?? false
+            Task {
+                isFollowing = await appUserStore.appUser.followingList?.contains(user.mid) ?? false
+            }
         }
         // Remove .padding(.vertical, 2) for minimal row height
     }

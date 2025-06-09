@@ -1,28 +1,8 @@
 import Foundation
 import Network
 
-// MARK: - String Extension for getIP
-extension String {
-    func getIP() -> String? {
-        let ipv4Regex = "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?::\\d+)?$"
-        let ipv6Regex = "\\[(.*?)\\]"
-        if let _ = self.range(of: ipv4Regex, options: .regularExpression) {
-            return self
-        }
-        if let match = self.range(of: ipv6Regex, options: .regularExpression) {
-            let nsrange = NSRange(match, in: self)
-            if let regex = try? NSRegularExpression(pattern: ipv6Regex),
-               let result = regex.firstMatch(in: self, options: [], range: nsrange),
-               let range = Range(result.range(at: 1), in: self) {
-                return String(self[range])
-            }
-        }
-        return nil
-    }
-}
-
 // MARK: - Gadget Utility
-class Gadget {
+final class Gadget: @unchecked Sendable {
     static let shared = Gadget()
     
     private init() {}
@@ -224,3 +204,24 @@ class Gadget {
     
 
 }
+
+// MARK: - String Extension for getIP
+extension String {
+    func getIP() -> String? {
+        let ipv4Regex = "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?::\\d+)?$"
+        let ipv6Regex = "\\[(.*?)\\]"
+        if let _ = self.range(of: ipv4Regex, options: .regularExpression) {
+            return self
+        }
+        if let match = self.range(of: ipv6Regex, options: .regularExpression) {
+            let nsrange = NSRange(match, in: self)
+            if let regex = try? NSRegularExpression(pattern: ipv6Regex),
+               let result = regex.firstMatch(in: self, options: [], range: nsrange),
+               let range = Range(result.range(at: 1), in: self) {
+                return String(self[range])
+            }
+        }
+        return nil
+    }
+}
+

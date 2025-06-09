@@ -19,6 +19,7 @@ struct CommentDetailView: View {
     @State private var selectedUser: User? = nil
     @State private var refreshTimer: Timer?
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @EnvironmentObject private var appUserStore: AppUserStore
     @Environment(\.dismiss) private var dismiss
     @State private var replies: [Tweet] = []
     
@@ -30,12 +31,6 @@ struct CommentDetailView: View {
     init(comment: Tweet, parentTweet: Tweet) {
         self.comment = comment
         self.parentTweet = parentTweet
-    }
-    
-    private func handleGuestAction() {
-        if hproseInstance.appUser.isGuest {
-            showLoginSheet = true
-        }
     }
     
     var body: some View {
@@ -140,7 +135,14 @@ struct CommentDetailView: View {
                 }
             }
         }
-        .background(profileNavigationLink)
+        .navigationDestination(isPresented: Binding(
+            get: { selectedUser != nil },
+            set: { isActive in if !isActive { selectedUser = nil } }
+        )) {
+            if let user = selectedUser {
+                ProfileView(user: user, onLogout: nil)
+            }
+        }
     }
     
     private var repliesListView: some View {
@@ -193,22 +195,6 @@ struct CommentDetailView: View {
                 print("Failed to refresh comment: \(error)")
             }
         }
-    }
-    
-    @ViewBuilder
-    private var profileNavigationLink: some View {
-        let profileDestination = selectedUser.map { ProfileView(user: $0, onLogout: nil) }
-        let isActiveBinding = Binding(
-            get: { selectedUser != nil },
-            set: { isActive in if !isActive { selectedUser = nil } }
-        )
-        NavigationLink(
-            destination: profileDestination,
-            isActive: isActiveBinding
-        ) {
-            EmptyView()
-        }
-        .hidden()
     }
 }
 

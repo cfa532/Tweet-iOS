@@ -12,7 +12,7 @@ struct CommentMenu: View {
     @ObservedObject var comment: Tweet
     @ObservedObject var parentTweet: Tweet
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var appUser = HproseInstance.shared.appUser
+    @State private var appUser: User = User(mid: Constants.GUEST_ID)
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var showAlert = false
     @State private var alertMessage = ""
@@ -52,6 +52,9 @@ struct CommentMenu: View {
         } message: {
             Text(alertMessage)
         }
+        .task {
+            appUser = await AppUserStore.shared.getAppUser()
+        }
     }
     
     private func deleteComment(_ comment: Tweet) async throws {
@@ -65,14 +68,12 @@ struct CommentMenu: View {
             parentTweet.commentCount = max(0, (parentTweet.commentCount ?? 1) - 1)
         }
         // Attempt actual deletion
-        if let response = try? await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid),
-           let commentId = response["commentId"] as? String,
-           let count = response["count"] as? Int {
-            print("Successfully deleted comment: \(commentId) \(count)")
+        if let response = try? await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid) {
+            print("Successfully deleted comment: \(response.commentId) \(response.count)")
             
             // Update parent tweet's comment count
             await MainActor.run {
-                parentTweet.commentCount = count
+                parentTweet.commentCount = response.count
             }
         } else {
             // If deletion fails, post restoration notification

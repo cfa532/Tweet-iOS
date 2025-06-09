@@ -49,7 +49,10 @@ struct TweetItemView: View {
                             showDetail = true
                         }
 
-                        TweetItemBodyView(tweet: originalTweet)
+                        TweetItemBodyView(tweet: originalTweet, onTap: { 
+                            detailTweet = originalTweet
+                            showDetail = true
+                        })
                             .padding(.top, -12)
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -79,7 +82,7 @@ struct TweetItemView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
-                        TweetItemBodyView(tweet: tweet, enableTap: false)
+                        TweetItemBodyView(tweet: tweet, onTap: { showDetail = true }, enableTap: false)
                             .padding(.top, -12)
                             .contentShape(Rectangle())
                             .onTapGesture { showDetail = true }
@@ -115,7 +118,7 @@ struct TweetItemView: View {
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
-                    TweetItemBodyView(tweet: tweet, enableTap: false)
+                    TweetItemBodyView(tweet: tweet, onTap: { showDetail = true }, enableTap: false)
                         .padding(.top, -12)
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
@@ -127,14 +130,9 @@ struct TweetItemView: View {
         }
         .padding()
         .background(Color(.systemBackground))
-        .background(
-            NavigationLink(destination: TweetDetailView(
-                tweet: detailTweet,
-            ), isActive: $showDetail) {
-                EmptyView()
-            }
-                .hidden()
-        )
+        .navigationDestination(isPresented: $showDetail) {
+            TweetDetailView(tweet: detailTweet)
+        }
         .task {
             // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet

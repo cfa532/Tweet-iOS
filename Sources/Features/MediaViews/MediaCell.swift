@@ -127,8 +127,8 @@ struct VisibilityModifier: ViewModifier {
 }
 
 struct VisibilityPreferenceKey: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+    static let defaultValue: CGRect = .zero
+    nonisolated static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         value = nextValue()
     }
 }

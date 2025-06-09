@@ -15,9 +15,187 @@ enum UserContentType: String {
     case FOLLOWING = "get_followings_sorted"    // following list
 }
 
-class User: ObservableObject, Codable, Identifiable, Hashable {
-    // MARK: - Singleton Dictionary
-    private static var userInstances: [String: User] = [:]
+actor AppUserStore: ObservableObject {
+    static let shared = AppUserStore()
+    @Published private(set) var appUser: User = User(mid: Constants.GUEST_ID)
+    
+    func initialize(preferenceHelper: PreferenceHelper) async {
+        let userId = preferenceHelper.getUserId() ?? Constants.GUEST_ID
+        let baseUrl = preferenceHelper.getAppUrls().first ?? ""
+        
+        // Get the singleton instance for the user
+        let instance = await User.getInstance(mid: userId)
+        instance.baseUrl = baseUrl
+        instance.followingList = Gadget.getAlphaIds()
+        
+        // Update the reference to point to the singleton instance
+        self.appUser = instance
+        
+        // Try to initialize app entry
+        do {
+            try await initAppEntry(preferenceHelper: preferenceHelper)
+        } catch {
+            print("Error initializing app entry: \(error)")
+            // Don't throw here, allow the app to continue with default settings
+        }
+    }
+    
+    private func initAppEntry(preferenceHelper: PreferenceHelper) async throws {
+        for url in preferenceHelper.getAppUrls() {
+            do {
+                let html = try await fetchHTML(from: url)
+                let paramData = Gadget.shared.extractParamMap(from: html)
+                let appId = paramData["mid"] as? String ?? ""
+                HproseInstance.appId = appId
+                
+                guard let addrs = paramData["addrs"] as? String else { continue }
+                print("Initializing with addresses: \(addrs)")
+                
+                if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
+                    #if DEBUG
+                        let firstIp = "218.72.53.166:8002"  // for testing
+                    #endif
+                    
+                    let baseUrl = "http://\(firstIp)"
+                    HproseInstance.baseUrl = baseUrl
+                    
+                    if !appUser.isGuest,
+                       let user = try await HproseInstance.shared.getUser(appUser.mid, baseUrl: baseUrl) {
+                        // Valid login user is found, use its provider IP as base.
+                        HproseInstance.baseUrl = baseUrl
+                        let followings = (try? await HproseInstance.shared.getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                        appUser.baseUrl = HproseInstance.baseUrl
+                        appUser.followingList = followings
+                        return
+                    } else {
+                        let user = await User.getInstance(mid: Constants.GUEST_ID)
+                        user.baseUrl = HproseInstance.baseUrl
+                        user.followingList = Gadget.getAlphaIds()
+                        self.appUser = user
+                        return
+                    }
+                }
+            } catch {
+                print("Error processing URL \(url): \(error)")
+                continue
+            }
+        }
+        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize app entry with any URL"])
+    }
+    
+    private func fetchHTML(from urlString: String) async throws -> String {
+        guard let url = URL(string: urlString) else {
+            throw URLError(.badURL)
+        }
+        let (data, _) = try await URLSession.shared.data(from: url)
+        guard let htmlString = String(data: data, encoding: .utf8) else {
+            throw URLError(.cannotDecodeContentData)
+        }
+        return htmlString
+    }
+    
+    func updateAppUser(_ newUser: User) async {
+        // Get the singleton instance for the new user
+        let instance = await User.getInstance(mid: newUser.mid)
+        // Update the singleton instance with new values
+        instance.baseUrl = newUser.baseUrl
+        instance.writableUrl = newUser.writableUrl
+        instance.name = newUser.name
+        instance.username = newUser.username
+        instance.avatar = newUser.avatar
+        instance.email = newUser.email
+        instance.profile = newUser.profile
+        instance.cloudDrivePort = newUser.cloudDrivePort
+        
+        instance.tweetCount = newUser.tweetCount
+        instance.followingCount = newUser.followingCount
+        instance.followersCount = newUser.followersCount
+        instance.bookmarksCount = newUser.bookmarksCount
+        instance.favoritesCount = newUser.favoritesCount
+        instance.commentsCount = newUser.commentsCount
+        
+        instance.hostIds = newUser.hostIds
+        
+        // Update the reference to point to the singleton instance
+        self.appUser = instance
+    }
+    
+    func getAppUser() async -> User {
+        return appUser
+    }
+}
+
+actor UserStore {
+    static let shared = UserStore()
+    private var instances: [String: User] = [:]
+    
+    func getInstance(mid: String) -> User {
+        if let existingInstance = instances[mid] {
+            return existingInstance
+        }
+        let newUser = User(mid: mid)
+        instances[mid] = newUser
+        return newUser
+    }
+    
+    func updateInstance(with user: User) {
+        let instance = getInstance(mid: user.mid)
+        instance.name = user.name
+        instance.username = user.username
+        instance.password = user.password
+        instance.avatar = user.avatar
+        instance.email = user.email
+        instance.profile = user.profile
+        instance.lastLogin = user.lastLogin
+        instance.cloudDrivePort = user.cloudDrivePort
+        instance.hostIds = user.hostIds
+        
+        instance.tweetCount = user.tweetCount
+        instance.followingCount = user.followingCount
+        instance.followersCount = user.followersCount
+        instance.bookmarksCount = user.bookmarksCount
+        instance.favoritesCount = user.favoritesCount
+        instance.commentsCount = user.commentsCount
+    }
+    
+    func clearInstance(mid: String) {
+        instances.removeValue(forKey: mid)
+    }
+    
+    func clearAllInstances() {
+        instances.removeAll()
+    }
+}
+
+class User: ObservableObject, Codable, Identifiable, Hashable, @unchecked Sendable {
+    // MARK: - Static Methods
+    static func getInstance(mid: String) async -> User {
+        return await UserStore.shared.getInstance(mid: mid)
+    }
+    
+    static func from(dict: [String: Any]) async -> User {
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: dict, options: [])
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            let decodedUser = try decoder.decode(User.self, from: jsonData)
+            await UserStore.shared.updateInstance(with: decodedUser)
+            return await UserStore.shared.getInstance(mid: decodedUser.mid)
+        } catch {
+            print("Error converting dictionary to User: \(error)")
+            return await getInstance(mid: Constants.GUEST_ID)
+        }
+    }
+    
+    static func from(cdUser: CDUser) async -> User {
+        // Try to decode the full user data
+        if let userData = cdUser.userData,
+           let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
+            decodedUser.baseUrl = HproseInstance.baseUrl
+            await UserStore.shared.updateInstance(with: decodedUser)
+        }
+        return await getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
+    }
     
     // MARK: - Properties
     @Published var mid: String
@@ -86,65 +264,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.commentsCount = nil
         self.hostIds = hostIds
         self.publicKey = publicKey
-    }
-    
-    // MARK: - Factory Methods
-    static func getInstance(mid: String) -> User {
-        if let existingUser = userInstances[mid] {
-            return existingUser
-        }
-        let newUser = User(mid: mid)
-        userInstances[mid] = newUser
-        return newUser
-    }
-    
-    static func from(dict: [String: Any]) -> User {
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: dict, options: [])
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .millisecondsSince1970
-            let decodedUser = try decoder.decode(User.self, from: jsonData)
-            updateUserInstance(with: decodedUser)
-            return userInstances[decodedUser.mid]!
-        } catch {
-            print("Error converting dictionary to User: \(error)")
-            return getInstance(mid: Constants.GUEST_ID)
-        }
-    }
-    
-    static func from(cdUser: CDUser) -> User {
-        // Try to decode the full user data
-        if let userData = cdUser.userData,
-           let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
-            decodedUser.baseUrl = HproseInstance.baseUrl
-            updateUserInstance(with: decodedUser)
-        }
-        return getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
-    }
-    
-    /**
-     * Do not update baseUrl and writableUrl. They are acquired at runtime, not from cache or backend.
-     */
-    private static func updateUserInstance(with user: User) {
-        let instance = getInstance(mid: user.mid)
-        Task { @MainActor in
-            instance.name = user.name
-            instance.username = user.username
-            instance.password = user.password
-            instance.avatar = user.avatar
-            instance.email = user.email
-            instance.profile = user.profile
-            instance.lastLogin = user.lastLogin
-            instance.cloudDrivePort = user.cloudDrivePort
-            instance.hostIds = user.hostIds
-            
-            instance.tweetCount = user.tweetCount
-            instance.followingCount = user.followingCount
-            instance.followersCount = user.followersCount
-            instance.bookmarksCount = user.bookmarksCount
-            instance.favoritesCount = user.favoritesCount
-            instance.commentsCount = user.commentsCount
-        }
     }
     
     // CodingKeys to handle @Published properties

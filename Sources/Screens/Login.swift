@@ -8,6 +8,12 @@
 import SwiftUI
 
 @available(iOS 16.0, *)
+struct LoginResult: Sendable {
+    let status: String
+    let reason: String
+}
+
+@available(iOS 16.0, *)
 struct LoginView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -18,6 +24,8 @@ struct LoginView: View {
     @State private var errorMessage: String?
     @State private var showSuccess = false
     @FocusState private var focusedField: Field?
+    @State private var showAlert = false
+    @State private var alertMessage = ""
     
     enum Field: Hashable {
         case username
@@ -119,12 +127,18 @@ struct LoginView: View {
             } message: {
                 Text("Welcome back!")
             }
+            .alert("Login", isPresented: $showAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(alertMessage)
+            }
         }
     }
     
     private func login() async {
         isLoading = true
         errorMessage = nil
+        defer { isLoading = false }
         
         do {
             if username.isEmpty || password.isEmpty {
@@ -136,12 +150,18 @@ struct LoginView: View {
                 if let user = try await hproseInstance.getUser(userId) {
                     user.password = password
                     let result = try await hproseInstance.login(user)
-                    if result["status"] as? String == "success" {
+                    let loginResult = LoginResult(
+                        status: result.status,
+                        reason: result.reason
+                    )
+                    
+                    if loginResult.status == "success" {
                         // Post notification for successful login
                         NotificationCenter.default.post(name: .userDidLogin, object: nil)
                         dismiss()
                     } else {
-                        errorMessage = result["reason"] as? String
+                        errorMessage = loginResult.reason
+                        showAlert = true
                     }
                 } else {
                     errorMessage = "Cannot find user by \(userId)"
@@ -151,9 +171,8 @@ struct LoginView: View {
             }
         } catch {
             errorMessage = error.localizedDescription
+            showAlert = true
         }
-        
-        isLoading = false
     }
 }
 

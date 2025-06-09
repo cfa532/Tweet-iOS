@@ -1,5 +1,11 @@
 import SwiftUI
 
+// MARK: - PinnedTweet
+struct PinnedTweet: Sendable {
+    let tweet: Tweet
+    let timePinned: TimeInterval
+}
+
 // MARK: - ProfileView
 /// A view that displays a user's profile, including their tweets, pinned tweets, and user information.
 /// This view handles both the current user's profile and other users' profiles.
@@ -48,6 +54,7 @@ struct ProfileView: View {
     @State private var isHeaderVisible = true
     @State private var bookmarks: [Tweet] = []
     @State private var favorites: [Tweet] = []
+    @State private var appUser: User = User(mid: Constants.GUEST_ID)
 
     init(user: User, onLogout: (() -> Void)? = nil) {
         self.user = user
@@ -57,7 +64,7 @@ struct ProfileView: View {
     // MARK: - Computed Properties
     /// Returns true if the displayed profile belongs to the current user
     var isCurrentUser: Bool {
-        user.mid == hproseInstance.appUser.mid
+        user.mid == appUser.mid
     }
 
     // MARK: - Methods
@@ -65,17 +72,11 @@ struct ProfileView: View {
     private func refreshPinnedTweets() async {
         do {
             let pinnedList = try await hproseInstance.getPinnedTweets(user: user)
-            // Extract tweets and their pin times, sort by timePinned descending
-            let sortedPinned = pinnedList.compactMap { dict -> (Tweet, Any)? in
-                guard let tweet = dict["tweet"] as? Tweet, let timePinned = dict["timePinned"] else { return nil }
-                return (tweet, timePinned)
-            }.sorted { lhs, rhs in
-                // Sort by timePinned descending (most recent first)
-                guard let l = lhs.1 as? TimeInterval, let r = rhs.1 as? TimeInterval else { return false }
-                return l > r
-            }
+            // Sort by timePinned descending
+            let sortedPinned = pinnedList.sorted { $0.timePinned > $1.timePinned }
+            
             await MainActor.run {
-                pinnedTweets = sortedPinned.map { $0.0 }
+                pinnedTweets = sortedPinned.map { $0.tweet }
                 pinnedTweetIds = Set(pinnedTweets.map { $0.mid })
             }
         } catch {
@@ -159,6 +160,7 @@ struct ProfileView: View {
                 isLoading = false
                 didLoad = true
             }
+            appUser = await AppUserStore.shared.getAppUser()
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
             if let _ = notification.userInfo?["tweetId"] as? String,
@@ -181,12 +183,12 @@ struct ProfileView: View {
                 onFollowToggle: { user in
                     if let isFollowing = try? await hproseInstance.toggleFollowing(
                         followedId: user.mid,
-                        followingId: hproseInstance.appUser.mid
+                        followingId: appUser.mid
                     ) {
                         try? await hproseInstance.toggleFollower(
                             userId: user.mid,
                             isFollowing: isFollowing,
-                            followerId: hproseInstance.appUser.mid
+                            followerId: appUser.mid
                         )
                     }
                 },
@@ -226,9 +228,16 @@ struct ProfileView: View {
         // Add local state for bookmarks/favorites if not already present
         let tweetsBinding = tweetListType == .BOOKMARKS ? $bookmarks : $favorites
         TweetListView<TweetItemView>(
-            title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",
-            tweets: tweetsBinding,
-            tweetFetcher: { page, size, isFromCache in
+            pageSize: 20,
+            rowView: { tweet in
+                TweetItemView(
+                    tweet: tweet,
+                    isPinned: pinnedTweetIds.contains(tweet.mid),
+                    isInProfile: true,
+                    onAvatarTap: { user in selectedUser = user }
+                )
+            },
+            tweetFetcher: { @Sendable page, size, isFromCache in
                 let tweets = try await hproseInstance.getUserTweetsByType(
                     user: user,
                     type: tweetListType,
@@ -237,14 +246,13 @@ struct ProfileView: View {
                 )
                 await MainActor.run {
                     if tweetListType == .BOOKMARKS {
-                        bookmarks.mergeTweets( tweets.compactMap{ $0 } )
+                        bookmarks.mergeTweets(tweets.compactMap{ $0 })
                     } else {
-                        favorites.mergeTweets( tweets.compactMap{ $0 } )
+                        favorites.mergeTweets(tweets.compactMap{ $0 })
                     }
                 }
                 return tweets
             },
-            showTitle: true,
             notifications: tweetListType == .BOOKMARKS ? [
                 TweetListNotification(
                     name: .bookmarkAdded,
@@ -275,26 +283,7 @@ struct ProfileView: View {
                     shouldAccept: { _ in true },
                     action: { tweet in favorites.removeAll { $0.mid == tweet.mid } }
                 )
-            ],
-            rowView: { tweet in
-                TweetItemView(
-                    tweet: tweet,
-                    isPinned: pinnedTweetIds.contains(tweet.mid),
-                    isInProfile: true,
-                    onAvatarTap: { user in selectedUser = user }
-                )
-            }
+            ]
         )
-    }
-}
-
-// MARK: - ProfileTweetsSection
-@available(iOS 16.0, *)
-
-// MARK: - Scroll Offset Preference Key
-private struct ScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }

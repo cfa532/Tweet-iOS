@@ -6,26 +6,27 @@
 //
 
 @available(iOS 16.0, *)
+@MainActor
 class FollowingsTweetViewModel: ObservableObject {
     @Published var tweets: [Tweet] = []     // tweet list to be displayed on screen.
     @Published var isLoading: Bool = false
-    private let hproseInstance: HproseInstance
+    var hproseInstance: HproseInstance
+    var appUserStore: AppUserStore
     
-    init(hproseInstance: HproseInstance) {
+    init(hproseInstance: HproseInstance, appUserStore: AppUserStore) {
         self.hproseInstance = hproseInstance
+        self.appUserStore = appUserStore
     }
     
     func fetchTweets(page: UInt, pageSize: UInt) async -> [Tweet?] {
         // fetch tweets from server
         do {
             let serverTweets = try await hproseInstance.fetchTweetFeed(
-                user: hproseInstance.appUser,
+                user: appUserStore.appUser,
                 pageNumber: page,
                 pageSize: pageSize
             )
-            await MainActor.run {
-                tweets.mergeTweets(serverTweets.compactMap{ $0 })
-            }
+            tweets.mergeTweets(serverTweets.compactMap{ $0 })
             return serverTweets     // including nil
         } catch {
             print("[FollowingsTweetViewModel] Error fetching tweets: \(error)")

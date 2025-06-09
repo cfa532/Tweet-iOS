@@ -5,31 +5,45 @@ struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
     @State private var showProfile = false
-    @EnvironmentObject private var hproseInstance: HproseInstance
-
+    @EnvironmentObject private var appUserStore: AppUserStore
+    @EnvironmentObject var hproseInstance: HproseInstance
+    @State private var currentUser: User?
+    
     var onAppIconTap: () -> Void = {}
     
     var body: some View {
         HStack {
             // Left: User Avatar
-            Button(action: {
-                if hproseInstance.appUser.isGuest {
-                    isLoginSheetPresented = true
-                } else {
-                    showProfile = true
+            NavigationLink {
+                if let user = currentUser {
+                    ProfileView(user: user)
                 }
-            }) {
-                Avatar(user: hproseInstance.appUser, size: 32)
+            } label: {
+                HStack {
+                    if let avatar = currentUser?.avatar {
+                        AsyncImage(url: URL(string: avatar)) { image in
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } placeholder: {
+                            Image(systemName: "person.circle.fill")
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        }
+                        .frame(width: 32, height: 32)
+                        .clipShape(Circle())
+                    } else {
+                        Image(systemName: "person.circle.fill")
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 32, height: 32)
+                            .foregroundColor(.gray)
+                    }
+                    Text(currentUser?.name ?? "No One")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                }
             }
-            .background(
-                NavigationLink(
-                    destination: ProfileView(user: hproseInstance.appUser, onLogout: {}), // Replace [] with actual tweets
-                    isActive: $showProfile
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-            )
             
             Spacer()
             
@@ -59,6 +73,9 @@ struct AppHeaderView: View {
         }
         .sheet(isPresented: $isSettingsSheetPresented) {
             SettingsView()
+        }
+        .task {
+            currentUser = await appUserStore.appUser
         }
     }
 }

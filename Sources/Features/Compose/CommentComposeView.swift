@@ -11,6 +11,7 @@ struct CommentComposeView: View {
     @State private var isQuoting = false
     @State private var selectedItems: [PhotosPickerItem] = []
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @EnvironmentObject private var appUserStore: AppUserStore
 
     var body: some View {
         NavigationView {
@@ -151,9 +152,9 @@ struct CommentComposeView: View {
         }
         
         // Create comment object
-        let comment = Tweet(
+        let comment = await Tweet(
             mid: Constants.GUEST_ID,                // placeholder Mimei Id
-            authorId: hproseInstance.appUser.mid,
+            authorId: appUserStore.appUser.mid,
             content: trimmedContent,
             timestamp: Date(),
             originalTweetId: isQuoting ? tweet.mid : nil,
@@ -213,7 +214,7 @@ struct CommentComposeView: View {
         }
         
         print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")
-        hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
+        await hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
         
         // Reset form and dismiss
         commentText = ""

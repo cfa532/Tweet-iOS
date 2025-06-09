@@ -14,11 +14,12 @@ extension View {
 
 @available(iOS 16.0, *)
 struct TweetItemBodyView: View {
+    @EnvironmentObject private var hproseInstance: HproseInstance
     @ObservedObject var tweet: Tweet
+    let onTap: () -> Void
     var enableTap: Bool = false
     @State private var isExpanded = false
     @State private var showLoginSheet = false
-    @EnvironmentObject private var hproseInstance: HproseInstance
 
     // Helper for grid aspect ratio
     func gridAspect(for attachments: [MimeiFileType]) -> CGFloat {
@@ -44,12 +45,6 @@ struct TweetItemBodyView: View {
             return 1.0
         default:
             return 1.0
-        }
-    }
-    
-    private func handleGuestAction() {
-        if hproseInstance.appUser.isGuest {
-            showLoginSheet = true
         }
     }
     
@@ -81,6 +76,18 @@ struct TweetItemBodyView: View {
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .onTapGesture {
+            if enableTap {
+                Task {
+                    let appUser = await AppUserStore.shared.appUser
+                    if appUser.isGuest {
+                        showLoginSheet = true
+                    } else {
+                        onTap()
+                    }
+                }
+            }
         }
     }
 }

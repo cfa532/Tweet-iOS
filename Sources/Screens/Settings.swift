@@ -7,20 +7,23 @@
 
 import SwiftUI
 
-
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @EnvironmentObject private var appUserStore: AppUserStore
+    @State private var isGuest: Bool = true
     
     var body: some View {
         NavigationView {
             List {
                 Section(header: Text("Account")) {
-                    if !hproseInstance.appUser.isGuest {
+                    if !isGuest {
                         Button("Logout") {
-                            hproseInstance.logout()
-                            NotificationCenter.default.post(name: .userDidLogout, object: nil)
-                            dismiss()
+                            Task {
+                                await hproseInstance.logout()
+                                NotificationCenter.default.post(name: .userDidLogout, object: nil)
+                                dismiss()
+                            }
                         }
                         .foregroundColor(.red)
                     }
@@ -44,6 +47,10 @@ struct SettingsView: View {
             .navigationBarItems(trailing: Button("Done") {
                 dismiss()
             })
+            .task {
+                let user = await appUserStore.getAppUser()
+                isGuest = user.isGuest
+            }
         }
     }
 }

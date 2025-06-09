@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TweetItemHeaderView: View {
     @ObservedObject var tweet: Tweet
+    @State private var appUser: User = User(mid: Constants.GUEST_ID)
     
     var body: some View {
         HStack {
@@ -14,6 +15,9 @@ struct TweetItemHeaderView: View {
             }
             Spacer()
         }
+        .task {
+            appUser = await AppUserStore.shared.getAppUser()
+        }
     }
 }
 
@@ -22,7 +26,7 @@ struct TweetMenu: View {
     @ObservedObject var tweet: Tweet
     let isPinned: Bool
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var appUser = HproseInstance.shared.appUser
+    @State private var appUser: User = User(mid: Constants.GUEST_ID)
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var isCurrentlyPinned: Bool
     @State private var showToast = false
@@ -93,6 +97,9 @@ struct TweetMenu: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .animation(.easeInOut, value: showToast)
             }
+        }
+        .task {
+            appUser = await AppUserStore.shared.getAppUser()
         }
     }
     

@@ -14,9 +14,10 @@ struct TweetActionButtonsView: View {
     @State private var showShareSheet = false
     @State private var showLoginSheet = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var appUser: User = User(mid: Constants.GUEST_ID)
 
     private func handleGuestAction() {
-        if hproseInstance.appUser.isGuest {
+        if appUser.isGuest {
             showLoginSheet = true
         }
     }
@@ -43,7 +44,7 @@ struct TweetActionButtonsView: View {
         HStack(spacing: 0) {
             // Comment button
             Button(action: {
-                if hproseInstance.appUser.isGuest {
+                if appUser.isGuest {
                     handleGuestAction()
                 } else {
                     showCommentCompose = true
@@ -62,7 +63,7 @@ struct TweetActionButtonsView: View {
             Spacer(minLength: 12)
             // Retweet button
             Button(action: {
-                if hproseInstance.appUser.isGuest {
+                if appUser.isGuest {
                     handleGuestAction()
                 } else {
                     Task {
@@ -87,7 +88,7 @@ struct TweetActionButtonsView: View {
             Spacer(minLength: 12)
             // Like button
             Button(action: {
-                if hproseInstance.appUser.isGuest {
+                if appUser.isGuest {
                     handleGuestAction()
                 } else {
                     Task {
@@ -116,7 +117,7 @@ struct TweetActionButtonsView: View {
             Spacer(minLength: 12)
             // Bookmark button
             Button(action: {
-                if hproseInstance.appUser.isGuest {
+                if appUser.isGuest {
                     handleGuestAction()
                 } else {
                     Task {
@@ -168,6 +169,9 @@ struct TweetActionButtonsView: View {
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .task {
+            appUser = await AppUserStore.shared.getAppUser()
         }
     }
 

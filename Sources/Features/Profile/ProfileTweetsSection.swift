@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - ProfileTweetsViewModel
 @available(iOS 16.0, *)
-class ProfileTweetsViewModel: ObservableObject {
+class ProfileTweetsViewModel: ObservableObject, @unchecked Sendable {
     @Published var tweets: [Tweet] = []
     @Published var isLoading: Bool = false
     private let hproseInstance: HproseInstance
@@ -34,20 +34,17 @@ class ProfileTweetsViewModel: ObservableObject {
         return filteredTweets
     }
     
+    @MainActor
     func handleNewTweet(_ tweet: Tweet) {
         tweets.insert(tweet, at: 0)
     }
     
+    @MainActor
     func handleDeletedTweet(_ tweetId: String) {
         tweets.removeAll { $0.mid == tweetId }
-        TweetCacheManager.shared.deleteTweet(mid: tweetId)
-    }
-}
-
-private struct TweetListScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+        Task {
+            TweetCacheManager.shared.deleteTweet(mid: tweetId)
+        }
     }
 }
 
@@ -103,36 +100,29 @@ struct ProfileTweetsSection: View {
                         .background(Color(UIColor.systemBackground))
                 }
                 TweetListView<TweetItemView>(
-                    title: "",
-                    tweets: $viewModel.tweets,
+                    pageSize: 20,
+                    rowView: { tweet in
+                        TweetItemView(
+                            tweet: tweet,
+                            isPinned: pinnedTweetIds.contains(tweet.mid),
+                            isInProfile: true,
+                            onAvatarTap: { user in onUserSelect(user) },
+                            onRemove: { tweetId in
+                                if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {
+                                    viewModel.tweets.remove(at: idx)
+                                }
+                            }
+                        )
+                    },
                     tweetFetcher: { page, size, isFromCache in
                         if isFromCache {
                             // Fetch from cache
-//                            let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: page, pageSize: size)
-//                            print("[DEBUG] Fetching cached tweets for user: \(user.mid)")
-//                            for tweet in cachedTweets {
-//                                if let t = tweet {
-//                                    print("[DEBUG] Cached tweet authorId: \(t.authorId), mid: \(t.mid)")
-//                                }
-//                            }
-//                            await MainActor.run {
-//                                viewModel.tweets.mergeTweets(cachedTweets.compactMap { tweet in
-//                                    if let t = tweet, t.authorId == user.mid {
-//                                        print("[DEBUG] Merging tweet mid: \(t.mid) for user: \(t.authorId)")
-//                                        return t
-//                                    } else {
-//                                        return nil
-//                                    }
-//                                })
-//                            }
-//                            return cachedTweets
                             return []
                         } else {
                             // Fetch from server
                             return try await viewModel.fetchTweets(page: page, pageSize: size)
                         }
                     },
-                    showTitle: false,
                     notifications: [
                         TweetListNotification(
                             name: .newTweetCreated,
@@ -146,20 +136,7 @@ struct ProfileTweetsSection: View {
                             shouldAccept: { _ in true },
                             action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
                         )
-                    ],
-                    rowView: { tweet in
-                        TweetItemView(
-                            tweet: tweet,
-                            isPinned: pinnedTweetIds.contains(tweet.mid),
-                            isInProfile: true,
-                            onAvatarTap: { user in onUserSelect(user) },
-                            onRemove: { tweetId in
-                                if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {
-                                    viewModel.tweets.remove(at: idx)
-                                }
-                            }
-                        )
-                    }
+                    ]
                 )
                 .frame(maxHeight: .infinity)
             }

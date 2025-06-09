@@ -1,6 +1,7 @@
 import CoreData
 import Foundation
 
+@MainActor
 class TweetCacheManager {
     static let shared = TweetCacheManager()
     let container: NSPersistentContainer
@@ -60,9 +61,7 @@ extension TweetCacheManager {
                 if let tweetData = cdTweet.tweetData,
                    let tweetDict = try? JSONSerialization.jsonObject(with: tweetData) as? [String: Any] {
                     do {
-                        let tweet = try await MainActor.run {
-                            try Tweet.from(dict: tweetDict)
-                        }
+                        let tweet = try await Tweet.from(dict: tweetDict)
                         tweets.append(tweet)
                     } catch {
                         print("Error processing tweet: \(error)")
@@ -78,24 +77,33 @@ extension TweetCacheManager {
     }
 
     func fetchTweet(mid: String) async -> Tweet? {
-        let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-        request.predicate = NSPredicate(format: "tid == %@", mid)
+        // First, get the tweet data on the main actor
+        let tweetData = await MainActor.run { () -> Data? in
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.predicate = NSPredicate(format: "tid == %@", mid)
+            guard let cdTweet = try? context.fetch(request).first,
+                  let data = cdTweet.tweetData else {
+                return nil
+            }
+            
+            // Update the cache time
+            cdTweet.timeCached = Date()
+            try? context.save()
+            
+            return data
+        }
         
-        // First, get the tweet and convert it
-        if let cdTweet = try? context.fetch(request).first {
+        // If we found tweet data, process it
+        if let tweetData = tweetData,
+           let tweetDict = try? JSONSerialization.jsonObject(with: tweetData) as? [String: Any] {
             do {
-                let tweet = try await MainActor.run {
-                    try Tweet.from(cdTweet: cdTweet)
-                }
-                // Then update the cache time in a separate operation
-                cdTweet.timeCached = Date()
-                try? context.save()
-                return tweet
+                return try await Tweet.from(dict: tweetDict)
             } catch {
                 print("Error processing tweet: \(error)")
                 return nil
             }
         }
+        
         return nil
     }
 
@@ -162,76 +170,106 @@ extension TweetCacheManager {
 
 // MARK: - Tweet <-> Core Data Conversion
 extension Tweet {
-    static func from(cdTweet: CDTweet) throws -> Tweet {
-        if let tweetData = cdTweet.tweetData,
-           let tweetDict = try? JSONSerialization.jsonObject(with: tweetData) as? [String: Any] {
-            return try Tweet.from(dict: tweetDict)
+    static func from(cdTweet: CDTweet) async throws -> Tweet? {
+        do {
+            if let tweetData = cdTweet.tweetData,
+               let tweetDict = try? JSONSerialization.jsonObject(with: tweetData) as? [String: Any] {
+                return try await Tweet.from(dict: tweetDict)
+            }
+        } catch {
+            throw NSError(domain: "TweetCacheManager", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])
         }
-        
-        throw NSError(domain: "TweetCacheManager", code: -1, 
-                     userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])
-    }
-    
-    static func from(cdTweet: CDTweet) async throws -> Tweet {
-        return try await MainActor.run {
-            try from(cdTweet: cdTweet)
-        }
+        return nil
     }
 }
 
 // MARK: - User Caching
 extension TweetCacheManager {
-    func fetchUser(mid: String) -> User {
-        let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-        request.predicate = NSPredicate(format: "mid == %@", mid)
-        
-        // First, get the user and convert it
-        if let cdUser = try? context.fetch(request).first {
-            let user = User.from(cdUser: cdUser)
-            // Then update the cache time in a separate operation
+    func fetchUser(mid: String) async -> User {
+        // First, get the user data on the main actor
+        let userData = await MainActor.run { () -> Data? in
+            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+            request.predicate = NSPredicate(format: "mid == %@", mid)
+            
+            guard let cdUser = try? context.fetch(request).first,
+                  let data = cdUser.userData else {
+                return nil
+            }
+            
+            // Update the cache time
             cdUser.timeCached = Date()
             try? context.save()
+            
+            return data
+        }
+        
+        // If we found user data, process it
+        if let userData = userData,
+           let user = try? JSONDecoder().decode(User.self, from: userData) {
             return user
         }
-        return User.getInstance(mid: mid)
+        
+        // If no cached user is found, return a new instance
+        return await User.getInstance(mid: mid)
     }
     
     func shouldRefreshUser(mid: String) -> Bool {
         let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
         request.predicate = NSPredicate(format: "mid == %@", mid)
-        if let cdUser = try? context.fetch(request).first {
-            return cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -300 // 5 minutes
+        
+        if let cdUser = try? context.fetch(request).first,
+           let timeCached = cdUser.timeCached {
+            let oneHourAgo = Calendar.current.date(byAdding: .hour, value: -1, to: Date())!
+            return timeCached < oneHourAgo
         }
-        return true // No cached user, we should refresh
+        return true
     }
-
+    
     func saveUser(_ user: User) {
-        if let userData = try? JSONEncoder().encode(user),
-           let userJson = String(data: userData, encoding: .utf8) {
-            print("Saving coredata user: \(userJson)")
-        } else {
-            print("Saving coredata user: <failed to encode user>")
+        context.performAndWait {
+            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+            request.predicate = NSPredicate(format: "mid == %@", user.mid)
+            let cdUser: CDUser
+            if let existingUser = try? context.fetch(request).first {
+                cdUser = existingUser
+            } else {
+                cdUser = CDUser(context: context)
+            }
+            cdUser.mid = user.mid
+            cdUser.timeCached = Date()
+            if let userData = try? JSONEncoder().encode(user) {
+                cdUser.userData = userData
+            }
+            try? context.save()
         }
-        let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-        request.predicate = NSPredicate(format: "mid == %@", user.mid)
-        let cdUser = (try? context.fetch(request).first) ?? CDUser(context: context)
-        cdUser.mid = user.mid
-        cdUser.timeCached = Date()
-        if let userData = try? JSONEncoder().encode(user) {
-            cdUser.userData = userData
-        }
-        try? context.save()
     }
-
+    
     func deleteExpiredUsers() {
         let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
         let oneMonthAgo = Calendar.current.date(byAdding: .month, value: -1, to: Date())!
         request.predicate = NSPredicate(format: "timeCached < %@", oneMonthAgo as NSDate)
-        
-        // Create a separate array to store the objects to delete
         if let expiredUsers = try? context.fetch(request) {
-            let usersToDelete = Array(expiredUsers)
-            for user in usersToDelete {
+            for user in expiredUsers {
+                context.delete(user)
+            }
+            try? context.save()
+        }
+    }
+    
+    func deleteUser(mid: String) {
+        let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+        request.predicate = NSPredicate(format: "mid == %@", mid)
+        if let cdUser = try? context.fetch(request).first {
+            context.delete(cdUser)
+            try? context.save()
+        }
+    }
+    
+    func clearAllUsers() {
+        let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+        if let allUsers = try? context.fetch(request) {
+            for user in allUsers {
                 context.delete(user)
             }
             try? context.save()

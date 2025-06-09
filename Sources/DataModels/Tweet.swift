@@ -1,18 +1,14 @@
 import Foundation
 
-class Tweet: Identifiable, Codable, ObservableObject {
-    // MARK: - Singleton
-    private static var instances: [String: Tweet] = [:]
-    private static let instanceLock = NSLock()
+actor TweetStore {
+    static let shared = TweetStore()
+    private var instances: [String: Tweet] = [:]
     
-    private static func getInstance(mid: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
-                          originalTweetId: String? = nil, originalAuthorId: String? = nil, author: User? = nil,
-                          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
-                          commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
-                          downloadable: Bool? = nil) -> Tweet {
-        instanceLock.lock()
-        defer { instanceLock.unlock() }
-        
+    func getInstance(mid: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
+                    originalTweetId: String? = nil, originalAuthorId: String? = nil, author: User? = nil,
+                    favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
+                    commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
+                    downloadable: Bool? = nil) -> Tweet {
         if let existingInstance = instances[mid] {
             // Update existing instance with new values
             if let content = content { existingInstance.content = content }
@@ -38,16 +34,34 @@ class Tweet: Identifiable, Codable, ObservableObject {
         return newInstance
     }
     
-    static func clearInstance(mid: String) {
-        instanceLock.lock()
-        defer { instanceLock.unlock() }
+    func clearInstance(mid: String) {
         instances.removeValue(forKey: mid)
     }
     
-    static func clearAllInstances() {
-        instanceLock.lock()
-        defer { instanceLock.unlock() }
+    func clearAllInstances() {
         instances.removeAll()
+    }
+}
+
+class Tweet: Identifiable, Codable, ObservableObject, @unchecked Sendable {
+    static func getInstance(mid: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
+                          originalTweetId: String? = nil, originalAuthorId: String? = nil, author: User? = nil,
+                          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
+                          commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
+                          downloadable: Bool? = nil) async -> Tweet {
+        return await TweetStore.shared.getInstance(mid: mid, authorId: authorId, content: content, timestamp: timestamp, title: title,
+                                                originalTweetId: originalTweetId, originalAuthorId: originalAuthorId, author: author,
+                                                favorites: favorites, favoriteCount: favoriteCount, bookmarkCount: bookmarkCount,
+                                                retweetCount: retweetCount, commentCount: commentCount, attachments: attachments,
+                                                isPrivate: isPrivate, downloadable: downloadable)
+    }
+    
+    static func clearInstance(mid: String) async {
+        await TweetStore.shared.clearInstance(mid: mid)
+    }
+    
+    static func clearAllInstances() async {
+        await TweetStore.shared.clearAllInstances()
     }
     
     // MARK: - Properties
@@ -126,7 +140,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         case downloadable
     }
     
-    required init(from decoder: Decoder) throws {
+    nonisolated required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mid = try container.decode(String.self, forKey: .mid)
         authorId = try container.decode(String.self, forKey: .authorId)
@@ -270,7 +284,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     /// - Parameter dict: Dictionary containing tweet data
     /// - Returns: A Tweet object if successful
     /// - Throws: DecodingError if the dictionary cannot be converted to a Tweet
-    static func from(dict: [String: Any]) throws -> Tweet {
+    static func from(dict: [String: Any]) async throws -> Tweet {
         do {
             // Create a new dictionary with validated fields and proper mapping
             var validatedDict = dict
@@ -290,7 +304,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
             decoder.dateDecodingStrategy = .millisecondsSince1970
             
             let tweet = try decoder.decode(Tweet.self, from: jsonData)
-            return getInstance(mid: tweet.mid, authorId: tweet.authorId, content: tweet.content,
+            return await getInstance(mid: tweet.mid, authorId: tweet.authorId, content: tweet.content,
                              timestamp: tweet.timestamp, title: tweet.title,
                              originalTweetId: tweet.originalTweetId, originalAuthorId: tweet.originalAuthorId,
                              author: tweet.author, favorites: tweet.favorites,
@@ -347,8 +361,8 @@ class Tweet: Identifiable, Codable, ObservableObject {
         attachments: [MimeiFileType]? = nil,
         isPrivate: Bool? = nil,
         downloadable: Bool? = nil
-    ) -> Tweet {
-        return Tweet.getInstance(
+    ) async -> Tweet {
+        return await Tweet.getInstance(
             mid: self.mid,
             authorId: self.authorId,
             content: content ?? self.content,

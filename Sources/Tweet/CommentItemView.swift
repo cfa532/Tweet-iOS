@@ -36,7 +36,7 @@ struct CommentItemView: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { showDetail = true }
-                TweetItemBodyView(tweet: comment, enableTap: false)
+                TweetItemBodyView(tweet: comment, onTap: { showDetail = true }, enableTap: false)
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
                     .padding(.top, -12)
@@ -46,13 +46,9 @@ struct CommentItemView: View {
         }
         .padding()
         .background(Color(.systemBackground))
-        .background(
-            NavigationLink(destination: CommentDetailView(comment: comment, parentTweet: parentTweet),
-                           isActive: $showDetail) {
-                EmptyView()
-            }
-                .hidden()
-        )
+        .navigationDestination(isPresented: $showDetail) {
+            CommentDetailView(comment: comment, parentTweet: parentTweet)
+        }
     }
 }
 

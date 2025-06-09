@@ -17,127 +17,152 @@ struct ComposeTweetView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                VStack(spacing: 0) {
-                    TextEditor(text: $viewModel.tweetContent)
-                        .frame(maxHeight: .infinity)
-                        .padding()
-                        .focused($isEditorFocused)
-                        .background(Color(.systemBackground))
-                        .onTapGesture {
-                            isEditorFocused = true
-                        }
-                    
-                    // Thumbnail preview section
-                    if !viewModel.selectedItems.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(viewModel.selectedItems, id: \.itemIdentifier) { item in
-                                    ThumbnailView(item: item)
-                                        .frame(width: 100, height: 100)
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                                        .overlay(
-                                            Button(action: {
-                                                viewModel.selectedItems.removeAll { $0.itemIdentifier == item.itemIdentifier }
-                                            }) {
-                                                Image(systemName: "xmark.circle.fill")
-                                                    .foregroundColor(.white)
-                                                    .background(Color.black.opacity(0.5))
-                                                    .clipShape(Circle())
-                                            }
-                                            .padding(4),
-                                            alignment: .topTrailing
-                                        )
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
-                        .frame(height: 120)
-                        .background(Color(.systemBackground))
-                    }
-                    
-                    // Attachment toolbar
-                    HStack(spacing: 20) {
-                        PhotosPicker(selection: $viewModel.selectedItems,
-                                   matching: .any(of: [.images, .videos])) {
-                            Image(systemName: "photo.on.rectangle")
-                                .font(.system(size: 20))
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Button(action: { /* TODO: Add poll */ }) {
-                            Image(systemName: "chart.bar")
-                                .font(.system(size: 20))
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Button(action: { /* TODO: Add location */ }) {
-                            Image(systemName: "location")
-                                .font(.system(size: 20))
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Spacer()
-                        
-                        Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.tweetContent.count))")
-                            .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .gray)
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemBackground))
-                    .overlay(
-                        Rectangle()
-                            .frame(height: 1)
-                            .foregroundColor(Color(.systemGray4)),
-                        alignment: .top
-                    )
-                }
-                
-                if viewModel.showToast {
-                    VStack {
-                        Spacer()
-                        ToastView(message: viewModel.toastMessage, type: .error)
-                            .padding(.bottom, 40)
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.easeInOut, value: viewModel.showToast)
-                }
-            }
-            .navigationTitle("New Tweet")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Tweet") {
-                        Task {
-                            await viewModel.postTweet()
-                            dismiss()
-                        }
-                    }
-                    .disabled(!viewModel.canPostTweet || viewModel.isUploading)
-                }
-            }
-            .onAppear {
-                // Try to focus immediately
-                isEditorFocused = true
-                
-                // If immediate focus doesn't work, try again after a short delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    isEditorFocused = true
-                }
-            }
-            .ignoresSafeArea(.keyboard, edges: .bottom)
+            ComposeTweetContentView(
+                viewModel: viewModel,
+                isEditorFocused: _isEditorFocused,
+                dismiss: dismiss
+            )
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .interactiveDismissDisabled(viewModel.tweetContent.count > 0)
+        .interactiveDismissDisabled(viewModel.content.count > 0)
+    }
+}
+
+@available(iOS 16.0, *)
+private struct ComposeTweetContentView: View {
+    @ObservedObject var viewModel: ComposeTweetViewModel
+    @FocusState var isEditorFocused: Bool
+    let dismiss: DismissAction
+    
+    var body: some View {
+        ZStack {
+            VStack(spacing: 0) {
+                TextEditor(text: $viewModel.content)
+                    .frame(maxHeight: .infinity)
+                    .padding()
+                    .focused($isEditorFocused)
+                    .background(Color(.systemBackground))
+                    .onTapGesture {
+                        isEditorFocused = true
+                    }
+                
+                if !viewModel.selectedItems.isEmpty {
+                    ThumbnailsView(viewModel: viewModel)
+                }
+                
+                AttachmentToolbar(viewModel: viewModel)
+            }
+            
+            if viewModel.showToast {
+                ToastOverlay(message: viewModel.toastMessage)
+            }
+        }
+        .navigationTitle("New Tweet")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("Cancel") {
+                    dismiss()
+                }
+            }
+            
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Tweet") {
+                    Task {
+                        await viewModel.uploadTweet()
+                        dismiss()
+                    }
+                }
+                .disabled(!viewModel.canPostTweet || viewModel.isUploading)
+            }
+        }
+        .onAppear {
+            // Try to focus immediately
+            isEditorFocused = true
+            
+            // If immediate focus doesn't work, try again after a short delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isEditorFocused = true
+            }
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+}
+
+@available(iOS 16.0, *)
+private struct ThumbnailsView: View {
+    @ObservedObject var viewModel: ComposeTweetViewModel
+    
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(viewModel.selectedItems, id: \.itemIdentifier) { item in
+                    ThumbnailView(item: item)
+                        .frame(width: 100, height: 100)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            Button(action: {
+                                viewModel.selectedItems.removeAll { $0.itemIdentifier == item.itemIdentifier }
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.white)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                            }
+                            .padding(4),
+                            alignment: .topTrailing
+                        )
+                }
+            }
+            .padding(.horizontal)
+        }
+        .frame(height: 120)
+        .background(Color(.systemBackground))
+    }
+}
+
+@available(iOS 16.0, *)
+private struct AttachmentToolbar: View {
+    @ObservedObject var viewModel: ComposeTweetViewModel
+    
+    var body: some View {
+        HStack(spacing: 20) {
+            PhotosPicker(selection: $viewModel.selectedItems,
+                       matching: .any(of: [.images, .videos])) {
+                Image(systemName: "photo.on.rectangle")
+                    .font(.system(size: 20))
+                    .foregroundColor(.blue)
+            }
+            .buttonStyle(.plain)
+            
+            Spacer()
+            
+            Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.content.count))")
+                .foregroundColor(viewModel.content.count > Constants.MAX_TWEET_SIZE ? .red : .gray)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color(.systemBackground))
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundColor(Color(.systemGray4)),
+            alignment: .top
+        )
+    }
+}
+
+@available(iOS 16.0, *)
+private struct ToastOverlay: View {
+    let message: String
+    
+    var body: some View {
+        VStack {
+            Spacer()
+            ToastView(message: message, type: .error)
+                .padding(.bottom, 40)
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }

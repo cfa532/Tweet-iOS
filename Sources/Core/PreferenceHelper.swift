@@ -1,6 +1,6 @@
 import Foundation
 
-class PreferenceHelper {
+final class PreferenceHelper: @unchecked Sendable {
     private let userDefaults = UserDefaults.standard
     
     // MARK: - App URLs

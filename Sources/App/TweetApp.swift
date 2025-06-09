@@ -23,6 +23,7 @@ class AppState: ObservableObject {
 @main
 struct TweetApp: App {
     @StateObject private var appState = AppState()
+    @StateObject private var appUserStore = AppUserStore.shared
     @State private var showGlobalAlert = false
     @State private var globalAlertMessage = ""
     
@@ -32,7 +33,10 @@ struct TweetApp: App {
             forTaskWithIdentifier: "com.tweet.upload",
             using: nil
         ) { task in
-            HproseInstance.handleBackgroundTask(task: task as! BGProcessingTask)
+            // Create a Task to handle the async operation
+            Task {
+                await HproseInstance.handleBackgroundTask(task: task as! BGProcessingTask)
+            }
         }
     }
     
@@ -64,6 +68,7 @@ struct TweetApp: App {
                     }
                 }
             }
+            .environmentObject(appUserStore)
             .alert(isPresented: $showGlobalAlert) {
                 Alert(title: Text("Error"), message: Text(globalAlertMessage), dismissButton: .default(Text("OK")))
             }

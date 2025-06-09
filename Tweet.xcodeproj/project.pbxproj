@@ -25,6 +25,8 @@
 		4674940F2DF2C4D60082FAC6 /* CommentListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4674940E2DF2C4D00082FAC6 /* CommentListView.swift */; };
 		467494132DF33BFD0082FAC6 /* CommentMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467494122DF33BF50082FAC6 /* CommentMenu.swift */; };
 		467494172DF4A1460082FAC6 /* CommentDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467494162DF4A13E0082FAC6 /* CommentDetailView.swift */; };
+		4674941E2DF666990082FAC6 /* UserSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4674941C2DF666990082FAC6 /* UserSettingsView.swift */; };
+		4674941F2DF666990082FAC6 /* UserSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4674941A2DF666990082FAC6 /* UserSearchView.swift */; };
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
 		469A99502DEBFBC100954049 /* Tweet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994F2DEBFBC100954049 /* Tweet.swift */; };
@@ -82,6 +84,8 @@
 		4674940E2DF2C4D00082FAC6 /* CommentListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentListView.swift; sourceTree = "<group>"; };
 		467494122DF33BF50082FAC6 /* CommentMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentMenu.swift; sourceTree = "<group>"; };
 		467494162DF4A13E0082FAC6 /* CommentDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentDetailView.swift; sourceTree = "<group>"; };
+		4674941A2DF666990082FAC6 /* UserSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserSearchView.swift; sourceTree = "<group>"; };
+		4674941C2DF666990082FAC6 /* UserSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserSettingsView.swift; sourceTree = "<group>"; };
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
 		469A994F2DEBFBC100954049 /* Tweet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tweet.swift; sourceTree = "<group>"; };
@@ -216,6 +220,8 @@
 		1A1A1A1A1A1A1A1A1A1A1A0A /* Features */ = {
 			isa = PBXGroup;
 			children = (
+				4674941B2DF666990082FAC6 /* Search */,
+				4674941D2DF666990082FAC6 /* Settings */,
 				46E5B3282DDA02E200AEF31F /* Profile */,
 				1A1A1A1A1A1A1A1A1A1A1A0D /* Home */,
 				1A1A1A1A1A1A1A1A1A1A1A0E /* Compose */,
@@ -266,6 +272,22 @@
 				D424303A66FF70A9FBF5540E /* Pods-Tweet.release.xcconfig */,
 			);
 			path = Pods;
+			sourceTree = "<group>";
+		};
+		4674941B2DF666990082FAC6 /* Search */ = {
+			isa = PBXGroup;
+			children = (
+				4674941A2DF666990082FAC6 /* UserSearchView.swift */,
+			);
+			path = Search;
+			sourceTree = "<group>";
+		};
+		4674941D2DF666990082FAC6 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				4674941C2DF666990082FAC6 /* UserSettingsView.swift */,
+			);
+			path = Settings;
 			sourceTree = "<group>";
 		};
 		469A994E2DEBF89B00954049 /* MediaViews */ = {
@@ -478,6 +500,8 @@
 				46E5B36D2DE3617400AEF31F /* AvatarFullScreenView.swift in Sources */,
 				469A99502DEBFBC100954049 /* Tweet.swift in Sources */,
 				46E5B3512DDCA00000AEF31F /* Settings.swift in Sources */,
+				4674941E2DF666990082FAC6 /* UserSettingsView.swift in Sources */,
+				4674941F2DF666990082FAC6 /* UserSearchView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A2C /* LocationPickerView.swift in Sources */,
 				46E5B3672DE2DD2900AEF31F /* TweetListView.swift in Sources */,
 				46E5B33A2DDA315700AEF31F /* RecommendedTweetView.swift in Sources */,
@@ -637,7 +661,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -647,7 +671,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Bridging-Header.h";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -681,7 +705,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Bridging-Header.h";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
