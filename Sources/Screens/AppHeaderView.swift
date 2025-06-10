@@ -19,7 +19,7 @@ struct AppHeaderView: View {
                     showProfile = true
                 }
             }) {
-                Avatar(user: hproseInstance.appUser, size: 32)
+                Avatar(user: hproseInstance.appUser, size: 36)
             }
             .background(
                 NavigationLink(

@@ -19,7 +19,7 @@ struct LoginView: View {
     @State private var showSuccess = false
     @FocusState private var focusedField: Field?
     
-    enum Field: Hashable {
+    enum Field {
         case username
         case password
     }
@@ -37,18 +37,21 @@ struct LoginView: View {
                         .autocapitalization(.none)
                         .disabled(isLoading)
                         .focused($focusedField, equals: .username)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            focusedField = .username
+                        .submitLabel(.next)
+                        .onSubmit {
+                            focusedField = .password
                         }
                     
                     SecureField("Password", text: $password)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .disabled(isLoading)
                         .focused($focusedField, equals: .password)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            focusedField = .password
+                        .submitLabel(.done)
+                        .onSubmit {
+                            focusedField = nil
+                            Task {
+                                await login()
+                            }
                         }
                 }
                 
