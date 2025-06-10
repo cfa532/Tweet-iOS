@@ -183,9 +183,18 @@ struct UserListView: View {
 
             // If not in cache, fetch from server
             do {
-                if let user = try await hproseInstance.getUser(userId) {
-                    if !fetchedUsers.contains(where: { $0.mid == userId }) {
-                        fetchedUsers.append(user)
+                if let serverUser = try await hproseInstance.getUser(userId) {
+                    // Update the cache with server data
+                    TweetCacheManager.shared.saveUser(serverUser)
+                    
+                    // Update the in-memory instance
+                    User.updateUserInstance(with: serverUser)
+                    
+                    // Replace the cached user with server user in our results
+                    if let index = fetchedUsers.firstIndex(where: { $0.mid == userId }) {
+                        fetchedUsers[index] = serverUser
+                    } else {
+                        fetchedUsers.append(serverUser)
                     }
                 }
             } catch {
