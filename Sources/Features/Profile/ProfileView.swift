@@ -191,11 +191,26 @@ struct ProfileView: View {
                         // update follower count is done by backend.
                     }
                 },
-                onUserTap: { user in
-                    selectedUser = user
+                onUserTap: { selectedUser in
+                    self.selectedUser = selectedUser
                 }
             )
         }
+        .background(
+            NavigationLink(
+                destination: Group {
+                    if let selectedUser = selectedUser {
+                        ProfileView(user: selectedUser, onLogout: nil)
+                    }
+                },
+                isActive: Binding(
+                    get: { selectedUser != nil },
+                    set: { if !$0 { selectedUser = nil } }
+                )
+            ) {
+                EmptyView()
+            }
+        )
         .navigationDestination(isPresented: $showTweetList) {
             VStack(spacing: 0) {
                 Text(tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites")

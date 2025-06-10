@@ -15,7 +15,7 @@ struct UserListView: View {
     @State private var hasMoreUsers: Bool = true
     @State private var currentPage: Int = 0
     private let initialBatchSize: Int = 10
-    private let loadMoreBatchSize: Int = 5
+    private let loadMoreBatchSize: Int = 10
     @State private var errorMessage: String? = nil
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -43,7 +43,9 @@ struct UserListView: View {
                         UserRowView(
                             user: user,
                             onFollowToggle: onFollowToggle,
-                            onTap: onUserTap
+                            onTap: { selectedUser in
+                                onUserTap?(selectedUser)
+                            }
                         )
                         .id(user.mid)
                     }

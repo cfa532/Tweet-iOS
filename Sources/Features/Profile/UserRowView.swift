@@ -29,7 +29,7 @@ struct UserRowView: View {
                     HStack {
                         Text(user.name ?? "User Name")
                             .font(.system(size: 14, weight: .semibold))
-                        Text("@\(user.username ?? "username")")
+                        Text("@\(user.username ?? "Noone")")
                             .font(.system(size: 12))
                             .foregroundColor(.gray)
                     }
@@ -39,7 +39,7 @@ struct UserRowView: View {
                                 Text(profile)
                                     .font(.footnote)
                                     .foregroundColor(.secondary)
-                                    .lineLimit(3)
+                                    .lineLimit(nil)
                                 Button("Show less") {
                                     showFullProfile = false
                                 }
@@ -50,9 +50,9 @@ struct UserRowView: View {
                                 Text(profile)
                                     .font(.footnote)
                                     .foregroundColor(.secondary)
-                                    .lineLimit(1)
+                                    .lineLimit(4)
                                     .truncationMode(.tail)
-                                if profile.count > 80 {
+                                if profile.count > 200 {
                                     Button("...") {
                                         showFullProfile = true
                                     }
@@ -85,11 +85,13 @@ struct UserRowView: View {
                 }
             }
             .padding(.horizontal)
+            .padding(.vertical, 8)
         }
         .buttonStyle(PlainButtonStyle())
         .onAppear {
             isFollowing = hproseInstance.appUser.followingList?.contains(user.mid) ?? false
         }
-        // Remove .padding(.vertical, 2) for minimal row height
+        Divider()
+            .padding(.horizontal)
     }
 }
