@@ -168,17 +168,25 @@ struct UserListView: View {
     
     private func fetchUserObjects(for userIds: [String]) async throws -> [User] {
         var fetchedUsers: [User] = []
+        var processedIds = Set<String>()
         
         for userId in userIds {
+            // Skip if we've already processed this ID
+            guard !processedIds.contains(userId) else { continue }
+            processedIds.insert(userId)
+            
             // First check if user is in Core Data cache
             let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
-            fetchedUsers.append(cachedUser)
+            if !fetchedUsers.contains(where: { $0.mid == userId }) {
+                fetchedUsers.append(cachedUser)
+            }
 
             // If not in cache, fetch from server
             do {
-                let user = try await hproseInstance.getUser(userId)
-                if user != nil {
-                    fetchedUsers.append(user!)
+                if let user = try await hproseInstance.getUser(userId) {
+                    if !fetchedUsers.contains(where: { $0.mid == userId }) {
+                        fetchedUsers.append(user)
+                    }
                 }
             } catch {
                 print("Error fetching user \(userId): \(error)")
