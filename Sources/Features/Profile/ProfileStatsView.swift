@@ -25,7 +25,7 @@ struct ProfileStatsView: View {
                 onFollowingTap()
             } label: {
                 VStack {
-                    Text("Following")
+                    Text("Followings")
                         .font(.caption)
                     Text("\(user.followingCount ?? 0)")
                         .font(.headline)
@@ -33,7 +33,7 @@ struct ProfileStatsView: View {
             }
             Spacer()
             VStack {
-                Text("Tweet")
+                Text("Tweets")
                     .font(.caption)
                 Text("\(user.tweetCount ?? 0)")
                     .font(.headline)

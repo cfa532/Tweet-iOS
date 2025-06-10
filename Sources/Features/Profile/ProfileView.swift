@@ -169,8 +169,13 @@ struct ProfileView: View {
             }
         }
         .navigationDestination(isPresented: $showUserList) {
+            let displayName = if let name = user.name, !name.isEmpty {
+                name
+            } else {
+                user.username ?? "No One"
+            }
             UserListView(
-                title: userListType == .FOLLOWER ? "Fans@\(user.username ?? "")" : "Following@\(user.username ?? "")",
+                title: userListType == .FOLLOWER ? "Fans@\(displayName)" : "Followings@\(displayName)",
                 userFetcher: { page, size in
                     let ids = try await hproseInstance.getFollows(user: user, entry: userListType)
                     let startIndex = page * size
