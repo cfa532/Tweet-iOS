@@ -180,14 +180,10 @@ struct ProfileView: View {
                 },
                 onFollowToggle: { user in
                     if let isFollowing = try? await hproseInstance.toggleFollowing(
-                        followedId: user.mid,
-                        followingId: hproseInstance.appUser.mid
+                        userId: hproseInstance.appUser.mid,
+                        followingId: user.mid
                     ) {
-                        try? await hproseInstance.toggleFollower(
-                            userId: user.mid,
-                            isFollowing: isFollowing,
-                            followerId: hproseInstance.appUser.mid
-                        )
+                        // update follower count.
                     }
                 },
                 onUserTap: { user in

@@ -100,7 +100,7 @@ final class HproseInstance: ObservableObject {
                 
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     #if DEBUG
-                        let firstIp = "218.72.53.166:8002"  // for testing
+                        let firstIp = "122.233.16.121:8002"  // for testing
                     #endif
                     
                     HproseInstance.baseUrl = "http://\(firstIp)"
@@ -537,48 +537,20 @@ final class HproseInstance: ObservableObject {
     }
     
     /**
-     * @param isFollowing indicates if the appUser is following @param userId. Passing
-     * an argument instead of toggling the status of a follower, because toggling
-     * following/follower status happens on two different hosts.
-     * */
-    func toggleFollower(
-        userId: String,
-        isFollowing: Bool,
-        followerId: String
-    ) async throws {
-        try await withRetry {
-            let entry = "toggle_follower"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "userid": userId,
-                "otherid": followerId,
-                "isfollower": isFollowing
-            ]
-            guard let service = hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-            }
-            _ = service.runMApp(entry, params, nil)
-        }
-    }
-    
-    /**
      * Called when appUser clicks the Follow button.
      * @param followedId is the user that appUser is following or unfollowing.
      * */
     func toggleFollowing(
-        followedId: String,
+        userId: String,
         followingId: String
     )  async throws -> Bool? {
         try await withRetry {
-            let followedUser = try await getUser(followedId)
             let entry = "toggle_following"
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "userid": followingId,
-                "otherid": followedId,
-                "otherhostid": followedUser?.hostIds?.first as Any
+                "followingid": followingId,
+                "userid": userId,
             ]
             guard let service = hproseClient else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
