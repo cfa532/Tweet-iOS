@@ -219,6 +219,11 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = item {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
+                    // Skip private tweets in feed
+                    if tweet.isPrivate == true {
+                        tweets.append(nil)
+                        continue
+                    }
                     tweet.author = try await getUser(tweet.authorId)
                     // Save tweet back to cache
                     TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
@@ -271,6 +276,11 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = item{
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
+                    // Only show private tweets if the current user is the author
+                    if tweet.isPrivate == true && tweet.authorId != appUser.mid {
+                        tweets.append(nil)
+                        continue
+                    }
                     tweet.author = try await getUser(tweet.authorId)
                     // Save tweet back to cache
                     tweets.append(tweet)
