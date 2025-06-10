@@ -33,8 +33,7 @@ struct FollowingsTweetView: View {
                         return cachedTweets
                     } else {
                         // Fetch from server
-                        let newTweets = await viewModel.fetchTweets(page: page, pageSize: size)
-                        return newTweets
+                        return await viewModel.fetchTweets(page: page, pageSize: size)
                     }
                 },
                 showTitle: false,

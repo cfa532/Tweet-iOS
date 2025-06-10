@@ -26,6 +26,15 @@ class FollowingsTweetViewModel: ObservableObject {
             await MainActor.run {
                 tweets.mergeTweets(serverTweets.compactMap{ $0 })
             }
+            Task {
+                let newTweets = try await hproseInstance.fetchTweetFeed(
+                    user: hproseInstance.appUser,
+                    entry: "update_following_tweets"
+                )
+                await MainActor.run {
+                    tweets.mergeTweets(newTweets.compactMap{ $0 })
+                }
+            }
             return serverTweets     // including nil
         } catch {
             print("[FollowingsTweetViewModel] Error fetching tweets: \(error)")
