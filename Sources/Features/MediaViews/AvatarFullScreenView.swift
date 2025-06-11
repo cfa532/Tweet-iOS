@@ -25,9 +25,9 @@ struct AvatarFullScreenView: View {
                 Spacer()
                 VStack(alignment: .leading, spacing: 8) {
                     Text(user.mid)
-//                    if let baseUrl = user.baseUrl {
-//                        Text(baseUrl)
-//                    }
+                    if let baseUrl = user.baseUrl {
+                        Text(baseUrl)
+                    }
                     if let hostId = user.hostIds?.first {
                         Text(hostId)
                     }
