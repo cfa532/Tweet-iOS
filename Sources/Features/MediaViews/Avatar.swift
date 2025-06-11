@@ -10,6 +10,8 @@ import SwiftUI
 struct Avatar: View {
     @ObservedObject var user: User
     let size: CGFloat
+    @State private var cachedImage: UIImage?
+    @State private var isLoading = false
     
     init(user: User, size: CGFloat = 40) {
         self.user = user
@@ -19,15 +21,40 @@ struct Avatar: View {
     var body: some View {
         Group {
             if let avatarUrl = user.avatarUrl {
-                AsyncImage(url: URL(string: avatarUrl)) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Color.gray
+                Group {
+                    if let cachedImage = cachedImage {
+                        Image(uiImage: cachedImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else if isLoading {
+                        Color.gray
+                            .overlay(
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .tint(.white)
+                            )
+                    } else {
+                        Color.gray
+                            .onAppear {
+                                loadAvatar(from: avatarUrl)
+                            }
+                    }
                 }
                 .frame(width: size, height: size)
                 .clipShape(Circle())
+                .onAppear {
+                    // Try to load from cache first when view appears
+                    if cachedImage == nil {
+                        loadAvatar(from: avatarUrl)
+                    }
+                }
+                .onChange(of: user.avatarUrl) { _ in
+                    // Reset and reload when avatar URL changes
+                    cachedImage = nil
+                    if let avatarUrl = user.avatarUrl {
+                        loadAvatar(from: avatarUrl)
+                    }
+                }
             } else {
                 Image("ic_splash")
                     .frame(width: size, height: size)
@@ -35,5 +62,40 @@ struct Avatar: View {
             }
         }
         .id(user.mid) // Force view update when user changes
+    }
+    
+    private func loadAvatar(from urlString: String) {
+        guard !isLoading else { return }
+        
+        // Use the filename from URL as the cache key - this is simpler and matches user's expectation
+        let cacheKey = URL(string: urlString)?.lastPathComponent ?? urlString
+        
+        // Create a MimeiFileType with the filename as mid so existing cache logic works
+        let avatarAttachment = MimeiFileType(
+            mid: cacheKey,
+            type: "image"
+        )
+        
+        // Check cache first
+        if let cached = ImageCacheManager.shared.getImage(for: avatarAttachment, baseUrl: "") {
+            cachedImage = cached
+            return
+        }
+        
+        // Load from network if not cached
+        isLoading = true
+        Task {
+            if let url = URL(string: urlString),
+               let image = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment, baseUrl: "") {
+                await MainActor.run {
+                    cachedImage = image
+                    isLoading = false
+                }
+            } else {
+                await MainActor.run {
+                    isLoading = false
+                }
+            }
+        }
     }
 }

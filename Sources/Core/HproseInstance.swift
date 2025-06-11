@@ -143,43 +143,41 @@ final class HproseInstance: ObservableObject {
         pageNumber: UInt = 0,
         pageSize: UInt = 20
     ) async throws -> [Tweet?] {
-        try await withRetry {
-            let entry = "get_comments"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "tweetid": parentTweet.mid,
-                "appuserid": appUser.mid,
-                "pn": pageNumber,
-                "ps": pageSize,
-            ]
-            guard let service = hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-            }
-            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchComments"])
-            }
-            
-            // Process each item in the response array, preserving nil positions
-            var commentsWithAuthors: [Tweet?] = []
-            for item in response {
-                if let dict = item {
-                    do {
-                        let comment = try await MainActor.run {
-                            return try Tweet.from(dict: dict)
-                        }
-                        comment.author = try? await getUser(comment.authorId)
-                        commentsWithAuthors.append(comment)
-                    } catch {
-                        print("Error processing comment: \(error)")
-                        commentsWithAuthors.append(nil)
+        let entry = "get_comments"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "tweetid": parentTweet.mid,
+            "appuserid": appUser.mid,
+            "pn": pageNumber,
+            "ps": pageSize,
+        ] as [String : Any]
+        guard let service = hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchComments"])
+        }
+        
+        // Process each item in the response array, preserving nil positions
+        var commentsWithAuthors: [Tweet?] = []
+        for item in response {
+            if let dict = item {
+                do {
+                    let comment = try await MainActor.run {
+                        return try Tweet.from(dict: dict)
                     }
-                } else {
+                    comment.author = try? await getUser(comment.authorId)
+                    commentsWithAuthors.append(comment)
+                } catch {
+                    print("Error processing comment: \(error)")
                     commentsWithAuthors.append(nil)
                 }
+            } else {
+                commentsWithAuthors.append(nil)
             }
-            return commentsWithAuthors
         }
+        return commentsWithAuthors
     }
     
     // MARK: - Tweet Operations
@@ -280,10 +278,10 @@ final class HproseInstance: ObservableObject {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                     tweet.author = try await getUser(tweet.authorId)
                     // Only show private tweets if the current user is the author
-                    if tweet.isPrivate == true && tweet.authorId != appUser.mid {
-                        tweets.append(nil)
-                        continue
-                    }
+//                    if tweet.isPrivate == true && tweet.authorId != appUser.mid {
+//                        tweets.append(nil)
+//                        continue
+//                    }
                     // Save tweet back to cache
                     //                        TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
                     tweets.append(tweet)
@@ -418,37 +416,35 @@ final class HproseInstance: ObservableObject {
     }
     
     func login(_ loginUser: User) async throws -> [String: Any] {
-        return try await withRetry {
-            let entry = "login"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "username": loginUser.username!,
-                "password": loginUser.password!
-            ]
-            let newClient = HproseHttpClient()
-            newClient.timeout = 60
-            newClient.uri = "\(loginUser.baseUrl!)/webapi/"
-            let newService = newClient.useService(HproseService.self) as AnyObject
-            guard let response = newService.runMApp(entry, params, nil) as? [String: Any] else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in login"])
-            }
-            if let status = response["status"] as? String {
-                if status == "failure" {
-                    if let reason = response["reason"] as? String {
-                        return ["reason": reason, "status": "failure"]
-                    }
-                    return ["reason": "Unknown error occurred", "status": "failure"]
-                } else if status == "success" {
-                    await MainActor.run {
-                        // Update the appUser reference to point to the new user instance
-                        preferenceHelper?.setUserId(loginUser.mid)
-                    }
-                    return ["reason": "Success", "status": "success"]
-                }
-            }
-            return ["reason": "Invalid response status", "status": "failure"]
+        let entry = "login"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "username": loginUser.username!,
+            "password": loginUser.password!
+        ]
+        let newClient = HproseHttpClient()
+        newClient.timeout = 60
+        newClient.uri = "\(loginUser.baseUrl!)/webapi/"
+        let newService = newClient.useService(HproseService.self) as AnyObject
+        guard let response = newService.runMApp(entry, params, nil) as? [String: Any] else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in login"])
         }
+        if let status = response["status"] as? String {
+            if status == "failure" {
+                if let reason = response["reason"] as? String {
+                    return ["reason": reason, "status": "failure"]
+                }
+                return ["reason": "Unknown error occurred", "status": "failure"]
+            } else if status == "success" {
+                await MainActor.run {
+                    // Update the appUser reference to point to the new user instance
+                    preferenceHelper?.setUserId(loginUser.mid)
+                }
+                return ["reason": "Success", "status": "success"]
+            }
+        }
+        return ["reason": "Invalid response status", "status": "failure"]
     }
     
     func logout() {

@@ -38,6 +38,12 @@ struct TweetMenu: View {
     var body: some View {
         ZStack {
             Menu {
+                Button(action: {
+                    UIPasteboard.general.string = tweet.mid
+                }) {
+                    Label("\(tweet.mid)", systemImage: "doc.on.clipboard")
+                }
+                
                 if tweet.authorId == appUser.mid {
                     Button(action: {
                         Task {
