@@ -12,6 +12,13 @@ class AppState: ObservableObject {
         do {
             try await HproseInstance.shared.initialize()
             isInitialized = true
+            
+            // Cleanup image cache after a delay
+            Task.detached(priority: .background) {
+                // Wait 3 seconds after app initialization
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                ImageCacheManager.shared.cleanupOldCache()
+            }
         } catch {
             self.error = error
         }

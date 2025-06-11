@@ -28,19 +28,9 @@ class ImageCacheManager {
         // Set cache limits
         cache.countLimit = 100 // Maximum number of images in memory
         cache.totalCostLimit = 50 * 1024 * 1024 // 50MB limit
-        
-        // Start cleanup timer
-        startCleanupTimer()
     }
     
-    private func startCleanupTimer() {
-        // Run cleanup every 24 hours
-        Timer.scheduledTimer(withTimeInterval: 24 * 60 * 60, repeats: true) { [weak self] _ in
-            self?.cleanupOldCache()
-        }
-    }
-    
-    private func cleanupOldCache() {
+    func cleanupOldCache() {
         do {
             let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
             let now = Date()
