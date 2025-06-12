@@ -8,6 +8,21 @@
 import SwiftUI
 import AVKit
 
+// MARK: - Video Player Error
+enum VideoPlayerError: LocalizedError {
+    case notPlayable
+    case unknown
+    
+    var errorDescription: String? {
+        switch self {
+        case .notPlayable:
+            return "This video format is not supported"
+        case .unknown:
+            return "An unknown error occurred"
+        }
+    }
+}
+
 // MARK: - Video Player View
 struct VideoPlayerCacheView: View {
     let url: URL
@@ -17,11 +32,11 @@ struct VideoPlayerCacheView: View {
     @State private var player: AVPlayer?
     @State private var isPlaying: Bool = false
     @State private var isMuted: Bool = PreferenceHelper().getSpeakerMute()
-    @State private var isVisible: Bool = false
     private let preferenceHelper = PreferenceHelper()
 
     var body: some View {
         ZStack {
+            // Simple VideoPlayer
             VideoPlayer(player: player)
                 .onAppear {
                     setupPlayer()
@@ -29,55 +44,65 @@ struct VideoPlayerCacheView: View {
                 .onDisappear {
                     cleanupPlayer()
                 }
-                .clipped()
-                .onVisibilityChanged { visible in
-                    isVisible = visible
-                    handlePlayback()
-                }
             
             // Controls overlay
-            controlsOverlay
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    
+                    // Play/Pause button
+                    Button(action: togglePlayPause) {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .foregroundColor(.white)
+                            .padding(12)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .padding(.trailing, 10)
+                    
+                    // Mute/Unmute button
+                    Button(action: toggleMute) {
+                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .foregroundColor(.white)
+                            .padding(12)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .padding(.trailing, 20)
+                }
+                .padding(.bottom, 20)
+            }
         }
+        .background(Color.black)
         .clipped()
-    }
-    
-    @ViewBuilder
-    private var controlsOverlay: some View {
-        HStack(spacing: 20) {
-            // Play/Pause button
-            Button(action: togglePlayPause) {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
-            }
-            
-            // Mute/Unmute button
-            Button(action: toggleMute) {
-                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
-            }
-        }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
     }
     
     private func setupPlayer() {
         guard player == nil else { return }
         
-        let asset = AVURLAsset(url: url)
-        let playerItem = AVPlayerItem(asset: asset)
-        player = AVPlayer(playerItem: playerItem)
-        player?.isMuted = isMuted
+        print("VideoPlayer: Setting up player for URL: \(url)")
         
-        handlePlayback()
+        // Simple player setup
+        let playerItem = AVPlayerItem(url: url)
+        let newPlayer = AVPlayer(playerItem: playerItem)
+        
+        // Configure player
+        newPlayer.isMuted = isMuted
+        newPlayer.volume = isMuted ? 0.0 : 1.0
+        
+        self.player = newPlayer
+        
+        // Auto-play if requested
+        if play {
+            newPlayer.play()
+            isPlaying = true
+            print("VideoPlayer: Started auto-play")
+        }
     }
     
     private func cleanupPlayer() {
+        print("VideoPlayer: Cleaning up player")
         player?.pause()
         player = nil
         isPlaying = false
@@ -95,17 +120,8 @@ struct VideoPlayerCacheView: View {
     private func toggleMute() {
         isMuted.toggle()
         player?.isMuted = isMuted
+        player?.volume = isMuted ? 0.0 : 1.0
         preferenceHelper.setSpeakerMute(isMuted)
-    }
-
-    private func handlePlayback() {
-        if isVisible && play {
-            player?.play()
-            isPlaying = true
-        } else {
-            player?.pause()
-            isPlaying = false
-        }
     }
 }
 
@@ -123,7 +139,7 @@ struct VisibilityModifier: ViewModifier {
         }
         .onPreferenceChange(VisibilityPreferenceKey.self) { frame in
             let screen = UIScreen.main.bounds
-            let isVisible = screen.intersects(frame)
+            let isVisible = screen.intersects(frame) && !frame.isEmpty
             onChange(isVisible)
         }
     }
