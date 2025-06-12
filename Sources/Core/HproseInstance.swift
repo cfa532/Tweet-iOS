@@ -100,15 +100,15 @@ final class HproseInstance: ObservableObject {
                 
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     #if DEBUG
-                        //let firstIp = "122.233.16.121:8002"  // for testing
+                        let firstIp = "220.184.19.248:8002"  // for testing
                     #endif
                     
                     HproseInstance.baseUrl = "http://\(firstIp)"
                     client.uri = HproseInstance.baseUrl + "/webapi/"
                     hproseClient = client.useService(HproseService.self) as AnyObject
                     
-//                    let providerIp = firstIp
-                    if !appUser.isGuest, let providerIp = try await getProvider(appUser.mid),
+                    let providerIp = firstIp
+                    if !appUser.isGuest, //let providerIp = try await getProvider(appUser.mid),
                        let user = try await getUser(appUser.mid, baseUrl: "http://\(providerIp)") {
                         // Valid login user is found, use its provider IP as base.
                         HproseInstance.baseUrl = "http://\(providerIp)"

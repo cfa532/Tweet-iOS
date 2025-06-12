@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AVFoundation
 import CryptoKit
 
 // MARK: - Image Cache Manager
@@ -124,7 +125,70 @@ struct MediaCell: View {
 
     var body: some View {
         if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
-            VideoPlayerCacheView(url: url, attachment: attachment, play: play)
+            ZStack(alignment: .topLeading) {
+                SimpleVideoPlayer(url: url, autoPlay: play)
+                
+                // Debug download button
+                Button(action: {
+                    print("MediaCell: Testing direct download of \(url)")
+                    URLSession.shared.dataTask(with: url) { data, response, error in
+                        if let error = error {
+                            print("MediaCell: Download error - \(error)")
+                        } else if let data = data {
+                            print("MediaCell: Downloaded \(data.count) bytes")
+                            print("MediaCell: Response: \(response?.mimeType ?? "unknown")")
+                            
+                            // Try to save and play locally
+                            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("test_\(UUID().uuidString).mp4")
+                            do {
+                                try data.write(to: tempURL)
+                                print("MediaCell: Saved to \(tempURL)")
+                                
+                                // Test if playable and get codec info
+                                let asset = AVAsset(url: tempURL)
+                                Task {
+                                    do {
+                                        let isPlayable = try await asset.load(.isPlayable)
+                                        print("MediaCell: Test file playable: \(isPlayable)")
+                                        
+                                        let tracks = try await asset.load(.tracks)
+                                        for track in tracks {
+                                            if track.mediaType == .video {
+                                                let formatDescriptions = try await track.load(.formatDescriptions)
+                                                print("MediaCell: Video track formats: \(formatDescriptions)")
+                                                
+                                                // Get codec info
+                                                for desc in formatDescriptions {
+                                                    let formatDesc = desc
+                                                    let mediaSubType = CMFormatDescriptionGetMediaSubType(formatDesc)
+                                                    let fourCC = String(format: "%c%c%c%c",
+                                                                      (mediaSubType >> 24) & 0xFF,
+                                                                      (mediaSubType >> 16) & 0xFF,
+                                                                      (mediaSubType >> 8) & 0xFF,
+                                                                      mediaSubType & 0xFF)
+                                                    print("MediaCell: Video codec: \(fourCC)")
+                                                }
+                                            }
+                                        }
+                                    } catch {
+                                        print("MediaCell: Error checking file: \(error)")
+                                    }
+                                }
+                            } catch {
+                                print("MediaCell: Save error - \(error)")
+                            }
+                        }
+                    }.resume()
+                }) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(.white)
+                        .padding(8)
+                        .background(Color.blue.opacity(0.8))
+                        .clipShape(Circle())
+                }
+                .padding(8)
+            }
         } else {
             Group {
                 if let cachedImage = cachedImage {

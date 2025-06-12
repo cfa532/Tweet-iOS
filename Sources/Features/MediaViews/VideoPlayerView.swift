@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import AVKit
 
 // MARK: - Video Player Error
 enum VideoPlayerError: LocalizedError {
@@ -29,20 +28,15 @@ struct VideoPlayerCacheView: View {
     let attachment: MimeiFileType
     var play: Bool = true // Default to true for auto-play
 
-    @State private var player: AVPlayer?
-    @State private var isPlaying: Bool = false
     @State private var isMuted: Bool = PreferenceHelper().getSpeakerMute()
     private let preferenceHelper = PreferenceHelper()
 
     var body: some View {
         ZStack {
-            // Simple VideoPlayer
-            VideoPlayer(player: player)
+            // Web-based player
+            WebVideoPlayer(url: url, isMuted: isMuted, autoPlay: play)
                 .onAppear {
-                    setupPlayer()
-                }
-                .onDisappear {
-                    cleanupPlayer()
+                    print("VideoPlayer: Using web player for \(url.lastPathComponent)")
                 }
             
             // Controls overlay
@@ -50,16 +44,6 @@ struct VideoPlayerCacheView: View {
                 Spacer()
                 HStack {
                     Spacer()
-                    
-                    // Play/Pause button
-                    Button(action: togglePlayPause) {
-                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                            .foregroundColor(.white)
-                            .padding(12)
-                            .background(Color.black.opacity(0.5))
-                            .clipShape(Circle())
-                    }
-                    .padding(.trailing, 10)
                     
                     // Mute/Unmute button
                     Button(action: toggleMute) {
@@ -78,49 +62,8 @@ struct VideoPlayerCacheView: View {
         .clipped()
     }
     
-    private func setupPlayer() {
-        guard player == nil else { return }
-        
-        print("VideoPlayer: Setting up player for URL: \(url)")
-        
-        // Simple player setup
-        let playerItem = AVPlayerItem(url: url)
-        let newPlayer = AVPlayer(playerItem: playerItem)
-        
-        // Configure player
-        newPlayer.isMuted = isMuted
-        newPlayer.volume = isMuted ? 0.0 : 1.0
-        
-        self.player = newPlayer
-        
-        // Auto-play if requested
-        if play {
-            newPlayer.play()
-            isPlaying = true
-            print("VideoPlayer: Started auto-play")
-        }
-    }
-    
-    private func cleanupPlayer() {
-        print("VideoPlayer: Cleaning up player")
-        player?.pause()
-        player = nil
-        isPlaying = false
-    }
-    
-    private func togglePlayPause() {
-        if isPlaying {
-            player?.pause()
-        } else {
-            player?.play()
-        }
-        isPlaying.toggle()
-    }
-    
     private func toggleMute() {
         isMuted.toggle()
-        player?.isMuted = isMuted
-        player?.volume = isMuted ? 0.0 : 1.0
         preferenceHelper.setSpeakerMute(isMuted)
     }
 }
