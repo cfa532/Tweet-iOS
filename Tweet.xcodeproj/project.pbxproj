@@ -61,9 +61,6 @@
 		46E5B36D2DE3617400AEF31F /* AvatarFullScreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B36C2DE3617400AEF31F /* AvatarFullScreenView.swift */; };
 		46E8A7D32DE9D0E700A30FBA /* CommentItemView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E8A7D22DE9D0DF00A30FBA /* CommentItemView.swift */; };
 		46E8A7D52DE9F15100A30FBA /* CommentsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */; };
-		46F3BFC82DFB06F800059F18 /* VideoPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFC72DFB06F100059F18 /* VideoPlayerView.swift */; };
-		46F3BFCA2DFB06F300059F18 /* VideoDataLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFC92DFB06F200059F18 /* VideoDataLoader.swift */; };
-		46F3BFCB2DFB2BE100059F18 /* VideoPlayerTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFC92DFB2BE100059F18 /* VideoPlayerTestView.swift */; };
 		46F3BFCC2DFB06F500059F18 /* SimpleVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */; };
 /* End PBXBuildFile section */
 
@@ -124,9 +121,6 @@
 		46E5B36C2DE3617400AEF31F /* AvatarFullScreenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarFullScreenView.swift; sourceTree = "<group>"; };
 		46E8A7D22DE9D0DF00A30FBA /* CommentItemView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentItemView.swift; sourceTree = "<group>"; };
 		46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsViewModel.swift; sourceTree = "<group>"; };
-		46F3BFC72DFB06F100059F18 /* VideoPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlayerView.swift; sourceTree = "<group>"; };
-		46F3BFC92DFB06F200059F18 /* VideoDataLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDataLoader.swift; sourceTree = "<group>"; };
-		46F3BFC92DFB2BE100059F18 /* VideoPlayerTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlayerTestView.swift; sourceTree = "<group>"; };
 		46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleVideoPlayer.swift; sourceTree = "<group>"; };
 		83423F5E23BD65E924B7AD86 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D424303A66FF70A9FBF5540E /* Pods-Tweet.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.release.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.release.xcconfig"; sourceTree = "<group>"; };
@@ -281,9 +275,6 @@
 		469A994E2DEBF89B00954049 /* MediaViews */ = {
 			isa = PBXGroup;
 			children = (
-				46F3BFC92DFB2BE100059F18 /* VideoPlayerTestView.swift */,
-				46F3BFC72DFB06F100059F18 /* VideoPlayerView.swift */,
-				46F3BFC92DFB06F200059F18 /* VideoDataLoader.swift */,
 				46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */,
 				46E5B36C2DE3617400AEF31F /* AvatarFullScreenView.swift */,
 				46E5B34A2DDC155200AEF31F /* MediaCell.swift */,
@@ -467,8 +458,6 @@
 				46E5B3442DDAB74400AEF31F /* TweetItemHeaderView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1A /* TweetApp.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */,
-				46F3BFC82DFB06F800059F18 /* VideoPlayerView.swift in Sources */,
-				46F3BFCA2DFB06F300059F18 /* VideoDataLoader.swift in Sources */,
 				46F3BFCC2DFB06F500059F18 /* SimpleVideoPlayer.swift in Sources */,
 				46E5B3592DE005EC00AEF31F /* ThumbnailView.swift in Sources */,
 				46E5B3472DDC0CFB00AEF31F /* Avatar.swift in Sources */,
@@ -487,7 +476,6 @@
 				467494172DF4A1460082FAC6 /* CommentDetailView.swift in Sources */,
 				469A994B2DEB163F00954049 /* ToastView.swift in Sources */,
 				46E5B36B2DE35E0A00AEF31F /* ProfileHeaderView.swift in Sources */,
-				46F3BFCB2DFB2BE100059F18 /* VideoPlayerTestView.swift in Sources */,
 				4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */,
 				4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */,
 				4608E2DA2DD5CD920051A92D /* User.swift in Sources */,
