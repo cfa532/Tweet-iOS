@@ -79,7 +79,7 @@ struct WebVideoPlayer: UIViewRepresentable {
     
     func updateUIView(_ webView: WKWebView, context: Context) {
         // Add timestamp to URL to prevent caching issues
-        let videoURL = url.absoluteString + "#t=3"
+        let videoURL = url.absoluteString + "#t=2"
         
         let html = """
         <html>

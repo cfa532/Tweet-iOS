@@ -126,6 +126,8 @@ struct MediaCell: View {
     var body: some View {
         if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
             SimpleVideoPlayer(url: url, autoPlay: play)
+        } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
+            SimpleAudioPlayer(url: url, autoPlay: play)
         } else {
             Group {
                 if let cachedImage = cachedImage {
