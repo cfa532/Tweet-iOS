@@ -122,11 +122,14 @@ struct MediaCell: View {
     var play: Bool = false
     @State private var cachedImage: UIImage?
     @State private var isLoading = false
+    @State private var currentTime: Double = 0
 
     var body: some View {
         if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
-            SimpleVideoPlayer(url: url, autoPlay: play)
-                .environmentObject(MuteState.shared)
+            SimpleVideoPlayer(url: url, autoPlay: play, onTimeUpdate: { time in
+                currentTime = time
+            })
+            .environmentObject(MuteState.shared)
         } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
             SimpleAudioPlayer(url: url, autoPlay: play)
         } else {
@@ -172,6 +175,10 @@ struct MediaCell: View {
                 }
             }
         }
+    }
+    
+    func getCurrentPlaybackTime() -> Double {
+        return currentTime
     }
 }
 

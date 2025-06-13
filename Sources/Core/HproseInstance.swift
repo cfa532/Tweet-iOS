@@ -56,7 +56,7 @@ final class HproseInstance: ObservableObject {
     }
     
     private var appId: String = Constants.GUEST_ID      // placeholder mimei id
-    private var preferenceHelper: PreferenceHelper?
+    var preferenceHelper: PreferenceHelper?
     
     private lazy var client: HproseClient = {
         let client = HproseHttpClient()
