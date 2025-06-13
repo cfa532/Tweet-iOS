@@ -9,15 +9,13 @@ struct HomeView: View {
     @State private var isScrolling = false
     @State private var scrollOffset: CGFloat = 0
     @State private var selectedUser: User? = nil
-    @State private var resetFollowingsFeed = false
-    @State private var scrollToTopTrigger = false
 
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                AppHeaderView(onAppIconTap: { scrollToTopTrigger.toggle() })
+                AppHeaderView()
                     .padding(.vertical, 8)
                 // Tab bar (no avatars/settings here)
                 HStack(spacing: 0) {
@@ -38,8 +36,6 @@ struct HomeView: View {
                         onAvatarTap: { user in
                             selectedUser = user
                         },
-                        resetTrigger: $resetFollowingsFeed,
-                        scrollToTopTrigger: $scrollToTopTrigger
                     )
                     .tag(0)
 
@@ -51,15 +47,12 @@ struct HomeView: View {
             .navigationDestination(item: $selectedUser) { user in
                 ProfileView(user: user, onLogout: {
                     selectedTab = 0
-                    resetFollowingsFeed.toggle()
                 })
             }
             .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
                 Task {
                     await MainActor.run {
                         TweetCacheManager.shared.clearAllTweets()
-                        // Reset all loaded tweets in all view models by toggling reset triggers
-                        resetFollowingsFeed.toggle()
                     }
                     try await HproseInstance.shared.initialize()
                 }
@@ -68,8 +61,6 @@ struct HomeView: View {
                 Task {
                     await MainActor.run {
                         TweetCacheManager.shared.clearAllTweets()
-                        resetFollowingsFeed.toggle()
-                        // Add similar triggers for other feeds/view models if needed
                     }
                     try await HproseInstance.shared.initialize()
                 }

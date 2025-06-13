@@ -4,16 +4,12 @@ import SwiftUI
 struct FollowingsTweetView: View {
     @Binding var isLoading: Bool
     let onAvatarTap: (User) -> Void
-    @Binding var resetTrigger: Bool
-    @Binding var scrollToTopTrigger: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
     @StateObject private var viewModel: FollowingsTweetViewModel
 
-    init(isLoading: Binding<Bool>, onAvatarTap: @escaping (User) -> Void, resetTrigger: Binding<Bool>, scrollToTopTrigger: Binding<Bool>) {
+    init(isLoading: Binding<Bool>, onAvatarTap: @escaping (User) -> Void) {
         self._isLoading = isLoading
         self.onAvatarTap = onAvatarTap
-        self._resetTrigger = resetTrigger
-        self._scrollToTopTrigger = scrollToTopTrigger
         self._viewModel = StateObject(wrappedValue: FollowingsTweetViewModel(hproseInstance: HproseInstance.shared))
     }
 
@@ -64,24 +60,6 @@ struct FollowingsTweetView: View {
                     )
                 }
             )
-            .onChange(of: resetTrigger) { newValue in
-                if newValue {
-                    Task {
-                        await MainActor.run {
-                            viewModel.tweets.removeAll()
-                        }
-                    }
-                    resetTrigger = false
-                }
-            }
-            .onChange(of: scrollToTopTrigger) { newValue in
-                if newValue {
-                    withAnimation {
-                        proxy.scrollTo("top", anchor: .top)
-                    }
-                    scrollToTopTrigger = false
-                }
-            }
         }
     }
 }
