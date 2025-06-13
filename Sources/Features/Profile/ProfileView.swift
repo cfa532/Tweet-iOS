@@ -56,7 +56,7 @@ struct ProfileView: View {
 
     // MARK: - Computed Properties
     /// Returns true if the displayed profile belongs to the current user
-    var isCurrentUser: Bool {
+    var isAppUser: Bool {
         user.mid == hproseInstance.appUser.mid
     }
 
@@ -90,7 +90,7 @@ struct ProfileView: View {
             VStack(spacing: 0) {
                 ProfileHeaderSection(
                     user: user,
-                    isCurrentUser: isCurrentUser,
+                    isCurrentUser: isAppUser,
                     isFollowing: isFollowing,
                     onEditTap: { showEditSheet = true },
                     onFollowToggle: { isFollowing.toggle() },
