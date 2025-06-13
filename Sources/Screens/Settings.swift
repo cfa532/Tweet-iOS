@@ -72,6 +72,16 @@ struct SettingsView: View {
         isCleaningCache = true
         Task.detached(priority: .background) {
             ImageCacheManager.shared.cleanupOldCache()
+            // Clear video cache
+            let fm = FileManager.default
+            let videoCacheDir = WebVideoPlayer.cacheDirectory
+            if let files = try? fm.contentsOfDirectory(at: videoCacheDir, includingPropertiesForKeys: nil) {
+                for file in files {
+                    try? fm.removeItem(at: file)
+                }
+            }
+            // Clear tweet cache
+            TweetCacheManager.shared.deleteExpiredTweets()
             await MainActor.run {
                 isCleaningCache = false
                 showCacheCleanedAlert = true
