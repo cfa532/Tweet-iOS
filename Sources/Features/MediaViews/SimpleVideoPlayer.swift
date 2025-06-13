@@ -7,6 +7,7 @@
 
 import SwiftUI
 import WebKit
+import CryptoKit
 
 // Global mute state
 class MuteState: ObservableObject {
@@ -56,8 +57,14 @@ struct WebVideoPlayer: UIViewRepresentable {
     let isMuted: Bool
     let onMuteChanged: (Bool) -> Void
     let onTimeUpdate: ((Double) -> Void)?
-    // Static reference for fullscreen mute control
+    let tweetId: String? = nil
     static weak var lastFullScreenWebView: WKWebView?
+    static let cacheDirectory: URL = {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!.appendingPathComponent("VideoCache")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+    static let maxCacheAge: TimeInterval = 30 * 24 * 60 * 60 // 30 days
     
     func makeCoordinator() -> Coordinator {
         Coordinator(onMuteChanged: onMuteChanged, onTimeUpdate: onTimeUpdate)
@@ -94,12 +101,50 @@ struct WebVideoPlayer: UIViewRepresentable {
         WebVideoPlayer.lastFullScreenWebView = webView
         context.coordinator.webView = webView
         context.coordinator.lastLoadedURL = nil // force initial load
+        // Clean up old cache files
+        WebVideoPlayer.cleanupOldCache()
         return webView
     }
     
     func updateUIView(_ webView: WKWebView, context: Context) {
         // Only reload HTML if the URL has changed
-        let videoURL = url.absoluteString + "#t=2"
+        let videoURL = url.absoluteString + "#t=1"
+        let cacheKey = url.lastPathComponent
+        let cachedFileURL = WebVideoPlayer.cacheDirectory.appendingPathComponent(cacheKey)
+        var videoToLoad = url
+        var isLocal = false
+        // Try to use cache if available and not expired
+        if FileManager.default.fileExists(atPath: cachedFileURL.path),
+           let attrs = try? FileManager.default.attributesOfItem(atPath: cachedFileURL.path),
+           let modDate = attrs[.modificationDate] as? Date,
+           Date().timeIntervalSince(modDate) < WebVideoPlayer.maxCacheAge {
+            videoToLoad = cachedFileURL
+            isLocal = true
+        } else {
+            // Download and cache the video
+            Task {
+                do {
+                    let (data, _) = try await URLSession.shared.data(from: url)
+                    try? data.write(to: cachedFileURL)
+                    // Optionally, associate with tweetId for later cleanup
+                    if let tweetId = tweetId {
+                        let metaURL = cachedFileURL.appendingPathExtension("meta")
+                        try? tweetId.data(using: .utf8)?.write(to: metaURL)
+                    }
+                } catch {
+                    // Ignore cache errors, fallback to streaming
+                }
+            }
+        }
+        let videoSrc: String
+        let baseURL: URL?
+        if isLocal {
+            videoSrc = videoToLoad.lastPathComponent
+            baseURL = WebVideoPlayer.cacheDirectory
+        } else {
+            videoSrc = videoToLoad.absoluteString
+            baseURL = nil
+        }
         if context.coordinator.lastLoadedURL != videoURL {
             let html = """
             <html>
@@ -130,7 +175,7 @@ struct WebVideoPlayer: UIViewRepresentable {
                     \(isMuted ? "muted" : "")
                     ontimeupdate=\"window.reportTime(this.currentTime)\"
                 >
-                    <source src=\"\(videoURL)\" type=\"video/mp4\">
+                    <source src=\"\(videoSrc)\" type=\"video/mp4\">
                 </video>
                 <script>
                     function checkOrientation(video) {
@@ -155,7 +200,7 @@ struct WebVideoPlayer: UIViewRepresentable {
             </body>
             </html>
             """
-            webView.loadHTMLString(html, baseURL: nil)
+            webView.loadHTMLString(html, baseURL: baseURL)
             context.coordinator.lastLoadedURL = videoURL
         }
         // Always update mute state via JS (no reload)
@@ -166,6 +211,22 @@ struct WebVideoPlayer: UIViewRepresentable {
     static func updateMuteExternally(isMuted: Bool) {
         let js = "window.setMute(\(isMuted ? "true" : "false"));"
         lastFullScreenWebView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+    
+    static func cleanupOldCache() {
+        let fm = FileManager.default
+        let now = Date()
+        guard let files = try? fm.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey], options: []) else { return }
+        for file in files {
+            if let attrs = try? fm.attributesOfItem(atPath: file.path),
+               let modDate = attrs[.modificationDate] as? Date,
+               now.timeIntervalSince(modDate) > maxCacheAge {
+                try? fm.removeItem(at: file)
+                // Remove associated meta file
+                let metaURL = file.appendingPathExtension("meta")
+                try? fm.removeItem(at: metaURL)
+            }
+        }
     }
     
     class Coordinator: NSObject, WKScriptMessageHandler {
