@@ -100,15 +100,15 @@ final class HproseInstance: ObservableObject {
                 
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     #if DEBUG
-//                        let firstIp = "220.184.19.248:8002"  // for testing
+                        let firstIp = "220.184.19.248:8002"  // for testing
                     #endif
                     
                     HproseInstance.baseUrl = "http://\(firstIp)"
                     client.uri = HproseInstance.baseUrl + "/webapi/"
                     hproseClient = client.useService(HproseService.self) as AnyObject
                     
-//                    let providerIp = firstIp
-                    if !appUser.isGuest, let providerIp = try await getProvider(appUser.mid),
+                    let providerIp = firstIp
+                    if !appUser.isGuest, //let providerIp = try await getProvider(appUser.mid),
                        let user = try await getUser(appUser.mid, baseUrl: "http://\(providerIp)") {
                         // Valid login user is found, use its provider IP as base.
                         HproseInstance.baseUrl = "http://\(providerIp)"
@@ -200,7 +200,7 @@ final class HproseInstance: ObservableObject {
         guard let service = hproseClient else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
-        print("[HproseInstance] Fetching tweets from server - pn: \(pageNumber), ps: \(pageSize)")
+        print("[fetchTweetFeed] Fetching tweets from server - pn: \(pageNumber), ps: \(pageSize)")
         let params = [
             "aid": appId,
             "ver": "last",
@@ -212,7 +212,7 @@ final class HproseInstance: ObservableObject {
         guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in fetcTweetFeed"])
         }
-        print("[HproseInstance] Got \(response.count) tweets from server (including nil)")
+        print("[fetchTweetFeed] Got \(response.count) tweets from server (including nil)")
         
         var tweets: [Tweet?] = []
         for item in response {
@@ -236,7 +236,7 @@ final class HproseInstance: ObservableObject {
                 tweets.append(nil)
             }
         }
-        print("[HproseInstance] Returning \(tweets.count) tweets")
+        print("[fetchTweetFeed] Returning \(tweets.count) tweets")
         return tweets
     }
     
@@ -294,6 +294,8 @@ final class HproseInstance: ObservableObject {
                 tweets.append(nil)
             }
         }
+        let validTweets = tweets.compactMap{ $0 }
+        print("[fetchUserTweet] Returning \(tweets.count) tweets, valid=\(validTweets.count) for \(user.mid) \(pageNumber) \(pageSize)")
         return tweets
     }
     
