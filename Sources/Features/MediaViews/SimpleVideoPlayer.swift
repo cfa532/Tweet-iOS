@@ -26,12 +26,19 @@ struct WebVideoPlayer: UIViewRepresentable {
     let autoPlay: Bool
     
     func makeUIView(context: Context) -> WKWebView {
-        let webView = WKWebView()
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        
+        // Configure for inline playback
+        let preferences = WKWebpagePreferences()
+        preferences.allowsContentJavaScript = true
+        configuration.defaultWebpagePreferences = preferences
+        
+        let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.backgroundColor = .black
         webView.isOpaque = true
         webView.scrollView.isScrollEnabled = false
-        webView.configuration.allowsInlineMediaPlayback = true
-        webView.configuration.mediaTypesRequiringUserActionForPlayback = []
         
         // Disable right-click
         let script = WKUserScript(
@@ -51,7 +58,7 @@ struct WebVideoPlayer: UIViewRepresentable {
         let html = """
         <html>
         <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
                 body { margin: 0; background-color: black; }
                 .video {
@@ -71,6 +78,8 @@ struct WebVideoPlayer: UIViewRepresentable {
                 controls
                 preload="auto"
                 playsinline
+                webkit-playsinline
+                x-webkit-airplay="allow"
                 onloadedmetadata="checkOrientation(this)"
             >
                 <source src="\(videoURL)" type="video/mp4">
