@@ -12,50 +12,17 @@ struct SimpleVideoPlayer: View {
     let url: URL
     var autoPlay: Bool = true
     
-    @State private var isMuted: Bool = PreferenceHelper().getSpeakerMute()
-    private let preferenceHelper = PreferenceHelper()
-    
     var body: some View {
-        ZStack {
-            // Web-based player
-            WebVideoPlayer(url: url, isMuted: isMuted, autoPlay: autoPlay)
-                .onAppear {
-                    print("SimpleVideoPlayer: Using web player for \(url.lastPathComponent)")
-                }
-            
-            // Controls overlay
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    
-                    // Mute/Unmute button
-                    Button(action: toggleMute) {
-                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .foregroundColor(.white)
-                            .padding(12)
-                            .background(Color.black.opacity(0.5))
-                            .clipShape(Circle())
-                    }
-                    .padding(.trailing, 20)
-                }
-                .padding(.bottom, 20)
+        WebVideoPlayer(url: url, autoPlay: autoPlay)
+            .onAppear {
+                print("SimpleVideoPlayer: Using web player for \(url.lastPathComponent)")
             }
-        }
-        .background(Color.black)
-        .clipped()
-    }
-    
-    private func toggleMute() {
-        isMuted.toggle()
-        preferenceHelper.setSpeakerMute(isMuted)
     }
 }
 
 // MARK: - Web Video Player
 struct WebVideoPlayer: UIViewRepresentable {
     let url: URL
-    let isMuted: Bool
     let autoPlay: Bool
     
     func makeUIView(context: Context) -> WKWebView {
@@ -103,7 +70,6 @@ struct WebVideoPlayer: UIViewRepresentable {
                 \(autoPlay ? "autoplay" : "")
                 controls
                 preload="auto"
-                \(isMuted ? "muted" : "")
                 playsinline
                 onloadedmetadata="checkOrientation(this)"
             >

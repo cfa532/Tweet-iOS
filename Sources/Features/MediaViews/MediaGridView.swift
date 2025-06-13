@@ -332,6 +332,8 @@ struct MediaBrowserView: View {
     let initialIndex: Int
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
+    @State private var isMuted: Bool = PreferenceHelper().getSpeakerMute()
+    private let preferenceHelper = PreferenceHelper()
 
     init(attachments: [MimeiFileType], baseUrl: String, initialIndex: Int) {
         self.attachments = attachments
@@ -346,9 +348,31 @@ struct MediaBrowserView: View {
                 ForEach(Array(attachments.enumerated()), id: \.offset) { idx, attachment in
                     Group {
                         if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
-                            VideoPlayer(player: AVPlayer(url: url))
-                                .aspectRatio(contentMode: .fit)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            ZStack {
+                                VideoPlayer(player: AVPlayer(url: url))
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .onAppear {
+                                        let player = AVPlayer(url: url)
+                                        player.isMuted = isMuted
+                                    }
+                                
+                                // Mute/Unmute button
+                                VStack {
+                                    HStack {
+                                        Spacer()
+                                        Button(action: toggleMute) {
+                                            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                                .foregroundColor(.white)
+                                                .padding(12)
+                                                .background(Color.black.opacity(0.5))
+                                                .clipShape(Circle())
+                                        }
+                                        .padding()
+                                    }
+                                    Spacer()
+                                }
+                            }
                         } else if let url = attachment.getUrl(baseUrl) {
                             AsyncImage(url: url) { image in
                                 image
@@ -384,6 +408,18 @@ struct MediaBrowserView: View {
                     .frame(width: 36, height: 36)
                     .foregroundColor(.white)
                     .padding()
+            }
+        }
+    }
+    
+    private func toggleMute() {
+        isMuted.toggle()
+        preferenceHelper.setSpeakerMute(isMuted)
+        // Update mute state for all video players
+        for idx in attachments.indices {
+            if let url = attachments[idx].getUrl(baseUrl) {
+                let player = AVPlayer(url: url)
+                player.isMuted = isMuted
             }
         }
     }
