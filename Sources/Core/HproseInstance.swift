@@ -156,7 +156,7 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchComments"])
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in fetchComments"])
         }
         
         // Process each item in the response array, preserving nil positions
@@ -210,7 +210,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid,
         ]
         guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetcTweetFeed"])
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in fetcTweetFeed"])
         }
         print("[HproseInstance] Got \(response.count) tweets from server (including nil)")
         
@@ -268,7 +268,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid,
         ] as [String : Any]
         guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in fetchUserTweet"])
         }
         
         var tweets: [Tweet?] = []
