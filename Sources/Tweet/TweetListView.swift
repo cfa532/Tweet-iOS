@@ -218,6 +218,7 @@ struct TweetListView<RowView: View>: View {
                 // Step 2: Fetch from backend
                 let tweetsInBackend = try await tweetFetcher(nextPage, pageSize, false)
                 let hasValidTweet = tweetsInBackend.contains { $0 != nil }
+                
                 if hasValidTweet {
                     await MainActor.run {
                         print("[TweetListView] Got \(tweetsInBackend.count) tweets from backend for user: \(hproseInstance.appUser.mid)")
@@ -275,9 +276,10 @@ struct TweetListContentView<RowView: View>: View {
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0)
-            ForEach(tweets.compactMap { $0 }, id: \ .mid) { tweet in
+            ForEach(tweets.compactMap { $0 }, id: \.mid) { tweet in
                 rowView(tweet)
             }
+            
             // Sentinel view for infinite scroll
             if hasMoreTweets {
                 ProgressView()
@@ -286,6 +288,7 @@ struct TweetListContentView<RowView: View>: View {
                         print("[TweetListContentView] ProgressView appeared - initialLoadComplete: \(initialLoadComplete), isLoadingMore: \(isLoadingMore)")
                         if initialLoadComplete && !isLoadingMore {
                             print("[TweetListContentView] Scheduling loadMoreTweets")
+                            // Add a delay to prevent rapid re-triggering
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                                 if initialLoadComplete && !isLoadingMore {
                                     print("[TweetListContentView] Calling loadMoreTweets")

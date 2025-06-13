@@ -29,6 +29,8 @@ class FollowingsTweetViewModel: ObservableObject {
             Task {
                 let newTweets = try await hproseInstance.fetchTweetFeed(
                     user: hproseInstance.appUser,
+                    pageNumber: page,
+                    pageSize: pageSize,
                     entry: "update_following_tweets"
                 )
                 await MainActor.run {
@@ -38,7 +40,7 @@ class FollowingsTweetViewModel: ObservableObject {
             return serverTweets     // including nil
         } catch {
             print("[FollowingsTweetViewModel] Error fetching tweets: \(error)")
-            return Array(repeating: nil, count: Int(pageSize))
+            return []
         }
     }
     
