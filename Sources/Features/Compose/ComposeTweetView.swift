@@ -18,82 +18,84 @@ struct ComposeTweetView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                VStack(spacing: 0) {
-                    TextEditor(text: $viewModel.tweetContent)
-                        .frame(maxHeight: .infinity)
-                        .padding()
-                        .focused($isEditorFocused)
-                        .background(Color(.systemBackground))
-                        .onTapGesture {
-                            isEditorFocused = true
-                        }
-                    
-                    // Thumbnail preview section
-                    if !viewModel.selectedItems.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(viewModel.selectedItems, id: \.itemIdentifier) { item in
-                                    ThumbnailView(item: item)
-                                        .frame(width: 100, height: 100)
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                                        .overlay(
-                                            Button(action: {
-                                                viewModel.selectedItems.removeAll { $0.itemIdentifier == item.itemIdentifier }
-                                            }) {
-                                                Image(systemName: "xmark.circle.fill")
-                                                    .foregroundColor(.white)
-                                                    .background(Color.black.opacity(0.5))
-                                                    .clipShape(Circle())
-                                            }
-                                            .padding(4),
-                                            alignment: .topTrailing
-                                        )
-                                }
+                ScrollView {
+                    VStack(spacing: 0) {
+                        TextEditor(text: $viewModel.tweetContent)
+                            .frame(minHeight: 150)
+                            .padding()
+                            .focused($isEditorFocused)
+                            .background(Color(.systemBackground))
+                            .onTapGesture {
+                                isEditorFocused = true
                             }
-                            .padding(.horizontal)
+                        
+                        // Thumbnail preview section
+                        if !viewModel.selectedItems.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(viewModel.selectedItems, id: \.itemIdentifier) { item in
+                                        ThumbnailView(item: item)
+                                            .frame(width: 100, height: 100)
+                                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                                            .overlay(
+                                                Button(action: {
+                                                    viewModel.selectedItems.removeAll { $0.itemIdentifier == item.itemIdentifier }
+                                                }) {
+                                                    Image(systemName: "xmark.circle.fill")
+                                                        .foregroundColor(.white)
+                                                        .background(Color.black.opacity(0.5))
+                                                        .clipShape(Circle())
+                                                }
+                                                .padding(4),
+                                                alignment: .topTrailing
+                                            )
+                                    }
+                                }
+                                .padding(.horizontal)
+                            }
+                            .frame(height: 120)
+                            .background(Color(.systemBackground))
                         }
-                        .frame(height: 120)
+                        
+                        // Attachment toolbar
+                        HStack(spacing: 20) {
+                            PhotosPicker(selection: $viewModel.selectedItems,
+                                       matching: .any(of: [.images, .videos])) {
+                                Image(systemName: "photo.on.rectangle")
+                                    .font(.system(size: 20))
+                                    .foregroundColor(.blue)
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Button(action: { /* TODO: Add poll */ }) {
+                                Image(systemName: "chart.bar")
+                                    .font(.system(size: 20))
+                                    .foregroundColor(.blue)
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Button(action: { /* TODO: Add location */ }) {
+                                Image(systemName: "location")
+                                    .font(.system(size: 20))
+                                    .foregroundColor(.blue)
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Spacer()
+                            
+                            Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.tweetContent.count))")
+                                .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .gray)
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
                         .background(Color(.systemBackground))
+                        .overlay(
+                            Rectangle()
+                                .frame(height: 1)
+                                .foregroundColor(Color(.systemGray4)),
+                            alignment: .top
+                        )
                     }
-                    
-                    // Attachment toolbar
-                    HStack(spacing: 20) {
-                        PhotosPicker(selection: $viewModel.selectedItems,
-                                   matching: .any(of: [.images, .videos])) {
-                            Image(systemName: "photo.on.rectangle")
-                                .font(.system(size: 20))
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Button(action: { /* TODO: Add poll */ }) {
-                            Image(systemName: "chart.bar")
-                                .font(.system(size: 20))
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Button(action: { /* TODO: Add location */ }) {
-                            Image(systemName: "location")
-                                .font(.system(size: 20))
-                                .foregroundColor(.blue)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Spacer()
-                        
-                        Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.tweetContent.count))")
-                            .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .gray)
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemBackground))
-                    .overlay(
-                        Rectangle()
-                            .frame(height: 1)
-                            .foregroundColor(Color(.systemGray4)),
-                        alignment: .top
-                    )
                 }
                 
                 if viewModel.showToast {
@@ -134,7 +136,6 @@ struct ComposeTweetView: View {
                     isEditorFocused = true
                 }
             }
-            .ignoresSafeArea(.keyboard, edges: .bottom)
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
