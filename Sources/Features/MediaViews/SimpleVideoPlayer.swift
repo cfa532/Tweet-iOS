@@ -108,7 +108,7 @@ struct WebVideoPlayer: UIViewRepresentable {
     
     func updateUIView(_ webView: WKWebView, context: Context) {
         // Only reload HTML if the URL has changed
-        let videoURL = url.absoluteString + "#t=1"
+        let videoURL = url.absoluteString + "#t=2"
         let cacheKey = url.lastPathComponent
         let cachedFileURL = WebVideoPlayer.cacheDirectory.appendingPathComponent(cacheKey)
         var videoToLoad = url

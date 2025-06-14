@@ -66,6 +66,9 @@ struct TweetDetailView: View {
                 HStack(alignment: .top, spacing: 12) {
                     if let user = displayTweet.author {
                         Avatar(user: user)
+                            .onTapGesture {
+                                selectedUser = user
+                            }
                     }
                     TweetItemHeaderView(tweet: displayTweet)
                     TweetMenu(tweet: displayTweet, isPinned: displayTweet.isPinned(in: pinnedTweets))
