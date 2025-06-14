@@ -109,7 +109,12 @@ struct WebVideoPlayer: UIViewRepresentable {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
                 <style>
                     body { margin: 0; background-color: black; }
-                    video { width: 100%; height: 100%; object-fit: contain; }
+                    video { 
+                        width: 100%; 
+                        height: 100%; 
+                        object-fit: contain;
+                        background-color: black;
+                    }
                 </style>
             </head>
             <body>
@@ -120,6 +125,7 @@ struct WebVideoPlayer: UIViewRepresentable {
                     webkit-playsinline
                     \(isMuted ? "muted" : "")
                     ontimeupdate="window.webkit.messageHandlers.timeUpdate.postMessage(this.currentTime)"
+                    preload="metadata"
                 >
                     <source src="\(videoURL)" type="video/mp4">
                 </video>
@@ -130,6 +136,8 @@ struct WebVideoPlayer: UIViewRepresentable {
                     window.setMute = function(muted) {
                         document.querySelector('video').muted = muted;
                     }
+                    // Force video to load metadata immediately
+                    document.querySelector('video').load();
                 </script>
             </body>
             </html>
