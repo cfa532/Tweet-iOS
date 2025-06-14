@@ -123,13 +123,27 @@ struct MediaCell: View {
     @State private var cachedImage: UIImage?
     @State private var isLoading = false
     @State private var currentTime: Double = 0
+    @State private var isVideoReady = false
+    @State private var showLoadingError = false
 
     var body: some View {
         if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
-            SimpleVideoPlayer(url: url, autoPlay: play, onTimeUpdate: { time in
-                currentTime = time
-            })
-            .environmentObject(MuteState.shared)
+            ZStack {
+                if isVideoReady {
+                    SimpleVideoPlayer(url: url, autoPlay: play, onTimeUpdate: { time in
+                        currentTime = time
+                    })
+                    .environmentObject(MuteState.shared)
+                } else {
+                    Color.black
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.5)
+                }
+            }
+            .onAppear {
+                checkVideoReadiness(url: url)
+            }
         } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
             SimpleAudioPlayer(url: url, autoPlay: play)
         } else {
@@ -159,6 +173,30 @@ struct MediaCell: View {
         }
     }
     
+    private func checkVideoReadiness(url: URL) {
+        let asset = AVAsset(url: url)
+        Task {
+            do {
+                // Check if the video is playable
+                let isPlayable = try await asset.load(.isPlayable)
+                if isPlayable {
+                    // Load the tracks to ensure video is ready
+                    let tracks = try await asset.load(.tracks)
+                    if !tracks.isEmpty {
+                        await MainActor.run {
+                            isVideoReady = true
+                        }
+                    }
+                }
+            } catch {
+                print("Error checking video readiness: \(error)")
+                await MainActor.run {
+                    showLoadingError = true
+                }
+            }
+        }
+    }
+    
     private func loadImage() {
         guard let url = attachment.getUrl(baseUrl), cachedImage == nil else { return }
         
@@ -179,6 +217,13 @@ struct MediaCell: View {
     
     func getCurrentPlaybackTime() -> Double {
         return currentTime
+    }
+    
+    var isReady: Bool {
+        if attachment.type.lowercased() == "video" {
+            return isVideoReady
+        }
+        return true
     }
 }
 

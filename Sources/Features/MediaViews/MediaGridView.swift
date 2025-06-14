@@ -15,6 +15,7 @@ struct MediaGridView: View {
     @State private var isVisible: Bool = false
     @State private var showBrowser: Bool = false
     @State private var selectedIndex: Int = 0
+    @State private var showLoadingAlert: Bool = false
 
     // Helper to determine if an attachment is portrait
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
@@ -74,8 +75,7 @@ struct MediaGridView: View {
                     .aspectRatio(contentMode: .fill)
                     .clipped()
                     .onTapGesture {
-                        selectedIndex = 0
-                        showBrowser = true
+                        handleMediaTap(at: 0)
                     }
                 case 2:
                     if allPortrait {
@@ -91,8 +91,7 @@ struct MediaGridView: View {
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
+                                    handleMediaTap(at: idx)
                                 }
                             }
                         }
@@ -109,8 +108,7 @@ struct MediaGridView: View {
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
+                                    handleMediaTap(at: idx)
                                 }
                             }
                         }
@@ -127,8 +125,7 @@ struct MediaGridView: View {
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
+                                    handleMediaTap(at: idx)
                                 }
                             }
                         }
@@ -146,8 +143,7 @@ struct MediaGridView: View {
                             .aspectRatio(contentMode: .fill)
                             .clipped()
                             .onTapGesture {
-                                selectedIndex = 0
-                                showBrowser = true
+                                handleMediaTap(at: 0)
                             }
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
@@ -160,8 +156,7 @@ struct MediaGridView: View {
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
                                     .onTapGesture {
-                                        selectedIndex = idx
-                                        showBrowser = true
+                                        handleMediaTap(at: idx)
                                     }
                                 }
                             }
@@ -178,8 +173,7 @@ struct MediaGridView: View {
                             .aspectRatio(contentMode: .fill)
                             .clipped()
                             .onTapGesture {
-                                selectedIndex = 0
-                                showBrowser = true
+                                handleMediaTap(at: 0)
                             }
                             HStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
@@ -192,8 +186,7 @@ struct MediaGridView: View {
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
                                     .onTapGesture {
-                                        selectedIndex = idx
-                                        showBrowser = true
+                                        handleMediaTap(at: idx)
                                     }
                                 }
                             }
@@ -210,8 +203,7 @@ struct MediaGridView: View {
                             .aspectRatio(contentMode: .fill)
                             .clipped()
                             .onTapGesture {
-                                selectedIndex = 0
-                                showBrowser = true
+                                handleMediaTap(at: 0)
                             }
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
@@ -224,8 +216,7 @@ struct MediaGridView: View {
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
                                     .onTapGesture {
-                                        selectedIndex = idx
-                                        showBrowser = true
+                                        handleMediaTap(at: idx)
                                     }
                                 }
                             }
@@ -245,8 +236,7 @@ struct MediaGridView: View {
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
+                                    handleMediaTap(at: idx)
                                 }
                             }
                         }
@@ -261,8 +251,7 @@ struct MediaGridView: View {
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
+                                    handleMediaTap(at: idx)
                                 }
                             }
                         }
@@ -281,8 +270,7 @@ struct MediaGridView: View {
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
+                                    handleMediaTap(at: idx)
                                 }
                             }
                         }
@@ -298,8 +286,7 @@ struct MediaGridView: View {
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
                                     .onTapGesture {
-                                        selectedIndex = idx
-                                        showBrowser = true
+                                        handleMediaTap(at: idx)
                                     }
                                     if idx == 3 {
                                         Color.black.opacity(0.4)
@@ -322,6 +309,28 @@ struct MediaGridView: View {
             .fullScreenCover(isPresented: $showBrowser) {
                 MediaBrowserView(attachments: attachments, baseUrl: baseUrl, initialIndex: selectedIndex)
             }
+            .alert("Video Loading", isPresented: $showLoadingAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Please wait while the video is being prepared.")
+            }
+        }
+    }
+    
+    private func handleMediaTap(at index: Int) {
+        let attachment = attachments[index]
+        if attachment.type.lowercased() == "video" {
+            // Create a temporary MediaCell to check readiness
+            let cell = MediaCell(attachment: attachment, baseUrl: baseUrl)
+            if cell.isReady {
+                selectedIndex = index
+                showBrowser = true
+            } else {
+                showLoadingAlert = true
+            }
+        } else {
+            selectedIndex = index
+            showBrowser = true
         }
     }
 }
@@ -329,12 +338,13 @@ struct MediaGridView: View {
 // MARK: - Zoomable View
 struct ZoomableView<Content: View>: View {
     let content: Content
-    @State private var scale: CGFloat = 1.0
+    @Binding var scale: CGFloat
     @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
     
-    init(@ViewBuilder content: () -> Content) {
+    init(scale: Binding<CGFloat>, @ViewBuilder content: () -> Content) {
+        self._scale = scale
         self.content = content()
     }
     
@@ -385,6 +395,7 @@ struct ZoomableView<Content: View>: View {
                         }
                     }
                 }
+                .allowsHitTesting(scale > 1) // Only allow zoom gestures when zoomed in
         }
     }
 }
@@ -396,6 +407,8 @@ struct MediaBrowserView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
     @State private var isMuted: Bool = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
+    @State private var isZoomed: Bool = false
+    @State private var zoomScale: CGFloat = 1.0
 
     init(attachments: [MimeiFileType], baseUrl: String, initialIndex: Int) {
         self.attachments = attachments
@@ -413,6 +426,7 @@ struct MediaBrowserView: View {
             }
             .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
             .background(Color.black.edgesIgnoringSafeArea(.all))
+            .disabled(isZoomed) // Disable TabView when zoomed
 
             // Close button
             Button(action: { dismiss() }) {
@@ -423,13 +437,16 @@ struct MediaBrowserView: View {
                     .padding()
             }
         }
+        .onChange(of: zoomScale) { newScale in
+            isZoomed = newScale > 1
+        }
     }
 
     @ViewBuilder
     private func mediaBrowserItemView(idx: Int, attachment: MimeiFileType) -> some View {
         if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
             ZStack {
-                ZoomableView {
+                ZoomableView(scale: $zoomScale) {
                     SimpleVideoPlayer(
                         url: url,
                         autoPlay: true,
@@ -478,7 +495,7 @@ struct MediaBrowserView: View {
             }
             .tag(idx)
         } else if let url = attachment.getUrl(baseUrl) {
-            ZoomableView {
+            ZoomableView(scale: $zoomScale) {
                 AsyncImage(url: url) { image in
                     image
                         .resizable()
