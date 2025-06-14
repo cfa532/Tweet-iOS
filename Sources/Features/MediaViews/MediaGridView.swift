@@ -496,13 +496,27 @@ struct MediaBrowserView: View {
             .tag(idx)
         } else if let url = attachment.getUrl(baseUrl) {
             ZoomableView(scale: $zoomScale) {
-                AsyncImage(url: url) { image in
-                    image
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } placeholder: {
-                    Color.gray
+                ZStack {
+                    // Show cached image first
+                    if let cachedImage = ImageCacheManager.shared.getImage(for: attachment, baseUrl: baseUrl) {
+                        Image(uiImage: cachedImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    
+                    // Load and show full-size image
+                    AsyncImage(url: url) { image in
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .transition(.opacity)
+                    } placeholder: {
+                        if ImageCacheManager.shared.getImage(for: attachment, baseUrl: baseUrl) == nil {
+                            Color.gray
+                        }
+                    }
                 }
             }
             .onTapGesture {
