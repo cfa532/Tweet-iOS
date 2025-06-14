@@ -278,10 +278,10 @@ final class HproseInstance: ObservableObject {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                     tweet.author = try await getUser(tweet.authorId)
                     // Only show private tweets if the current user is the author
-                    if tweet.isPrivate == true && tweet.authorId != appUser.mid {
-                        tweets.append(nil)
-                        continue
-                    }
+//                    if tweet.isPrivate == true && tweet.authorId != appUser.mid {
+//                        tweets.append(nil)
+//                        continue
+//                    }
                     // Save tweet back to cache
                     //                        TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
                     tweets.append(tweet)

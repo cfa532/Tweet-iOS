@@ -139,8 +139,17 @@ struct WebVideoPlayer: UIViewRepresentable {
         let videoSrc: String
         let baseURL: URL?
         if isLocal {
-            videoSrc = videoToLoad.lastPathComponent
-            baseURL = WebVideoPlayer.cacheDirectory
+            // Read the video data and create a data URL
+            if let videoData = try? Data(contentsOf: videoToLoad),
+               let mimeType = try? videoToLoad.resourceValues(forKeys: [.typeIdentifierKey]).typeIdentifier {
+                let base64Data = videoData.base64EncodedString()
+                videoSrc = "data:\(mimeType);base64,\(base64Data)"
+                baseURL = nil
+            } else {
+                // Fallback to original URL if data reading fails
+                videoSrc = url.absoluteString
+                baseURL = nil
+            }
         } else {
             videoSrc = videoToLoad.absoluteString
             baseURL = nil
