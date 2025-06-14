@@ -50,6 +50,76 @@ struct SimpleVideoPlayer: View {
     }
 }
 
+// MARK: - Video Cache Manager
+class VideoCacheManager {
+    static let shared = VideoCacheManager()
+    private let fileManager = FileManager.default
+    private let cacheDirectory: URL
+    private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days in seconds
+    
+    private init() {
+        // Get the cache directory
+        let cachesDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        cacheDirectory = cachesDirectory.appendingPathComponent("VideoCache")
+        
+        // Create cache directory if it doesn't exist
+        try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+    }
+    
+    func cleanupOldCache() {
+        do {
+            let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
+            let now = Date()
+            
+            for fileURL in contents {
+                if let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
+                   let modificationDate = attributes[.modificationDate] as? Date {
+                    if now.timeIntervalSince(modificationDate) > maxCacheAge {
+                        try? fileManager.removeItem(at: fileURL)
+                    }
+                }
+            }
+        } catch {
+            print("Error cleaning up video cache: \(error)")
+        }
+    }
+    
+    private func getCacheKey(for url: URL) -> String {
+        return url.lastPathComponent
+    }
+    
+    private func getCacheFileURL(for key: String) -> URL {
+        return cacheDirectory.appendingPathComponent(key)
+    }
+    
+    func getCachedVideoURL(for url: URL) -> URL? {
+        let key = getCacheKey(for: url)
+        let fileURL = getCacheFileURL(for: key)
+        
+        if fileManager.fileExists(atPath: fileURL.path) {
+            return fileURL
+        }
+        return nil
+    }
+    
+    func cacheVideo(from url: URL) async {
+        let key = getCacheKey(for: url)
+        let fileURL = getCacheFileURL(for: key)
+        
+        // Skip if already cached
+        if fileManager.fileExists(atPath: fileURL.path) {
+            return
+        }
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            try data.write(to: fileURL)
+        } catch {
+            print("Error caching video: \(error)")
+        }
+    }
+}
+
 // MARK: - Web Video Player
 struct WebVideoPlayer: UIViewRepresentable {
     let url: URL
@@ -103,6 +173,22 @@ struct WebVideoPlayer: UIViewRepresentable {
         let videoURL = url.absoluteString
         
         if context.coordinator.lastLoadedURL != videoURL {
+            // Start caching the video
+            Task {
+                await VideoCacheManager.shared.cacheVideo(from: url)
+            }
+            
+            // Try to use cached video if available
+            let videoSource: String
+            if let cachedURL = VideoCacheManager.shared.getCachedVideoURL(for: url),
+               let data = try? Data(contentsOf: cachedURL) {
+                // Convert cached video to base64 data URL
+                let base64 = data.base64EncodedString()
+                videoSource = "data:video/mp4;base64,\(base64)"
+            } else {
+                videoSource = videoURL
+            }
+            
             let html = """
             <html>
             <head>
@@ -119,6 +205,7 @@ struct WebVideoPlayer: UIViewRepresentable {
             </head>
             <body>
                 <video
+                    id="videoPlayer"
                     \(autoPlay ? "autoplay" : "")
                     controls
                     playsinline
@@ -127,7 +214,7 @@ struct WebVideoPlayer: UIViewRepresentable {
                     ontimeupdate="window.webkit.messageHandlers.timeUpdate.postMessage(this.currentTime)"
                     preload="metadata"
                 >
-                    <source src="\(videoURL)" type="video/mp4">
+                    <source src="\(videoSource)" type="video/mp4">
                 </video>
                 <script>
                     document.querySelector('video').addEventListener('volumechange', function(e) {
@@ -136,8 +223,6 @@ struct WebVideoPlayer: UIViewRepresentable {
                     window.setMute = function(muted) {
                         document.querySelector('video').muted = muted;
                     }
-                    // Force video to load metadata immediately
-                    document.querySelector('video').load();
                 </script>
             </body>
             </html>

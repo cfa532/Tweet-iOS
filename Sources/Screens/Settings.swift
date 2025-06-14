@@ -36,7 +36,7 @@ struct SettingsView: View {
                         cleanupCache()
                     }) {
                         HStack {
-                            Text("Clear Image Cache")
+                            Text("Clear Media Cache")
                             Spacer()
                             if isCleaningCache {
                                 ProgressView()
@@ -63,7 +63,7 @@ struct SettingsView: View {
             .alert("Cache Cleared", isPresented: $showCacheCleanedAlert) {
                 Button("OK") { }
             } message: {
-                Text("Image cache has been cleared successfully.")
+                Text("Media cache has been cleared successfully.")
             }
         }
     }
@@ -71,7 +71,10 @@ struct SettingsView: View {
     private func cleanupCache() {
         isCleaningCache = true
         Task.detached(priority: .background) {
+            // Clean up image cache
             ImageCacheManager.shared.cleanupOldCache()
+            // Clean up video cache
+            VideoCacheManager.shared.cleanupOldCache()
             // Clear tweet cache
             TweetCacheManager.shared.deleteExpiredTweets()
             await MainActor.run {
