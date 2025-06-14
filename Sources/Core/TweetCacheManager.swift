@@ -216,7 +216,7 @@ extension TweetCacheManager {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
             request.predicate = NSPredicate(format: "mid == %@", mid)
             if let cdUser = try? context.fetch(request).first {
-                shouldRefresh = cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -300 // 5 minutes
+                shouldRefresh = cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -1800 // 30  minutes
             }
             // If no cached user found, shouldRefresh remains true
         }
