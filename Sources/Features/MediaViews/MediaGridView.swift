@@ -403,6 +403,14 @@ struct MediaBrowserView: View {
                 }
             }
             .tag(idx)
+        } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
+            ZStack {
+                Color.black.edgesIgnoringSafeArea(.all)
+                SimpleAudioPlayer(url: url, autoPlay: true)
+                    .frame(maxWidth: 400)
+                    .padding()
+            }
+            .tag(idx)
         } else if let url = attachment.getUrl(baseUrl) {
             AsyncImage(url: url) { image in
                 image
