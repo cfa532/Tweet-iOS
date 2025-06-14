@@ -326,6 +326,69 @@ struct MediaGridView: View {
     }
 }
 
+// MARK: - Zoomable View
+struct ZoomableView<Content: View>: View {
+    let content: Content
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+    
+    var body: some View {
+        GeometryReader { geometry in
+            content
+                .scaleEffect(scale)
+                .offset(offset)
+                .gesture(
+                    SimultaneousGesture(
+                        MagnificationGesture()
+                            .onChanged { value in
+                                let delta = value / lastScale
+                                lastScale = value
+                                scale = min(max(scale * delta, 1), 4)
+                            }
+                            .onEnded { _ in
+                                lastScale = 1.0
+                            },
+                        DragGesture()
+                            .onChanged { value in
+                                if scale > 1 {
+                                    let newOffset = CGSize(
+                                        width: lastOffset.width + value.translation.width,
+                                        height: lastOffset.height + value.translation.height
+                                    )
+                                    // Limit the offset based on scale
+                                    let maxOffset = (scale - 1) * geometry.size.width / 2
+                                    offset = CGSize(
+                                        width: min(max(newOffset.width, -maxOffset), maxOffset),
+                                        height: min(max(newOffset.height, -maxOffset), maxOffset)
+                                    )
+                                }
+                            }
+                            .onEnded { _ in
+                                lastOffset = offset
+                            }
+                    )
+                )
+                .onTapGesture(count: 2) {
+                    withAnimation {
+                        if scale > 1 {
+                            scale = 1
+                            offset = .zero
+                            lastOffset = .zero
+                        } else {
+                            scale = 2
+                        }
+                    }
+                }
+        }
+    }
+}
+
 struct MediaBrowserView: View {
     let attachments: [MimeiFileType]
     let baseUrl: String
@@ -366,22 +429,25 @@ struct MediaBrowserView: View {
     private func mediaBrowserItemView(idx: Int, attachment: MimeiFileType) -> some View {
         if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
             ZStack {
-                SimpleVideoPlayer(
-                    url: url,
-                    autoPlay: true,
-                    isMuted: isMuted,
-                    onMuteChanged: { muted in
-                        isMuted = muted
-                        HproseInstance.shared.preferenceHelper?.setSpeakerMute(muted)
-                        WebVideoPlayer.updateMuteExternally(isMuted: muted)
+                ZoomableView {
+                    SimpleVideoPlayer(
+                        url: url,
+                        autoPlay: true,
+                        isMuted: isMuted,
+                        onMuteChanged: { muted in
+                            isMuted = muted
+                            HproseInstance.shared.preferenceHelper?.setSpeakerMute(muted)
+                            WebVideoPlayer.updateMuteExternally(isMuted: muted)
+                        }
+                    )
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .id(url) // force reload on url change
+                    .onAppear {
+                        isMuted = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
                     }
-                )
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .id(url) // force reload on url change
-                .onAppear {
-                    isMuted = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
                 }
+                
                 // Mute/Unmute button
                 VStack {
                     HStack {
@@ -412,19 +478,18 @@ struct MediaBrowserView: View {
             }
             .tag(idx)
         } else if let url = attachment.getUrl(baseUrl) {
-            AsyncImage(url: url) { image in
-                image
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onTapGesture {
-                        dismiss()
-                    }
-            } placeholder: {
-                Color.gray
-                    .onTapGesture {
-                        dismiss()
-                    }
+            ZoomableView {
+                AsyncImage(url: url) { image in
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } placeholder: {
+                    Color.gray
+                }
+            }
+            .onTapGesture {
+                dismiss()
             }
             .tag(idx)
         } else {
