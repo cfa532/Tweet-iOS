@@ -152,7 +152,7 @@ struct MediaCell: View {
             MediaBrowserView(
                 attachments: attachments,
                 baseUrl: baseUrl,
-                initialIndex: 0
+                initialIndex: currentIndex
             )
         }
         .onAppear {
