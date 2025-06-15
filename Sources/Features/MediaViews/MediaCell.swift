@@ -120,21 +120,24 @@ struct MediaCell: View {
     let attachment: MimeiFileType
     let baseUrl: String
     var play: Bool = false
+    var allAttachments: [MimeiFileType]? = nil
+    var currentIndex: Int = 0
     @State private var cachedImage: UIImage?
     @State private var isLoading = false
     @State private var currentTime: Double = 0
     @State private var showLoadingError = false
+    @State private var showBrowser = false
 
     var body: some View {
-        if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
-            SimpleVideoPlayer(url: url, autoPlay: play, onTimeUpdate: { time in
-                currentTime = time
-            })
-            .environmentObject(MuteState.shared)
-        } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
-            SimpleAudioPlayer(url: url, autoPlay: play)
-        } else {
-            Group {
+        Group {
+            if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
+                SimpleVideoPlayer(url: url, autoPlay: play, onTimeUpdate: { time in
+                    currentTime = time
+                })
+                .environmentObject(MuteState.shared)
+            } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
+                SimpleAudioPlayer(url: url, autoPlay: play)
+            } else {
                 if let cachedImage = cachedImage {
                     Image(uiImage: cachedImage)
                         .resizable()
@@ -149,13 +152,23 @@ struct MediaCell: View {
                         }
                 }
             }
-            .onAppear {
-                // Try to load from cache first
-                if let cached = ImageCacheManager.shared.getImage(for: attachment, baseUrl: baseUrl) {
-                    cachedImage = cached
-                } else {
-                    loadImage()
-                }
+        }
+        .onTapGesture {
+            showBrowser = true
+        }
+        .fullScreenCover(isPresented: $showBrowser) {
+            if let attachments = allAttachments {
+                MediaBrowserView(attachments: attachments, baseUrl: baseUrl, initialIndex: currentIndex)
+            } else {
+                MediaBrowserView(attachments: [attachment], baseUrl: baseUrl, initialIndex: 0)
+            }
+        }
+        .onAppear {
+            // Try to load from cache first
+            if let cached = ImageCacheManager.shared.getImage(for: attachment, baseUrl: baseUrl) {
+                cachedImage = cached
+            } else {
+                loadImage()
             }
         }
     }

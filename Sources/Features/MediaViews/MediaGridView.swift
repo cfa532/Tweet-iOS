@@ -69,14 +69,13 @@ struct MediaGridView: View {
                     MediaCell(
                         attachment: attachments[0],
                         baseUrl: baseUrl,
-                        play: isVisible && firstVideoIndex == 0
+                        play: isVisible && firstVideoIndex == 0,
+                        allAttachments: attachments,
+                        currentIndex: 0
                     )
                     .frame(width: gridWidth, height: gridHeight)
                     .aspectRatio(contentMode: .fill)
                     .clipped()
-                    .onTapGesture {
-                        handleMediaTap(at: 0)
-                    }
                 case 2:
                     if allPortrait {
                         // HStack, 4:3
@@ -85,14 +84,13 @@ struct MediaGridView: View {
                                 MediaCell(
                                     attachment: attachments[idx],
                                     baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx
+                                    play: isVisible && firstVideoIndex == idx,
+                                    allAttachments: attachments,
+                                    currentIndex: idx
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
-                                .onTapGesture {
-                                    handleMediaTap(at: idx)
-                                }
                             }
                         }
                     } else if allLandscape {
@@ -102,14 +100,13 @@ struct MediaGridView: View {
                                 MediaCell(
                                     attachment: attachments[idx],
                                     baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx
+                                    play: isVisible && firstVideoIndex == idx,
+                                    allAttachments: attachments,
+                                    currentIndex: idx
                                 )
                                 .frame(width: gridWidth, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
-                                .onTapGesture {
-                                    handleMediaTap(at: idx)
-                                }
                             }
                         }
                     } else {
@@ -119,14 +116,13 @@ struct MediaGridView: View {
                                 MediaCell(
                                     attachment: attachments[idx],
                                     baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx
+                                    play: isVisible && firstVideoIndex == idx,
+                                    allAttachments: attachments,
+                                    currentIndex: idx
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
-                                .onTapGesture {
-                                    handleMediaTap(at: idx)
-                                }
                             }
                         }
                     }
@@ -137,27 +133,25 @@ struct MediaGridView: View {
                             MediaCell(
                                 attachment: attachments[0],
                                 baseUrl: baseUrl,
-                                play: isVisible && firstVideoIndex == 0
+                                play: isVisible && firstVideoIndex == 0,
+                                allAttachments: attachments,
+                                currentIndex: 0
                             )
                             .frame(width: gridWidth / 2 - 1, height: gridHeight)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
-                            .onTapGesture {
-                                handleMediaTap(at: 0)
-                            }
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
                                         attachment: attachments[idx],
                                         baseUrl: baseUrl,
-                                        play: isVisible && firstVideoIndex == idx
+                                        play: isVisible && firstVideoIndex == idx,
+                                        allAttachments: attachments,
+                                        currentIndex: idx
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
-                                    .onTapGesture {
-                                        handleMediaTap(at: idx)
-                                    }
                                 }
                             }
                         }
@@ -167,27 +161,25 @@ struct MediaGridView: View {
                             MediaCell(
                                 attachment: attachments[0],
                                 baseUrl: baseUrl,
-                                play: isVisible && firstVideoIndex == 0
+                                play: isVisible && firstVideoIndex == 0,
+                                allAttachments: attachments,
+                                currentIndex: 0
                             )
                             .frame(width: gridWidth, height: gridHeight / 2 - 1)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
-                            .onTapGesture {
-                                handleMediaTap(at: 0)
-                            }
                             HStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
                                         attachment: attachments[idx],
                                         baseUrl: baseUrl,
-                                        play: isVisible && firstVideoIndex == idx
+                                        play: isVisible && firstVideoIndex == idx,
+                                        allAttachments: attachments,
+                                        currentIndex: idx
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
-                                    .onTapGesture {
-                                        handleMediaTap(at: idx)
-                                    }
                                 }
                             }
                         }
@@ -197,27 +189,25 @@ struct MediaGridView: View {
                             MediaCell(
                                 attachment: attachments[0],
                                 baseUrl: baseUrl,
-                                play: isVisible && firstVideoIndex == 0
+                                play: isVisible && firstVideoIndex == 0,
+                                allAttachments: attachments,
+                                currentIndex: 0
                             )
                             .frame(width: gridWidth / 2 - 1, height: gridHeight)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
-                            .onTapGesture {
-                                handleMediaTap(at: 0)
-                            }
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
                                         attachment: attachments[idx],
                                         baseUrl: baseUrl,
-                                        play: isVisible && firstVideoIndex == idx
+                                        play: isVisible && firstVideoIndex == idx,
+                                        allAttachments: attachments,
+                                        currentIndex: idx
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
-                                    .onTapGesture {
-                                        handleMediaTap(at: idx)
-                                    }
                                 }
                             }
                         }
@@ -230,14 +220,13 @@ struct MediaGridView: View {
                                 MediaCell(
                                     attachment: attachments[idx],
                                     baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx
+                                    play: isVisible && firstVideoIndex == idx,
+                                    allAttachments: attachments,
+                                    currentIndex: idx
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
-                                .onTapGesture {
-                                    handleMediaTap(at: idx)
-                                }
                             }
                         }
                         HStack(spacing: 2) {
@@ -245,14 +234,13 @@ struct MediaGridView: View {
                                 MediaCell(
                                     attachment: attachments[idx],
                                     baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx
+                                    play: isVisible && firstVideoIndex == idx,
+                                    allAttachments: attachments,
+                                    currentIndex: idx
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
-                                .onTapGesture {
-                                    handleMediaTap(at: idx)
-                                }
                             }
                         }
                     }
@@ -264,14 +252,13 @@ struct MediaGridView: View {
                                 MediaCell(
                                     attachment: attachments[idx],
                                     baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx
+                                    play: isVisible && firstVideoIndex == idx,
+                                    allAttachments: attachments,
+                                    currentIndex: idx
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
-                                .onTapGesture {
-                                    handleMediaTap(at: idx)
-                                }
                             }
                         }
                         HStack(spacing: 2) {
@@ -280,14 +267,13 @@ struct MediaGridView: View {
                                     MediaCell(
                                         attachment: attachments[idx],
                                         baseUrl: baseUrl,
-                                        play: isVisible && firstVideoIndex == idx
+                                        play: isVisible && firstVideoIndex == idx,
+                                        allAttachments: attachments,
+                                        currentIndex: idx
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
-                                    .onTapGesture {
-                                        handleMediaTap(at: idx)
-                                    }
                                     if idx == 3 {
                                         Color.black.opacity(0.4)
                                         Text("+\(attachments.count - 4)")
@@ -314,23 +300,6 @@ struct MediaGridView: View {
             } message: {
                 Text("Please wait while the video is being prepared.")
             }
-        }
-    }
-    
-    private func handleMediaTap(at index: Int) {
-        let attachment = attachments[index]
-        if attachment.type.lowercased() == "video" {
-            // Create a temporary MediaCell to check readiness
-            let cell = MediaCell(attachment: attachment, baseUrl: baseUrl)
-            if cell.isReady {
-                selectedIndex = index
-                showBrowser = true
-            } else {
-                showLoadingAlert = true
-            }
-        } else {
-            selectedIndex = index
-            showBrowser = true
         }
     }
 }
