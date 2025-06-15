@@ -119,9 +119,9 @@ struct WebVideoPlayer: UIViewRepresentable {
                     webkit-playsinline
                     \(isMuted ? "muted" : "")
                     ontimeupdate="window.webkit.messageHandlers.timeUpdate.postMessage(this.currentTime)"
-                    preload="metadata"
+                    preload="auto"
                 >
-                    <source src="\(videoURL)#t=1" type="video/mp4">
+                    <source src="\(videoURL)" type="video/mp4">
                 </video>
                 <script>
                     document.querySelector('video').addEventListener('volumechange', function(e) {
@@ -130,6 +130,8 @@ struct WebVideoPlayer: UIViewRepresentable {
                     window.setMute = function(muted) {
                         document.querySelector('video').muted = muted;
                     }
+                    // Preload the video
+                    document.querySelector('video').load();
                 </script>
             </body>
             </html>
