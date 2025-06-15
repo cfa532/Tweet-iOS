@@ -15,11 +15,6 @@ struct MediaBrowserView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
     @State private var isMuted: Bool = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
-    @State private var isZoomed: Bool = false
-    @State private var zoomScale: CGFloat = 1.0
-    @State private var offset: CGSize = .zero
-    @State private var lastOffset: CGSize = .zero
-    @State private var lastScale: CGFloat = 1.0
 
     init(attachments: [MimeiFileType], baseUrl: String, initialIndex: Int) {
         self.attachments = attachments
@@ -42,7 +37,6 @@ struct MediaBrowserView: View {
             }
             .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
             .background(Color.black.edgesIgnoringSafeArea(.all))
-            .disabled(isZoomed) // Disable TabView when zoomed
 
             // Close button
             Button(action: { dismiss() }) {
@@ -52,18 +46,6 @@ struct MediaBrowserView: View {
                     .foregroundColor(.white)
                     .padding()
             }
-        }
-        .onChange(of: zoomScale) { newScale in
-            isZoomed = newScale > 1
-        }
-    }
-
-    private func resetZoom() {
-        withAnimation {
-            zoomScale = 1.0
-            offset = .zero
-            lastOffset = .zero
-            lastScale = 1.0
         }
     }
 
@@ -87,48 +69,6 @@ struct MediaBrowserView: View {
                     .id(url) // force reload on url change
                     .onAppear {
                         isMuted = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
-                    }
-                    .scaleEffect(zoomScale)
-                    .offset(offset)
-                    .gesture(
-                        SimultaneousGesture(
-                            MagnificationGesture()
-                                .onChanged { value in
-                                    let delta = value / lastScale
-                                    lastScale = value
-                                    zoomScale = min(max(zoomScale * delta, 1), 4)
-                                }
-                                .onEnded { _ in
-                                    lastScale = 1.0
-                                },
-                            DragGesture()
-                                .onChanged { value in
-                                    if zoomScale > 1 {
-                                        let newOffset = CGSize(
-                                            width: lastOffset.width + value.translation.width,
-                                            height: lastOffset.height + value.translation.height
-                                        )
-                                        // Limit the offset based on scale
-                                        let maxOffset = (zoomScale - 1) * geometry.size.width / 2
-                                        offset = CGSize(
-                                            width: min(max(newOffset.width, -maxOffset), maxOffset),
-                                            height: min(max(newOffset.height, -maxOffset), maxOffset)
-                                        )
-                                    }
-                                }
-                                .onEnded { _ in
-                                    lastOffset = offset
-                                }
-                        )
-                    )
-                    .onTapGesture(count: 2) {
-                        if zoomScale > 1 {
-                            resetZoom()
-                        } else {
-                            withAnimation {
-                                zoomScale = 2.0
-                            }
-                        }
                     }
                     
                     // Mute/Unmute button
@@ -182,48 +122,6 @@ struct MediaBrowserView: View {
                     } placeholder: {
                         if ImageCacheManager.shared.getImage(for: attachment, baseUrl: baseUrl) == nil {
                             Color.gray
-                        }
-                    }
-                }
-                .scaleEffect(zoomScale)
-                .offset(offset)
-                .gesture(
-                    SimultaneousGesture(
-                        MagnificationGesture()
-                            .onChanged { value in
-                                let delta = value / lastScale
-                                lastScale = value
-                                zoomScale = min(max(zoomScale * delta, 1), 4)
-                            }
-                            .onEnded { _ in
-                                lastScale = 1.0
-                            },
-                        DragGesture()
-                            .onChanged { value in
-                                if zoomScale > 1 {
-                                    let newOffset = CGSize(
-                                        width: lastOffset.width + value.translation.width,
-                                        height: lastOffset.height + value.translation.height
-                                    )
-                                    // Limit the offset based on scale
-                                    let maxOffset = (zoomScale - 1) * geometry.size.width / 2
-                                    offset = CGSize(
-                                        width: min(max(newOffset.width, -maxOffset), maxOffset),
-                                        height: min(max(newOffset.height, -maxOffset), maxOffset)
-                                    )
-                                }
-                            }
-                            .onEnded { _ in
-                                lastOffset = offset
-                            }
-                    )
-                )
-                .onTapGesture(count: 2) {
-                    if zoomScale > 1 {
-                        resetZoom()
-                    } else {
-                        withAnimation {
-                            zoomScale = 2.0
                         }
                     }
                 }
