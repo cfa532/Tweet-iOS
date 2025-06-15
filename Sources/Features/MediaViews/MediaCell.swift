@@ -120,41 +120,16 @@ struct MediaCell: View {
     let attachment: MimeiFileType
     let baseUrl: String
     var play: Bool = false
-    var allAttachments: [MimeiFileType]? = nil
     var currentIndex: Int = 0
     @State private var cachedImage: UIImage?
     @State private var isLoading = false
-    @State private var currentTime: Double = 0
-    @State private var showLoadingError = false
     @State private var showBrowser = false
-
-    init(attachment: MimeiFileType, baseUrl: String, play: Bool = false, allAttachments: [MimeiFileType]? = nil, currentIndex: Int = 0) {
-        self.attachment = attachment
-        self.baseUrl = baseUrl
-        self.play = play
-        self.allAttachments = allAttachments
-        self.currentIndex = currentIndex
-    }
-
-    private func handleTap() {
-        showBrowser = true
-    }
-
-    private func createBrowserView() -> some View {
-        if let attachments = allAttachments {
-            return AnyView(MediaBrowserView(attachments: attachments, baseUrl: baseUrl, initialIndex: currentIndex))
-        } else {
-            return AnyView(MediaBrowserView(attachments: [attachment], baseUrl: baseUrl, initialIndex: 0))
-        }
-    }
 
     var body: some View {
         Group {
             if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
-                SimpleVideoPlayer(url: url, autoPlay: play, onTimeUpdate: { time in
-                    currentTime = time
-                })
-                .environmentObject(MuteState.shared)
+                SimpleVideoPlayer(url: url, autoPlay: play)
+                    .environmentObject(MuteState.shared)
             } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
                 SimpleAudioPlayer(url: url, autoPlay: play)
             } else {
@@ -167,20 +142,19 @@ struct MediaCell: View {
                     Color.gray
                 } else {
                     Color.gray
-                        .onAppear {
-                            loadImage()
-                        }
+                        .onAppear { loadImage() }
                 }
             }
         }
-        .onTapGesture {
-            handleTap()
-        }
+        .onTapGesture { showBrowser = true }
         .fullScreenCover(isPresented: $showBrowser) {
-            createBrowserView()
+            MediaBrowserView(
+                attachments: [attachment],
+                baseUrl: baseUrl,
+                initialIndex: 0
+            )
         }
         .onAppear {
-            // Try to load from cache first
             if let cached = ImageCacheManager.shared.getImage(for: attachment, baseUrl: baseUrl) {
                 cachedImage = cached
             } else {
@@ -191,7 +165,6 @@ struct MediaCell: View {
     
     private func loadImage() {
         guard let url = attachment.getUrl(baseUrl), cachedImage == nil else { return }
-        
         isLoading = true
         Task {
             if let image = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: baseUrl) {
@@ -200,19 +173,9 @@ struct MediaCell: View {
                     isLoading = false
                 }
             } else {
-                await MainActor.run {
-                    isLoading = false
-                }
+                await MainActor.run { isLoading = false }
             }
         }
-    }
-    
-    func getCurrentPlaybackTime() -> Double {
-        return currentTime
-    }
-    
-    var isReady: Bool {
-        return true // Video is always ready since we're using WKWebView
     }
 }
 

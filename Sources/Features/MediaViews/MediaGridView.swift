@@ -11,253 +11,184 @@ import AVKit
 struct MediaGridView: View {
     let attachments: [MimeiFileType]
     let baseUrl: String
-
     @State private var isVisible: Bool = false
     @State private var showBrowser: Bool = false
     @State private var selectedIndex: Int = 0
-    @State private var showLoadingAlert: Bool = false
 
-    // Helper to determine if an attachment is portrait
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
         guard let ar = attachment.aspectRatio, ar > 0 else { return false }
-        return ar < 1.0 // width/height < 1 means portrait
+        return ar < 1.0
     }
-    // Helper to determine if an attachment is landscape
+
     private func isLandscape(_ attachment: MimeiFileType) -> Bool {
         guard let ar = attachment.aspectRatio, ar > 0 else { return false }
-        return ar > 1.0 // width/height > 1 means landscape
+        return ar > 1.0
+    }
+
+    private func gridAspect() -> CGFloat {
+        let count = attachments.count
+        let allPortrait = attachments.allSatisfy { isPortrait($0) }
+        let allLandscape = attachments.allSatisfy { isLandscape($0) }
+        
+        switch count {
+        case 1:
+            return CGFloat(attachments[0].aspectRatio ?? 1.0)
+        case 2:
+            if allPortrait { return 4.0/3.0 }
+            if allLandscape { return 3.0/4.0 }
+            return 1.0
+        case 3:
+            if allPortrait { return 4.0/3.0 }
+            if allLandscape { return 3.0/4.0 }
+            return 1.0
+        default:
+            return 1.0
+        }
     }
 
     var body: some View {
         if attachments.isEmpty {
             EmptyView()
         } else {
-            let count = attachments.count
-            // Determine layout/aspect ratio
-            let allPortrait = attachments.allSatisfy { isPortrait($0) }
-            let allLandscape = attachments.allSatisfy { isLandscape($0) }
-            let aspect: CGFloat = {
-                switch count {
-                case 1:
-                    if let ar = attachments[0].aspectRatio, ar > 0 {
-                        return CGFloat(ar) // Use actual aspect ratio
-                    } else {
-                        return 1.0 // Square when no aspect ratio is available
-                    }
-                case 2:
-                    if allPortrait { return 4.0/3.0 }
-                    else if allLandscape { return 3.0/4.0 }
-                    else { return 1.0 } // mixed
-                case 3:
-                    if allPortrait { return 4.0/3.0 }
-                    else if allLandscape { return 3.0/4.0 }
-                    else { return 1.0 }
-                case 4:
-                    return 1.0
-                default:
-                    return 1.0
-                }
-            }()
             let gridWidth: CGFloat = 320
-            let gridHeight = gridWidth / aspect
+            let gridHeight = gridWidth / gridAspect()
             let firstVideoIndex = attachments.firstIndex { $0.type.lowercased() == "video" }
 
             ZStack {
-                switch count {
+                switch attachments.count {
                 case 1:
-                    // Single image: use actual aspect ratio
                     MediaCell(
                         attachment: attachments[0],
                         baseUrl: baseUrl,
                         play: isVisible && firstVideoIndex == 0,
-                        allAttachments: attachments,
                         currentIndex: 0
                     )
                     .frame(width: gridWidth, height: gridHeight)
                     .aspectRatio(contentMode: .fill)
                     .clipped()
                     .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedIndex = 0
+                        showBrowser = true
+                    }
+                    
                 case 2:
-                    if allPortrait {
-                        // HStack, 4:3
+                    if isPortrait(attachments[0]) {
                         HStack(spacing: 2) {
                             ForEach(Array(attachments.enumerated()), id: \.offset) { idx, attachment in
                                 MediaCell(
                                     attachment: attachment,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
-                                    allAttachments: attachments,
                                     currentIndex: idx
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedIndex = idx
+                                    showBrowser = true
+                                }
                             }
                         }
-                    } else if allLandscape {
-                        // VStack, 3:4
+                    } else {
                         VStack(spacing: 2) {
                             ForEach(Array(attachments.enumerated()), id: \.offset) { idx, attachment in
                                 MediaCell(
                                     attachment: attachment,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
-                                    allAttachments: attachments,
                                     currentIndex: idx
                                 )
                                 .frame(width: gridWidth, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .contentShape(Rectangle())
-                            }
-                        }
-                    } else {
-                        // Mixed: HStack, 1:1
-                        HStack(spacing: 2) {
-                            ForEach(Array(attachments.enumerated()), id: \.offset) { idx, attachment in
-                                MediaCell(
-                                    attachment: attachment,
-                                    baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx,
-                                    allAttachments: attachments,
-                                    currentIndex: idx
-                                )
-                                .frame(width: gridWidth / 2 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedIndex = idx
+                                    showBrowser = true
+                                }
                             }
                         }
                     }
+                    
                 case 3:
-                    if allPortrait {
-                        // HStack: left 1, right VStack 2, 4:3
+                    if isPortrait(attachments[0]) {
                         HStack(spacing: 2) {
                             MediaCell(
                                 attachment: attachments[0],
                                 baseUrl: baseUrl,
                                 play: isVisible && firstVideoIndex == 0,
-                                allAttachments: attachments,
                                 currentIndex: 0
                             )
                             .frame(width: gridWidth / 2 - 1, height: gridHeight)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
                             .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedIndex = 0
+                                showBrowser = true
+                            }
+                            
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
                                         attachment: attachments[idx],
                                         baseUrl: baseUrl,
                                         play: isVisible && firstVideoIndex == idx,
-                                        allAttachments: attachments,
                                         currentIndex: idx
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
                                     .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        selectedIndex = idx
+                                        showBrowser = true
+                                    }
                                 }
                             }
                         }
-                    } else if allLandscape {
-                        // VStack: top 1, bottom HStack 2, 3:4
+                    } else {
                         VStack(spacing: 2) {
                             MediaCell(
                                 attachment: attachments[0],
                                 baseUrl: baseUrl,
                                 play: isVisible && firstVideoIndex == 0,
-                                allAttachments: attachments,
                                 currentIndex: 0
                             )
                             .frame(width: gridWidth, height: gridHeight / 2 - 1)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
                             .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedIndex = 0
+                                showBrowser = true
+                            }
+                            
                             HStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
                                         attachment: attachments[idx],
                                         baseUrl: baseUrl,
                                         play: isVisible && firstVideoIndex == idx,
-                                        allAttachments: attachments,
                                         currentIndex: idx
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
                                     .contentShape(Rectangle())
-                                }
-                            }
-                        }
-                    } else {
-                        // Mixed: HStack, left 1, right VStack 2, 1:1
-                        HStack(spacing: 2) {
-                            MediaCell(
-                                attachment: attachments[0],
-                                baseUrl: baseUrl,
-                                play: isVisible && firstVideoIndex == 0,
-                                allAttachments: attachments,
-                                currentIndex: 0
-                            )
-                            .frame(width: gridWidth / 2 - 1, height: gridHeight)
-                            .aspectRatio(contentMode: .fill)
-                            .clipped()
-                            .contentShape(Rectangle())
-                            VStack(spacing: 2) {
-                                ForEach(1..<3) { idx in
-                                    MediaCell(
-                                        attachment: attachments[idx],
-                                        baseUrl: baseUrl,
-                                        play: isVisible && firstVideoIndex == idx,
-                                        allAttachments: attachments,
-                                        currentIndex: idx
-                                    )
-                                    .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                    .aspectRatio(contentMode: .fill)
-                                    .clipped()
-                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        selectedIndex = idx
+                                        showBrowser = true
+                                    }
                                 }
                             }
                         }
                     }
-                case 4:
-                    // 2x2 grid, 1:1
-                    VStack(spacing: 2) {
-                        HStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
-                                MediaCell(
-                                    attachment: attachments[idx],
-                                    baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx,
-                                    allAttachments: attachments,
-                                    currentIndex: idx
-                                )
-                                .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                            }
-                        }
-                        HStack(spacing: 2) {
-                            ForEach(2..<4) { idx in
-                                MediaCell(
-                                    attachment: attachments[idx],
-                                    baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx,
-                                    allAttachments: attachments,
-                                    currentIndex: idx
-                                )
-                                .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                            }
-                        }
-                    }
+                    
                 default:
-                    // For more than 4, show first 4 and overlay a count
                     VStack(spacing: 2) {
                         HStack(spacing: 2) {
                             ForEach(0..<2) { idx in
@@ -265,30 +196,37 @@ struct MediaGridView: View {
                                     attachment: attachments[idx],
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
-                                    allAttachments: attachments,
                                     currentIndex: idx
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedIndex = idx
+                                    showBrowser = true
+                                }
                             }
                         }
                         HStack(spacing: 2) {
-                            ForEach(2..<4) { idx in
+                            ForEach(2..<min(4, attachments.count)) { idx in
                                 ZStack {
                                     MediaCell(
                                         attachment: attachments[idx],
                                         baseUrl: baseUrl,
                                         play: isVisible && firstVideoIndex == idx,
-                                        allAttachments: attachments,
                                         currentIndex: idx
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
                                     .contentShape(Rectangle())
-                                    if idx == 3 {
+                                    .onTapGesture {
+                                        selectedIndex = idx
+                                        showBrowser = true
+                                    }
+                                    
+                                    if idx == 3 && attachments.count > 4 {
                                         Color.black.opacity(0.4)
                                         Text("+\(attachments.count - 4)")
                                             .foregroundColor(.white)
@@ -308,11 +246,6 @@ struct MediaGridView: View {
             .onDisappear { isVisible = false }
             .fullScreenCover(isPresented: $showBrowser) {
                 MediaBrowserView(attachments: attachments, baseUrl: baseUrl, initialIndex: selectedIndex)
-            }
-            .alert("Video Loading", isPresented: $showLoadingAlert) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text("Please wait while the video is being prepared.")
             }
         }
     }
