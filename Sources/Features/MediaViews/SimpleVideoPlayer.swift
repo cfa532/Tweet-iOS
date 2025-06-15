@@ -12,14 +12,7 @@ import CryptoKit
 // Global mute state
 class MuteState: ObservableObject {
     static let shared = MuteState()
-    @Published var isMuted: Bool {
-        didSet {
-            PreferenceHelper().setSpeakerMute(isMuted)
-        }
-    }
-    init() {
-        self.isMuted = PreferenceHelper().getSpeakerMute()
-    }
+    @Published var isMuted: Bool = false
 }
 
 struct SimpleVideoPlayer: View {
@@ -182,7 +175,7 @@ struct WebVideoPlayer: UIViewRepresentable {
             let videoSource: String
             if let cachedURL = VideoCacheManager.shared.getCachedVideoURL(for: url),
                let data = try? Data(contentsOf: cachedURL) {
-                // Convert cached video to base64 data URL
+                // Create a data URL for the cached video
                 let base64 = data.base64EncodedString()
                 videoSource = "data:video/mp4;base64,\(base64)"
             } else {
