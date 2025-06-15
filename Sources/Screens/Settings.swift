@@ -63,7 +63,7 @@ struct SettingsView: View {
             .alert("Cache Cleared", isPresented: $showCacheCleanedAlert) {
                 Button("OK") { }
             } message: {
-                Text("Media cache has been cleared successfully.")
+                Text("Image and tweet caches have been cleared successfully.")
             }
         }
     }
@@ -73,8 +73,6 @@ struct SettingsView: View {
         Task.detached(priority: .background) {
             // Clean up image cache
             ImageCacheManager.shared.cleanupOldCache()
-            // Clean up video cache
-            VideoCacheManager.shared.cleanupOldCache()
             // Clear tweet cache
             TweetCacheManager.shared.deleteExpiredTweets()
             await MainActor.run {

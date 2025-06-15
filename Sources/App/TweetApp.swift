@@ -19,8 +19,6 @@ class AppState: ObservableObject {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 // Clean up image cache
                 ImageCacheManager.shared.cleanupOldCache()
-                // Clean up video cache
-                VideoCacheManager.shared.cleanupOldCache()
             }
         } catch {
             self.error = error
