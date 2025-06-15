@@ -59,9 +59,10 @@ struct MediaBrowserView: View {
                         autoPlay: true,
                         isMuted: isMuted,
                         onMuteChanged: { muted in
-                            isMuted = muted
-                            HproseInstance.shared.preferenceHelper?.setSpeakerMute(muted)
-                            WebVideoPlayer.updateMuteExternally(isMuted: muted)
+                            DispatchQueue.main.async {
+                                isMuted = muted
+                                HproseInstance.shared.preferenceHelper?.setSpeakerMute(muted)
+                            }
                         }
                     )
                     .aspectRatio(contentMode: .fit)
@@ -76,9 +77,10 @@ struct MediaBrowserView: View {
                         HStack {
                             Spacer()
                             Button(action: {
-                                isMuted.toggle()
-                                HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
-                                WebVideoPlayer.updateMuteExternally(isMuted: isMuted)
+                                DispatchQueue.main.async {
+                                    isMuted.toggle()
+                                    HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
+                                }
                             }) {
                                 Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                                     .foregroundColor(.white)

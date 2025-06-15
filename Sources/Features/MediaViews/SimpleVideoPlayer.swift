@@ -6,8 +6,7 @@
 //
 
 import SwiftUI
-import WebKit
-import CryptoKit
+import AVKit
 
 // Global mute state
 class MuteState: ObservableObject {
@@ -24,149 +23,93 @@ struct SimpleVideoPlayer: View {
     var onMuteChanged: ((Bool) -> Void)? = nil
     
     var body: some View {
-        WebVideoPlayer(
+        VideoPlayerView(
             url: url,
             autoPlay: autoPlay,
             isMuted: isMuted ?? muteState.isMuted,
-            onMuteChanged: { muted in
-                if let onMuteChanged = onMuteChanged {
-                    onMuteChanged(muted)
-                } else {
-                    muteState.isMuted = muted
-                }
-            },
+            onMuteChanged: onMuteChanged,
             onTimeUpdate: onTimeUpdate
         )
-        .onAppear {
-            print("SimpleVideoPlayer: Using web player for \(url.lastPathComponent)")
-        }
     }
 }
 
-// MARK: - Web Video Player
-struct WebVideoPlayer: UIViewRepresentable {
+struct VideoPlayerView: UIViewControllerRepresentable {
     let url: URL
     let autoPlay: Bool
     let isMuted: Bool
-    let onMuteChanged: (Bool) -> Void
+    let onMuteChanged: ((Bool) -> Void)?
     let onTimeUpdate: ((Double) -> Void)?
     
-    static weak var lastFullScreenWebView: WKWebView?
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.showsPlaybackControls = true
+        controller.videoGravity = .resizeAspect
+        controller.entersFullScreenWhenPlaybackBegins = false
+        controller.exitsFullScreenWhenPlaybackEnds = false
+        
+        // Create asset with proper configuration
+        let asset = AVURLAsset(url: url, options: [
+            "AVURLAssetOutOfBandMIMETypeKey": "video/mp4",
+            "AVURLAssetHTTPHeaderFieldsKey": ["Accept": "*/*", "Range": "bytes=0-"]
+        ])
+        
+        // Create player item with asset
+        let playerItem = AVPlayerItem(asset: asset)
+        
+        // Configure player item
+        playerItem.preferredForwardBufferDuration = 2.0 // Limit buffer size
+        playerItem.preferredPeakBitRate = 2_000_000 // 2 Mbps limit
+        
+        // Create and configure player
+        let player = AVPlayer(playerItem: playerItem)
+        player.automaticallyWaitsToMinimizeStalling = true
+        player.isMuted = isMuted
+        
+        // Set up time observer
+        let timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { time in
+            onTimeUpdate?(time.seconds)
+        }
+        
+        // Store observer in coordinator
+        context.coordinator.timeObserver = timeObserver
+        
+        // Set up player
+        controller.player = player
+        
+        if autoPlay {
+            player.play()
+        }
+        
+        return controller
+    }
+    
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        controller.player?.isMuted = isMuted
+    }
+    
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
+        // Clean up time observer
+        if let timeObserver = coordinator.timeObserver {
+            controller.player?.removeTimeObserver(timeObserver)
+        }
+        
+        // Stop playback
+        controller.player?.pause()
+        controller.player = nil
+    }
     
     func makeCoordinator() -> Coordinator {
         Coordinator(onMuteChanged: onMuteChanged, onTimeUpdate: onTimeUpdate)
     }
     
-    func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.allowsInlineMediaPlayback = true
-        configuration.mediaTypesRequiringUserActionForPlayback = []
-        
-        // Configure for inline playback
-        let preferences = WKWebpagePreferences()
-        preferences.allowsContentJavaScript = true
-        configuration.defaultWebpagePreferences = preferences
-        
-        // Add message handler for mute state changes and time updates
-        configuration.userContentController.add(context.coordinator, name: "muteStateChanged")
-        configuration.userContentController.add(context.coordinator, name: "timeUpdate")
-        
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.backgroundColor = .black
-        webView.isOpaque = true
-        webView.scrollView.isScrollEnabled = false
-        
-        // Disable right-click
-        let script = WKUserScript(
-            source: "document.addEventListener('contextmenu', function(e) { e.preventDefault(); });",
-            injectionTime: .atDocumentEnd,
-            forMainFrameOnly: false
-        )
-        webView.configuration.userContentController.addUserScript(script)
-        
-        // Store static reference for fullscreen
-        WebVideoPlayer.lastFullScreenWebView = webView
-        context.coordinator.webView = webView
-        context.coordinator.lastLoadedURL = nil // force initial load
-        
-        return webView
-    }
-    
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        let videoURL = url.absoluteString
-        
-        if context.coordinator.lastLoadedURL != videoURL {
-            let html = """
-            <html>
-            <head>
-                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                <style>
-                    body { margin: 0; background-color: black; }
-                    video { 
-                        width: 100%; 
-                        height: 100%; 
-                        object-fit: contain;
-                        background-color: black;
-                    }
-                </style>
-            </head>
-            <body>
-                <video
-                    id="videoPlayer"
-                    \(autoPlay ? "autoplay" : "")
-                    controls
-                    playsinline
-                    webkit-playsinline
-                    \(isMuted ? "muted" : "")
-                    ontimeupdate="window.webkit.messageHandlers.timeUpdate.postMessage(this.currentTime)"
-                    preload="auto"
-                >
-                    <source src="\(videoURL)" type="video/mp4">
-                </video>
-                <script>
-                    document.querySelector('video').addEventListener('volumechange', function(e) {
-                        window.webkit.messageHandlers.muteStateChanged.postMessage(e.target.muted);
-                    });
-                    window.setMute = function(muted) {
-                        document.querySelector('video').muted = muted;
-                    }
-                    // Preload the video
-                    document.querySelector('video').load();
-                </script>
-            </body>
-            </html>
-            """
-            webView.loadHTMLString(html, baseURL: nil)
-            context.coordinator.lastLoadedURL = videoURL
-        }
-        
-        // Update mute state
-        let js = "window.setMute(\(isMuted ? "true" : "false"));"
-        webView.evaluateJavaScript(js, completionHandler: nil)
-    }
-    
-    static func updateMuteExternally(isMuted: Bool) {
-        let js = "window.setMute(\(isMuted ? "true" : "false"));"
-        lastFullScreenWebView?.evaluateJavaScript(js, completionHandler: nil)
-    }
-    
-    class Coordinator: NSObject, WKScriptMessageHandler {
-        let onMuteChanged: (Bool) -> Void
+    class Coordinator: NSObject {
+        let onMuteChanged: ((Bool) -> Void)?
         let onTimeUpdate: ((Double) -> Void)?
-        weak var webView: WKWebView?
-        var lastLoadedURL: String?
+        var timeObserver: Any?
         
-        init(onMuteChanged: @escaping (Bool) -> Void, onTimeUpdate: ((Double) -> Void)?) {
+        init(onMuteChanged: ((Bool) -> Void)?, onTimeUpdate: ((Double) -> Void)?) {
             self.onMuteChanged = onMuteChanged
             self.onTimeUpdate = onTimeUpdate
-        }
-        
-        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            if message.name == "muteStateChanged", let isMuted = message.body as? Bool {
-                onMuteChanged(isMuted)
-            } else if message.name == "timeUpdate", let time = message.body as? Double {
-                onTimeUpdate?(time)
-            }
         }
     }
 } 
