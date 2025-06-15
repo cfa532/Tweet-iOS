@@ -43,77 +43,17 @@ struct TweetDetailView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                // Attachments (edge-to-edge, no margin)
-                if let attachments = displayTweet.attachments, let baseUrl = displayTweet.author?.baseUrl, !attachments.isEmpty {
-                    let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
-                    TabView(selection: $selectedMediaIndex) {
-                        ForEach(attachments.indices, id: \.self) { index in
-                            MediaCell(
-                                attachment: attachments[index],
-                                baseUrl: baseUrl,
-                                play: index == selectedMediaIndex
-                            )
-                            .tag(index)
-                            .onTapGesture { showBrowser = true }
-                        }
-                    }
-                    .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: UIScreen.main.bounds.width / aspect)
-                    .background(Color.black)
-                }
-                // Tweet header (with avatar and menu)
-                HStack(alignment: .top, spacing: 12) {
-                    if let user = displayTweet.author {
-                        Avatar(user: user)
-                            .onTapGesture {
-                                selectedUser = user
-                            }
-                    }
-                    TweetItemHeaderView(tweet: displayTweet)
-                    TweetMenu(tweet: displayTweet, isPinned: displayTweet.isPinned(in: pinnedTweets))
-                }
-                .padding(.horizontal)
-                .padding(.top)
-                // Tweet content
-                if let content = displayTweet.content, !content.isEmpty {
-                    Text(content)
-                        .font(.title3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                }
-                TweetActionButtonsView(tweet: displayTweet)
-                    .padding(.leading, 48)
-                    .padding(.trailing, 8)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
+                mediaSection
+                tweetHeader
+                tweetContent
+                actionButtons
                 Divider()
                     .padding(.top, 8)
                     .padding(.bottom, 4)
-                
-                // Comments section using CommentListView
                 commentsListView
             }
             .task {
-                // Initial load of original tweet
-                if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
-                    if let originalTweet = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
-                        self.originalTweet = originalTweet
-                    }
-                }
-                
-                // Initial refresh after 2 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    refreshTweet()
-                }
-                
-                // Set up periodic refresh every 5 minutes
-                refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
-                    Task { @MainActor in
-                        refreshTweet()
-                    }
-                }
+                setupInitialData()
             }
         }
         .background(Color(.systemBackground))
@@ -132,25 +72,107 @@ struct TweetDetailView: View {
                 }
             }
         }
-        .overlay(
-            Group {
-                if showToast {
-                    VStack {
-                        Spacer()
-                        ToastView(message: toastMessage, type: toastType)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                    .padding(.bottom, 32)
-                }
-            }
-        )
+        .overlay(toastOverlay)
         .onDisappear {
-            // Clean up timer when view disappears
             refreshTimer?.invalidate()
             refreshTimer = nil
         }
-        // Navigation to another user's profile when an avatar is tapped
-        profileNavigationLink
+        .background(profileNavigationLink)
+    }
+    
+    private var mediaSection: some View {
+        Group {
+            if let attachments = displayTweet.attachments, let baseUrl = displayTweet.author?.baseUrl, !attachments.isEmpty {
+                let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
+                TabView(selection: $selectedMediaIndex) {
+                    ForEach(attachments.indices, id: \.self) { index in
+                        MediaCell(
+                            attachments: attachments,
+                            baseUrl: baseUrl,
+                            play: index == selectedMediaIndex,
+                            currentIndex: index
+                        )
+                        .tag(index)
+                        .onTapGesture { showBrowser = true }
+                    }
+                }
+                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
+                .frame(maxWidth: .infinity)
+                .frame(height: UIScreen.main.bounds.width / aspect)
+                .background(Color.black)
+            }
+        }
+    }
+    
+    private var tweetHeader: some View {
+        HStack(alignment: .top, spacing: 12) {
+            if let user = displayTweet.author {
+                Avatar(user: user)
+                    .onTapGesture {
+                        selectedUser = user
+                    }
+            }
+            TweetItemHeaderView(tweet: displayTweet)
+            TweetMenu(tweet: displayTweet, isPinned: displayTweet.isPinned(in: pinnedTweets))
+        }
+        .padding(.horizontal)
+        .padding(.top)
+    }
+    
+    private var tweetContent: some View {
+        Group {
+            if let content = displayTweet.content, !content.isEmpty {
+                Text(content)
+                    .font(.title3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+            }
+        }
+    }
+    
+    private var actionButtons: some View {
+        TweetActionButtonsView(tweet: displayTweet)
+            .padding(.leading, 48)
+            .padding(.trailing, 8)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+    }
+    
+    private var toastOverlay: some View {
+        Group {
+            if showToast {
+                VStack {
+                    Spacer()
+                    ToastView(message: toastMessage, type: toastType)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                .padding(.bottom, 32)
+            }
+        }
+    }
+    
+    private func setupInitialData() {
+        // Initial load of original tweet
+        if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
+            Task {
+                if let originalTweet = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                    self.originalTweet = originalTweet
+                }
+            }
+        }
+        
+        // Initial refresh after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            refreshTweet()
+        }
+        
+        // Set up periodic refresh every 5 minutes
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
+            Task { @MainActor in
+                refreshTweet()
+            }
+        }
     }
 
     private var commentsListView: some View {

@@ -117,7 +117,7 @@ class ImageCacheManager {
 
 // MARK: - MediaCell
 struct MediaCell: View {
-    let attachment: MimeiFileType
+    let attachments: [MimeiFileType]
     let baseUrl: String
     var play: Bool = false
     var currentIndex: Int = 0
@@ -127,6 +127,7 @@ struct MediaCell: View {
 
     var body: some View {
         Group {
+            let attachment = attachments[currentIndex]
             if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
                 SimpleVideoPlayer(url: url, autoPlay: play)
                     .environmentObject(MuteState.shared)
@@ -149,13 +150,13 @@ struct MediaCell: View {
         .onTapGesture { showBrowser = true }
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
-                attachments: [attachment],
+                attachments: attachments,
                 baseUrl: baseUrl,
                 initialIndex: 0
             )
         }
         .onAppear {
-            if let cached = ImageCacheManager.shared.getImage(for: attachment, baseUrl: baseUrl) {
+            if let cached = ImageCacheManager.shared.getImage(for: attachments[currentIndex], baseUrl: baseUrl) {
                 cachedImage = cached
             } else {
                 loadImage()
@@ -164,6 +165,7 @@ struct MediaCell: View {
     }
     
     private func loadImage() {
+        let attachment = attachments[currentIndex]
         guard let url = attachment.getUrl(baseUrl), cachedImage == nil else { return }
         isLoading = true
         Task {

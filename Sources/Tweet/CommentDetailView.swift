@@ -41,57 +41,13 @@ struct CommentDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                // Attachments (edge-to-edge, no margin)
-                if let attachments = comment.attachments, let baseUrl = comment.author?.baseUrl, !attachments.isEmpty {
-                    let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
-                    TabView(selection: $selectedMediaIndex) {
-                        ForEach(attachments.indices, id: \.self) { index in
-                            MediaCell(
-                                attachment: attachments[index],
-                                baseUrl: baseUrl,
-                                play: index == selectedMediaIndex
-                            )
-                            .tag(index)
-                            .onTapGesture { showBrowser = true }
-                        }
-                    }
-                    .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: UIScreen.main.bounds.width / aspect)
-                    .background(Color.black)
-                }
-                
-                // Comment header (with avatar and menu)
-                HStack(alignment: .top, spacing: 12) {
-                    if let user = comment.author {
-                        Avatar(user: user)
-                    }
-                    TweetItemHeaderView(tweet: comment)
-                    CommentMenu(comment: comment, parentTweet: parentTweet)
-                }
-                .padding(.horizontal)
-                .padding(.top)
-                
-                // Comment content
-                if let content = comment.content, !content.isEmpty {
-                    Text(content)
-                        .font(.title3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                }
-                
-                TweetActionButtonsView(tweet: comment)
-                    .padding(.leading, 48)
-                    .padding(.trailing, 8)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
-                
+                mediaSection
+                commentHeader
+                commentContent
+                actionButtons
                 Divider()
                     .padding(.top, 8)
                     .padding(.bottom, 4)
-                
-                // Replies section
                 repliesListView
             }
         }
@@ -110,37 +66,98 @@ struct CommentDetailView: View {
                 dismiss()
             }
         }
-        .overlay(
-            Group {
-                if showToast {
-                    VStack {
-                        Spacer()
-                        ToastView(message: toastMessage, type: toastType)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                    .padding(.bottom, 32)
-                }
-            }
-        )
+        .overlay(toastOverlay)
         .onDisappear {
-            // Clean up timer when view disappears
             refreshTimer?.invalidate()
             refreshTimer = nil
         }
         .task {
-            // Initial refresh after 2 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                refreshComment()
-            }
-            
-            // Set up periodic refresh every 5 minutes
-            refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
-                Task { @MainActor in
-                    refreshComment()
-                }
-            }
+            setupRefreshTimer()
         }
         .background(profileNavigationLink)
+    }
+    
+    private var mediaSection: some View {
+        Group {
+            if let attachments = comment.attachments, let baseUrl = comment.author?.baseUrl, !attachments.isEmpty {
+                let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
+                TabView(selection: $selectedMediaIndex) {
+                    ForEach(attachments.indices, id: \.self) { index in
+                        MediaCell(
+                            attachments: attachments,
+                            baseUrl: baseUrl,
+                            play: index == selectedMediaIndex,
+                            currentIndex: index
+                        )
+                        .tag(index)
+                        .onTapGesture { showBrowser = true }
+                    }
+                }
+                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
+                .frame(maxWidth: .infinity)
+                .frame(height: UIScreen.main.bounds.width / aspect)
+                .background(Color.black)
+            }
+        }
+    }
+    
+    private var commentHeader: some View {
+        HStack(alignment: .top, spacing: 12) {
+            if let user = comment.author {
+                Avatar(user: user)
+            }
+            TweetItemHeaderView(tweet: comment)
+            CommentMenu(comment: comment, parentTweet: parentTweet)
+        }
+        .padding(.horizontal)
+        .padding(.top)
+    }
+    
+    private var commentContent: some View {
+        Group {
+            if let content = comment.content, !content.isEmpty {
+                Text(content)
+                    .font(.title3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+            }
+        }
+    }
+    
+    private var actionButtons: some View {
+        TweetActionButtonsView(tweet: comment)
+            .padding(.leading, 48)
+            .padding(.trailing, 8)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+    }
+    
+    private var toastOverlay: some View {
+        Group {
+            if showToast {
+                VStack {
+                    Spacer()
+                    ToastView(message: toastMessage, type: toastType)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                .padding(.bottom, 32)
+            }
+        }
+    }
+    
+    private func setupRefreshTimer() {
+        // Initial refresh after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            refreshComment()
+        }
+        
+        // Set up periodic refresh every 5 minutes
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
+            Task { @MainActor in
+                refreshComment()
+            }
+        }
     }
     
     private var repliesListView: some View {

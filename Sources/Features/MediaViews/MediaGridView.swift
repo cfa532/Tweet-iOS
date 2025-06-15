@@ -58,7 +58,7 @@ struct MediaGridView: View {
                 switch attachments.count {
                 case 1:
                     MediaCell(
-                        attachment: attachments[0],
+                        attachments: attachments,
                         baseUrl: baseUrl,
                         play: isVisible && firstVideoIndex == 0,
                         currentIndex: 0
@@ -75,9 +75,9 @@ struct MediaGridView: View {
                 case 2:
                     if isPortrait(attachments[0]) {
                         HStack(spacing: 2) {
-                            ForEach(Array(attachments.enumerated()), id: \.offset) { idx, attachment in
+                            ForEach(Array(attachments.enumerated()), id: \.offset) { idx, _ in
                                 MediaCell(
-                                    attachment: attachment,
+                                    attachments: attachments,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
                                     currentIndex: idx
@@ -94,9 +94,9 @@ struct MediaGridView: View {
                         }
                     } else {
                         VStack(spacing: 2) {
-                            ForEach(Array(attachments.enumerated()), id: \.offset) { idx, attachment in
+                            ForEach(Array(attachments.enumerated()), id: \.offset) { idx, _ in
                                 MediaCell(
-                                    attachment: attachment,
+                                    attachments: attachments,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
                                     currentIndex: idx
@@ -117,7 +117,7 @@ struct MediaGridView: View {
                     if isPortrait(attachments[0]) {
                         HStack(spacing: 2) {
                             MediaCell(
-                                attachment: attachments[0],
+                                attachments: attachments,
                                 baseUrl: baseUrl,
                                 play: isVisible && firstVideoIndex == 0,
                                 currentIndex: 0
@@ -134,7 +134,7 @@ struct MediaGridView: View {
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
-                                        attachment: attachments[idx],
+                                        attachments: attachments,
                                         baseUrl: baseUrl,
                                         play: isVisible && firstVideoIndex == idx,
                                         currentIndex: idx
@@ -153,7 +153,7 @@ struct MediaGridView: View {
                     } else {
                         VStack(spacing: 2) {
                             MediaCell(
-                                attachment: attachments[0],
+                                attachments: attachments,
                                 baseUrl: baseUrl,
                                 play: isVisible && firstVideoIndex == 0,
                                 currentIndex: 0
@@ -170,7 +170,7 @@ struct MediaGridView: View {
                             HStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
-                                        attachment: attachments[idx],
+                                        attachments: attachments,
                                         baseUrl: baseUrl,
                                         play: isVisible && firstVideoIndex == idx,
                                         currentIndex: idx
@@ -193,7 +193,7 @@ struct MediaGridView: View {
                         HStack(spacing: 2) {
                             ForEach(0..<2) { idx in
                                 MediaCell(
-                                    attachment: attachments[idx],
+                                    attachments: attachments,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
                                     currentIndex: idx
@@ -212,7 +212,7 @@ struct MediaGridView: View {
                             ForEach(2..<min(4, attachments.count)) { idx in
                                 ZStack {
                                     MediaCell(
-                                        attachment: attachments[idx],
+                                        attachments: attachments,
                                         baseUrl: baseUrl,
                                         play: isVisible && firstVideoIndex == idx,
                                         currentIndex: idx
