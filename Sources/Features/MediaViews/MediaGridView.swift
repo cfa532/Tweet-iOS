@@ -76,13 +76,14 @@ struct MediaGridView: View {
                     .frame(width: gridWidth, height: gridHeight)
                     .aspectRatio(contentMode: .fill)
                     .clipped()
+                    .contentShape(Rectangle())
                 case 2:
                     if allPortrait {
                         // HStack, 4:3
                         HStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
+                            ForEach(Array(attachments.enumerated()), id: \.offset) { idx, attachment in
                                 MediaCell(
-                                    attachment: attachments[idx],
+                                    attachment: attachment,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
                                     allAttachments: attachments,
@@ -91,14 +92,15 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
+                                .contentShape(Rectangle())
                             }
                         }
                     } else if allLandscape {
                         // VStack, 3:4
                         VStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
+                            ForEach(Array(attachments.enumerated()), id: \.offset) { idx, attachment in
                                 MediaCell(
-                                    attachment: attachments[idx],
+                                    attachment: attachment,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
                                     allAttachments: attachments,
@@ -107,14 +109,15 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
+                                .contentShape(Rectangle())
                             }
                         }
                     } else {
                         // Mixed: HStack, 1:1
                         HStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
+                            ForEach(Array(attachments.enumerated()), id: \.offset) { idx, attachment in
                                 MediaCell(
-                                    attachment: attachments[idx],
+                                    attachment: attachment,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
                                     allAttachments: attachments,
@@ -123,6 +126,7 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
+                                .contentShape(Rectangle())
                             }
                         }
                     }
@@ -140,6 +144,7 @@ struct MediaGridView: View {
                             .frame(width: gridWidth / 2 - 1, height: gridHeight)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
+                            .contentShape(Rectangle())
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
@@ -152,6 +157,7 @@ struct MediaGridView: View {
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
+                                    .contentShape(Rectangle())
                                 }
                             }
                         }
@@ -168,6 +174,7 @@ struct MediaGridView: View {
                             .frame(width: gridWidth, height: gridHeight / 2 - 1)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
+                            .contentShape(Rectangle())
                             HStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
@@ -180,6 +187,7 @@ struct MediaGridView: View {
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
+                                    .contentShape(Rectangle())
                                 }
                             }
                         }
@@ -196,6 +204,7 @@ struct MediaGridView: View {
                             .frame(width: gridWidth / 2 - 1, height: gridHeight)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
+                            .contentShape(Rectangle())
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
@@ -208,6 +217,7 @@ struct MediaGridView: View {
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
+                                    .contentShape(Rectangle())
                                 }
                             }
                         }
@@ -227,6 +237,7 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
+                                .contentShape(Rectangle())
                             }
                         }
                         HStack(spacing: 2) {
@@ -241,6 +252,7 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
+                                .contentShape(Rectangle())
                             }
                         }
                     }
@@ -259,6 +271,7 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
+                                .contentShape(Rectangle())
                             }
                         }
                         HStack(spacing: 2) {
@@ -274,6 +287,7 @@ struct MediaGridView: View {
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
+                                    .contentShape(Rectangle())
                                     if idx == 3 {
                                         Color.black.opacity(0.4)
                                         Text("+\(attachments.count - 4)")
@@ -384,13 +398,18 @@ struct MediaBrowserView: View {
         self.baseUrl = baseUrl
         self.initialIndex = initialIndex
         _currentIndex = State(initialValue: initialIndex)
+        print("MediaBrowserView init - attachments count: \(attachments.count), initialIndex: \(initialIndex)")
     }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            TabView(selection: $currentIndex) {
+            TabView(selection: Binding(
+                get: { currentIndex },
+                set: { currentIndex = $0 }
+            )) {
                 ForEach(Array(attachments.enumerated()), id: \.offset) { idx, attachment in
                     mediaBrowserItemView(idx: idx, attachment: attachment)
+                        .tag(idx)
                 }
             }
             .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))

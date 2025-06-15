@@ -128,6 +128,26 @@ struct MediaCell: View {
     @State private var showLoadingError = false
     @State private var showBrowser = false
 
+    init(attachment: MimeiFileType, baseUrl: String, play: Bool = false, allAttachments: [MimeiFileType]? = nil, currentIndex: Int = 0) {
+        self.attachment = attachment
+        self.baseUrl = baseUrl
+        self.play = play
+        self.allAttachments = allAttachments
+        self.currentIndex = currentIndex
+    }
+
+    private func handleTap() {
+        showBrowser = true
+    }
+
+    private func createBrowserView() -> some View {
+        if let attachments = allAttachments {
+            return AnyView(MediaBrowserView(attachments: attachments, baseUrl: baseUrl, initialIndex: currentIndex))
+        } else {
+            return AnyView(MediaBrowserView(attachments: [attachment], baseUrl: baseUrl, initialIndex: 0))
+        }
+    }
+
     var body: some View {
         Group {
             if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
@@ -154,14 +174,10 @@ struct MediaCell: View {
             }
         }
         .onTapGesture {
-            showBrowser = true
+            handleTap()
         }
         .fullScreenCover(isPresented: $showBrowser) {
-            if let attachments = allAttachments {
-                MediaBrowserView(attachments: attachments, baseUrl: baseUrl, initialIndex: currentIndex)
-            } else {
-                MediaBrowserView(attachments: [attachment], baseUrl: baseUrl, initialIndex: 0)
-            }
+            createBrowserView()
         }
         .onAppear {
             // Try to load from cache first
