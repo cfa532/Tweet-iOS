@@ -1,5 +1,6 @@
 import SwiftUI
 import BackgroundTasks
+import MetricKit
 
 @MainActor
 class AppState: ObservableObject {
@@ -42,6 +43,9 @@ struct TweetApp: App {
         ) { task in
             HproseInstance.handleBackgroundTask(task: task as! BGProcessingTask)
         }
+        
+        // Initialize MetricKit
+        _ = MetricKitManager.shared
     }
     
     var body: some Scene {

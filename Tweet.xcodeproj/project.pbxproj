@@ -17,6 +17,7 @@
 		1C8EC478C6D1F6DB861107CF /* Pods_Tweet.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 83423F5E23BD65E924B7AD86 /* Pods_Tweet.framework */; };
 		4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D72DD5CA640051A92D /* HproseInstance.swift */; };
 		4608E2DA2DD5CD920051A92D /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D92DD5CD920051A92D /* User.swift */; };
+		4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4629FB182DFFEA3100588941 /* MetricKitManager.swift */; };
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
 		4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DC2DD62CCB00A20E19 /* Gadget.swift */; };
@@ -77,6 +78,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A2D /* LocationPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LocationPickerView.swift; path = Sources/Features/Compose/LocationPickerView.swift; sourceTree = SOURCE_ROOT; };
 		4608E2D72DD5CA640051A92D /* HproseInstance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseInstance.swift; sourceTree = "<group>"; };
 		4608E2D92DD5CD920051A92D /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
+		4629FB182DFFEA3100588941 /* MetricKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitManager.swift; sourceTree = "<group>"; };
 		4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiFileType.swift; sourceTree = "<group>"; };
 		4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHelper.swift; sourceTree = "<group>"; };
 		4642A1DC2DD62CCB00A20E19 /* Gadget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gadget.swift; sourceTree = "<group>"; };
@@ -168,6 +170,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A04 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				4629FB172DFFE9FB00588941 /* Utils */,
 				469A99512DEBFC2A00954049 /* Tweet */,
 				1A1A1A1A1A1A1A1A1A1A1A07 /* App */,
 				1A1A1A1A1A1A1A1A1A1A1A08 /* Screens */,
@@ -274,6 +277,14 @@
 				D424303A66FF70A9FBF5540E /* Pods-Tweet.release.xcconfig */,
 			);
 			path = Pods;
+			sourceTree = "<group>";
+		};
+		4629FB172DFFE9FB00588941 /* Utils */ = {
+			isa = PBXGroup;
+			children = (
+				4629FB182DFFEA3100588941 /* MetricKitManager.swift */,
+			);
+			path = Utils;
 			sourceTree = "<group>";
 		};
 		469A994E2DEBF89B00954049 /* MediaViews */ = {
@@ -472,6 +483,7 @@
 				4674940F2DF2C4D60082FAC6 /* CommentListView.swift in Sources */,
 				4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */,
 				4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
+				4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */,
 				46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */,
 				46E5B34B2DDC155600AEF31F /* MediaCell.swift in Sources */,
