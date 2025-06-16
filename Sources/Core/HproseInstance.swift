@@ -100,7 +100,7 @@ final class HproseInstance: ObservableObject {
                 
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     #if DEBUG
-//                        let firstIp = "36.24.162.94"  // for testing
+                        let firstIp = "36.24.162.94"  // for testing
                     #endif
                     
                     HproseInstance.baseUrl = "http://\(firstIp)"

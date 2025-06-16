@@ -195,7 +195,6 @@
 				46E5B32A2DDA038E00AEF31F /* AppConfig.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1D /* ContentView.swift */,
-				4642A1DC2DD62CCB00A20E19 /* Gadget.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -217,9 +216,7 @@
 			children = (
 				469A995E2DEF300900954049 /* TweetCacheManager.swift */,
 				469A994C2DEB31EF00954049 /* NotificationNames.swift */,
-				4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */,
 				4608E2D72DD5CA640051A92D /* HproseInstance.swift */,
-				469A99492DEB163F00954049 /* ToastView.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -282,6 +279,9 @@
 		4629FB172DFFE9FB00588941 /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				469A99492DEB163F00954049 /* ToastView.swift */,
+				4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */,
+				4642A1DC2DD62CCB00A20E19 /* Gadget.swift */,
 				4629FB182DFFEA3100588941 /* MetricKitManager.swift */,
 			);
 			path = Utils;
