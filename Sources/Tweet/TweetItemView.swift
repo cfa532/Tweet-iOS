@@ -11,8 +11,18 @@ struct TweetItemView: View {
     @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
     @State private var originalTweet: Tweet?
     @State private var refreshTimer: Timer?
+    @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     var onRemove: ((String) -> Void)? = nil
+
+    private func mediaGrid(for tweet: Tweet) -> some View {
+        Group {
+            if let attachments = tweet.attachments, !attachments.isEmpty {
+                MediaGridView(attachments: attachments, baseUrl: tweet.author?.baseUrl ?? "", isVisible: isVisible)
+                    .padding(.top, 8)
+            }
+        }
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -49,7 +59,7 @@ struct TweetItemView: View {
                             showDetail = true
                         }
 
-                        TweetItemBodyView(tweet: originalTweet)
+                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
                             .padding(.top, -12)
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -79,7 +89,7 @@ struct TweetItemView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
-                        TweetItemBodyView(tweet: tweet, enableTap: false)
+                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                             .padding(.top, -12)
                             .contentShape(Rectangle())
                             .onTapGesture { showDetail = true }
@@ -115,7 +125,7 @@ struct TweetItemView: View {
                     }
                     .contentShape(Rectangle())
                     .onTapGesture { showDetail = true }
-                    TweetItemBodyView(tweet: tweet, enableTap: false)
+                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                         .padding(.top, -12)
                         .contentShape(Rectangle())
                         .onTapGesture { showDetail = true }
@@ -136,6 +146,8 @@ struct TweetItemView: View {
                 .hidden()
         )
         .task {
+            isVisible = true
+            tweet.isVisible = true
             // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
             if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
@@ -172,6 +184,8 @@ struct TweetItemView: View {
             }
         }
         .onDisappear {
+            isVisible = false
+            tweet.isVisible = false
             // Cancel timer when view disappears
             refreshTimer?.invalidate()
             refreshTimer = nil

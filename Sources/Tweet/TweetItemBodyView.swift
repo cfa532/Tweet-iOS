@@ -16,6 +16,7 @@ extension View {
 struct TweetItemBodyView: View {
     @ObservedObject var tweet: Tweet
     var enableTap: Bool = false
+    var isVisible: Bool = true
     @State private var isExpanded = false
     @State private var showLoginSheet = false
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -74,7 +75,7 @@ struct TweetItemBodyView: View {
             }
             
             if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl {
-                MediaGridView(attachments: attachments, baseUrl: baseUrl)
+                MediaGridView(attachments: attachments, baseUrl: baseUrl, isVisible: isVisible)
                     .aspectRatio(gridAspect(for: attachments), contentMode: .fit)
                     .frame(maxWidth: .infinity)
             }

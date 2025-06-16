@@ -48,11 +48,6 @@ struct CommentComposeView: View {
                                 .font(.body)
                                 .lineLimit(3)
                         }
-                        
-                        if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl {
-                            MediaGridView(attachments: attachments, baseUrl: baseUrl)
-                                .frame(maxHeight: 100)
-                        }
                     }
                     .padding()
                     .background(Color(.secondarySystemBackground))

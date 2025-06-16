@@ -75,6 +75,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     @Published var bookmarkCount: Int?
     @Published var retweetCount: Int?
     @Published var commentCount: Int?
+    @Published var isVisible: Bool = false  // Track visibility state
     
     // Computed properties for user interaction states
     var isFavorite: Bool {

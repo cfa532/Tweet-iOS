@@ -17,15 +17,15 @@ struct CommentDetailView: View {
     @State private var selectedMediaIndex = 0
     @State private var showLoginSheet = false
     @State private var selectedUser: User? = nil
-    @State private var refreshTimer: Timer?
-    @EnvironmentObject private var hproseInstance: HproseInstance
-    @Environment(\.dismiss) private var dismiss
     @State private var replies: [Tweet] = []
     
     // Toast states
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
+    
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @Environment(\.dismiss) private var dismiss
     
     init(comment: Tweet, parentTweet: Tweet) {
         self.comment = comment
@@ -67,12 +67,10 @@ struct CommentDetailView: View {
             }
         }
         .overlay(toastOverlay)
-        .onDisappear {
-            refreshTimer?.invalidate()
-            refreshTimer = nil
-        }
         .task {
-            setupRefreshTimer()
+            // Refresh comment after a short delay
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            await refreshComment()
         }
         .background(profileNavigationLink)
     }
@@ -87,7 +85,8 @@ struct CommentDetailView: View {
                             attachments: attachments,
                             baseUrl: baseUrl,
                             play: index == selectedMediaIndex,
-                            currentIndex: index
+                            currentIndex: index,
+                            isVisible: true
                         )
                         .tag(index)
                         .onTapGesture { showBrowser = true }
@@ -146,20 +145,6 @@ struct CommentDetailView: View {
         }
     }
     
-    private func setupRefreshTimer() {
-        // Initial refresh after 2 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            refreshComment()
-        }
-        
-        // Set up periodic refresh every 5 minutes
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
-            Task { @MainActor in
-                refreshComment()
-            }
-        }
-    }
-    
     private var repliesListView: some View {
         CommentListView<CommentItemView>(
             title: "Replies",
@@ -198,34 +183,32 @@ struct CommentDetailView: View {
         )
     }
     
-    private func refreshComment() {
-        Task {
-            do {
-                if let refreshedComment = try await hproseInstance.getTweet(tweetId: comment.mid, authorId: comment.authorId) {
-                    await MainActor.run {
-                        try? comment.update(from: refreshedComment)
-                    }
-                }
-            } catch {
-                print("Failed to refresh comment: \(error)")
+    private func refreshComment() async {
+        do {
+            if let refreshedComment = try await hproseInstance.getTweet(tweetId: comment.mid, authorId: comment.authorId) {
+                try comment.update(from: refreshedComment)
             }
+        } catch {
+            print("Failed to refresh comment: \(error)")
         }
     }
     
     @ViewBuilder
     private var profileNavigationLink: some View {
-        let profileDestination = selectedUser.map { ProfileView(user: $0, onLogout: nil) }
-        let isActiveBinding = Binding(
-            get: { selectedUser != nil },
-            set: { isActive in if !isActive { selectedUser = nil } }
-        )
-        NavigationLink(
-            destination: profileDestination,
-            isActive: isActiveBinding
-        ) {
-            EmptyView()
+        Group {
+            if let user = selectedUser {
+                NavigationLink(
+                    destination: ProfileView(user: user, onLogout: nil),
+                    isActive: Binding(
+                        get: { selectedUser != nil },
+                        set: { if !$0 { selectedUser = nil } }
+                    )
+                ) {
+                    EmptyView()
+                }
+                .hidden()
+            }
         }
-        .hidden()
     }
 }
 

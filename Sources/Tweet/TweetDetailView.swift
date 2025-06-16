@@ -12,32 +12,25 @@ struct TweetDetailView: View {
     @State private var originalTweet: Tweet?
     @State private var selectedUser: User? = nil
     @State private var refreshTimer: Timer?
-    @EnvironmentObject private var hproseInstance: HproseInstance
-    @Environment(\.dismiss) private var dismiss
     @State private var comments: [Tweet] = []
-    
-    // Toast states
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
+    @State private var isVisible = true
     
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @Environment(\.dismiss) private var dismiss
+
     init(tweet: Tweet) {
         self.tweet = tweet
     }
 
-    // Computed property to determine which tweet to display
     private var displayTweet: Tweet {
-        let currentTweet = tweet
-        if (currentTweet.content == nil || currentTweet.content?.isEmpty == true) && (currentTweet.attachments == nil || currentTweet.attachments?.isEmpty == true) {
-            return originalTweet ?? currentTweet
+        if (tweet.content == nil || tweet.content?.isEmpty == true) && 
+           (tweet.attachments == nil || tweet.attachments?.isEmpty == true) {
+            return originalTweet ?? tweet
         }
-        return currentTweet
-    }
-
-    private func handleGuestAction() {
-        if hproseInstance.appUser.isGuest {
-            showLoginSheet = true
-        }
+        return tweet
     }
 
     var body: some View {
@@ -60,29 +53,35 @@ struct TweetDetailView: View {
         .navigationTitle("Tweet")
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
-            MediaBrowserView(attachments: displayTweet.attachments ?? [], baseUrl: displayTweet.author?.baseUrl ?? "", initialIndex: selectedMediaIndex)
+            MediaBrowserView(
+                attachments: displayTweet.attachments ?? [],
+                baseUrl: displayTweet.author?.baseUrl ?? "",
+                initialIndex: selectedMediaIndex
+            )
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
-            if let deletedTweetId = notification.userInfo?["tweetId"] as? String ?? notification.object as? String {
-                if deletedTweetId == displayTweet.mid {
-                    dismiss()
-                }
+            if let deletedTweetId = notification.userInfo?["tweetId"] as? String ?? notification.object as? String,
+               deletedTweetId == displayTweet.mid {
+                dismiss()
             }
         }
         .overlay(toastOverlay)
         .onDisappear {
             refreshTimer?.invalidate()
             refreshTimer = nil
+            isVisible = false
         }
         .background(profileNavigationLink)
     }
     
     private var mediaSection: some View {
         Group {
-            if let attachments = displayTweet.attachments, let baseUrl = displayTweet.author?.baseUrl, !attachments.isEmpty {
+            if let attachments = displayTweet.attachments,
+               let baseUrl = displayTweet.author?.baseUrl,
+               !attachments.isEmpty {
                 let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
@@ -90,7 +89,8 @@ struct TweetDetailView: View {
                             attachments: attachments,
                             baseUrl: baseUrl,
                             play: index == selectedMediaIndex,
-                            currentIndex: index
+                            currentIndex: index,
+                            isVisible: isVisible && index == selectedMediaIndex
                         )
                         .tag(index)
                         .onTapGesture { showBrowser = true }
@@ -108,9 +108,7 @@ struct TweetDetailView: View {
         HStack(alignment: .top, spacing: 12) {
             if let user = displayTweet.author {
                 Avatar(user: user)
-                    .onTapGesture {
-                        selectedUser = user
-                    }
+                    .onTapGesture { selectedUser = user }
             }
             TweetItemHeaderView(tweet: displayTweet)
             TweetMenu(tweet: displayTweet, isPinned: displayTweet.isPinned(in: pinnedTweets))
@@ -152,29 +150,6 @@ struct TweetDetailView: View {
         }
     }
     
-    private func setupInitialData() {
-        // Initial load of original tweet
-        if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
-            Task {
-                if let originalTweet = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
-                    self.originalTweet = originalTweet
-                }
-            }
-        }
-        
-        // Initial refresh after 2 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            refreshTweet()
-        }
-        
-        // Set up periodic refresh every 5 minutes
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
-            Task { @MainActor in
-                refreshTweet()
-            }
-        }
-    }
-
     private var commentsListView: some View {
         CommentListView<CommentItemView>(
             title: "Comments",
@@ -192,9 +167,7 @@ struct TweetDetailView: View {
                     name: .newCommentAdded,
                     key: "comment",
                     shouldAccept: { _ in true },
-                    action: { comment in
-                        comments.insert(comment, at: 0)
-                    }
+                    action: { comment in comments.insert(comment, at: 0) }
                 ),
                 CommentListNotification(
                     name: .commentDeleted,
@@ -213,32 +186,43 @@ struct TweetDetailView: View {
         )
     }
 
-    @ViewBuilder
     private var profileNavigationLink: some View {
-        let profileDestination = selectedUser.map { ProfileView(user: $0, onLogout: nil) }
-        let isActiveBinding = Binding(
-            get: { selectedUser != nil },
-            set: { isActive in if !isActive { selectedUser = nil } }
-        )
-        NavigationLink(
-            destination: profileDestination,
-            isActive: isActiveBinding
-        ) {
-            EmptyView()
+        Group {
+            if let user = selectedUser {
+                NavigationLink(
+                    destination: ProfileView(user: user, onLogout: nil),
+                    isActive: Binding(
+                        get: { selectedUser != nil },
+                        set: { if !$0 { selectedUser = nil } }
+                    )
+                ) {
+                    EmptyView()
+                }
+                .hidden()
+            }
         }
-        .hidden()
     }
 
-    private func showToast(message: String, type: ToastView.ToastType) {
-        toastMessage = message
-        toastType = type
-        withAnimation {
-            showToast = true
+    private func setupInitialData() {
+        if let originalTweetId = tweet.originalTweetId,
+           let originalAuthorId = tweet.originalAuthorId {
+            Task {
+                if let originalTweet = try? await hproseInstance.getTweet(
+                    tweetId: originalTweetId,
+                    authorId: originalAuthorId
+                ) {
+                    self.originalTweet = originalTweet
+                }
+            }
         }
-        // Hide toast after 2 seconds
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            withAnimation {
-                showToast = false
+            refreshTweet()
+        }
+        
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
+            Task { @MainActor in
+                refreshTweet()
             }
         }
     }
@@ -246,7 +230,6 @@ struct TweetDetailView: View {
     private func refreshTweet() {
         Task {
             do {
-                print("Refreshing tweet detail. \(tweet.mid)")
                 if let refreshedTweet = try await hproseInstance.refreshTweet(
                     tweetId: tweet.mid,
                     authorId: tweet.authorId
@@ -257,6 +240,19 @@ struct TweetDetailView: View {
                 }
             } catch {
                 print("Error refreshing tweet: \(error)")
+            }
+        }
+    }
+
+    private func showToast(message: String, type: ToastView.ToastType) {
+        toastMessage = message
+        toastType = type
+        withAnimation {
+            showToast = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation {
+                showToast = false
             }
         }
     }

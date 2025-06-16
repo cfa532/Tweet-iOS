@@ -23,10 +23,11 @@ struct SimpleVideoPlayer: View {
     var onMuteChanged: ((Bool) -> Void)? = nil
     @State private var shouldLoadVideo: Bool = false
     @State private var loadTimer: Timer?
+    let isVisible: Bool
     
     var body: some View {
         ZStack {
-            if shouldLoadVideo {
+            if shouldLoadVideo && isVisible {
                 VideoPlayerView(
                     url: url,
                     autoPlay: autoPlay,

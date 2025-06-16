@@ -11,7 +11,7 @@ import AVKit
 struct MediaGridView: View {
     let attachments: [MimeiFileType]
     let baseUrl: String
-    @State private var isVisible: Bool = false
+    let isVisible: Bool
     @State private var showBrowser: Bool = false
     @State private var selectedIndex: Int = 0
 
@@ -61,7 +61,8 @@ struct MediaGridView: View {
                         attachments: attachments,
                         baseUrl: baseUrl,
                         play: isVisible && firstVideoIndex == 0,
-                        currentIndex: 0
+                        currentIndex: 0,
+                        isVisible: isVisible
                     )
                     .frame(width: gridWidth, height: gridHeight)
                     .aspectRatio(contentMode: .fill)
@@ -80,7 +81,8 @@ struct MediaGridView: View {
                                     attachments: attachments,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
-                                    currentIndex: idx
+                                    currentIndex: idx,
+                                    isVisible: isVisible
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight)
                                 .aspectRatio(contentMode: .fill)
@@ -99,7 +101,8 @@ struct MediaGridView: View {
                                     attachments: attachments,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
-                                    currentIndex: idx
+                                    currentIndex: idx,
+                                    isVisible: isVisible
                                 )
                                 .frame(width: gridWidth, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
@@ -120,7 +123,8 @@ struct MediaGridView: View {
                                 attachments: attachments,
                                 baseUrl: baseUrl,
                                 play: isVisible && firstVideoIndex == 0,
-                                currentIndex: 0
+                                currentIndex: 0,
+                                isVisible: isVisible
                             )
                             .frame(width: gridWidth / 2 - 1, height: gridHeight)
                             .aspectRatio(contentMode: .fill)
@@ -137,7 +141,8 @@ struct MediaGridView: View {
                                         attachments: attachments,
                                         baseUrl: baseUrl,
                                         play: isVisible && firstVideoIndex == idx,
-                                        currentIndex: idx
+                                        currentIndex: idx,
+                                        isVisible: isVisible
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
@@ -156,7 +161,8 @@ struct MediaGridView: View {
                                 attachments: attachments,
                                 baseUrl: baseUrl,
                                 play: isVisible && firstVideoIndex == 0,
-                                currentIndex: 0
+                                currentIndex: 0,
+                                isVisible: isVisible
                             )
                             .frame(width: gridWidth, height: gridHeight / 2 - 1)
                             .aspectRatio(contentMode: .fill)
@@ -173,7 +179,8 @@ struct MediaGridView: View {
                                         attachments: attachments,
                                         baseUrl: baseUrl,
                                         play: isVisible && firstVideoIndex == idx,
-                                        currentIndex: idx
+                                        currentIndex: idx,
+                                        isVisible: isVisible
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
@@ -196,7 +203,8 @@ struct MediaGridView: View {
                                     attachments: attachments,
                                     baseUrl: baseUrl,
                                     play: isVisible && firstVideoIndex == idx,
-                                    currentIndex: idx
+                                    currentIndex: idx,
+                                    isVisible: isVisible
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
@@ -209,29 +217,32 @@ struct MediaGridView: View {
                             }
                         }
                         HStack(spacing: 2) {
-                            ForEach(2..<min(4, attachments.count)) { idx in
-                                ZStack {
-                                    MediaCell(
-                                        attachments: attachments,
-                                        baseUrl: baseUrl,
-                                        play: isVisible && firstVideoIndex == idx,
-                                        currentIndex: idx
-                                    )
-                                    .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                    .aspectRatio(contentMode: .fill)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        selectedIndex = idx
-                                        showBrowser = true
-                                    }
-                                    
-                                    if idx == 3 && attachments.count > 4 {
-                                        Color.black.opacity(0.4)
-                                        Text("+\(attachments.count - 4)")
-                                            .foregroundColor(.white)
-                                            .font(.title)
-                                            .bold()
+                            ForEach(2..<4) { idx in
+                                if idx < attachments.count {
+                                    ZStack {
+                                        MediaCell(
+                                            attachments: attachments,
+                                            baseUrl: baseUrl,
+                                            play: isVisible && firstVideoIndex == idx,
+                                            currentIndex: idx,
+                                            isVisible: isVisible
+                                        )
+                                        .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
+                                        .aspectRatio(contentMode: .fill)
+                                        .clipped()
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            selectedIndex = idx
+                                            showBrowser = true
+                                        }
+                                        
+                                        if idx == 3 && attachments.count > 4 {
+                                            Color.black.opacity(0.4)
+                                            Text("+\(attachments.count - 4)")
+                                                .foregroundColor(.white)
+                                                .font(.title)
+                                                .bold()
+                                        }
                                     }
                                 }
                             }
@@ -242,8 +253,8 @@ struct MediaGridView: View {
             .frame(width: gridWidth, height: gridHeight)
             .clipped()
             .cornerRadius(8)
-            .onAppear { isVisible = true }
-            .onDisappear { isVisible = false }
+            .onAppear { }
+            .onDisappear { }
             .fullScreenCover(isPresented: $showBrowser) {
                 MediaBrowserView(attachments: attachments, baseUrl: baseUrl, initialIndex: selectedIndex)
             }

@@ -121,6 +121,7 @@ struct MediaCell: View {
     let baseUrl: String
     var play: Bool = false
     var currentIndex: Int = 0
+    let isVisible: Bool
     @State private var cachedImage: UIImage?
     @State private var isLoading = false
     @State private var showBrowser = false
@@ -129,10 +130,10 @@ struct MediaCell: View {
         Group {
             let attachment = attachments[currentIndex]
             if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
-                SimpleVideoPlayer(url: url, autoPlay: play)
+                SimpleVideoPlayer(url: url, autoPlay: play, isVisible: isVisible)
                     .environmentObject(MuteState.shared)
             } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
-                SimpleAudioPlayer(url: url, autoPlay: play)
+                SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
             } else {
                 if let cachedImage = cachedImage {
                     Image(uiImage: cachedImage)
