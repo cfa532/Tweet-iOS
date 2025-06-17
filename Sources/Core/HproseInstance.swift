@@ -385,11 +385,15 @@ final class HproseInstance: ObservableObject {
             guard let providerIP = try await getProviderIP(userId) else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provide not found"])
             }
-            user.baseUrl = "http://\(providerIP)"
+            await MainActor.run {
+                user.baseUrl = "http://\(providerIP)"
+            }
             try await updateUserFromServer(user)
             return user
         } else {
-            user.baseUrl = baseUrl
+            await MainActor.run {
+                user.baseUrl = baseUrl
+            }
             try await updateUserFromServer(user)
             return user
         }
@@ -411,7 +415,9 @@ final class HproseInstance: ObservableObject {
             } else if let ipAddress = response as? String {
                 // the user is not found on this node, a provider IP of the user is returned.
                 // point server to this new IP.
-                user.baseUrl = "http://\(ipAddress)"
+                await MainActor.run {
+                    user.baseUrl = "http://\(ipAddress)"
+                }
                 if let newService = user.hproseService, let userDict = newService.runMApp(entry, params, nil) as? [String: Any] {
                     _ = try User.from(dict: userDict)
                     TweetCacheManager.shared.saveUser(user)
