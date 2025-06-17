@@ -245,15 +245,6 @@ struct TweetListView<RowView: View>: View {
         }
     }
 
-    private func showToastWith(message: String, type: ToastView.ToastType) {
-        toastMessage = message
-        toastType = type
-        showToast = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            withAnimation { showToast = false }
-        }
-    }
-
     // MARK: - Optimistic UI Methods
     func insertTweet(_ tweet: Tweet) {
         tweets.insert(tweet, at: 0)
