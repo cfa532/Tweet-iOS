@@ -78,7 +78,7 @@ struct TweetListView<RowView: View>: View {
                         rowView: { tweet in
                             rowView(tweet)
                         },
-                        hasMoreTweets: hasMoreTweets,
+                        hasMoreTweets: $hasMoreTweets,
                         isLoadingMore: isLoadingMore,
                         isLoading: isLoading,
                         initialLoadComplete: initialLoadComplete,
@@ -258,7 +258,7 @@ struct TweetListView<RowView: View>: View {
 struct TweetListContentView<RowView: View>: View {
     @Binding var tweets: [Tweet?]
     let rowView: (Tweet) -> RowView
-    let hasMoreTweets: Bool
+    @Binding var hasMoreTweets: Bool
     let isLoadingMore: Bool
     let isLoading: Bool
     let initialLoadComplete: Bool
@@ -271,23 +271,29 @@ struct TweetListContentView<RowView: View>: View {
                 rowView(tweet)
             }
             
-            // Sentinel view for infinite scroll
-            if hasMoreTweets {
-                ProgressView()
-                    .frame(height: 40)
-                    .onAppear {
-                        print("[TweetListContentView] ProgressView appeared - initialLoadComplete: \(initialLoadComplete), isLoadingMore: \(isLoadingMore)")
-                        if initialLoadComplete && !isLoadingMore {
-                            print("[TweetListContentView] Scheduling loadMoreTweets")
-                            // Add a delay to prevent rapid re-triggering
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                if initialLoadComplete && !isLoadingMore {
-                                    print("[TweetListContentView] Calling loadMoreTweets")
-                                    loadMoreTweets()
-                                }
+            // Always present view to detect bottom scrolling
+            Color.clear
+                .frame(height: 40)
+                .onAppear {
+                    print("[TweetListContentView] Bottom view appeared - initialLoadComplete: \(initialLoadComplete), isLoadingMore: \(isLoadingMore)")
+                    if initialLoadComplete && !isLoadingMore {
+                        print("[TweetListContentView] Setting hasMoreTweets to true")
+                        hasMoreTweets = true
+                        print("[TweetListContentView] Scheduling loadMoreTweets")
+                        // Add a delay to prevent rapid re-triggering
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            if initialLoadComplete && !isLoadingMore {
+                                print("[TweetListContentView] Calling loadMoreTweets")
+                                loadMoreTweets()
                             }
                         }
                     }
+                }
+            
+            // Loading indicator
+            if hasMoreTweets {
+                ProgressView()
+                    .frame(height: 40)
             }
         }
     }
