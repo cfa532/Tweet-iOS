@@ -1,9 +1,13 @@
 import CoreData
 import Foundation
+import UIKit
 
 class TweetCacheManager {
     static let shared = TweetCacheManager()
     let container: NSPersistentContainer
+    private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days
+    private let maxCacheSize: Int = 1000 // Maximum number of tweets to cache
+    private var cleanupTimer: Timer?
 
     private init() {
         container = NSPersistentContainer(name: "TweetModel")
@@ -25,6 +29,53 @@ class TweetCacheManager {
                 } catch {
                     print("Failed to recover from Core Data error: \(error)")
                 }
+            }
+        }
+        
+        // Set up periodic cleanup
+        setupPeriodicCleanup()
+        
+        // Register for memory warnings
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMemoryWarning),
+            name: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil
+        )
+    }
+    
+    deinit {
+        cleanupTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    private func setupPeriodicCleanup() {
+        // Clean up every hour
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            self?.performPeriodicCleanup()
+        }
+    }
+    
+    @objc private func handleMemoryWarning() {
+        performPeriodicCleanup()
+    }
+    
+    private func performPeriodicCleanup() {
+        context.performAndWait {
+            // Delete expired tweets
+            deleteExpiredTweets()
+            
+            // Limit total number of tweets
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
+            request.fetchLimit = maxCacheSize
+            
+            if let allTweets = try? context.fetch(request) {
+                let tweetsToDelete = Array(allTweets[maxCacheSize...])
+                for tweet in tweetsToDelete {
+                    context.delete(tweet)
+                }
+                try? context.save()
             }
         }
     }
@@ -107,12 +158,6 @@ extension TweetCacheManager {
 
     /// Save a tweet to the cache. If tweet is nil, do nothing. To remove a tweet, use deleteTweet.
     func saveTweet(_ tweet: Tweet, userId: String) {
-//        if let tweetData = try? JSONEncoder().encode(tweet),
-//           let tweetJson = String(data: tweetData, encoding: .utf8) {
-//            print("Saving coredata tweet: \(tweetJson)")
-//        } else {
-//            print("Saving coredata tweet: <failed to encode tweet>")
-//        }
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
@@ -126,8 +171,10 @@ extension TweetCacheManager {
             cdTweet.uid = userId
             cdTweet.timestamp = tweet.timestamp
             cdTweet.timeCached = Date()
+            
+            // Compress tweet data before saving
             if let tweetDict = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(tweet)) as? [String: Any],
-               let tweetData = try? JSONSerialization.data(withJSONObject: tweetDict) {
+               let tweetData = try? JSONSerialization.data(withJSONObject: tweetDict, options: .sortedKeys) {
                 cdTweet.tweetData = tweetData
             }
             try? context.save()
@@ -137,8 +184,8 @@ extension TweetCacheManager {
     func deleteExpiredTweets() {
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-            let oneMonthAgo = Calendar.current.date(byAdding: .month, value: -1, to: Date())!
-            request.predicate = NSPredicate(format: "timeCached < %@", oneMonthAgo as NSDate)
+            let expirationDate = Date().addingTimeInterval(-maxCacheAge)
+            request.predicate = NSPredicate(format: "timeCached < %@", expirationDate as NSDate)
             if let expiredTweets = try? context.fetch(request) {
                 for tweet in expiredTweets {
                     context.delete(tweet)
