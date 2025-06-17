@@ -177,26 +177,12 @@ struct UserListView: View {
             guard !processedIds.contains(userId) else { continue }
             processedIds.insert(userId)
             
-            // First check if user is in Core Data cache
-            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
-            if !fetchedUsers.contains(where: { $0.mid == userId }) {
-                fetchedUsers.append(cachedUser)
-            }
-
-            // If not in cache, fetch from server
             do {
-                if let serverUser = try await hproseInstance.fetchUser(userId) {
-                    // Update the cache with server data
-                    TweetCacheManager.shared.saveUser(serverUser)
-                    
-                    // Update the in-memory instance
-                    User.updateUserInstance(with: serverUser)
-                    
-                    // Replace the cached user with server user in our results
-                    if let index = fetchedUsers.firstIndex(where: { $0.mid == userId }) {
-                        fetchedUsers[index] = serverUser
-                    } else {
-                        fetchedUsers.append(serverUser)
+                // Fetch user using HproseInstance's improved fetchUser method
+                if let user = try await hproseInstance.fetchUser(userId) {
+                    // Only add if we haven't already added this user
+                    if !fetchedUsers.contains(where: { $0.mid == userId }) {
+                        fetchedUsers.append(user)
                     }
                 }
             } catch {

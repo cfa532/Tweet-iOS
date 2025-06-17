@@ -366,74 +366,58 @@ final class HproseInstance: ObservableObject {
     /// If @baseUrl is an empty string, the function will ignore the cache and try to find a provider's IP for this user
     /// and update cache with the new user.
     /// If @baseUrl is omitted, an user object will be retrieved from cache or the default serving node of appUser.
+    /// Otherwise, user object will be retrieved from the node of the given baseUrl.
+    ///
+    /// Do not really need to return the user, for user instance with the same mid has been updated or created.
     func fetchUser(
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl ?? ""
     ) async throws -> User? {
-        // Step 1: Check user cache in Core Data
+        // Step 1: Check user cache in Core Data.
         if !TweetCacheManager.shared.shouldRefreshUser(mid: userId), baseUrl == appUser.baseUrl {
             // get cached user instance, whose baseUrl might not be the same as appUser's.
             return TweetCacheManager.shared.fetchUser(mid: userId)
         }
         
         // Step 2: Fetch from server. No instance available in memory or cache.
-        guard var service = hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
-        
-        var user = User.getInstance(mid: userId)
+        let user = User.getInstance(mid: userId)
         if baseUrl.isEmpty {
             guard let providerIP = try await getProviderIP(userId) else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provide not found"])
             }
             user.baseUrl = "http://\(providerIP)"
-            if let userInDB = try await getUserFromServer(user) {
-                userInDB.baseUrl = user.baseUrl     // keep the baseUrl in updated user instance.
-                User.updateUserInstance(with: userInDB)
-                return user
-            }
+            try await updateUserFromServer(user)
+            return user
         } else {
             user.baseUrl = baseUrl
-            if let userInDB = try await getUserFromServer(user) {
-                userInDB.baseUrl = user.baseUrl     // keep the baseUrl in updated user instance.
-                User.updateUserInstance(with: userInDB)
-                return user
-            }
+            try await updateUserFromServer(user)
+            return user
         }
-        return nil
     }
     
-    func getUserFromServer(_ user: User) async throws -> User? {
+    func updateUserFromServer(_ user: User) async throws {
         let entry = "get_user"
         let params = [
             "aid": appId,
             "ver": "last",
             "userid": user.mid,
         ]
-        if let service = user.hproseService,
-           let response = service.runMApp(entry, params, nil) {
+        if let service = user.hproseService, let response = service.runMApp(entry, params, nil) {
             if let userDict = response as? [String: Any]
             {
-                // a valid User object is returned
-                let jsonData = try JSONSerialization.data(withJSONObject: userDict, options: [])
-                let decoder = JSONDecoder()
-                decoder.dateDecodingStrategy = .millisecondsSince1970
-                return try decoder.decode(User.self, from: jsonData)
-                
+                // user instance of the given mid is updated.
+                _ = try User.from(dict: userDict)
+                TweetCacheManager.shared.saveUser(user)
             } else if let ipAddress = response as? String {
                 // the user is not found on this node, a provider IP of the user is returned.
                 // point server to this new IP.
                 user.baseUrl = "http://\(ipAddress)"
-                if let newService = user.hproseService,
-                   let userDict = newService.runMApp(entry, params, nil) as? [String: Any] {
-                    let jsonData = try JSONSerialization.data(withJSONObject: userDict, options: [])
-                    let decoder = JSONDecoder()
-                    decoder.dateDecodingStrategy = .millisecondsSince1970
-                    return try decoder.decode(User.self, from: jsonData)
+                if let newService = user.hproseService, let userDict = newService.runMApp(entry, params, nil) as? [String: Any] {
+                    _ = try User.from(dict: userDict)
+                    TweetCacheManager.shared.saveUser(user)
                 }
             }
         }
-        return nil
     }
     
     func login(_ loginUser: User) async throws -> [String: Any] {
@@ -618,10 +602,7 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: Invalid response"])
             }
             if let userDict = response["user"] as? [String: Any] {
-                let user = try User.from(dict: userDict)
-                await MainActor.run {
-                    appUser.favoritesCount = user.favoritesCount
-                }
+                let _ = try User.from(dict: userDict)
             }
             if let isFavorite = response["isFavorite"] as? Bool,
                let favoriteCount = response["count"] as? Int {
@@ -654,10 +635,7 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: Invalid response"])
             }
             if let userDict = response["user"] as? [String: Any] {
-                let user = try User.from(dict: userDict)
-                await MainActor.run {
-                    appUser.bookmarksCount = user.bookmarksCount
-                }
+                let _ = try User.from(dict: userDict)
             }
             if let hasBookmarked = response["hasBookmarked"] as? Bool,
                let bookmarkCount = response["count"] as? Int {

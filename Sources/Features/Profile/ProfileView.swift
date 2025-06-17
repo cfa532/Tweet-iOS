@@ -155,6 +155,7 @@ struct ProfileView: View {
         .task {
             if !didLoad {
                 isLoading = true
+                _ = try? await hproseInstance.fetchUser(user.mid, baseUrl: "") // force user to reload from server
                 await refreshPinnedTweets()
                 isLoading = false
                 didLoad = true

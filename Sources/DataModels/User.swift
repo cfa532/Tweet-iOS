@@ -42,19 +42,19 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     @Published var hostIds: [String]? // List of MimeiId
     @Published var publicKey: String?
-    private var _hproseService: HproseService?
-    public var hproseService: HproseService? {
+    private var _hproseService: AnyObject?
+    public var hproseService: AnyObject? {
         get {
             guard let baseUrl = baseUrl else { return nil }
             if baseUrl == HproseInstance.shared.appUser.baseUrl {
-                return HproseInstance.shared.hproseService as? HproseService
+                return HproseInstance.shared.hproseService
             } else if let cached = _hproseService {
                 return cached
             } else {
                 let client = HproseHttpClient()
                 client.timeout = 60
                 client.uri = "\(baseUrl)/webapi/"
-                let service = client.useService(HproseService.self) as? HproseService
+                let service = client.useService(HproseService.self) as? AnyObject
                 _hproseService = service
                 return service
             }
@@ -123,6 +123,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         return newUser
     }
     
+    /// Update user instance with backend data. Keep current baseUrl
     static func from(dict: [String: Any]) throws -> User {
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: dict, options: [])
@@ -130,6 +131,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             decoder.dateDecodingStrategy = .millisecondsSince1970
             let decodedUser = try decoder.decode(User.self, from: jsonData)
             
+            // keep original baseUrl when updated by user dictionary from backend.
             let instance = getInstance(mid: decodedUser.mid)
             decodedUser.baseUrl = instance.baseUrl
             decodedUser.writableUrl = instance.writableUrl
@@ -142,7 +144,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     
     static func from(cdUser: CDUser) -> User {
-        // Try to decode the full user data
+        // Try to decode the full user object from cache.
         if let userData = cdUser.userData,
            let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
             updateUserInstance(with: decodedUser)
