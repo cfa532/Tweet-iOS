@@ -42,6 +42,24 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     @Published var hostIds: [String]? // List of MimeiId
     @Published var publicKey: String?
+    private var _hproseService: HproseService?
+    public var hproseService: HproseService? {
+        get {
+            guard let baseUrl = baseUrl else { return nil }
+            if baseUrl == HproseInstance.shared.appUser.baseUrl {
+                return HproseInstance.shared.hproseService as? HproseService
+            } else if let cached = _hproseService {
+                return cached
+            } else {
+                let client = HproseHttpClient()
+                client.timeout = 60
+                client.uri = "\(baseUrl)/webapi/"
+                let service = client.useService(HproseService.self) as? HproseService
+                _hproseService = service
+                return service
+            }
+        }
+    }
     
     @Published var fansList: [String]? // List of MimeiId
     @Published var followingList: [String]? // List of MimeiId
@@ -52,6 +70,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var topTweets: [String]? // List of MimeiId
     
     var id: String { mid }  // Computed property that returns mid
+    
+    private var baseUrlCancellable: AnyCancellable?
     
     // MARK: - Initialization
     init(
@@ -86,6 +106,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.commentsCount = nil
         self.hostIds = hostIds
         self.publicKey = publicKey
+        // Observe baseUrl changes to clear cached client
+        baseUrlCancellable = $baseUrl
+            .sink { [weak self] _ in
+                self?._hproseService = nil
+            }
     }
     
     // MARK: - Factory Methods
@@ -98,17 +123,21 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         return newUser
     }
     
-    static func from(dict: [String: Any]) -> User {
+    static func from(dict: [String: Any]) throws -> User {
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: dict, options: [])
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .millisecondsSince1970
             let decodedUser = try decoder.decode(User.self, from: jsonData)
+            
+            let instance = getInstance(mid: decodedUser.mid)
+            decodedUser.baseUrl = instance.baseUrl
+            decodedUser.writableUrl = instance.writableUrl
+            
             updateUserInstance(with: decodedUser)
             return userInstances[decodedUser.mid]!
         } catch {
-            print("Error converting dictionary to User: \(error)")
-            return getInstance(mid: Constants.GUEST_ID)
+            throw NSError(domain: "User", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot decode dict to user"])
         }
     }
     
@@ -116,15 +145,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         // Try to decode the full user data
         if let userData = cdUser.userData,
            let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
-            decodedUser.baseUrl = HproseInstance.baseUrl
             updateUserInstance(with: decodedUser)
         }
         return getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
     }
     
-    /**
-     * Do not update baseUrl and writableUrl. They are acquired at runtime, not from cache or backend.
-     */
     static func updateUserInstance(with user: User) {
         let instance = getInstance(mid: user.mid)
         Task { @MainActor in
@@ -137,6 +162,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.lastLogin = user.lastLogin
             instance.cloudDrivePort = user.cloudDrivePort
             instance.hostIds = user.hostIds
+            instance.baseUrl = user.baseUrl
+            instance.writableUrl = user.writableUrl
             
             instance.tweetCount = user.tweetCount
             instance.followingCount = user.followingCount

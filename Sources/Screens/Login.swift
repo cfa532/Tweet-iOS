@@ -136,7 +136,7 @@ struct LoginView: View {
             }
             if let userId = try await hproseInstance.getUserId(username) {
                 // retrieve user object from the net.
-                if let user = try await hproseInstance.getUser(userId) {
+                if let user = try await hproseInstance.fetchUser(userId) {
                     user.password = password
                     let result = try await hproseInstance.login(user)
                     if result["status"] as? String == "success" {

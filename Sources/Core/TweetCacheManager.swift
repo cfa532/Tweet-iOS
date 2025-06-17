@@ -192,6 +192,7 @@ extension Tweet {
 }
 
 // MARK: - User Caching
+/// Might need to update baseUrl of cached user, which might be outdated.
 extension TweetCacheManager {
     func fetchUser(mid: String) -> User {
         var user: User?
@@ -253,6 +254,29 @@ extension TweetCacheManager {
             if let expiredUsers = try? context.fetch(request) {
                 let usersToDelete = Array(expiredUsers)
                 for user in usersToDelete {
+                    context.delete(user)
+                }
+                try? context.save()
+            }
+        }
+    }
+
+    func deleteUser(mid: String) {
+        context.performAndWait {
+            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+            request.predicate = NSPredicate(format: "mid == %@", mid)
+            if let cdUser = try? context.fetch(request).first {
+                context.delete(cdUser)
+                try? context.save()
+            }
+        }
+    }
+
+    func clearAllUsers() {
+        context.performAndWait {
+            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+            if let allUsers = try? context.fetch(request) {
+                for user in allUsers {
                     context.delete(user)
                 }
                 try? context.save()

@@ -185,7 +185,7 @@ struct UserListView: View {
 
             // If not in cache, fetch from server
             do {
-                if let serverUser = try await hproseInstance.getUser(userId) {
+                if let serverUser = try await hproseInstance.fetchUser(userId) {
                     // Update the cache with server data
                     TweetCacheManager.shared.saveUser(serverUser)
                     

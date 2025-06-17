@@ -63,7 +63,7 @@ final class HproseInstance: ObservableObject {
         client.timeout = 60
         return client
     }()
-    private var hproseClient: AnyObject?
+    var hproseService: AnyObject?
     
     // MARK: - Initialization
     private init() {}
@@ -100,20 +100,20 @@ final class HproseInstance: ObservableObject {
                 
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     #if DEBUG
-                        let firstIp = "36.24.162.94"  // for testing
+//                        let firstIp = "36.24.162.94"  // for testing
                     #endif
                     
                     HproseInstance.baseUrl = "http://\(firstIp)"
                     client.uri = HproseInstance.baseUrl + "/webapi/"
-                    hproseClient = client.useService(HproseService.self) as AnyObject
+                    hproseService = client.useService(HproseService.self) as AnyObject
                     
 //                    let providerIp = firstIp
-                    if !appUser.isGuest, let providerIp = try await getProvider(appUser.mid),
-                       let user = try await getUser(appUser.mid, baseUrl: "http://\(providerIp)") {
+                    if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid),
+                       let user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)") {
                         // Valid login user is found, use its provider IP as base.
                         HproseInstance.baseUrl = "http://\(providerIp)"
                         client.uri = HproseInstance.baseUrl + "/webapi/"
-                        hproseClient = client.useService(HproseService.self) as AnyObject
+                        hproseService = client.useService(HproseService.self) as AnyObject
                         let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
                         await MainActor.run {
                             _appUser.baseUrl = HproseInstance.baseUrl
@@ -152,7 +152,7 @@ final class HproseInstance: ObservableObject {
             "pn": pageNumber,
             "ps": pageSize,
         ] as [String : Any]
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
@@ -167,7 +167,7 @@ final class HproseInstance: ObservableObject {
                     let comment = try await MainActor.run {
                         return try Tweet.from(dict: dict)
                     }
-                    comment.author = try? await getUser(comment.authorId)
+                    comment.author = try? await fetchUser(comment.authorId)
                     commentsWithAuthors.append(comment)
                 } catch {
                     print("Error processing comment: \(error)")
@@ -197,7 +197,7 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweet_feed"
     ) async throws -> [Tweet?] {
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         print("[fetchTweetFeed] Fetching tweets from server - pn: \(pageNumber), ps: \(pageSize)")
@@ -219,7 +219,7 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = item {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                    tweet.author = try await getUser(tweet.authorId)
+                    tweet.author = try await fetchUser(tweet.authorId)
                     // Skip private tweets in feed
                     if tweet.isPrivate == true {
                         tweets.append(nil)
@@ -256,7 +256,7 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweets_by_user"
     ) async throws -> [Tweet?] {
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         let params = [
@@ -276,7 +276,7 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = item{
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                    tweet.author = try await getUser(tweet.authorId)
+                    tweet.author = try await fetchUser(tweet.authorId)
                     // Only show private tweets if the current user is the author
 //                    if tweet.isPrivate == true && tweet.authorId != appUser.mid {
 //                        tweets.append(nil)
@@ -314,7 +314,7 @@ final class HproseInstance: ObservableObject {
         tweetId: String,
         authorId: String,
     ) async throws -> Tweet? {
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         let entry = "get_tweet"
@@ -327,7 +327,7 @@ final class HproseInstance: ObservableObject {
         if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
             do {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                tweet.author = try? await getUser(authorId)
+                tweet.author = try? await fetchUser(authorId)
                 TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
                 
                 if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
@@ -347,7 +347,7 @@ final class HproseInstance: ObservableObject {
     
     func getUserId(_ username: String) async throws -> String? {
         try await withRetry {
-            guard let service = hproseClient else {
+            guard let service = hproseService else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             let entry = "get_userid"
@@ -363,58 +363,77 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func getUser(_ userId: String, baseUrl: String = shared.appUser.baseUrl ?? "") async throws -> User? {
+    /// If @baseUrl is an empty string, the function will ignore the cache and try to find a provider's IP for this user
+    /// and update cache with the new user.
+    /// If @baseUrl is omitted, an user object will be retrieved from cache or the default serving node of appUser.
+    func fetchUser(
+        _ userId: String,
+        baseUrl: String = shared.appUser.baseUrl ?? ""
+    ) async throws -> User? {
         // Step 1: Check user cache in Core Data
-        if !TweetCacheManager.shared.shouldRefreshUser(mid: userId) {
+        if !TweetCacheManager.shared.shouldRefreshUser(mid: userId), baseUrl == appUser.baseUrl {
+            // get cached user instance, whose baseUrl might not be the same as appUser's.
             return TweetCacheManager.shared.fetchUser(mid: userId)
         }
         
-        // Step 2: Fetch from server
-        return try await withRetry {
-            guard var service = hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        // Step 2: Fetch from server. No instance available in memory or cache.
+        guard var service = hproseService else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        
+        var user = User.getInstance(mid: userId)
+        if baseUrl.isEmpty {
+            guard let providerIP = try await getProviderIP(userId) else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provide not found"])
             }
-            if baseUrl != appUser.baseUrl {
-                let newClient = HproseHttpClient()
-                newClient.timeout = 60
-                newClient.uri = "\(baseUrl)/webapi/"
-                service = newClient.useService(HproseService.self) as AnyObject
-            }
-            let entry = "get_user"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "userid": userId,
-            ]
-            guard let response = service.runMApp(entry, params, nil) else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUser"])
-            }
-            if let userDict = response as? [String: Any] {
-                // a valid User object is returned
-                let user = User.from(dict: userDict)
-                await MainActor.run { user.baseUrl = baseUrl }
-                
-                // Save to Core Data cache
-                TweetCacheManager.shared.saveUser(user)
+            user.baseUrl = "http://\(providerIP)"
+            if let userInDB = try await getUserFromServer(user) {
+                userInDB.baseUrl = user.baseUrl     // keep the baseUrl in updated user instance.
+                User.updateUserInstance(with: userInDB)
                 return user
             }
-            // the user is not found on this node, a provider IP of the user is returned.
-            if let ipAddress = response as? String {
-                let newClient = HproseHttpClient()
-                newClient.timeout = 60
-                newClient.uri = "http://\(ipAddress)/webapi/"
-                let newService = newClient.useService(HproseService.self) as AnyObject
-                if let userDict = newService.runMApp(entry, params, nil) as? [String: Any] {
-                    let user = User.from(dict: userDict)
-                    await MainActor.run { user.baseUrl = "http://\(ipAddress)" }
-                    
-                    // Save to Core Data cache
-                    TweetCacheManager.shared.saveUser(user)
-                    return user
+        } else {
+            user.baseUrl = baseUrl
+            if let userInDB = try await getUserFromServer(user) {
+                userInDB.baseUrl = user.baseUrl     // keep the baseUrl in updated user instance.
+                User.updateUserInstance(with: userInDB)
+                return user
+            }
+        }
+        return nil
+    }
+    
+    func getUserFromServer(_ user: User) async throws -> User? {
+        let entry = "get_user"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": user.mid,
+        ]
+        if let service = user.hproseService,
+           let response = service.runMApp(entry, params, nil) {
+            if let userDict = response as? [String: Any]
+            {
+                // a valid User object is returned
+                let jsonData = try JSONSerialization.data(withJSONObject: userDict, options: [])
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .millisecondsSince1970
+                return try decoder.decode(User.self, from: jsonData)
+                
+            } else if let ipAddress = response as? String {
+                // the user is not found on this node, a provider IP of the user is returned.
+                // point server to this new IP.
+                user.baseUrl = "http://\(ipAddress)"
+                if let newService = user.hproseService,
+                   let userDict = newService.runMApp(entry, params, nil) as? [String: Any] {
+                    let jsonData = try JSONSerialization.data(withJSONObject: userDict, options: [])
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .millisecondsSince1970
+                    return try decoder.decode(User.self, from: jsonData)
                 }
             }
-            return nil
         }
+        return nil
     }
     
     func login(_ loginUser: User) async throws -> [String: Any] {
@@ -430,8 +449,11 @@ final class HproseInstance: ObservableObject {
         newClient.uri = "\(loginUser.baseUrl!)/webapi/"
         let newService = newClient.useService(HproseService.self) as AnyObject
         guard let response = newService.runMApp(entry, params, nil) as? [String: Any] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in login"])
+            newClient.close()
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in login"])
         }
+        newClient.close()
+        
         if let status = response["status"] as? String {
             if status == "failure" {
                 if let reason = response["reason"] as? String {
@@ -465,18 +487,25 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "userid": user.mid,
         ]
-        guard var service = hproseClient else {
+        guard var service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
+        
+        var newClient: HproseClient? = nil
         if user.baseUrl != appUser.baseUrl {
-            let newClient = HproseHttpClient()
-            newClient.timeout = 60
-            newClient.uri = "\(user.baseUrl!)/webapi/"
-            service = newClient.useService(HproseService.self) as AnyObject
+            let client = HproseHttpClient()
+            client.timeout = 60
+            client.uri = "\(user.baseUrl!)/webapi/"
+            service = client.useService(HproseService.self) as AnyObject
+            newClient = client
         }
+
         guard let response = service.runMApp(entry.rawValue, params, nil) as? [[String: Any]] else {
+            newClient?.close()
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFollows: No response"])
         }
+        newClient?.close()
+        
         let sorted = response.sorted {
             (lhs, rhs) in
             let lval = (lhs["value"] as? Int) ?? 0
@@ -502,25 +531,32 @@ final class HproseInstance: ObservableObject {
             "ps": pageSize,
             "appuserid": appUser.mid
         ] as [String : Any]
-        guard var service = hproseClient else {
+        guard var service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
+        
+        var newClient: HproseClient? = nil
         if user.baseUrl != appUser.baseUrl {
-            let newClient = HproseHttpClient()
-            newClient.timeout = 60
-            newClient.uri = "\(user.baseUrl!)/webapi/"
-            service = newClient.useService(HproseService.self) as AnyObject
+            let client = HproseHttpClient()
+            client.timeout = 60
+            client.uri = "\(user.baseUrl!)/webapi/"
+            service = client.useService(HproseService.self) as AnyObject
+            newClient = client
         }
+        
         guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
+            newClient?.close()
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
         }
+        newClient?.close()
+        
         var tweetsWithAuthors: [Tweet?] = []
         for dict in response {
             if let item = dict {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: item) }
                     if (tweet.author == nil) {
-                        tweet.author = try? await getUser(tweet.authorId)
+                        tweet.author = try? await fetchUser(tweet.authorId)
                     }
                     TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
                     tweetsWithAuthors.append(tweet)
@@ -551,7 +587,7 @@ final class HproseInstance: ObservableObject {
                 "followingid": followingId,
                 "userid": userId,
             ]
-            guard let service = hproseClient else {
+            guard let service = hproseService else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             guard let response = service.runMApp(entry, params, nil) as? Bool else {
@@ -575,14 +611,14 @@ final class HproseInstance: ObservableObject {
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
             ]
-            guard let service = hproseClient else {
+            guard let service = hproseService else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: Invalid response"])
             }
             if let userDict = response["user"] as? [String: Any] {
-                let user = User.from(dict: userDict)
+                let user = try User.from(dict: userDict)
                 await MainActor.run {
                     appUser.favoritesCount = user.favoritesCount
                 }
@@ -611,14 +647,14 @@ final class HproseInstance: ObservableObject {
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
             ]
-            guard let service = hproseClient else {
+            guard let service = hproseService else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: Invalid response"])
             }
             if let userDict = response["user"] as? [String: Any] {
-                let user = User.from(dict: userDict)
+                let user = try User.from(dict: userDict)
                 await MainActor.run {
                     appUser.bookmarksCount = user.bookmarksCount
                 }
@@ -673,7 +709,7 @@ final class HproseInstance: ObservableObject {
             "tweetid": tweet.mid,
             "authorid": tweet.authorId,
         ]
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
@@ -694,7 +730,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid,
             "tweetid": tweetId
         ]
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         guard let response = service.runMApp(entry, params, nil) as? String else {
@@ -704,7 +740,7 @@ final class HproseInstance: ObservableObject {
     }
         
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         comment.author = nil
@@ -735,24 +771,22 @@ final class HproseInstance: ObservableObject {
     // both author and tweet author can delete this comment
     // TODO
     func deleteComment(parentTweet: Tweet, commentId: String) async throws -> [String: Any]? {
-        try await withRetry {
-            let entry = "delete_comment"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "tweetid": parentTweet.mid,
-                "hostid": parentTweet.author?.hostIds?.first as Any,
-                "commentid": commentId,
-                "appuserid": appUser.mid
-            ]
-            guard let service = hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-            }
-            guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Invalid response"])
-            }
-            return response
+        let entry = "delete_comment"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "tweetid": parentTweet.mid,
+            "hostid": parentTweet.author?.hostIds?.first as Any,
+            "commentid": commentId,
+            "appuserid": appUser.mid
+        ]
+        guard let service = hproseService else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
+        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Invalid response"])
+        }
+        return response
     }
     
     // MARK: - File Upload
@@ -762,7 +796,7 @@ final class HproseInstance: ObservableObject {
         fileName: String? = nil,
         referenceId: String? = nil
     ) async throws -> MimeiFileType? {
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         
@@ -901,13 +935,13 @@ final class HproseInstance: ObservableObject {
         return htmlString
     }
     
-    private func getProvider(_ mid: String) async throws -> String? {
+    private func getProviderIP(_ mid: String) async throws -> String? {
         let params = [
             "aid": appId,
             "ver": "last",
             "mid": mid
         ]
-        if let response = hproseClient?.runMApp("get_provider", params, []) {
+        if let response = hproseService?.runMApp("get_provider", params, []) {
             return response as? String
         }
         return nil
@@ -923,6 +957,7 @@ final class HproseInstance: ObservableObject {
         var retryCount = 0
         while retryCount < 2 {
             do {
+                TweetCacheManager.shared.clearAllUsers()
                 return try await block()
             } catch {
                 retryCount += 1
@@ -1087,7 +1122,7 @@ final class HproseInstance: ObservableObject {
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
         return try await withRetry {
-            guard let service = hproseClient else {
+            guard let service = hproseService else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             // Create a copy of the tweet and remove its author attribute
@@ -1106,7 +1141,7 @@ final class HproseInstance: ObservableObject {
             
             let uploadedTweet = tweet
             uploadedTweet.mid = newTweetId
-            uploadedTweet.author = try? await self.getUser(tweet.authorId)
+            uploadedTweet.author = try? await self.fetchUser(tweet.authorId)
             return uploadedTweet
         }
     }
@@ -1273,7 +1308,7 @@ final class HproseInstance: ObservableObject {
      * Return the current tweet list that is pinned to top.
      */
     func togglePinnedTweet(tweetId: String) async throws -> Bool? {
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         let entry = "toggle_top_tweets"
@@ -1294,7 +1329,7 @@ final class HproseInstance: ObservableObject {
      * the tweet is pinned.
      */
     func getPinnedTweets(user: User) async throws -> [[String: Any]] {
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         let entry = "get_top_tweets"
@@ -1311,7 +1346,7 @@ final class HproseInstance: ObservableObject {
         for dict in response {
             if let tweetDict = dict["tweet"] as? [String: Any] {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                tweet.author = try? await getUser(tweet.authorId)
+                tweet.author = try? await fetchUser(tweet.authorId)
                 let timePinned = dict["timestamp"]
                 result.append([
                     "tweet": tweet,
@@ -1329,7 +1364,7 @@ final class HproseInstance: ObservableObject {
         profile: String,
         hostId: String? = nil
     ) async throws -> Bool {
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         var hosts: [String]? = nil
@@ -1364,7 +1399,7 @@ final class HproseInstance: ObservableObject {
         profile: String? = nil,
         hostId: String? = nil,
     ) async throws -> Bool {
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         let updatedUser = User(mid: appUser.mid, name: alias, password: password, profile: profile)
@@ -1394,7 +1429,7 @@ final class HproseInstance: ObservableObject {
     // MARK: - User Avatar
     /// Sets the user's avatar on the server
     func setUserAvatar(user: User, avatar: String) async throws {
-        guard let service = hproseClient else {
+        guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         let entry = "set_user_avatar"
