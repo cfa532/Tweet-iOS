@@ -189,7 +189,7 @@ struct MediaCell: View {
                     .environmentObject(MuteState.shared)
             } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
                 SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
-            } else {
+            } else  if attachment.type.lowercased() == "image", let _ = attachment.getUrl(baseUrl) {
                 if let cachedImage = cachedImage {
                     Image(uiImage: cachedImage)
                         .resizable()
@@ -201,6 +201,8 @@ struct MediaCell: View {
                     Color.gray
                         .onAppear { loadImage() }
                 }
+            } else {
+                EmptyView()
             }
         }
         .onTapGesture { showBrowser = true }
