@@ -31,7 +31,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var profile: String?
     @Published var timestamp: Date
     @Published var lastLogin: Date?
-    @Published var cloudDrivePort: Int?
+    @Published var cloudDrivePort: Int? = 8010
     
     @Published var tweetCount: Int?
     @Published var followingCount: Int?

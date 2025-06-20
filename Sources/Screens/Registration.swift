@@ -11,7 +11,7 @@ import PhotosUI
 @available(iOS 16.0, *)
 struct RegistrationView: View {
     @Environment(\.dismiss) private var dismiss
-    var onSubmit: (String, String?, String?, String?, String?) -> Void // username, password, alias, profile, hostId, avatarId
+    var onSubmit: (String, String?, String?, String?, String?, Int?) -> Void // username, password, alias, profile, hostId, cloudDrivePort
 
     @State private var username: String = ""
     @State private var password: String = ""
@@ -19,6 +19,7 @@ struct RegistrationView: View {
     @State private var alias: String = ""
     @State private var profile: String = ""
     @State private var hostId: String = ""
+    @State private var cloudDrivePort: String = "8010"
     @State private var showPasswordConfirm: Bool = false
     @State private var errorMessage: String?
     @FocusState private var focusedField: Field?
@@ -30,10 +31,10 @@ struct RegistrationView: View {
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
-        case username, password, confirmPassword, alias, profile, hostId
+        case username, password, confirmPassword, alias, profile, hostId, cloudDrivePort
     }
 
-    init(onSubmit: @escaping (String, String?, String?, String?, String?) -> Void) {
+    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int?) -> Void) {
         self.onSubmit = onSubmit
     }
 
@@ -182,6 +183,25 @@ struct RegistrationView: View {
                                     }
                                 }
                         }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Cloud Drive Port")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            TextField("Cloud Drive Port", text: $cloudDrivePort)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .keyboardType(.numberPad)
+                                .focused($focusedField, equals: .cloudDrivePort)
+                                .contentShape(Rectangle())
+                                .onTapGesture { focusedField = .cloudDrivePort }
+                                .onChange(of: cloudDrivePort) { newValue in
+                                    // Only allow numeric input
+                                    let filtered = newValue.filter { $0.isNumber }
+                                    if filtered != newValue {
+                                        cloudDrivePort = filtered
+                                    }
+                                }
+                        }
                     }
 
                     if let errorMessage = errorMessage {
@@ -210,6 +230,7 @@ struct RegistrationView: View {
                     profile = appUser.profile ?? ""
                     hostId = appUser.hostIds?.first ?? ""
                     avatarId = appUser.avatar
+                    cloudDrivePort = appUser.cloudDrivePort?.description ?? "8010"
                 }
             }
         }
@@ -229,6 +250,13 @@ struct RegistrationView: View {
             errorMessage = "Host ID must be \(Constants.MIMEI_ID_LENGTH) characters if provided."
             return
         }
+        
+        // Validate cloudDrivePort
+        if let port = Int(cloudDrivePort), port < 1 || port > 65535 {
+            errorMessage = "Cloud Drive Port must be between 1 and 65535."
+            return
+        }
+        
         if hproseInstance.appUser.isGuest {
             // Registration: password required and must match
             if password != confirmPassword {
@@ -248,7 +276,8 @@ struct RegistrationView: View {
             password.isEmpty ? nil : password,
             alias.isEmpty ? nil : alias,
             profile.isEmpty ? nil : profile,
-            hostId
+            hostId,
+            Int(cloudDrivePort)
         )
         dismiss()
     }

@@ -93,7 +93,7 @@ struct LoginView: View {
                 dismiss()
             })
             .sheet(isPresented: $showRegistration) {
-                RegistrationView { (username: String, password: String?, alias: String?, profile: String?, hostId: String?) in
+                RegistrationView { (username: String, password: String?, alias: String?, profile: String?, hostId: String?, cloudDrivePort: Int?) in
                     Task {
                         do {
                             let success = try await hproseInstance.registerUser(
@@ -101,7 +101,8 @@ struct LoginView: View {
                                 password: password ?? "",
                                 alias: alias ?? "",
                                 profile: profile ?? "",
-                                hostId: (hostId?.isEmpty ?? true) ? nil : hostId
+                                hostId: (hostId?.isEmpty ?? true) ? nil : hostId,
+                                cloudDrivePort: cloudDrivePort
                             )
                             if success {
                                 showSuccess = true

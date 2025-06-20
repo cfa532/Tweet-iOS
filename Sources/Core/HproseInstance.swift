@@ -1581,7 +1581,8 @@ final class HproseInstance: ObservableObject {
         password: String,
         alias: String?,
         profile: String,
-        hostId: String? = nil
+        hostId: String? = nil,
+        cloudDrivePort: Int? = nil
     ) async throws -> Bool {
         guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
@@ -1591,7 +1592,7 @@ final class HproseInstance: ObservableObject {
             hosts = [hostId]
         }
         let newUser = User(mid: appUser.mid, name: alias, username: username, password: password,
-                           profile: profile, hostIds: hosts)
+                           profile: profile, cloudDrivePort: cloudDrivePort, hostIds: hosts)
         let entry = "register"
         let params = [
             "aid": appId,
@@ -1617,11 +1618,12 @@ final class HproseInstance: ObservableObject {
         alias: String? = nil,
         profile: String? = nil,
         hostId: String? = nil,
+        cloudDrivePort: Int? = nil
     ) async throws -> Bool {
         guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
-        let updatedUser = User(mid: appUser.mid, name: alias, password: password, profile: profile)
+        let updatedUser = User(mid: appUser.mid, name: alias, password: password, profile: profile, cloudDrivePort: cloudDrivePort)
         if let hostId = hostId, !hostId.isEmpty {
             updatedUser.hostIds = [hostId]
         }

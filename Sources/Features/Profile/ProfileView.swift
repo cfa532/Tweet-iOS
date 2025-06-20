@@ -140,11 +140,11 @@ struct ProfileView: View {
             .id(user.mid)
         }
         .sheet(isPresented: $showEditSheet) {
-            RegistrationView(onSubmit: { username, password, alias, profile, hostId in
+            RegistrationView(onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
                 // TODO: Implement user update logic here
                 Task {
                     try? await hproseInstance.updateUserCore(
-                        password: password, alias: alias, profile: profile, hostId: hostId
+                        password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort
                     )
                 }
             })
