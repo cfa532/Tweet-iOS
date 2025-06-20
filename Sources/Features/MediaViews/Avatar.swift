@@ -77,7 +77,7 @@ struct Avatar: View {
         )
         
         // Check cache first
-        if let cached = ImageCacheManager.shared.getImage(for: avatarAttachment, baseUrl: "") {
+        if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: "") {
             cachedImage = cached
             return
         }

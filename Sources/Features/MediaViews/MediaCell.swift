@@ -17,7 +17,7 @@ class ImageCacheManager {
     private let cacheDirectory: URL
     private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days in seconds
     private let maxDiskCacheSize: Int64 = 5000 * 1024 * 1024 // 500MB
-    private let maxImageSize: Int = 5 * 1024 * 1024 // 5MB per image
+    private let maxCompressedImageSize: Int = 300 * 1024 // 300KB for compressed images
     
     private init() {
         // Get the cache directory
@@ -106,24 +106,25 @@ class ImageCacheManager {
         return UUID().uuidString
     }
     
-    private func getCacheFileURL(for key: String) -> URL {
-        return cacheDirectory.appendingPathComponent(key)
+    private func getCompressedCacheFileURL(for key: String) -> URL {
+        return cacheDirectory.appendingPathComponent("\(key)_compressed.jpg")
     }
     
-    func getImage(for attachment: MimeiFileType, baseUrl: String) -> UIImage? {
+    func getCompressedImage(for attachment: MimeiFileType, baseUrl: String) -> UIImage? {
         let key = getCacheKey(for: attachment, baseUrl: baseUrl)
+        let cacheKey = "\(key)_compressed"
         
         // Check memory cache first
-        if let cachedImage = cache.object(forKey: key as NSString) {
+        if let cachedImage = cache.object(forKey: cacheKey as NSString) {
             return cachedImage
         }
         
         // Check disk cache
-        let fileURL = getCacheFileURL(for: key)
+        let fileURL = getCompressedCacheFileURL(for: key)
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data) {
             // Add to memory cache
-            cache.setObject(image, forKey: key as NSString)
+            cache.setObject(image, forKey: cacheKey as NSString)
             return image
         }
         
@@ -133,38 +134,69 @@ class ImageCacheManager {
     func cacheImageData(_ data: Data, for attachment: MimeiFileType, baseUrl: String) {
         let key = getCacheKey(for: attachment, baseUrl: baseUrl)
         
-        // Check if data is too large
-        if data.count > maxImageSize {
-            print("Image too large to cache: \(data.count) bytes")
-            return
-        }
-        
         // Create UIImage from data
         guard let image = UIImage(data: data) else { return }
         
-        // Compress image with adaptive quality
-        let compressionQuality = min(1.0, Double(maxImageSize) / Double(data.count))
-        guard let compressedData = image.jpegData(compressionQuality: compressionQuality) else { return }
+        // Create compressed version (under 300KB)
+        let compressedImage = compressImageToSize(image, maxSize: maxCompressedImageSize)
+        let compressedFileURL = getCompressedCacheFileURL(for: key)
+        try? compressedImage.write(to: compressedFileURL)
+        cache.setObject(UIImage(data: compressedImage)!, forKey: "\(key)_compressed" as NSString)
+    }
+    
+    private func compressImageToSize(_ image: UIImage, maxSize: Int) -> Data {
+        var compression: CGFloat = 1.0
+        var data = image.jpegData(compressionQuality: compression)!
         
-        // Save to disk
-        let fileURL = getCacheFileURL(for: key)
-        try? compressedData.write(to: fileURL)
+        // Reduce quality until size is under maxSize
+        while data.count > maxSize && compression > 0.1 {
+            compression -= 0.1
+            data = image.jpegData(compressionQuality: compression)!
+        }
         
-        // Add to memory cache
-        cache.setObject(image, forKey: key as NSString)
+        // If still too large, reduce image size
+        if data.count > maxSize {
+            let scale = sqrt(Double(maxSize) / Double(data.count))
+            let newSize = CGSize(
+                width: image.size.width * scale,
+                height: image.size.height * scale
+            )
+            
+            UIGraphicsBeginImageContextWithOptions(newSize, false, 1.0)
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+            let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
+            UIGraphicsEndImageContext()
+            
+            if let resizedImage = resizedImage {
+                data = resizedImage.jpegData(compressionQuality: 0.8)!
+            }
+        }
+        
+        return data
     }
     
     func loadAndCacheImage(from url: URL, for attachment: MimeiFileType, baseUrl: String) async -> UIImage? {
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             
-            // Cache the data
+            // Cache the compressed version
             cacheImageData(data, for: attachment, baseUrl: baseUrl)
             
-            // Return the image
-            return UIImage(data: data)
+            // Return the compressed image for thumbnail use
+            return getCompressedImage(for: attachment, baseUrl: baseUrl)
         } catch {
             print("Error loading image: \(error)")
+            return nil
+        }
+    }
+    
+    func loadOriginalImage(from url: URL, for attachment: MimeiFileType, baseUrl: String) async -> UIImage? {
+        // Load original image directly from network (no caching)
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            return UIImage(data: data)
+        } catch {
+            print("Error loading original image: \(error)")
             return nil
         }
     }
@@ -214,7 +246,7 @@ struct MediaCell: View {
             )
         }
         .onAppear {
-            if let cached = ImageCacheManager.shared.getImage(for: attachments[currentIndex], baseUrl: baseUrl) {
+            if let cached = ImageCacheManager.shared.getCompressedImage(for: attachments[currentIndex], baseUrl: baseUrl) {
                 cachedImage = cached
             } else {
                 loadImage()

@@ -16,6 +16,7 @@ struct MediaBrowserView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isVisible = true
     @State private var isMuted: Bool = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
+    @State private var imageStates: [Int: ImageState] = [:]
 
     init(attachments: [MimeiFileType], baseUrl: String, initialIndex: Int) {
         self.attachments = attachments
@@ -47,21 +48,15 @@ struct MediaBrowserView: View {
                                 url: url,
                                 autoPlay: isVisible && currentIndex == index
                             )
-                        } else if let url = attachment.getUrl(baseUrl) {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .empty:
-                                    ProgressView()
-                                case .success(let image):
-                                    image
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fit)
-                                case .failure:
-                                    Image(systemName: "photo")
-                                        .foregroundColor(.gray)
-                                @unknown default:
-                                    EmptyView()
-                                }
+                        } else if attachment.type.lowercased() == "image", let url = attachment.getUrl(baseUrl) {
+                            ImageViewWithPlaceholder(
+                                attachment: attachment,
+                                baseUrl: baseUrl,
+                                url: url,
+                                imageState: imageStates[index] ?? .loading
+                            )
+                            .onAppear {
+                                loadImageIfNeeded(for: attachment, at: index)
                             }
                         }
                     }
@@ -90,5 +85,86 @@ struct MediaBrowserView: View {
         .onDisappear {
             isVisible = false
         }
+    }
+    
+    private func loadImageIfNeeded(for attachment: MimeiFileType, at index: Int) {
+        // Show compressed image as placeholder first
+        if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            imageStates[index] = .placeholder(compressedImage)
+        } else {
+            imageStates[index] = .loading
+        }
+        
+        // Load original image from backend
+        guard let url = attachment.getUrl(baseUrl) else { return }
+        
+        Task {
+            if let originalImage = await ImageCacheManager.shared.loadOriginalImage(from: url, for: attachment, baseUrl: baseUrl) {
+                await MainActor.run {
+                    imageStates[index] = .loaded(originalImage)
+                }
+            } else {
+                await MainActor.run {
+                    imageStates[index] = .error
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Image State
+enum ImageState {
+    case loading
+    case placeholder(UIImage)
+    case loaded(UIImage)
+    case error
+}
+
+// MARK: - Image View With Placeholder
+struct ImageViewWithPlaceholder: View {
+    let attachment: MimeiFileType
+    let baseUrl: String
+    let url: URL
+    let imageState: ImageState
+    
+    var body: some View {
+        Group {
+            switch imageState {
+            case .loading:
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.5)
+                
+            case .placeholder(let placeholderImage):
+                Image(uiImage: placeholderImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .overlay(
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.0)
+                            .background(Color.black.opacity(0.3))
+                            .clipShape(Circle())
+                            .padding(),
+                        alignment: .topTrailing
+                    )
+                
+            case .loaded(let image):
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                
+            case .error:
+                VStack {
+                    Image(systemName: "photo")
+                        .font(.system(size: 50))
+                        .foregroundColor(.gray)
+                    Text("Failed to load image")
+                        .foregroundColor(.gray)
+                        .font(.caption)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 } 
