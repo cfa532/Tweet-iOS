@@ -235,6 +235,12 @@ struct MediaCell: View {
                     if shouldLoadVideo {
                         SimpleVideoPlayer(url: url, autoPlay: play, isVisible: isVisible)
                             .environmentObject(MuteState.shared)
+                            .onTapGesture {
+                                handleVideoTap()
+                            }
+                            .onTapGesture(count: 2) {
+                                showFullScreen = true
+                            }
                     } else {
                         // Video placeholder with play button
                         ZStack {
@@ -244,9 +250,15 @@ struct MediaCell: View {
                                 .frame(width: 50, height: 50)
                                 .foregroundColor(.white)
                         }
+                        .onTapGesture {
+                            handleTap()
+                        }
                     }
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
+                        .onTapGesture {
+                            handleTap()
+                        }
                 case "image":
                     if let image = image {
                         Image(uiImage: image)
@@ -273,9 +285,6 @@ struct MediaCell: View {
                 loadImage()
             }
         }
-        .onTapGesture {
-            handleTap()
-        }
         .fullScreenCover(isPresented: $showFullScreen) {
             if let attachments = parentTweet.attachments {
                 MediaBrowserView(
@@ -293,9 +302,6 @@ struct MediaCell: View {
                 // First tap: load and start video
                 shouldLoadVideo = true
                 play = true
-            } else {
-                // Subsequent taps: toggle play/pause
-                play.toggle()
             }
         case "audio":
             // Toggle audio playback
@@ -307,6 +313,11 @@ struct MediaCell: View {
             // Open full-screen for other types
             showFullScreen = true
         }
+    }
+    
+    private func handleVideoTap() {
+        // For videos that are already loaded, toggle play/pause
+        play.toggle()
     }
     
     private func loadImage() {

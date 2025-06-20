@@ -158,7 +158,7 @@ struct ProfileTweetsSection: View {
                             isPinned: pinnedTweets.contains { $0.mid == tweet.mid },
                             isInProfile: true,
                             onAvatarTap: { user in
-                                // Handle avatar tap - navigate to profile
+                                onUserSelect(user)
                             },
                             onRemove: { tweetId in
                                 if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {

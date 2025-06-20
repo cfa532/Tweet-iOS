@@ -53,7 +53,7 @@ struct FollowingsTweetView: View {
                         isPinned: false,
                         isInProfile: false,
                         onAvatarTap: { user in
-                            // Handle avatar tap - navigate to profile
+                            onAvatarTap(user)
                         },
                         onRemove: { tweetId in
                             if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {
