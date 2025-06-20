@@ -211,7 +211,6 @@ struct MediaCell: View {
     @State private var showFullScreen = false
     @State private var play = false
     @State private var isVisible = false
-    @State private var showVideoPlayer = false
     
     private let imageCache = ImageCacheManager.shared
     
@@ -228,94 +227,67 @@ struct MediaCell: View {
     }
     
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // Image and Video handling
-                if let image = image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .clipped()
-                        .onTapGesture {
-                            if attachment.type.starts(with: "video") {
-                                showVideoPlayer = true
-                            } else {
-                                showFullScreen = true
-                            }
-                        }
-                } else if isLoading {
-                    ProgressView()
-                } else {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                }
-
-                // Play button for video and audio
-                if attachment.type.starts(with: "video") || attachment.type.starts(with: "audio") {
-                    Image(systemName: "play.circle.fill")
-                        .font(.largeTitle)
-                        .foregroundColor(.white)
-                }
-                
-                // Audio specific view
-                if attachment.type.starts(with: "audio") && image == nil {
-                    VStack {
-                        Image(systemName: "waveform")
-                            .font(.largeTitle)
-                            .foregroundColor(.white)
-                        Text("Play Audio")
-                            .font(.caption)
-                            .foregroundColor(.white)
+        Group {
+            if let url = attachment.getUrl(baseUrl) {
+                switch attachment.type.lowercased() {
+                case "video", "hls_video":
+                    SimpleVideoPlayer(url: url, autoPlay: play, isVisible: isVisible)
+                        .environmentObject(MuteState.shared)
+                case "audio":
+                    SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
+                case "image":
+                    if let image = image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .clipped()
+                    } else if isLoading {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .scaleEffect(1.2)
+                    } else {
+                        Color.gray.opacity(0.3)
                     }
-                    .onTapGesture {
-                        showVideoPlayer = true // This will open the audio player
-                    }
+                default:
+                    EmptyView()
                 }
+            } else {
+                EmptyView()
             }
-            .frame(width: geometry.size.width, height: geometry.size.height)
-            .onAppear(perform: loadImage)
-            .background(Color.black)
-            .fullScreenCover(isPresented: $showFullScreen) {
-                if let attachments = parentTweet.attachments {
-                    MediaBrowserView(attachments: attachments, initialIndex: attachmentIndex)
-                }
+        }
+        .onAppear(perform: loadImage)
+        .onChange(of: isVisible) { newValue in
+            if newValue && image == nil {
+                loadImage()
             }
-            .fullScreenCover(isPresented: $showVideoPlayer) {
-                if let url = attachment.getUrl(baseUrl) {
-                    if attachment.type.starts(with: "video") {
-                        SimpleVideoPlayer(url: url, isVisible: true)
-                            .environmentObject(MuteState.shared)
-                    } else if attachment.type.starts(with: "audio") {
-                        SimpleAudioPlayer(url: url)
-                    }
-                }
+        }
+        .onTapGesture { showFullScreen = true }
+        .fullScreenCover(isPresented: $showFullScreen) {
+            if let attachments = parentTweet.attachments {
+                MediaBrowserView(
+                    attachments: attachments,
+                    initialIndex: attachmentIndex
+                )
             }
         }
     }
     
     private func loadImage() {
-        guard attachment.type.lowercased() == "image" else { return }
+        guard let url = attachment.getUrl(baseUrl) else { return }
         
-        // Try to get cached image first
+        // First, try to get cached image immediately
         if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
             self.image = cachedImage
             return
         }
         
+        // If no cached image, start loading
         isLoading = true
-        
         Task {
-            if let url = attachment.getUrl(baseUrl) {
-                if let loadedImage = await imageCache.loadAndCacheImage(from: url, for: attachment, baseUrl: baseUrl) {
-                    await MainActor.run {
-                        self.image = loadedImage
-                        self.isLoading = false
-                    }
-                } else {
-                    await MainActor.run {
-                        self.isLoading = false
-                    }
+            if let loadedImage = await imageCache.loadAndCacheImage(from: url, for: attachment, baseUrl: baseUrl) {
+                await MainActor.run {
+                    self.image = loadedImage
+                    self.isLoading = false
                 }
             } else {
                 await MainActor.run {
