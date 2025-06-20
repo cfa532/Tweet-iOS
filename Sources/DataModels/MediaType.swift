@@ -8,6 +8,7 @@
 enum MediaType: String, Codable {
     case image = "Image"
     case video = "Video"
+    case hls_video = "hls_video"
     case audio = "Audio"
     case pdf = "PDF"
     case word = "Word"

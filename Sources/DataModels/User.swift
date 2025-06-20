@@ -21,8 +21,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // MARK: - Properties
     @Published var mid: String
-    @Published var baseUrl: String?
-    @Published var writableUrl: String?
+    @Published var baseUrl: URL?
+    @Published var writableUrl: URL?
     @Published var name: String?
     @Published var username: String?
     @Published var password: String?
@@ -76,7 +76,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     // MARK: - Initialization
     init(
         mid: String = Constants.GUEST_ID,
-        baseUrl: String? = nil,
+        baseUrl: URL? = nil,
         name: String? = nil,
         username: String? = nil,
         password: String? = nil,
@@ -188,8 +188,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
         mid = try container.decode(String.self, forKey: .mid)
-        baseUrl = try container.decodeIfPresent(String.self, forKey: .baseUrl)
-        writableUrl = try container.decodeIfPresent(String.self, forKey: .writableUrl)
+        baseUrl = try container.decodeIfPresent(URL.self, forKey: .baseUrl)
+        writableUrl = try container.decodeIfPresent(URL.self, forKey: .writableUrl)
         name = try container.decodeIfPresent(String.self, forKey: .name)
         username = try container.decodeIfPresent(String.self, forKey: .username)
         password = try container.decodeIfPresent(String.self, forKey: .password)
@@ -277,14 +277,15 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // MARK: - Writable URL Resolution
     /// Returns the writable URL for the user, resolving via hostIds if needed
-    func resolvedWritableUrl() async throws -> String? {
-        if let writableUrl = self.writableUrl, !writableUrl.isEmpty {
+    func resolvedWritableUrl() async throws -> URL? {
+        if let writableUrl = self.writableUrl {
             return writableUrl
         }
         if let hostId = self.hostIds?.first, !hostId.isEmpty {
             if let hostIP = await HproseInstance.shared.getHostIP(hostId) {
-                self.writableUrl = "http://\(hostIP)"
-                return self.writableUrl
+                let url = URL(string: "http://\(hostIP)")
+                self.writableUrl = url
+                return url
             }
         }
         throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No writable url available"])

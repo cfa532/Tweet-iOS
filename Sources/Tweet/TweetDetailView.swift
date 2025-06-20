@@ -55,7 +55,6 @@ struct TweetDetailView: View {
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
                 attachments: displayTweet.attachments ?? [],
-                baseUrl: displayTweet.author?.baseUrl ?? "",
                 initialIndex: selectedMediaIndex
             )
         }
@@ -80,17 +79,13 @@ struct TweetDetailView: View {
     private var mediaSection: some View {
         Group {
             if let attachments = displayTweet.attachments,
-               let baseUrl = displayTweet.author?.baseUrl,
                !attachments.isEmpty {
                 let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
                         MediaCell(
-                            attachments: attachments,
-                            baseUrl: baseUrl,
-                            play: index == selectedMediaIndex,
-                            currentIndex: index,
-                            isVisible: isVisible && index == selectedMediaIndex
+                            parentTweet: displayTweet,
+                            attachmentIndex: index
                         )
                         .tag(index)
                         .onTapGesture { showBrowser = true }

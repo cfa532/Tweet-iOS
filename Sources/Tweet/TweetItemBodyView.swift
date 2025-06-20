@@ -74,8 +74,8 @@ struct TweetItemBodyView: View {
                 }
             }
             
-            if let attachments = tweet.attachments, let baseUrl = tweet.author?.baseUrl {
-                MediaGridView(attachments: attachments, baseUrl: baseUrl, isVisible: isVisible)
+            if let attachments = tweet.attachments {
+                MediaGridView(parentTweet: tweet, attachments: attachments)
                     .aspectRatio(gridAspect(for: attachments), contentMode: .fit)
                     .frame(maxWidth: .infinity)
             }

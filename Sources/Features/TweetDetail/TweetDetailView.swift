@@ -39,8 +39,11 @@ struct TweetDetailView: View {
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,
+                        isPinned: false,
                         isInProfile: false,
-                        onAvatarTap: onAvatarTap
+                        onAvatarTap: { user in
+                            // Handle avatar tap - navigate to profile
+                        }
                     )
                 }
             )

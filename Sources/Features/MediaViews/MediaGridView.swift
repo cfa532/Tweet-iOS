@@ -9,12 +9,12 @@ import SwiftUI
 import AVKit
 
 struct MediaGridView: View {
+    let parentTweet: Tweet
     let attachments: [MimeiFileType]
-    let baseUrl: String
-    let isVisible: Bool
-    @State private var showBrowser: Bool = false
+    let maxImages: Int = 4
     @State private var selectedIndex: Int = 0
-
+    @State private var showBrowser = false
+    
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
         guard let ar = attachment.aspectRatio, ar > 0 else { return false }
         return ar < 1.0
@@ -47,22 +47,16 @@ struct MediaGridView: View {
     }
 
     var body: some View {
-        if attachments.isEmpty {
-            EmptyView()
-        } else {
+        GeometryReader { geometry in
             let gridWidth: CGFloat = 320
             let gridHeight = gridWidth / gridAspect()
-            let firstVideoIndex = attachments.firstIndex { $0.type.lowercased() == "video" }
 
             ZStack {
                 switch attachments.count {
                 case 1:
                     MediaCell(
-                        attachments: attachments,
-                        baseUrl: baseUrl,
-                        play: isVisible && firstVideoIndex == 0,
-                        currentIndex: 0,
-                        isVisible: isVisible
+                        parentTweet: parentTweet,
+                        attachmentIndex: 0
                     )
                     .frame(width: gridWidth, height: gridHeight)
                     .aspectRatio(contentMode: .fill)
@@ -76,13 +70,10 @@ struct MediaGridView: View {
                 case 2:
                     if isPortrait(attachments[0]) {
                         HStack(spacing: 2) {
-                            ForEach(Array(attachments.enumerated()), id: \.offset) { idx, _ in
+                            ForEach(Array(attachments.enumerated()), id: \ .offset) { idx, att in
                                 MediaCell(
-                                    attachments: attachments,
-                                    baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx,
-                                    currentIndex: idx,
-                                    isVisible: isVisible
+                                    parentTweet: parentTweet,
+                                    attachmentIndex: idx
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight)
                                 .aspectRatio(contentMode: .fill)
@@ -96,13 +87,10 @@ struct MediaGridView: View {
                         }
                     } else {
                         VStack(spacing: 2) {
-                            ForEach(Array(attachments.enumerated()), id: \.offset) { idx, _ in
+                            ForEach(Array(attachments.enumerated()), id: \ .offset) { idx, att in
                                 MediaCell(
-                                    attachments: attachments,
-                                    baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx,
-                                    currentIndex: idx,
-                                    isVisible: isVisible
+                                    parentTweet: parentTweet,
+                                    attachmentIndex: idx
                                 )
                                 .frame(width: gridWidth, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
@@ -120,11 +108,8 @@ struct MediaGridView: View {
                     if isPortrait(attachments[0]) {
                         HStack(spacing: 2) {
                             MediaCell(
-                                attachments: attachments,
-                                baseUrl: baseUrl,
-                                play: isVisible && firstVideoIndex == 0,
-                                currentIndex: 0,
-                                isVisible: isVisible
+                                parentTweet: parentTweet,
+                                attachmentIndex: 0
                             )
                             .frame(width: gridWidth / 2 - 1, height: gridHeight)
                             .aspectRatio(contentMode: .fill)
@@ -138,11 +123,8 @@ struct MediaGridView: View {
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
-                                        attachments: attachments,
-                                        baseUrl: baseUrl,
-                                        play: isVisible && firstVideoIndex == idx,
-                                        currentIndex: idx,
-                                        isVisible: isVisible
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: idx
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
@@ -158,11 +140,8 @@ struct MediaGridView: View {
                     } else {
                         VStack(spacing: 2) {
                             MediaCell(
-                                attachments: attachments,
-                                baseUrl: baseUrl,
-                                play: isVisible && firstVideoIndex == 0,
-                                currentIndex: 0,
-                                isVisible: isVisible
+                                parentTweet: parentTweet,
+                                attachmentIndex: 0
                             )
                             .frame(width: gridWidth, height: gridHeight / 2 - 1)
                             .aspectRatio(contentMode: .fill)
@@ -176,11 +155,8 @@ struct MediaGridView: View {
                             HStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
-                                        attachments: attachments,
-                                        baseUrl: baseUrl,
-                                        play: isVisible && firstVideoIndex == idx,
-                                        currentIndex: idx,
-                                        isVisible: isVisible
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: idx
                                     )
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
@@ -200,11 +176,8 @@ struct MediaGridView: View {
                         HStack(spacing: 2) {
                             ForEach(0..<2) { idx in
                                 MediaCell(
-                                    attachments: attachments,
-                                    baseUrl: baseUrl,
-                                    play: isVisible && firstVideoIndex == idx,
-                                    currentIndex: idx,
-                                    isVisible: isVisible
+                                    parentTweet: parentTweet,
+                                    attachmentIndex: idx
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
@@ -221,11 +194,8 @@ struct MediaGridView: View {
                                 if idx < attachments.count {
                                     ZStack {
                                         MediaCell(
-                                            attachments: attachments,
-                                            baseUrl: baseUrl,
-                                            play: isVisible && firstVideoIndex == idx,
-                                            currentIndex: idx,
-                                            isVisible: isVisible
+                                            parentTweet: parentTweet,
+                                            attachmentIndex: idx
                                         )
                                         .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                         .aspectRatio(contentMode: .fill)
@@ -256,7 +226,7 @@ struct MediaGridView: View {
             .onAppear { }
             .onDisappear { }
             .fullScreenCover(isPresented: $showBrowser) {
-                MediaBrowserView(attachments: attachments, baseUrl: baseUrl, initialIndex: selectedIndex)
+                MediaBrowserView(attachments: attachments, initialIndex: selectedIndex)
             }
         }
     }

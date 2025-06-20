@@ -296,9 +296,11 @@ struct ProfileView: View {
             rowView: { tweet in
                 TweetItemView(
                     tweet: tweet,
-                    isPinned: pinnedTweetIds.contains(tweet.mid),
-                    isInProfile: true,
-                    onAvatarTap: { user in selectedUser = user }
+                    isPinned: false,
+                    isInProfile: false,
+                    onAvatarTap: { user in
+                        // Handle avatar tap - navigate to profile
+                    }
                 )
             }
         )

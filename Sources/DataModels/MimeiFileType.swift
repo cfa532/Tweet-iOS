@@ -50,9 +50,9 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
         }
     }
     
-    func getUrl(_ baseUrl: String) -> URL? {
-        let path = mid.count > Constants.MIMEI_ID_LENGTH ? "\(baseUrl)/ipfs/\(mid)" : "\(baseUrl)/mm/\(mid)"
-        return URL(string: path)
+    func getUrl(_ baseUrl: URL) -> URL? {
+        let path = mid.count > Constants.MIMEI_ID_LENGTH ? "ipfs/\(mid)" : "mm/\(mid)"
+        return baseUrl.appendingPathComponent(path)
     }
     
     // Implement the hash(into:) method for Hashable conformance

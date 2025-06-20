@@ -76,8 +76,10 @@ struct Avatar: View {
             type: "image"
         )
         
+        let baseUrl = user.baseUrl ?? HproseInstance.baseUrl
+        
         // Check cache first
-        if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: "") {
+        if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
             cachedImage = cached
             return
         }
@@ -86,7 +88,7 @@ struct Avatar: View {
         isLoading = true
         Task {
             if let url = URL(string: urlString),
-               let image = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment, baseUrl: "") {
+               let image = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment, baseUrl: baseUrl) {
                 await MainActor.run {
                     cachedImage = image
                     isLoading = false

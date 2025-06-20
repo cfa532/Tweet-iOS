@@ -10,17 +10,24 @@ import AVKit
 
 struct MediaBrowserView: View {
     let attachments: [MimeiFileType]
-    let baseUrl: String
     let initialIndex: Int
-    @State private var currentIndex: Int
     @Environment(\.dismiss) private var dismiss
+    @State private var currentIndex: Int
+    @State private var showVideoPlayer = false
+    @State private var play = false
     @State private var isVisible = true
     @State private var isMuted: Bool = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
     @State private var imageStates: [Int: ImageState] = [:]
+    @State private var showControls = true
+    @State private var controlsTimer: Timer?
 
-    init(attachments: [MimeiFileType], baseUrl: String, initialIndex: Int) {
+    private var baseUrl: URL {
+        // Try to get baseUrl from the first attachment's parent tweet, fallback to HproseInstance.baseUrl
+        return HproseInstance.baseUrl
+    }
+
+    init(attachments: [MimeiFileType], initialIndex: Int) {
         self.attachments = attachments
-        self.baseUrl = baseUrl
         self.initialIndex = initialIndex
         self._currentIndex = State(initialValue: initialIndex)
         print("MediaBrowserView init - attachments count: \(attachments.count), initialIndex: \(initialIndex)")
@@ -33,7 +40,7 @@ struct MediaBrowserView: View {
             TabView(selection: $currentIndex) {
                 ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
                     ZStack {
-                        if attachment.type.lowercased() == "video", let url = attachment.getUrl(baseUrl) {
+                        if (attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video"), let url = attachment.getUrl(baseUrl) {
                             SimpleVideoPlayer(
                                 url: url,
                                 autoPlay: true,
@@ -123,7 +130,7 @@ enum ImageState {
 // MARK: - Image View With Placeholder
 struct ImageViewWithPlaceholder: View {
     let attachment: MimeiFileType
-    let baseUrl: String
+    let baseUrl: URL
     let url: URL
     let imageState: ImageState
     

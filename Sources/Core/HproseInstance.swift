@@ -21,7 +21,7 @@ extension Array {
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
-    static var baseUrl: String = ""
+    static var baseUrl: URL = URL(string: "http://localhost")!
     @Published private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
     var appUser: User {
         get { _appUser }
@@ -74,7 +74,7 @@ final class HproseInstance: ObservableObject {
         
         await MainActor.run {
             _appUser = User.getInstance(mid: preferenceHelper?.getUserId() ?? Constants.GUEST_ID)
-            _appUser.baseUrl = preferenceHelper?.getAppUrls().first ?? ""
+            _appUser.baseUrl = preferenceHelper?.getAppUrls().first.flatMap { URL(string: $0) } ?? URL(string: "http://localhost")!
             _appUser.followingList = Gadget.getAlphaIds()
         }
         
@@ -103,16 +103,16 @@ final class HproseInstance: ObservableObject {
 //                        let firstIp = "36.24.162.94"  // for testing
                     #endif
                     
-                    HproseInstance.baseUrl = "http://\(firstIp)"
-                    client.uri = HproseInstance.baseUrl + "/webapi/"
+                    HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
+                    client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     hproseService = client.useService(HproseService.self) as AnyObject
                     
 //                    let providerIp = firstIp
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid),
                        let user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)") {
                         // Valid login user is found, use its provider IP as base.
-                        HproseInstance.baseUrl = "http://\(providerIp)"
-                        client.uri = HproseInstance.baseUrl + "/webapi/"
+                        HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
+                        client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                         hproseService = client.useService(HproseService.self) as AnyObject
                         let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
                         await MainActor.run {
@@ -371,10 +371,10 @@ final class HproseInstance: ObservableObject {
     /// Do not really need to return the user, for user instance with the same mid has been updated or created.
     func fetchUser(
         _ userId: String,
-        baseUrl: String = shared.appUser.baseUrl ?? ""
+        baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
         // Step 1: Check user cache in Core Data.
-        if !TweetCacheManager.shared.shouldRefreshUser(mid: userId), baseUrl == appUser.baseUrl {
+        if !TweetCacheManager.shared.shouldRefreshUser(mid: userId), baseUrl == appUser.baseUrl?.absoluteString {
             // get cached user instance, whose baseUrl might not be the same as appUser's.
             return TweetCacheManager.shared.fetchUser(mid: userId)
         }
@@ -386,13 +386,13 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provide not found"])
             }
             await MainActor.run {
-                user.baseUrl = "http://\(providerIP)"
+                user.baseUrl = URL(string: "http://\(providerIP)")!
             }
             try await updateUserFromServer(user)
             return user
         } else {
             await MainActor.run {
-                user.baseUrl = baseUrl
+                user.baseUrl = URL(string: baseUrl)!
             }
             try await updateUserFromServer(user)
             return user
@@ -416,7 +416,7 @@ final class HproseInstance: ObservableObject {
                 // the user is not found on this node, a provider IP of the user is returned.
                 // point server to this new IP.
                 await MainActor.run {
-                    user.baseUrl = "http://\(ipAddress)"
+                    user.baseUrl = URL(string: "http://\(ipAddress)")!
                 }
                 if let newService = user.hproseService, let userDict = newService.runMApp(entry, params, nil) as? [String: Any] {
                     _ = try User.from(dict: userDict)
@@ -436,7 +436,7 @@ final class HproseInstance: ObservableObject {
         ]
         let newClient = HproseHttpClient()
         newClient.timeout = 60
-        newClient.uri = "\(loginUser.baseUrl!)/webapi/"
+        newClient.uri = "\(loginUser.baseUrl!.absoluteString)/webapi/"
         let newService = newClient.useService(HproseService.self) as AnyObject
         guard let response = newService.runMApp(entry, params, nil) as? [String: Any] else {
             newClient.close()
@@ -485,7 +485,7 @@ final class HproseInstance: ObservableObject {
         if user.baseUrl != appUser.baseUrl {
             let client = HproseHttpClient()
             client.timeout = 60
-            client.uri = "\(user.baseUrl!)/webapi/"
+            client.uri = "\(user.baseUrl!.absoluteString)/webapi/"
             service = client.useService(HproseService.self) as AnyObject
             newClient = client
         }
@@ -529,7 +529,7 @@ final class HproseInstance: ObservableObject {
         if user.baseUrl != appUser.baseUrl {
             let client = HproseHttpClient()
             client.timeout = 60
-            client.uri = "\(user.baseUrl!)/webapi/"
+            client.uri = "\(user.baseUrl!.absoluteString)/webapi/"
             service = client.useService(HproseService.self) as AnyObject
             newClient = client
         }
@@ -1044,6 +1044,16 @@ final class HproseInstance: ObservableObject {
         service: AnyObject,
         mediaType: MediaType
     ) async throws -> MimeiFileType? {
+        // Handle video files differently - upload HLS tar to post service
+        if mediaType == .video {
+            return try await uploadVideoToPostService(
+                data: data,
+                fileName: fileName,
+                referenceId: referenceId
+            )
+        }
+        
+        // Handle non-video files with original logic
         // Create temporary file
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try data.write(to: tempURL)
@@ -1108,6 +1118,77 @@ final class HproseInstance: ObservableObject {
             print("Error uploading file: \(error)")
             throw error
         }
+    }
+    
+    private func uploadVideoToPostService(
+        data: Data,
+        fileName: String?,
+        referenceId: String?
+    ) async throws -> MimeiFileType? {
+        // Get user's writable URL and cloud drive port
+        guard let writableUrl = appUser.writableUrl ?? appUser.baseUrl else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "User writable URL not available"])
+        }
+        
+        // Use cloudDrivePort with its default value (8010) if nil
+        let cloudDrivePort = appUser.cloudDrivePort ?? 8010
+        
+        // Construct the post service URL
+        // If writableUrl already contains a port, use it as is, otherwise append the cloudDrivePort
+        let postServiceURL: String
+        if writableUrl.port != nil {
+            // writableUrl already has a port, use it directly
+            postServiceURL = "\(writableUrl.absoluteString)/extract-tar"
+        } else {
+            // writableUrl doesn't have a port, append cloudDrivePort
+            postServiceURL = "\(writableUrl.absoluteString):\(cloudDrivePort)/extract-tar"
+        }
+        
+        guard let url = URL(string: postServiceURL) else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid post service URL: \(postServiceURL)"])
+        }
+        
+        // Create the request
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        
+        // Add reference ID if provided
+        if let referenceId = referenceId {
+            request.setValue(referenceId, forHTTPHeaderField: "X-Reference-ID")
+        }
+        
+        // Set the tar file data as the request body
+        request.httpBody = data
+        
+        // Make the request
+        let (responseData, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from post service"])
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: responseData, encoding: .utf8) ?? "Unknown error"
+            throw NSError(domain: "HproseService", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Post service error: \(errorMessage)"])
+        }
+        
+        // Parse the response to get the mid
+        guard let mid = String(data: responseData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !mid.isEmpty else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from post service - no mid returned"])
+        }
+        
+        // Create MimeiFileType for HLS video
+        return MimeiFileType(
+            mid: mid,
+            type: "hls_video", // Special type for HLS videos
+            size: Int64(data.count),
+            fileName: fileName,
+            timestamp: Date(),
+            aspectRatio: nil, // HLS videos don't need aspect ratio
+            url: nil
+        )
     }
     
     private func convertVideoToHLS(inputPath: String, outputDir: String, resolution: String) async -> Bool {
@@ -1663,7 +1744,7 @@ final class HproseInstance: ObservableObject {
 
     /// Find IP addresses of given nodeId
     func getHostIP(_ nodeId: String) async -> String? {
-        let urlString = "\(appUser.baseUrl ?? HproseInstance.baseUrl)/getvar?name=ips&arg0=\(nodeId)"
+        let urlString = "\(appUser.baseUrl!.absoluteString)/getvar?name=ips&arg0=\(nodeId)"
         guard let url = URL(string: urlString) else { return nil }
         do {
             let (data, response) = try await URLSession.shared.data(from: url)

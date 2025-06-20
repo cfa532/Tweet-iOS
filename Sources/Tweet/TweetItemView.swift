@@ -18,7 +18,7 @@ struct TweetItemView: View {
     private func mediaGrid(for tweet: Tweet) -> some View {
         Group {
             if let attachments = tweet.attachments, !attachments.isEmpty {
-                MediaGridView(attachments: attachments, baseUrl: tweet.author?.baseUrl ?? "", isVisible: isVisible)
+                MediaGridView(parentTweet: tweet, attachments: attachments)
                     .padding(.top, 8)
             }
         }
