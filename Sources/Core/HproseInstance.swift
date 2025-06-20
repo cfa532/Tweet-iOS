@@ -1114,21 +1114,19 @@ final class HproseInstance: ObservableObject {
         let ffmpeg = FFmpegWrapper.shared
         
         // FFmpeg command to convert video to HLS with 720p resolution
-        let arguments = [
-            "ffmpeg",
+        let ffmpegArgs = [
             "-i", inputPath,
             "-c:v", "libx264",
-            "-c:a", "aac",
             "-preset", "medium",
             "-crf", "23",
-            "-vf", "scale=-2:720",  // Scale to 720p height, maintain aspect ratio
+            "-vf", "scale=480:-2",  // Scale to 480p width, maintain aspect ratio
             "-hls_time", "6",       // 6 seconds per segment
             "-hls_list_size", "0",  // Keep all segments
             "-hls_segment_filename", "\(outputDir)/segment_%03d.ts",
             "\(outputDir)/playlist.m3u8"
         ]
         
-        return ffmpeg.executeFFmpegCommand(arguments)
+        return ffmpeg.executeFFmpegCommand(ffmpegArgs)
     }
     
     private func getVideoAspectRatio(url: URL) async throws -> Float? {
