@@ -21,43 +21,16 @@ struct SimpleVideoPlayer: View {
     var onTimeUpdate: ((Double) -> Void)? = nil
     var isMuted: Bool? = nil
     var onMuteChanged: ((Bool) -> Void)? = nil
-    @State private var shouldLoadVideo: Bool = false
-    @State private var loadTimer: Timer?
     let isVisible: Bool
     
     var body: some View {
-        ZStack {
-            if shouldLoadVideo && isVisible {
-                VideoPlayerView(
-                    url: url,
-                    autoPlay: autoPlay,
-                    isMuted: isMuted ?? muteState.isMuted,
-                    onMuteChanged: onMuteChanged,
-                    onTimeUpdate: onTimeUpdate
-                )
-            } else {
-                // Placeholder view
-                Color.black
-                
-                // Play button overlay
-                Image(systemName: "play.circle.fill")
-                    .resizable()
-                    .frame(width: 50, height: 50)
-                    .foregroundColor(.white)
-            }
-        }
-        .onAppear {
-            // Start timer to delay video loading
-            loadTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
-                shouldLoadVideo = true
-            }
-        }
-        .onDisappear {
-            // Cancel timer and reset state when view disappears
-            loadTimer?.invalidate()
-            loadTimer = nil
-            shouldLoadVideo = false
-        }
+        VideoPlayerView(
+            url: url,
+            autoPlay: autoPlay,
+            isMuted: isMuted ?? muteState.isMuted,
+            onMuteChanged: onMuteChanged,
+            onTimeUpdate: onTimeUpdate
+        )
     }
 }
 

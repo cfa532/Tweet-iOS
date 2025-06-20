@@ -211,6 +211,7 @@ struct MediaCell: View {
     @State private var showFullScreen = false
     @State private var play = false
     @State private var isVisible = false
+    @State private var shouldLoadVideo = false
     
     private let imageCache = ImageCacheManager.shared
     
@@ -231,8 +232,19 @@ struct MediaCell: View {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
-                    SimpleVideoPlayer(url: url, autoPlay: play, isVisible: isVisible)
-                        .environmentObject(MuteState.shared)
+                    if shouldLoadVideo {
+                        SimpleVideoPlayer(url: url, autoPlay: play, isVisible: isVisible)
+                            .environmentObject(MuteState.shared)
+                    } else {
+                        // Video placeholder with play button
+                        ZStack {
+                            Color.black
+                            Image(systemName: "play.circle.fill")
+                                .resizable()
+                                .frame(width: 50, height: 50)
+                                .foregroundColor(.white)
+                        }
+                    }
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
                 case "image":
@@ -261,7 +273,9 @@ struct MediaCell: View {
                 loadImage()
             }
         }
-        .onTapGesture { showFullScreen = true }
+        .onTapGesture {
+            handleTap()
+        }
         .fullScreenCover(isPresented: $showFullScreen) {
             if let attachments = parentTweet.attachments {
                 MediaBrowserView(
@@ -269,6 +283,29 @@ struct MediaCell: View {
                     initialIndex: attachmentIndex
                 )
             }
+        }
+    }
+    
+    private func handleTap() {
+        switch attachment.type.lowercased() {
+        case "video", "hls_video":
+            if !shouldLoadVideo {
+                // First tap: load and start video
+                shouldLoadVideo = true
+                play = true
+            } else {
+                // Subsequent taps: toggle play/pause
+                play.toggle()
+            }
+        case "audio":
+            // Toggle audio playback
+            play.toggle()
+        case "image":
+            // Open full-screen for images
+            showFullScreen = true
+        default:
+            // Open full-screen for other types
+            showFullScreen = true
         }
     }
     
