@@ -230,6 +230,7 @@ struct MediaCell: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
+                // Image and Video handling
                 if let image = image {
                     Image(uiImage: image)
                         .resizable()
@@ -237,48 +238,58 @@ struct MediaCell: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .clipped()
                         .onTapGesture {
-                            showFullScreen = true
+                            if attachment.type.starts(with: "video") {
+                                showVideoPlayer = true
+                            } else {
+                                showFullScreen = true
+                            }
                         }
                 } else if isLoading {
                     ProgressView()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
                 } else {
                     Rectangle()
                         .fill(Color.gray.opacity(0.3))
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .onTapGesture {
-                            showFullScreen = true
-                        }
+                }
+
+                // Play button for video and audio
+                if attachment.type.starts(with: "video") || attachment.type.starts(with: "audio") {
+                    Image(systemName: "play.circle.fill")
+                        .font(.largeTitle)
+                        .foregroundColor(.white)
                 }
                 
-                // Video play button overlay
-                if (attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video") && !showVideoPlayer {
-                    Button(action: {
-                        showVideoPlayer = true
-                    }) {
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 50))
+                // Audio specific view
+                if attachment.type.starts(with: "audio") && image == nil {
+                    VStack {
+                        Image(systemName: "waveform")
+                            .font(.largeTitle)
                             .foregroundColor(.white)
-                            .shadow(radius: 3)
+                        Text("Play Audio")
+                            .font(.caption)
+                            .foregroundColor(.white)
+                    }
+                    .onTapGesture {
+                        showVideoPlayer = true // This will open the audio player
                     }
                 }
             }
-        }
-        .onAppear {
-            loadImage()
-        }
-        .onDisappear {
-            isVisible = false
-        }
-        .fullScreenCover(isPresented: $showFullScreen) {
-            if let attachments = parentTweet.attachments {
-                MediaBrowserView(attachments: attachments, initialIndex: attachmentIndex)
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .onAppear(perform: loadImage)
+            .background(Color.black)
+            .fullScreenCover(isPresented: $showFullScreen) {
+                if let attachments = parentTweet.attachments {
+                    MediaBrowserView(attachments: attachments, initialIndex: attachmentIndex)
+                }
             }
-        }
-        .fullScreenCover(isPresented: $showVideoPlayer) {
-            if let url = attachment.getUrl(baseUrl) {
-                SimpleVideoPlayer(url: url, autoPlay: true, isVisible: true)
-                    .environmentObject(MuteState.shared)
+            .fullScreenCover(isPresented: $showVideoPlayer) {
+                if let url = attachment.getUrl(baseUrl) {
+                    if attachment.type.starts(with: "video") {
+                        SimpleVideoPlayer(url: url, isVisible: true)
+                            .environmentObject(MuteState.shared)
+                    } else if attachment.type.starts(with: "audio") {
+                        SimpleAudioPlayer(url: url)
+                    }
+                }
             }
         }
     }
