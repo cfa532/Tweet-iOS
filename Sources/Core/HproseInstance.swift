@@ -784,6 +784,266 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         
+        // Determine media type first
+        let mediaType: MediaType
+        if typeIdentifier.hasPrefix("public.image") {
+            // Check for specific image types
+            if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
+                mediaType = .image
+            } else if typeIdentifier.contains("png") {
+                mediaType = .image
+            } else if typeIdentifier.contains("gif") {
+                mediaType = .image
+            } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+                mediaType = .image
+            } else {
+                mediaType = .image // Default to image for any public.image type
+            }
+        } else if typeIdentifier.hasPrefix("public.movie") {
+            mediaType = .video
+        } else if typeIdentifier.hasPrefix("public.audio") {
+            mediaType = .audio
+        } else if typeIdentifier == "public.composite-content" {
+            mediaType = .pdf
+        } else if typeIdentifier == "public.zip-archive" {
+            mediaType = .zip
+        } else if typeIdentifier == "public.composite-content" {
+            mediaType = .word
+        } else {
+            // Try to determine type from file extension
+            let fileExtension = typeIdentifier.components(separatedBy: ".").last?.lowercased()
+            switch fileExtension {
+            case "jpg", "jpeg", "png", "gif", "heic", "heif":
+                mediaType = .image
+            case "mp4", "mov", "m4v", "mkv":
+                mediaType = .video
+            case "mp3", "m4a", "wav":
+                mediaType = .audio
+            case "pdf":
+                mediaType = .pdf
+            case "zip":
+                mediaType = .zip
+            case "doc", "docx":
+                mediaType = .word
+            default:
+                mediaType = .unknown
+            }
+        }
+        
+        // Handle video conversion to HLS if it's a video
+        if mediaType == .video {
+            return try await uploadVideoAsHLS(
+                data: data,
+                typeIdentifier: typeIdentifier,
+                fileName: fileName,
+                referenceId: referenceId,
+                service: service
+            )
+        } else {
+            // Handle non-video files with original logic
+            return try await uploadRegularFile(
+                data: data,
+                typeIdentifier: typeIdentifier,
+                fileName: fileName,
+                referenceId: referenceId,
+                service: service,
+                mediaType: mediaType
+            )
+        }
+    }
+    
+    private func uploadVideoAsHLS(
+        data: Data,
+        typeIdentifier: String,
+        fileName: String?,
+        referenceId: String?,
+        service: AnyObject
+    ) async throws -> MimeiFileType? {
+        // Create temporary directory for video processing
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        
+        // Save original video to temp directory
+        let originalVideoPath = tempDir.appendingPathComponent("original_video.mp4")
+        try data.write(to: originalVideoPath)
+        
+        // Convert video to HLS with 720p resolution
+        let hlsOutputDir = tempDir.appendingPathComponent("hls_output")
+        try FileManager.default.createDirectory(at: hlsOutputDir, withIntermediateDirectories: true)
+        
+        let success = await convertVideoToHLS(
+            inputPath: originalVideoPath.path,
+            outputDir: hlsOutputDir.path,
+            resolution: "720p"
+        )
+        
+        guard success else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to HLS"])
+        }
+        
+        // Create a simple archive of HLS files
+        let archivePath = tempDir.appendingPathComponent("hls_package.tar")
+        let archiveSuccess = await createSimpleArchive(from: hlsOutputDir.path, to: archivePath.path)
+        
+        guard archiveSuccess else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create archive package"])
+        }
+        
+        // Read archive data
+        let archiveData = try Data(contentsOf: archivePath)
+        
+        // Upload archive package using original upload logic
+        return try await uploadRegularFile(
+            data: archiveData,
+            typeIdentifier: "public.data",
+            fileName: fileName?.replacingOccurrences(of: ".mp4", with: "_hls.tar") ?? "hls_package.tar",
+            referenceId: referenceId,
+            service: service,
+            mediaType: .unknown
+        )
+    }
+    
+    private func createSimpleArchive(from sourceDir: String, to archivePath: String) async -> Bool {
+        // Create a proper tar file for iOS compatibility
+        do {
+            let fileManager = FileManager.default
+            let sourceURL = URL(fileURLWithPath: sourceDir)
+            let archiveURL = URL(fileURLWithPath: archivePath)
+            
+            // Get all files in the source directory
+            let files = try fileManager.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil)
+            
+            // Create tar file data
+            var tarData = Data()
+            
+            for fileURL in files {
+                let fileName = fileURL.lastPathComponent
+                let fileData = try Data(contentsOf: fileURL)
+                
+                // Create tar header (512 bytes)
+                var header = Data(count: 512)
+                var offset = 0
+                
+                // File name (100 bytes)
+                let nameData = fileName.data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<min(offset + nameData.count, 100), with: nameData)
+                offset += 100
+                
+                // File mode (8 bytes) - 0644 for regular files
+                let mode = "0000644".data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<offset + 8, with: mode)
+                offset += 8
+                
+                // Owner ID (8 bytes)
+                let uid = "0000000".data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<offset + 8, with: uid)
+                offset += 8
+                
+                // Group ID (8 bytes)
+                let gid = "0000000".data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<offset + 8, with: gid)
+                offset += 8
+                
+                // File size (12 bytes) - octal format
+                let sizeOctal = String(format: "%011o", fileData.count).data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<offset + 12, with: sizeOctal)
+                offset += 12
+                
+                // Modification time (12 bytes) - current time in octal
+                let timeOctal = String(format: "%011o", Int(Date().timeIntervalSince1970)).data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<offset + 12, with: timeOctal)
+                offset += 12
+                
+                // Checksum placeholder (8 bytes) - filled with spaces initially
+                let checksumPlaceholder = "        ".data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<offset + 8, with: checksumPlaceholder)
+                offset += 8
+                
+                // Type flag (1 byte) - '0' for regular file
+                header[offset] = UInt8("0".utf8.first!)
+                offset += 1
+                
+                // Link name (100 bytes) - empty for regular files
+                offset += 100
+                
+                // Magic (6 bytes) - "ustar"
+                let magic = "ustar ".data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<offset + 6, with: magic)
+                offset += 6
+                
+                // Version (2 bytes) - "00"
+                let version = "00".data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<offset + 2, with: version)
+                offset += 2
+                
+                // User name (32 bytes)
+                let uname = "root".data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<min(offset + uname.count, 32), with: uname)
+                offset += 32
+                
+                // Group name (32 bytes)
+                let gname = "root".data(using: .ascii) ?? Data()
+                header.replaceSubrange(offset..<min(offset + gname.count, 32), with: gname)
+                offset += 32
+                
+                // Device major (8 bytes)
+                offset += 8
+                
+                // Device minor (8 bytes)
+                offset += 8
+                
+                // Prefix (155 bytes) - empty for files in current directory
+                offset += 155
+                
+                // Calculate checksum (sum of all bytes in header, treating them as unsigned)
+                var checksum: UInt32 = 0
+                for i in 0..<512 {
+                    if i >= 148 && i < 156 { // Skip checksum field itself
+                        checksum += UInt32(" ".utf8.first!)
+                    } else {
+                        checksum += UInt32(header[i])
+                    }
+                }
+                
+                // Write checksum (6 bytes, octal format)
+                let checksumOctal = String(format: "%06o", checksum).data(using: .ascii) ?? Data()
+                header.replaceSubrange(148..<154, with: checksumOctal)
+                header[154] = UInt8(" ".utf8.first!)
+                header[155] = UInt8(" ".utf8.first!)
+                
+                // Add header to tar data
+                tarData.append(header)
+                
+                // Add file data, padded to 512-byte boundary
+                tarData.append(fileData)
+                let padding = (512 - (fileData.count % 512)) % 512
+                if padding > 0 {
+                    tarData.append(Data(count: padding))
+                }
+            }
+            
+            // Add two empty blocks at the end (tar convention)
+            tarData.append(Data(count: 1024))
+            
+            // Write the tar file
+            try tarData.write(to: archiveURL)
+            return true
+            
+        } catch {
+            print("Error creating tar archive: \(error)")
+            return false
+        }
+    }
+    
+    private func uploadRegularFile(
+        data: Data,
+        typeIdentifier: String,
+        fileName: String?,
+        referenceId: String?,
+        service: AnyObject,
+        mediaType: MediaType
+    ) async throws -> MimeiFileType? {
         // Create temporary file
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try data.write(to: tempURL)
@@ -823,58 +1083,12 @@ final class HproseInstance: ObservableObject {
                 return nil
             }
             
-            // Determine media type
-            let mediaType: MediaType
-            if typeIdentifier.hasPrefix("public.image") {
-                // Check for specific image types
-                if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
-                    mediaType = .image
-                } else if typeIdentifier.contains("png") {
-                    mediaType = .image
-                } else if typeIdentifier.contains("gif") {
-                    mediaType = .image
-                } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
-                    mediaType = .image
-                } else {
-                    mediaType = .image // Default to image for any public.image type
-                }
-            } else if typeIdentifier.hasPrefix("public.movie") {
-                mediaType = .video
-            } else if typeIdentifier.hasPrefix("public.audio") {
-                mediaType = .audio
-            } else if typeIdentifier == "public.composite-content" {
-                mediaType = .pdf
-            } else if typeIdentifier == "public.zip-archive" {
-                mediaType = .zip
-            } else if typeIdentifier == "public.composite-content" {
-                mediaType = .word
-            } else {
-                // Try to determine type from file extension
-                let fileExtension = typeIdentifier.components(separatedBy: ".").last?.lowercased()
-                switch fileExtension {
-                case "jpg", "jpeg", "png", "gif", "heic", "heif":
-                    mediaType = .image
-                case "mp4", "mov", "m4v", "mkv":
-                    mediaType = .video
-                case "mp3", "m4a", "wav":
-                    mediaType = .audio
-                case "pdf":
-                    mediaType = .pdf
-                case "zip":
-                    mediaType = .zip
-                case "doc", "docx":
-                    mediaType = .word
-                default:
-                    mediaType = .unknown
-                }
-            }
-            
             // Get file attributes
             let fileAttributes = try FileManager.default.attributesOfItem(atPath: tempURL.path)
             let fileSize = fileAttributes[.size] as? UInt64 ?? 0
             let fileTimestamp = fileAttributes[.modificationDate] as? Date ?? Date()
             
-            // Get aspect ratio for videos
+            // Get aspect ratio for videos (only for original videos, not HLS packages)
             var aspectRatio: Float?
             if mediaType == .video {
                 aspectRatio = try await getVideoAspectRatio(url: tempURL)
@@ -894,6 +1108,27 @@ final class HproseInstance: ObservableObject {
             print("Error uploading file: \(error)")
             throw error
         }
+    }
+    
+    private func convertVideoToHLS(inputPath: String, outputDir: String, resolution: String) async -> Bool {
+        let ffmpeg = FFmpegWrapper.shared
+        
+        // FFmpeg command to convert video to HLS with 720p resolution
+        let arguments = [
+            "ffmpeg",
+            "-i", inputPath,
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            "-preset", "medium",
+            "-crf", "23",
+            "-vf", "scale=-2:720",  // Scale to 720p height, maintain aspect ratio
+            "-hls_time", "6",       // 6 seconds per segment
+            "-hls_list_size", "0",  // Keep all segments
+            "-hls_segment_filename", "\(outputDir)/segment_%03d.ts",
+            "\(outputDir)/playlist.m3u8"
+        ]
+        
+        return ffmpeg.executeFFmpegCommand(arguments)
     }
     
     private func getVideoAspectRatio(url: URL) async throws -> Float? {
