@@ -5,6 +5,7 @@ enum Constants {
     static let GUEST_ID = "000000000000000000000000000"
     static let MAX_TWEET_SIZE = 28000
     static let MIMEI_ID_LENGTH = 27
+    static let DEFAULT_CLOUD_PORT = 8010
 }
 
 enum UserContentType: String {

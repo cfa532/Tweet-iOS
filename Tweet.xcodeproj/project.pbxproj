@@ -36,7 +36,7 @@
 		469A99572DEC744200954049 /* ProfileStatsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99532DEC744200954049 /* ProfileStatsSection.swift */; };
 		469A995F2DEF300900954049 /* TweetCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A995E2DEF300900954049 /* TweetCacheManager.swift */; };
 		469A99622DEF318C00954049 /* TweetModel.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 469A99602DEF318C00954049 /* TweetModel.xcdatamodeld */; };
-		46D4089B2E04EDFE006F593F /* FFmpegWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D4089A2E04EDFE006F593F /* FFmpegWrapper.swift */; };
+		46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */; };
 		46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */; };
 		46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32A2DDA038E00AEF31F /* AppConfig.swift */; };
 		46E5B32D2DDA045B00AEF31F /* AppHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32C2DDA045B00AEF31F /* AppHeaderView.swift */; };
@@ -99,7 +99,7 @@
 		469A99542DEC744200954049 /* ProfileTweetsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTweetsSection.swift; sourceTree = "<group>"; };
 		469A995E2DEF300900954049 /* TweetCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetCacheManager.swift; sourceTree = "<group>"; };
 		469A99612DEF318C00954049 /* TweetModel.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = TweetModel.xcdatamodel; sourceTree = "<group>"; };
-		46D4089A2E04EDFE006F593F /* FFmpegWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FFmpegWrapper.swift; sourceTree = "<group>"; };
+		46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSVideoProcessor.swift; sourceTree = "<group>"; };
 		46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProfileView.swift; path = Sources/Features/Profile/ProfileView.swift; sourceTree = SOURCE_ROOT; };
 		46E5B32A2DDA038E00AEF31F /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		46E5B32C2DDA045B00AEF31F /* AppHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppHeaderView.swift; sourceTree = "<group>"; };
@@ -216,7 +216,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
-				46D4089A2E04EDFE006F593F /* FFmpegWrapper.swift */,
+				46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */,
 				469A995E2DEF300900954049 /* TweetCacheManager.swift */,
 				469A994C2DEB31EF00954049 /* NotificationNames.swift */,
 				4608E2D72DD5CA640051A92D /* HproseInstance.swift */,
@@ -467,7 +467,6 @@
 				469A99562DEC744200954049 /* ProfileHeaderSection.swift in Sources */,
 				469A99572DEC744200954049 /* ProfileStatsSection.swift in Sources */,
 				46E5B3492DDC0F6900AEF31F /* MediaGridView.swift in Sources */,
-				46D4089B2E04EDFE006F593F /* FFmpegWrapper.swift in Sources */,
 				46E5B3612DE16FD800AEF31F /* Login.swift in Sources */,
 				46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */,
 				46E5B32D2DDA045B00AEF31F /* AppHeaderView.swift in Sources */,
@@ -506,6 +505,7 @@
 				46E5B3632DE1703200AEF31F /* Registration.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */,
 				46E5B3572DDF74B500AEF31F /* CommentComposeView.swift in Sources */,
+				46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A2A /* PollCreationView.swift in Sources */,
 				46E5B36D2DE3617400AEF31F /* AvatarFullScreenView.swift in Sources */,
 				469A99502DEBFBC100954049 /* Tweet.swift in Sources */,

@@ -784,6 +784,8 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         
+        print("DEBUG: uploadToIPFS called with typeIdentifier: \(typeIdentifier), fileName: \(fileName ?? "nil")")
+        
         // Determine media type first
         let mediaType: MediaType
         if typeIdentifier.hasPrefix("public.image") {
@@ -799,9 +801,9 @@ final class HproseInstance: ObservableObject {
             } else {
                 mediaType = .image // Default to image for any public.image type
             }
-        } else if typeIdentifier.hasPrefix("public.movie") {
+        } else if typeIdentifier.hasPrefix("public.movie") || typeIdentifier.contains("quicktime-movie") || typeIdentifier.contains("movie") {
             mediaType = .video
-        } else if typeIdentifier.hasPrefix("public.audio") {
+        } else if typeIdentifier.hasPrefix("public.audio") || typeIdentifier.contains("audio") {
             mediaType = .audio
         } else if typeIdentifier == "public.composite-content" {
             mediaType = .pdf
@@ -815,9 +817,9 @@ final class HproseInstance: ObservableObject {
             switch fileExtension {
             case "jpg", "jpeg", "png", "gif", "heic", "heif":
                 mediaType = .image
-            case "mp4", "mov", "m4v", "mkv":
+            case "mp4", "mov", "m4v", "mkv", "avi", "flv", "wmv", "webm", "ts", "mts", "m2ts", "vob", "dat", "ogv", "ogg", "f4v", "asf":
                 mediaType = .video
-            case "mp3", "m4a", "wav":
+            case "mp3", "m4a", "wav", "flac", "aac":
                 mediaType = .audio
             case "pdf":
                 mediaType = .pdf
@@ -830,8 +832,11 @@ final class HproseInstance: ObservableObject {
             }
         }
         
+        print("DEBUG: Detected media type: \(mediaType.rawValue)")
+        
         // Handle video conversion to HLS if it's a video
         if mediaType == .video {
+            print("DEBUG: Processing video with HLS conversion")
             return try await uploadVideoAsHLS(
                 data: data,
                 typeIdentifier: typeIdentifier,
@@ -840,6 +845,7 @@ final class HproseInstance: ObservableObject {
                 service: service
             )
         } else {
+            print("DEBUG: Processing non-video file with regular upload")
             // Handle non-video files with original logic
             return try await uploadRegularFile(
                 data: data,
@@ -859,49 +865,107 @@ final class HproseInstance: ObservableObject {
         referenceId: String?,
         service: AnyObject
     ) async throws -> MimeiFileType? {
+        print("DEBUG: uploadVideoAsHLS started with data size: \(data.count) bytes")
+        
         // Create temporary directory for video processing
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         
+        print("DEBUG: Created temp directory: \(tempDir.path)")
+        
         // Save original video to temp directory
         let originalVideoPath = tempDir.appendingPathComponent("original_video.mp4")
         try data.write(to: originalVideoPath)
         
-        // Convert video to HLS with 720p resolution
+        print("DEBUG: Saved original video to: \(originalVideoPath.path)")
+        
+        // Check if the video format is supported
+        let hlsProcessor = HLSVideoProcessor.shared
+        
+        // First check file extension support
+        if let fileName = fileName, !hlsProcessor.isSupportedVideoFormat(fileName) {
+            print("Warning: File extension not in supported list: \(fileName)")
+        }
+        
+        // Then check if AVFoundation can actually handle the format
+        let canHandle = await hlsProcessor.canHandleVideoFormat(url: originalVideoPath)
+        print("DEBUG: AVFoundation can handle format: \(canHandle)")
+        
+        if !canHandle {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video format not supported by AVFoundation"])
+        }
+        
+        // Configure adaptive HLS settings with multiple quality levels
+        let qualityLevels = [
+            HLSVideoProcessor.QualityLevel.high,    // 720p - 2 Mbps
+            HLSVideoProcessor.QualityLevel.medium,  // 480p - 1 Mbps
+            HLSVideoProcessor.QualityLevel.low,     // 360p - 500 Kbps
+            HLSVideoProcessor.QualityLevel.ultraLow // 240p - 250 Kbps
+        ]
+        
+        let hlsConfig = HLSVideoProcessor.HLSConfig(
+            segmentDuration: 6.0,
+            targetResolution: CGSize(width: 480, height: 270), // Default 480p
+            keyframeInterval: 2.0,
+            qualityLevels: qualityLevels
+        )
+        
         let hlsOutputDir = tempDir.appendingPathComponent("hls_output")
-        try FileManager.default.createDirectory(at: hlsOutputDir, withIntermediateDirectories: true)
         
-        let success = await convertVideoToHLS(
-            inputPath: originalVideoPath.path,
-            outputDir: hlsOutputDir.path,
-            resolution: "720p"
-        )
+        print("DEBUG: Starting HLS conversion to: \(hlsOutputDir.path)")
         
-        guard success else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to HLS"])
+        do {
+            // Convert video to adaptive HLS format
+            print("DEBUG: Calling convertToAdaptiveHLS...")
+            _ = try await hlsProcessor.convertToAdaptiveHLS(
+                inputURL: originalVideoPath,
+                outputDirectory: hlsOutputDir,
+                config: hlsConfig
+            )
+            
+            print("DEBUG: HLS conversion completed successfully")
+            
+            // Create a simple archive of HLS files
+            let archivePath = tempDir.appendingPathComponent("hls_package.tar")
+            print("DEBUG: Creating archive at: \(archivePath.path)")
+            let archiveSuccess = await createSimpleArchive(from: hlsOutputDir.path, to: archivePath.path)
+            
+            print("DEBUG: Archive creation result: \(archiveSuccess)")
+            
+            guard archiveSuccess else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create archive package"])
+            }
+            
+            // Read archive data
+            let archiveData = try Data(contentsOf: archivePath)
+            print("DEBUG: Archive data size: \(archiveData.count) bytes")
+            
+            // Upload archive package using original upload logic
+            print("DEBUG: Uploading HLS archive...")
+            return try await uploadRegularFile(
+                data: archiveData,
+                typeIdentifier: "public.data",
+                fileName: fileName?.replacingOccurrences(of: ".mp4", with: "_hls.tar") ?? "hls_package.tar",
+                referenceId: referenceId,
+                service: service,
+                mediaType: .video
+            )
+            
+        } catch {
+            print("Error converting video to HLS: \(error)")
+            print("DEBUG: Falling back to regular video upload")
+            
+            // Fallback: Upload original video as regular file
+            return try await uploadRegularFile(
+                data: data,
+                typeIdentifier: typeIdentifier,
+                fileName: fileName,
+                referenceId: referenceId,
+                service: service,
+                mediaType: .video
+            )
         }
-        
-        // Create a simple archive of HLS files
-        let archivePath = tempDir.appendingPathComponent("hls_package.tar")
-        let archiveSuccess = await createSimpleArchive(from: hlsOutputDir.path, to: archivePath.path)
-        
-        guard archiveSuccess else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create archive package"])
-        }
-        
-        // Read archive data
-        let archiveData = try Data(contentsOf: archivePath)
-        
-        // Upload archive package using original upload logic
-        return try await uploadRegularFile(
-            data: archiveData,
-            typeIdentifier: "public.data",
-            fileName: fileName?.replacingOccurrences(of: ".mp4", with: "_hls.tar") ?? "hls_package.tar",
-            referenceId: referenceId,
-            service: service,
-            mediaType: .unknown
-        )
     }
     
     private func createSimpleArchive(from sourceDir: String, to archivePath: String) async -> Bool {
@@ -911,81 +975,125 @@ final class HproseInstance: ObservableObject {
             let sourceURL = URL(fileURLWithPath: sourceDir)
             let archiveURL = URL(fileURLWithPath: archivePath)
             
-            // Get all files in the source directory
-            let files = try fileManager.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil)
+            print("DEBUG: Creating archive from: \(sourceDir)")
+            
+            // Get all files in the source directory recursively
+            let enumerator = fileManager.enumerator(at: sourceURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])
+            var files: [URL] = []
+            
+            while let fileURL = enumerator?.nextObject() as? URL {
+                let resourceValues = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+                if resourceValues.isRegularFile == true {
+                    files.append(fileURL)
+                }
+            }
+            
+            print("DEBUG: Found \(files.count) files to archive")
             
             // Create tar file data
             var tarData = Data()
             
             for fileURL in files {
-                let fileName = fileURL.lastPathComponent
+                print("DEBUG: Processing file: \(fileURL.path)")
+                print("DEBUG: Source directory: \(sourceDir)")
+                
+                // Get relative path from source directory
+                let relativePath: String
+                if fileURL.path.hasPrefix(sourceDir) {
+                    let sourceDirLength = sourceDir.count
+                    print("DEBUG: Source dir length: \(sourceDirLength)")
+                    print("DEBUG: File path length: \(fileURL.path.count)")
+                    
+                    if sourceDirLength < fileURL.path.count {
+                        let startIndex = fileURL.path.index(fileURL.path.startIndex, offsetBy: sourceDirLength)
+                        let remainingPath = String(fileURL.path[startIndex...])
+                        relativePath = remainingPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                        print("DEBUG: Remaining path: \(remainingPath)")
+                        print("DEBUG: Relative path: \(relativePath)")
+                    } else {
+                        relativePath = fileURL.lastPathComponent
+                        print("DEBUG: Using filename as relative path: \(relativePath)")
+                    }
+                } else {
+                    relativePath = fileURL.lastPathComponent
+                    print("DEBUG: Path doesn't start with source dir, using filename: \(relativePath)")
+                }
+                
+                let fileName = relativePath.isEmpty ? fileURL.lastPathComponent : relativePath
+                
+                print("DEBUG: Final filename for archive: \(fileName)")
+                
+                // Ensure filename fits in tar header (100 bytes max)
+                let maxFileNameLength = 100
+                let finalFileName: String
+                if fileName.count > maxFileNameLength {
+                    // Truncate filename if too long
+                    let truncated = String(fileName.prefix(maxFileNameLength - 4)) + ".ts"
+                    finalFileName = truncated
+                    print("DEBUG: Filename truncated to: \(finalFileName)")
+                } else {
+                    finalFileName = fileName
+                }
+                
                 let fileData = try Data(contentsOf: fileURL)
                 
                 // Create tar header (512 bytes)
                 var header = Data(count: 512)
                 var offset = 0
                 
+                // Helper function to safely write string data to header
+                func writeStringToHeader(_ string: String, maxLength: Int) {
+                    let stringData = string.data(using: .ascii) ?? Data()
+                    let writeLength = min(stringData.count, maxLength)
+                    if writeLength > 0 && offset + writeLength <= header.count {
+                        header.replaceSubrange(offset..<(offset + writeLength), with: stringData)
+                    }
+                    offset += maxLength
+                }
+                
                 // File name (100 bytes)
-                let nameData = fileName.data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<min(offset + nameData.count, 100), with: nameData)
-                offset += 100
+                writeStringToHeader(finalFileName, maxLength: 100)
                 
                 // File mode (8 bytes) - 0644 for regular files
-                let mode = "0000644".data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<offset + 8, with: mode)
-                offset += 8
+                writeStringToHeader("0000644", maxLength: 8)
                 
                 // Owner ID (8 bytes)
-                let uid = "0000000".data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<offset + 8, with: uid)
-                offset += 8
+                writeStringToHeader("0000000", maxLength: 8)
                 
                 // Group ID (8 bytes)
-                let gid = "0000000".data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<offset + 8, with: gid)
-                offset += 8
+                writeStringToHeader("0000000", maxLength: 8)
                 
                 // File size (12 bytes) - octal format
-                let sizeOctal = String(format: "%011o", fileData.count).data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<offset + 12, with: sizeOctal)
-                offset += 12
+                let sizeOctal = String(format: "%011o", fileData.count)
+                writeStringToHeader(sizeOctal, maxLength: 12)
                 
                 // Modification time (12 bytes) - current time in octal
-                let timeOctal = String(format: "%011o", Int(Date().timeIntervalSince1970)).data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<offset + 12, with: timeOctal)
-                offset += 12
+                let timeOctal = String(format: "%011o", Int(Date().timeIntervalSince1970))
+                writeStringToHeader(timeOctal, maxLength: 12)
                 
                 // Checksum placeholder (8 bytes) - filled with spaces initially
-                let checksumPlaceholder = "        ".data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<offset + 8, with: checksumPlaceholder)
-                offset += 8
+                writeStringToHeader("        ", maxLength: 8)
                 
                 // Type flag (1 byte) - '0' for regular file
-                header[offset] = UInt8("0".utf8.first!)
+                if offset < header.count {
+                    header[offset] = UInt8("0".utf8.first!)
+                }
                 offset += 1
                 
                 // Link name (100 bytes) - empty for regular files
                 offset += 100
                 
                 // Magic (6 bytes) - "ustar"
-                let magic = "ustar ".data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<offset + 6, with: magic)
-                offset += 6
+                writeStringToHeader("ustar ", maxLength: 6)
                 
                 // Version (2 bytes) - "00"
-                let version = "00".data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<offset + 2, with: version)
-                offset += 2
+                writeStringToHeader("00", maxLength: 2)
                 
                 // User name (32 bytes)
-                let uname = "root".data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<min(offset + uname.count, 32), with: uname)
-                offset += 32
+                writeStringToHeader("root", maxLength: 32)
                 
                 // Group name (32 bytes)
-                let gname = "root".data(using: .ascii) ?? Data()
-                header.replaceSubrange(offset..<min(offset + gname.count, 32), with: gname)
-                offset += 32
+                writeStringToHeader("root", maxLength: 32)
                 
                 // Device major (8 bytes)
                 offset += 8
@@ -1007,10 +1115,18 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 // Write checksum (6 bytes, octal format)
-                let checksumOctal = String(format: "%06o", checksum).data(using: .ascii) ?? Data()
-                header.replaceSubrange(148..<154, with: checksumOctal)
-                header[154] = UInt8(" ".utf8.first!)
-                header[155] = UInt8(" ".utf8.first!)
+                let checksumOctal = String(format: "%06o", checksum)
+                let checksumData = checksumOctal.data(using: .ascii) ?? Data()
+                let checksumLength = min(checksumData.count, 6)
+                if checksumLength > 0 && 148 + checksumLength <= header.count {
+                    header.replaceSubrange(148..<(148 + checksumLength), with: checksumData)
+                }
+                if 154 < header.count {
+                    header[154] = UInt8(" ".utf8.first!)
+                }
+                if 155 < header.count {
+                    header[155] = UInt8(" ".utf8.first!)
+                }
                 
                 // Add header to tar data
                 tarData.append(header)
@@ -1028,6 +1144,7 @@ final class HproseInstance: ObservableObject {
             
             // Write the tar file
             try tarData.write(to: archiveURL)
+            print("DEBUG: Successfully created tar archive: \(archivePath)")
             return true
             
         } catch {
@@ -1044,14 +1161,19 @@ final class HproseInstance: ObservableObject {
         service: AnyObject,
         mediaType: MediaType
     ) async throws -> MimeiFileType? {
+        print("DEBUG: uploadRegularFile called with mediaType: \(mediaType.rawValue), data size: \(data.count) bytes")
+        
         // Handle video files differently - upload HLS tar to post service
         if mediaType == .video {
+            print("DEBUG: Detected video file, uploading to post service")
             return try await uploadVideoToPostService(
                 data: data,
                 fileName: fileName,
                 referenceId: referenceId
             )
         }
+        
+        print("DEBUG: Processing non-video file with regular upload logic")
         
         // Handle non-video files with original logic
         // Create temporary file
@@ -1125,100 +1247,133 @@ final class HproseInstance: ObservableObject {
         fileName: String?,
         referenceId: String?
     ) async throws -> MimeiFileType? {
+        print("DEBUG: ===== uploadVideoToPostService ENTRY POINT =====")
+        print("DEBUG: uploadVideoToPostService started with data size: \(data.count) bytes")
+        print("DEBUG: fileName: \(fileName ?? "nil")")
+        print("DEBUG: referenceId: \(referenceId ?? "nil")")
+        
         // Get user's writable URL and cloud drive port
         guard let writableUrl = appUser.writableUrl ?? appUser.baseUrl else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "User writable URL not available"])
         }
         
-        // Use cloudDrivePort with its default value (8010) if nil
-        let cloudDrivePort = appUser.cloudDrivePort ?? 8010
+        print("DEBUG: Using writable URL: \(writableUrl.absoluteString)")
         
-        // Construct the post service URL
-        // If writableUrl already contains a port, use it as is, otherwise append the cloudDrivePort
+        // Use cloudDrivePort with its default value (8010) if nil
+        let cloudDrivePort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
+        
+        print("DEBUG: Using cloud drive port: \(cloudDrivePort)")
+        
+        // Construct the post service URL by replacing the port of writableUrl with cloudDrivePort
         let postServiceURL: String
-        if writableUrl.port != nil {
-            // writableUrl already has a port, use it directly
-            postServiceURL = "\(writableUrl.absoluteString)/extract-tar"
+        if let originalPort = writableUrl.port {
+            // Replace the existing port with cloudDrivePort
+            var components = URLComponents(url: writableUrl, resolvingAgainstBaseURL: false)
+            components?.port = cloudDrivePort
+            postServiceURL = "\(components?.url?.absoluteString ?? writableUrl.absoluteString)/extract-tar"
         } else {
             // writableUrl doesn't have a port, append cloudDrivePort
             postServiceURL = "\(writableUrl.absoluteString):\(cloudDrivePort)/extract-tar"
         }
         
+        print("DEBUG: Post service URL: \(postServiceURL)")
+        
         guard let url = URL(string: postServiceURL) else {
+            print("DEBUG: Failed to create URL from: \(postServiceURL)")
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid post service URL: \(postServiceURL)"])
         }
+        
+        print("DEBUG: Created URL successfully: \(url.absoluteString)")
         
         // Create the request
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        
+        // Create multipart form data with a simpler boundary
+        let boundary = "----WebKitFormBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        
+        print("DEBUG: Using boundary: \(boundary)")
+        
+        var body = Data()
         
         // Add reference ID if provided
         if let referenceId = referenceId {
-            request.setValue(referenceId, forHTTPHeaderField: "X-Reference-ID")
+            print("DEBUG: Adding referenceId: \(referenceId)")
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(referenceId)\r\n".data(using: .utf8)!)
         }
         
-        // Set the tar file data as the request body
-        request.httpBody = data
+        // Add the tar file with the correct field name
+        let finalFileName = fileName ?? "hls_package.tar"
+        print("DEBUG: Adding tarFile with filename: \(finalFileName)")
         
-        // Make the request
-        let (responseData, response) = try await URLSession.shared.data(for: request)
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"tarFile\"; filename=\"\(finalFileName)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/x-tar\r\n\r\n".data(using: .utf8)!)
+        body.append(data)
+        body.append("\r\n".data(using: .utf8)!)
         
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from post service"])
+        // End boundary
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        
+        request.httpBody = body
+        
+        print("DEBUG: Request body size: \(body.count) bytes")
+        print("DEBUG: Content-Type header: \(request.value(forHTTPHeaderField: "Content-Type") ?? "nil")")
+        print("DEBUG: Request URL: \(request.url?.absoluteString ?? "nil")")
+        print("DEBUG: Request method: \(request.httpMethod ?? "nil")")
+        print("DEBUG: Making HTTP request to post service with multipart form data...")
+        
+        do {
+            // Make the request
+            let (responseData, response) = try await URLSession.shared.data(for: request)
+            
+            print("DEBUG: HTTP request completed successfully")
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from post service"])
+            }
+            
+            print("DEBUG: HTTP response status code: \(httpResponse.statusCode)")
+            print("DEBUG: HTTP response headers: \(httpResponse.allHeaderFields)")
+            
+            guard httpResponse.statusCode == 200 else {
+                let errorMessage = String(data: responseData, encoding: .utf8) ?? "Unknown error"
+                print("DEBUG: Post service error: \(errorMessage)")
+                print("DEBUG: Response data: \(String(data: responseData, encoding: .utf8) ?? "nil")")
+                throw NSError(domain: "HproseService", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Post service error: \(errorMessage)"])
+            }
+            
+            // Parse the response to get the mid
+            guard let mid = String(data: responseData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !mid.isEmpty else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from post service - no mid returned"])
+            }
+            
+            print("DEBUG: Successfully uploaded HLS video with mid: \(mid)")
+            
+            // Create MimeiFileType for HLS video
+            return MimeiFileType(
+                mid: mid,
+                type: "hls_video", // Special type for HLS videos
+                size: Int64(data.count),
+                fileName: fileName,
+                timestamp: Date(),
+                aspectRatio: nil, // HLS videos don't need aspect ratio
+                url: nil
+            )
+            
+        } catch {
+            print("DEBUG: HTTP request failed with error: \(error)")
+            print("DEBUG: Error details: \(error.localizedDescription)")
+            throw error
         }
-        
-        guard httpResponse.statusCode == 200 else {
-            let errorMessage = String(data: responseData, encoding: .utf8) ?? "Unknown error"
-            throw NSError(domain: "HproseService", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Post service error: \(errorMessage)"])
-        }
-        
-        // Parse the response to get the mid
-        guard let mid = String(data: responseData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !mid.isEmpty else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from post service - no mid returned"])
-        }
-        
-        // Create MimeiFileType for HLS video
-        return MimeiFileType(
-            mid: mid,
-            type: "hls_video", // Special type for HLS videos
-            size: Int64(data.count),
-            fileName: fileName,
-            timestamp: Date(),
-            aspectRatio: nil, // HLS videos don't need aspect ratio
-            url: nil
-        )
-    }
-    
-    private func convertVideoToHLS(inputPath: String, outputDir: String, resolution: String) async -> Bool {
-        let ffmpeg = FFmpegWrapper.shared
-        
-        // FFmpeg command to convert video to HLS with 720p resolution
-        let ffmpegArgs = [
-            "-i", inputPath,
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "23",
-            "-vf", "scale=480:-2",  // Scale to 480p width, maintain aspect ratio
-            "-hls_time", "6",       // 6 seconds per segment
-            "-hls_list_size", "0",  // Keep all segments
-            "-hls_segment_filename", "\(outputDir)/segment_%03d.ts",
-            "\(outputDir)/playlist.m3u8"
-        ]
-        
-        return ffmpeg.executeFFmpegCommand(ffmpegArgs)
     }
     
     private func getVideoAspectRatio(url: URL) async throws -> Float? {
-        let asset = AVAsset(url: url)
-        let tracks = try await asset.load(.tracks)
-        guard let videoTrack = tracks.first(where: { $0.mediaType == .video }) else {
-            return nil
-        }
-        
-        let size = try await videoTrack.load(.naturalSize)
-        return Float(size.width / size.height)
+        return try await HLSVideoProcessor.shared.getVideoAspectRatio(url: url)
     }
     
     // MARK: - Private Methods

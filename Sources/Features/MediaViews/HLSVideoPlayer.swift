@@ -1,65 +1,114 @@
-//
-//  SimpleVideoPlayer.swift
-//  Tweet
-//
-//  A simpler video player implementation with HLS support
-//
-
 import SwiftUI
 import AVKit
 import AVFoundation
 
-// Global mute state
-class MuteState: ObservableObject {
-    static let shared = MuteState()
-    @Published var isMuted: Bool = false
-}
-
-struct SimpleVideoPlayer: View {
-    let url: URL
-    var autoPlay: Bool = true
-    @EnvironmentObject var muteState: MuteState
-    var onTimeUpdate: ((Double) -> Void)? = nil
-    var isMuted: Bool? = nil
-    var onMuteChanged: ((Bool) -> Void)? = nil
-    let isVisible: Bool
+/// HLSVideoPlayer provides a SwiftUI wrapper for playing HLS video streams
+struct HLSVideoPlayer: View {
+    let videoURL: URL
+    let aspectRatio: Float?
+    
+    @State private var player: AVPlayer?
+    @State private var isPlaying = false
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    
+    init(videoURL: URL, aspectRatio: Float? = nil) {
+        self.videoURL = videoURL
+        self.aspectRatio = aspectRatio
+    }
     
     var body: some View {
-        // Check if this is an HLS stream
-        if isHLSStream(url: url) {
-            HLSVideoPlayerWithControls(
-                videoURL: url,
-                aspectRatio: nil
-            )
-        } else {
-            VideoPlayerView(
-                url: url,
-                autoPlay: autoPlay,
-                isMuted: isMuted ?? muteState.isMuted,
-                onMuteChanged: onMuteChanged,
-                onTimeUpdate: onTimeUpdate
-            )
+        ZStack {
+            if let player = player {
+                VideoPlayer(player: player)
+                    .aspectRatio(aspectRatio.map { CGFloat($0) } ?? 16.0/9.0, contentMode: .fit)
+                    .onAppear {
+                        setupPlayer()
+                    }
+                    .onDisappear {
+                        cleanupPlayer()
+                    }
+            } else if isLoading {
+                ProgressView("Loading video...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let errorMessage = errorMessage {
+                VStack {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.largeTitle)
+                        .foregroundColor(.red)
+                    Text("Video Error")
+                        .font(.headline)
+                    Text(errorMessage)
+                        .font(.caption)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .onAppear {
+            setupPlayer()
         }
     }
     
-    /// Check if the URL points to an HLS stream
-    private func isHLSStream(url: URL) -> Bool {
-        // Check for .m3u8 extension
-        if url.pathExtension.lowercased() == "m3u8" {
-            return true
+    private func setupPlayer() {
+        isLoading = true
+        errorMessage = nil
+        
+        // Create AVPlayer with the video URL
+        let avPlayer = AVPlayer(url: videoURL)
+        
+        // Add observer for player status
+        avPlayer.currentItem?.addObserver(
+            NSObject(),
+            forKeyPath: "status",
+            options: [.new, .old],
+            context: nil
+        )
+        
+        // Add periodic time observer
+        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        avPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { _ in
+            // Handle time updates if needed
         }
         
-        // Check for HLS content type in URL
-        if url.absoluteString.contains("playlist.m3u8") {
-            return true
+        // Add notification observers
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: avPlayer.currentItem,
+            queue: .main
+        ) { _ in
+            // Handle video completion
+            isPlaying = false
         }
         
-        // Check for HLS-related query parameters
-        if let query = url.query, query.contains("hls") || query.contains("stream") {
-            return true
+        // Check if the video is playable
+        Task {
+            do {
+                let asset = AVAsset(url: videoURL)
+                let isPlayable = try await asset.load(.isPlayable)
+                
+                await MainActor.run {
+                    if isPlayable {
+                        self.player = avPlayer
+                        self.isLoading = false
+                    } else {
+                        self.errorMessage = "Video is not playable"
+                        self.isLoading = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Failed to load video: \(error.localizedDescription)"
+                    self.isLoading = false
+                }
+            }
         }
-        
-        return false
+    }
+    
+    private func cleanupPlayer() {
+        player?.pause()
+        player = nil
+        isPlaying = false
     }
 }
 
@@ -236,83 +285,13 @@ struct HLSVideoPlayerWithControls: View {
     }
 }
 
-struct VideoPlayerView: UIViewControllerRepresentable {
-    let url: URL
-    let autoPlay: Bool
-    let isMuted: Bool
-    let onMuteChanged: ((Bool) -> Void)?
-    let onTimeUpdate: ((Double) -> Void)?
-    
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.showsPlaybackControls = true
-        controller.videoGravity = .resizeAspect
-        controller.entersFullScreenWhenPlaybackBegins = false
-        controller.exitsFullScreenWhenPlaybackEnds = false
-        
-        // Create asset with proper configuration
-        let asset = AVURLAsset(url: url, options: [
-            "AVURLAssetOutOfBandMIMETypeKey": "video/mp4",
-            "AVURLAssetHTTPHeaderFieldsKey": ["Accept": "*/*", "Range": "bytes=0-"]
-        ])
-        
-        // Create player item with asset
-        let playerItem = AVPlayerItem(asset: asset)
-        
-        // Configure player item
-        playerItem.preferredForwardBufferDuration = 2.0 // Limit buffer size
-        playerItem.preferredPeakBitRate = 2_000_000 // 2 Mbps limit
-        
-        // Create and configure player
-        let player = AVPlayer(playerItem: playerItem)
-        player.automaticallyWaitsToMinimizeStalling = true
-        player.isMuted = isMuted
-        
-        // Set up time observer
-        let timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { time in
-            onTimeUpdate?(time.seconds)
-        }
-        
-        // Store observer in coordinator
-        context.coordinator.timeObserver = timeObserver
-        
-        // Set up player
-        controller.player = player
-        
-        if autoPlay {
-            player.play()
-        }
-        
-        return controller
-    }
-    
-    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        controller.player?.isMuted = isMuted
-    }
-    
-    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
-        // Clean up time observer
-        if let timeObserver = coordinator.timeObserver {
-            controller.player?.removeTimeObserver(timeObserver)
-        }
-        
-        // Stop playback
-        controller.player?.pause()
-        controller.player = nil
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onMuteChanged: onMuteChanged, onTimeUpdate: onTimeUpdate)
-    }
-    
-    class Coordinator: NSObject {
-        let onMuteChanged: ((Bool) -> Void)?
-        let onTimeUpdate: ((Double) -> Void)?
-        var timeObserver: Any?
-        
-        init(onMuteChanged: ((Bool) -> Void)?, onTimeUpdate: ((Double) -> Void)?) {
-            self.onMuteChanged = onMuteChanged
-            self.onTimeUpdate = onTimeUpdate
-        }
+// MARK: - Preview
+
+struct HLSVideoPlayer_Previews: PreviewProvider {
+    static var previews: some View {
+        HLSVideoPlayer(
+            videoURL: URL(string: "https://example.com/sample.m3u8")!,
+            aspectRatio: 16.0/9.0
+        )
     }
 } 
