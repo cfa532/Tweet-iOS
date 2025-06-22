@@ -18,8 +18,36 @@ THIN=`pwd`/"thin"
 
 #FDK_AAC=`pwd`/../fdk-aac-build-script-for-iOS/fdk-aac-ios
 
+# HLS-optimized configuration flags
+# Only enable what's needed for HLS video conversion
 CONFIGURE_FLAGS="--enable-cross-compile --disable-debug --disable-programs \
-                 --disable-doc --enable-pic"
+                 --disable-doc --enable-pic \
+                 --enable-gpl --enable-libx264 --enable-libfdk-aac --enable-nonfree \
+                 --enable-encoder=libx264 --enable-encoder=aac \
+                 --enable-decoder=h264 --enable-decoder=aac \
+                 --enable-demuxer=mov --enable-demuxer=m4v --enable-demuxer=mp4 \
+                 --enable-muxer=mp4 --enable-muxer=mpegts --enable-muxer=hls \
+                 --enable-protocol=file --enable-protocol=http --enable-protocol=https \
+                 --enable-filter=scale --enable-filter=resample \
+                 --disable-avdevice --disable-postproc --disable-swresample \
+                 --disable-avfilter --disable-network --disable-encoders \
+                 --disable-decoders --disable-muxers --disable-demuxers \
+                 --disable-parsers --disable-bsfs --disable-hwaccels \
+                 --disable-indevs --disable-outdevs --disable-filters \
+                 --disable-devices --disable-ffplay --disable-ffprobe \
+                 --disable-ffmpeg --disable-avresample --disable-postproc \
+                 --disable-swresample --disable-swscale --disable-avfilter \
+                 --disable-network --disable-encoders --disable-decoders \
+                 --disable-muxers --disable-demuxers --disable-parsers \
+                 --disable-bsfs --disable-hwaccels --disable-indevs \
+                 --disable-outdevs --disable-filters --disable-devices \
+                 --disable-ffplay --disable-ffprobe --disable-ffmpeg \
+                 --enable-encoder=libx264 --enable-encoder=aac \
+                 --enable-decoder=h264 --enable-decoder=aac \
+                 --enable-demuxer=mov --enable-demuxer=m4v --enable-demuxer=mp4 \
+                 --enable-muxer=mp4 --enable-muxer=mpegts --enable-muxer=hls \
+                 --enable-protocol=file --enable-protocol=http --enable-protocol=https \
+                 --enable-filter=scale --enable-filter=resample"
 
 if [ "$X264" ]
 then

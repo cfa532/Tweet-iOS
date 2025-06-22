@@ -1,0 +1,16 @@
+libavcodec/hevc_mp4toannexb_bsf.o: src/libavcodec/hevc_mp4toannexb_bsf.c \
+  src/libavutil/intreadwrite.h libavutil/avconfig.h \
+  src/libavutil/attributes.h src/libavutil/bswap.h config.h \
+  src/libavutil/x86/bswap.h src/libavutil/x86/intreadwrite.h \
+  src/libavutil/mem.h src/libavcodec/bsf.h src/libavutil/dict.h \
+  src/libavutil/log.h src/libavutil/version.h src/libavutil/macros.h \
+  src/libavutil/rational.h src/libavcodec/codec_id.h \
+  src/libavutil/avutil.h src/libavutil/common.h src/libavutil/error.h \
+  src/libavutil/intmath.h src/libavutil/x86/intmath.h \
+  src/libavutil/internal.h src/libavutil/pixfmt.h src/libavutil/libm.h \
+  src/libavutil/intfloat.h src/libavutil/mathematics.h \
+  src/libavutil/samplefmt.h src/libavcodec/version_major.h \
+  src/libavcodec/codec_par.h src/libavutil/channel_layout.h \
+  src/libavcodec/defs.h src/libavcodec/packet.h src/libavutil/buffer.h \
+  src/libavcodec/bsf_internal.h src/libavcodec/bytestream.h \
+  src/libavutil/avassert.h src/libavcodec/hevc.h
