@@ -348,11 +348,11 @@ typedef struct AVPacketSideData {
 /**
  * Allocate a new packet side data.
  *
- * @param sd    pointer to an array of side data to which the side data should
- *              be added. *sd may be NULL, in which case the array will be
- *              initialized.
- * @param nb_sd pointer to an integer containing the number of entries in
- *              the array. The integer value will be increased by 1 on success.
+ * @param psd    pointer to an array of side data to which the side data should
+ *               be added. *psd may be NULL, in which case the array will be
+ *               initialized
+ * @param pnb_sd pointer to an integer containing the number of entries in
+ *               the array. The integer value will be increased by 1 on success.
  * @param type  side data type
  * @param size  desired side data size
  * @param flags currently unused. Must be zero

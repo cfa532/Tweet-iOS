@@ -712,6 +712,7 @@
 					"-lpthread",
 					"-lbz2",
 					"-liconv",
+					"-Wl,-w",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.Tweet;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -769,6 +770,7 @@
 					"-lpthread",
 					"-lbz2",
 					"-liconv",
+					"-Wl,-w",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.Tweet;
 				PRODUCT_NAME = "$(TARGET_NAME)";

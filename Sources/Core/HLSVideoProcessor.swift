@@ -146,7 +146,33 @@ public class HLSVideoProcessor {
 
     func canHandleVideoFormat(url: URL) async -> Bool {
         let asset = AVAsset(url: url)
-        return await asset.isPlayable
+        do {
+            return try await asset.load(.isPlayable)
+        } catch {
+            print("Error checking if video is playable: \(error)")
+            return false
+        }
+    }
+
+    /// Check if video processing is supported on this device
+    public func isVideoProcessingSupported() -> Bool {
+        // Check if the device supports video export by trying to create an export session
+        // This is a more reliable approach than checking deprecated export presets
+        let dummyURL = URL(fileURLWithPath: "")
+        let dummyAsset = AVAsset(url: dummyURL)
+        
+        // Try to create an export session with a common preset
+        // If this succeeds, video processing is supported
+        guard let exportSession = AVAssetExportSession(
+            asset: dummyAsset,
+            presetName: AVAssetExportPresetPassthrough
+        ) else {
+            return false
+        }
+        
+        // Clean up
+        exportSession.outputURL = nil
+        return true
     }
 }
 
@@ -175,11 +201,6 @@ public enum HLSProcessorError: Error, LocalizedError {
 // MARK: - Convenience Extensions
 
 extension HLSVideoProcessor {
-    
-    /// Check if video processing is supported on this device
-    public var isVideoProcessingSupported: Bool {
-        return AVAssetExportSession.exportPresets(compatibleWith: AVAsset(url: URL(fileURLWithPath: ""))).contains(AVAssetExportPresetHighestQuality)
-    }
     
     /// Get supported video formats
     public func getSupportedVideoFormats() -> [String] {

@@ -137,14 +137,9 @@ struct TweetItemView: View {
         }
         .padding()
         .background(Color(.systemBackground))
-        .background(
-            NavigationLink(destination: TweetDetailView(
-                tweet: detailTweet,
-            ), isActive: $showDetail) {
-                EmptyView()
-            }
-                .hidden()
-        )
+        .navigationDestination(isPresented: $showDetail) {
+            TweetDetailView(tweet: detailTweet)
+        }
         .task {
             isVisible = true
             tweet.isVisible = true

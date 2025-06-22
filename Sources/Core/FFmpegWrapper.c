@@ -26,6 +26,7 @@ int convert_to_hls(const char *input_path, const char *output_dir) {
     AVFormatContext *input_format_context = NULL;
     AVFormatContext *output_format_context = NULL;
     int ret;
+    int *stream_mapping = NULL;
 
     // 1. Open input file and allocate format context
     if ((ret = avformat_open_input(&input_format_context, input_path, NULL, NULL)) < 0) {
@@ -53,37 +54,47 @@ int convert_to_hls(const char *input_path, const char *output_dir) {
     }
 
     // 4. Copy streams from input to output (Remuxing)
-    int *stream_mapping = av_calloc(input_format_context->nb_streams, sizeof(int));
-    if (!stream_mapping) {
-        ret = AVERROR(ENOMEM);
-        goto end;
-    }
     int stream_index = 0;
-
-    for (int i = 0; i < input_format_context->nb_streams; i++) {
-        AVStream *out_stream;
-        AVStream *in_stream = input_format_context->streams[i];
-        const AVCodecParameters *in_codecpar = in_stream->codecpar;
-
-        if (in_codecpar->codec_type != AVMEDIA_TYPE_AUDIO &&
-            in_codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
+    
+    // Allocate stream mapping array - always allocate if there are streams
+    if (input_format_context->nb_streams > 0) {
+        stream_mapping = av_calloc(input_format_context->nb_streams, sizeof(int));
+        if (!stream_mapping) {
+            av_log(NULL, AV_LOG_ERROR, "Failed to allocate stream mapping array\n");
+            ret = AVERROR(ENOMEM);
+            goto end;
+        }
+        
+        // Initialize all entries to -1 (unused)
+        for (int i = 0; i < input_format_context->nb_streams; i++) {
             stream_mapping[i] = -1;
-            continue;
         }
+        
+        // Process streams
+        for (int i = 0; i < input_format_context->nb_streams; i++) {
+            AVStream *out_stream;
+            AVStream *in_stream = input_format_context->streams[i];
+            const AVCodecParameters *in_codecpar = in_stream->codecpar;
 
-        stream_mapping[i] = stream_index++;
-        out_stream = avformat_new_stream(output_format_context, NULL);
-        if (!out_stream) {
-            av_log(NULL, AV_LOG_ERROR, "Failed allocating output stream\n");
-            ret = AVERROR_UNKNOWN;
-            goto end;
+            if (in_codecpar->codec_type != AVMEDIA_TYPE_AUDIO &&
+                in_codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
+                continue; // Already initialized to -1
+            }
+
+            stream_mapping[i] = stream_index++;
+            out_stream = avformat_new_stream(output_format_context, NULL);
+            if (!out_stream) {
+                av_log(NULL, AV_LOG_ERROR, "Failed allocating output stream\n");
+                ret = AVERROR_UNKNOWN;
+                goto end;
+            }
+            ret = avcodec_parameters_copy(out_stream->codecpar, in_codecpar);
+            if (ret < 0) {
+                av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters: %s\n", av_err2str(ret));
+                goto end;
+            }
+            out_stream->codecpar->codec_tag = 0;
         }
-        ret = avcodec_parameters_copy(out_stream->codecpar, in_codecpar);
-        if (ret < 0) {
-            av_log(NULL, AV_LOG_ERROR, "Failed to copy codec parameters: %s\n", av_err2str(ret));
-            goto end;
-        }
-        out_stream->codecpar->codec_tag = 0;
     }
     
     av_dump_format(output_format_context, 0, output_playlist, 1);
@@ -122,7 +133,9 @@ int convert_to_hls(const char *input_path, const char *output_dir) {
             break; // EOF or error
         }
 
-        if (stream_mapping[pkt.stream_index] < 0) {
+        // Skip packets if we have no stream mapping or if this stream is not mapped
+        if (!stream_mapping || pkt.stream_index >= input_format_context->nb_streams || 
+            stream_mapping[pkt.stream_index] < 0) {
             av_packet_unref(&pkt);
             continue;
         }
@@ -154,7 +167,9 @@ end:
         avio_closep(&output_format_context->pb);
     }
     avformat_free_context(output_format_context);
-    av_free(stream_mapping);
+    if (stream_mapping) {
+        av_free(stream_mapping);
+    }
 
     if (ret < 0 && ret != AVERROR_EOF) {
         av_log(NULL, AV_LOG_ERROR, "Error occurred during conversion: %s\n", av_err2str(ret));

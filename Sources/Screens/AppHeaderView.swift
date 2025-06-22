@@ -19,15 +19,6 @@ struct AppHeaderView: View {
             }) {
                 Avatar(user: hproseInstance.appUser, size: 36)
             }
-            .background(
-                NavigationLink(
-                    destination: ProfileView(user: hproseInstance.appUser, onLogout: {}), // Replace [] with actual tweets
-                    isActive: $showProfile
-                ) {
-                    EmptyView()
-                }
-                    .hidden()
-            )
             
             Spacer()
             
@@ -55,6 +46,9 @@ struct AppHeaderView: View {
         }
         .sheet(isPresented: $isSettingsSheetPresented) {
             SettingsView()
+        }
+        .navigationDestination(isPresented: $showProfile) {
+            ProfileView(user: hproseInstance.appUser, onLogout: {})
         }
     }
 }

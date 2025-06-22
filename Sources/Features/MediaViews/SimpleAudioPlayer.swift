@@ -94,8 +94,20 @@ struct SimpleAudioPlayer: View {
         player = AVPlayer(playerItem: playerItem)
         player?.isMuted = isMuted
         
-        // Get duration
-        self.duration = playerItem.asset.duration.seconds
+        // Get duration using the new load(.duration) method
+        Task {
+            do {
+                let durationTime = try await playerItem.asset.load(.duration)
+                await MainActor.run {
+                    self.duration = durationTime.seconds
+                }
+            } catch {
+                print("Error loading duration: \(error)")
+                await MainActor.run {
+                    self.duration = 0
+                }
+            }
+        }
         
         // Add time observer
         player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { time in

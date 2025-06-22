@@ -197,21 +197,14 @@ struct ProfileView: View {
                 }
             )
         }
-        .background(
-            NavigationLink(
-                destination: Group {
-                    if let selectedUser = selectedUser {
-                        ProfileView(user: selectedUser, onLogout: nil)
-                    }
-                },
-                isActive: Binding(
-                    get: { selectedUser != nil },
-                    set: { if !$0 { selectedUser = nil } }
-                )
-            ) {
-                EmptyView()
+        .navigationDestination(isPresented: Binding(
+            get: { selectedUser != nil },
+            set: { if !$0 { selectedUser = nil } }
+        )) {
+            if let selectedUser = selectedUser {
+                ProfileView(user: selectedUser, onLogout: nil)
             }
-        )
+        }
         .navigationDestination(isPresented: $showTweetList) {
             VStack(spacing: 0) {
                 Text(tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites")

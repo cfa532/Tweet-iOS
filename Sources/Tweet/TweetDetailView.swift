@@ -73,7 +73,14 @@ struct TweetDetailView: View {
             refreshTimer = nil
             isVisible = false
         }
-        .background(profileNavigationLink)
+        .navigationDestination(isPresented: Binding(
+            get: { selectedUser != nil },
+            set: { if !$0 { selectedUser = nil } }
+        )) {
+            if let selectedUser = selectedUser {
+                ProfileView(user: selectedUser, onLogout: nil)
+            }
+        }
     }
     
     private var mediaSection: some View {
@@ -179,23 +186,6 @@ struct TweetDetailView: View {
                 )
             }
         )
-    }
-
-    private var profileNavigationLink: some View {
-        Group {
-            if let user = selectedUser {
-                NavigationLink(
-                    destination: ProfileView(user: user, onLogout: nil),
-                    isActive: Binding(
-                        get: { selectedUser != nil },
-                        set: { if !$0 { selectedUser = nil } }
-                    )
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-            }
-        }
     }
 
     private func setupInitialData() {

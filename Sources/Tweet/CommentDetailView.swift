@@ -72,7 +72,14 @@ struct CommentDetailView: View {
             try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
             await refreshComment()
         }
-        .background(profileNavigationLink)
+        .navigationDestination(isPresented: Binding(
+            get: { selectedUser != nil },
+            set: { if !$0 { selectedUser = nil } }
+        )) {
+            if let selectedUser = selectedUser {
+                ProfileView(user: selectedUser, onLogout: nil)
+            }
+        }
     }
     
     private var mediaSection: some View {
@@ -187,24 +194,6 @@ struct CommentDetailView: View {
             }
         } catch {
             print("Failed to refresh comment: \(error)")
-        }
-    }
-    
-    @ViewBuilder
-    private var profileNavigationLink: some View {
-        Group {
-            if let user = selectedUser {
-                NavigationLink(
-                    destination: ProfileView(user: user, onLogout: nil),
-                    isActive: Binding(
-                        get: { selectedUser != nil },
-                        set: { if !$0 { selectedUser = nil } }
-                    )
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-            }
         }
     }
 }
