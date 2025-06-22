@@ -99,70 +99,38 @@ public class HLSVideoProcessor {
         outputDirectory: URL,
         config: HLSConfig
     ) async throws -> URL {
-        print("DEBUG: convertToAdaptiveHLS started")
-        print("DEBUG: Input URL: \(inputURL.path)")
-        print("DEBUG: Output directory: \(outputDirectory.path)")
-        print("DEBUG: Config quality levels: \(config.qualityLevels.count)")
-        
-        // Create output directory
-        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
-        
-        // Get video asset
-        let asset = AVAsset(url: inputURL)
-        print("DEBUG: Created AVAsset")
-        
-        // Check if asset is playable
-        let isPlayable = try await asset.load(.isPlayable)
-        print("DEBUG: Asset is playable: \(isPlayable)")
-        
-        // Get available export presets
-        let exportPresets = AVAssetExportSession.exportPresets(compatibleWith: asset)
-        print("DEBUG: Available export presets: \(exportPresets)")
-        
-        // Get video tracks
-        let videoTracks = try await asset.loadTracks(withMediaType: .video)
-        print("DEBUG: Video tracks count: \(videoTracks.count)")
-        
-        if let videoTrack = videoTracks.first {
-            let naturalSize = try await videoTrack.load(.naturalSize)
-            let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
-            print("DEBUG: Video size: \(naturalSize), frame rate: \(nominalFrameRate)")
+        print("Starting HLS conversion with FFmpeg...")
+
+        // Ensure the output directory exists
+        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true, attributes: nil)
+
+        let inputPath = inputURL.path
+        let outputPath = outputDirectory.path
+
+        // The C function convert_to_hls is now available directly in Swift
+        // because we added it to the bridging header.
+        let result = convert_to_hls(inputPath, outputPath)
+
+        if result == 0 {
+            print("✅ FFmpeg HLS conversion successful.")
+            let masterPlaylistURL = outputDirectory.appendingPathComponent("master.m3u8")
+            // Check if the master playlist was actually created
+            if FileManager.default.fileExists(atPath: masterPlaylistURL.path) {
+                return masterPlaylistURL
+            } else {
+                // If the master playlist is missing, we can assume the output is a single playlist.
+                // This can happen depending on the FFmpeg commands.
+                let singlePlaylistURL = outputDirectory.appendingPathComponent("playlist.m3u8")
+                 if FileManager.default.fileExists(atPath: singlePlaylistURL.path) {
+                    return singlePlaylistURL
+                 } else {
+                    throw NSError(domain: "HLSVideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "FFmpeg conversion succeeded, but the M3U8 playlist file was not found."])
+                 }
+            }
+        } else {
+            print("❌ FFmpeg HLS conversion failed with exit code: \(result).")
+            throw NSError(domain: "HLSVideoProcessor", code: Int(result), userInfo: [NSLocalizedDescriptionKey: "FFmpeg HLS conversion failed."])
         }
-        
-        // Get audio tracks
-        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
-        print("DEBUG: Audio tracks count: \(audioTracks.count)")
-        
-        // Create quality-specific directories and playlists
-        var qualityPlaylists: [String] = []
-        
-        for (index, qualityLevel) in config.qualityLevels.enumerated() {
-            print("DEBUG: Processing quality level \(index + 1): \(qualityLevel.resolution)")
-            
-            let qualityDir = outputDirectory.appendingPathComponent("quality_\(index)")
-            try FileManager.default.createDirectory(at: qualityDir, withIntermediateDirectories: true)
-            
-            // Convert to HLS for this quality level
-            let playlistURL = try await convertToHLS(
-                inputURL: inputURL,
-                outputDirectory: qualityDir,
-                config: config,
-                qualityLevel: qualityLevel
-            )
-            
-            qualityPlaylists.append("quality_\(index)")
-        }
-        
-        // Create master playlist
-        let masterPlaylistURL = outputDirectory.appendingPathComponent("master.m3u8")
-        try createMasterPlaylist(
-            qualityLevels: config.qualityLevels,
-            qualityPlaylists: qualityPlaylists,
-            outputURL: masterPlaylistURL
-        )
-        
-        print("DEBUG: convertToAdaptiveHLS completed successfully")
-        return masterPlaylistURL
     }
     
     /// Convert video to HLS format using native iOS APIs (with quality level support)

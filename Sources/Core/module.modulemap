@@ -1,8 +1,0 @@
-module Core {
-    header "Config/AppConfig.swift"
-    header "Network/Gadget.swift"
-    header "FFmpegWrapper.swift"
-    framework module PhotosUI
-    framework module AVFoundation
-    export *
-} 
