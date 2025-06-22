@@ -1266,7 +1266,7 @@ final class HproseInstance: ObservableObject {
         
         // Construct the post service URL by replacing the port of writableUrl with cloudDrivePort
         let postServiceURL: String
-        if let originalPort = writableUrl.port {
+        if let _ = writableUrl.port {
             // Replace the existing port with cloudDrivePort
             var components = URLComponents(url: writableUrl, resolvingAgainstBaseURL: false)
             components?.port = cloudDrivePort
