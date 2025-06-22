@@ -1,7 +1,7 @@
 prefix=
 exec_prefix=
 libdir=${pcfiledir}/../../../libswresample
-includedir=src
+includedir=/Users/cfa532/Documents/GitHub/Tweet-iOS/ffmpeg-6.1
 
 Name: libswresample
 Description: FFmpeg audio resampling library

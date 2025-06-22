@@ -1,0 +1,10 @@
+libavcodec/rv30dsp.o: src/libavcodec/rv30dsp.c src/libavutil/attributes.h \
+  src/libavcodec/h264chroma.h src/libavcodec/h264qpel.h \
+  src/libavcodec/qpeldsp.h src/libavcodec/mathops.h \
+  src/libavutil/attributes_internal.h src/libavutil/common.h \
+  src/libavutil/error.h src/libavutil/macros.h libavutil/avconfig.h \
+  config.h src/libavutil/intmath.h src/libavutil/mem.h \
+  src/libavutil/internal.h src/libavutil/pixfmt.h \
+  src/libavutil/version.h src/libavutil/libm.h src/libavutil/intfloat.h \
+  src/libavutil/mathematics.h src/libavutil/rational.h \
+  src/libavcodec/rv34dsp.h

@@ -76,6 +76,8 @@ for ARCH in $ARCHS; do
         PLATFORM="iPhoneSimulator"
         CFLAGS="$CFLAGS -mios-simulator-version-min=$DEPLOYMENT_TARGET"
     else
+        # For arm64, we need to build for both device and simulator
+        # We'll build for device first, then simulator
         PLATFORM="iPhoneOS"
         CFLAGS="$CFLAGS -mios-version-min=$DEPLOYMENT_TARGET -fembed-bitcode"
         if [ "$ARCH" = "arm64" ]; then
@@ -86,7 +88,7 @@ for ARCH in $ARCHS; do
     XCRUN_SDK=`echo $PLATFORM | tr '[:upper:]' '[:lower:]'`
     CC="xcrun -sdk $XCRUN_SDK clang"
     
-    if [ "$ARCH" = "arm64" ]; then
+    if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "arm64-simulator" ]; then
         AS="gas-preprocessor.pl -arch aarch64 -- $CC"
     else
         AS="gas-preprocessor.pl -- $CC"
@@ -123,12 +125,15 @@ mkdir -p $FAT/lib
 cd $THIN/arm64/lib
 
 # Only the essential libraries for HLS
-ESSENTIAL_LIBS="libavcodec.a libavformat.a libavutil.a libswscale.a"
+ESSENTIAL_LIBS="libavcodec.a libavformat.a libavutil.a libswscale.a libswresample.a"
 
 for LIB in $ESSENTIAL_LIBS; do
     if [ -f "$LIB" ]; then
         echo "Creating universal binary for $LIB..."
-        lipo -create `find $THIN -name $LIB` -output $FAT/lib/$LIB
+        # Create device universal binary (arm64 + x86_64)
+        lipo -create thin/arm64/lib/$LIB thin/x86_64/lib/$LIB -output $FAT/lib/$LIB
+        # Create simulator universal binary (arm64-simulator + x86_64)
+        lipo -create thin/arm64-simulator/lib/$LIB thin/x86_64/lib/$LIB -output $FAT/lib/${LIB%.a}_simulator.a
     fi
 done
 

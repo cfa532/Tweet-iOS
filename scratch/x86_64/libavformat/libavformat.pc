@@ -1,7 +1,7 @@
-prefix=/Users/cfa532/Documents/GitHub/Tweet-iOS/thin/x86_64
+prefix=.
 exec_prefix=${prefix}
-libdir=/Users/cfa532/Documents/GitHub/Tweet-iOS/thin/x86_64/lib
-includedir=/Users/cfa532/Documents/GitHub/Tweet-iOS/thin/x86_64/include
+libdir=./lib
+includedir=./include
 
 Name: libavformat
 Description: FFmpeg container format library

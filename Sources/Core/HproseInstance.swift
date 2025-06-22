@@ -724,8 +724,9 @@ final class HproseInstance: ObservableObject {
     }
         
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
-        guard let service = hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        await appUser.resolveWritableUrl()
+        guard let uploadService = appUser.uploadService else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
         }
         comment.author = nil
         let params: [String: Any] = [
@@ -737,7 +738,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid
         ]
         let entry = "add_comment"
-        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = uploadService.runMApp(entry, params, nil) as? [String: Any] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Invalid response"])
         }
         if let commentId = response["commentId"] as? String,
@@ -780,9 +781,7 @@ final class HproseInstance: ObservableObject {
         fileName: String? = nil,
         referenceId: String? = nil
     ) async throws -> MimeiFileType? {
-        guard let service = hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
+        await appUser.resolveWritableUrl()
         
         print("DEBUG: uploadToIPFS called with typeIdentifier: \(typeIdentifier), fileName: \(fileName ?? "nil")")
         
@@ -841,8 +840,7 @@ final class HproseInstance: ObservableObject {
                 data: data,
                 typeIdentifier: typeIdentifier,
                 fileName: fileName,
-                referenceId: referenceId,
-                service: service
+                referenceId: referenceId
             )
         } else {
             print("DEBUG: Processing non-video file with regular upload")
@@ -852,7 +850,6 @@ final class HproseInstance: ObservableObject {
                 typeIdentifier: typeIdentifier,
                 fileName: fileName,
                 referenceId: referenceId,
-                service: service,
                 mediaType: mediaType
             )
         }
@@ -862,8 +859,7 @@ final class HproseInstance: ObservableObject {
         data: Data,
         typeIdentifier: String,
         fileName: String?,
-        referenceId: String?,
-        service: AnyObject
+        referenceId: String?
     ) async throws -> MimeiFileType? {
         print("DEBUG: uploadVideoAsHLS started with data size: \(data.count) bytes")
         
@@ -896,19 +892,13 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video format not supported by AVFoundation"])
         }
         
-        // Configure adaptive HLS settings with multiple quality levels
-        let qualityLevels = [
-            HLSVideoProcessor.QualityLevel.high,    // 720p - 2 Mbps
-            HLSVideoProcessor.QualityLevel.medium,  // 480p - 1 Mbps
-            HLSVideoProcessor.QualityLevel.low,     // 360p - 500 Kbps
-            HLSVideoProcessor.QualityLevel.ultraLow // 240p - 250 Kbps
-        ]
-        
+        // Configure a simple HLS configuration.
+        // The actual settings like segment duration are now controlled by the C wrapper.
         let hlsConfig = HLSVideoProcessor.HLSConfig(
             segmentDuration: 6.0,
-            targetResolution: CGSize(width: 480, height: 270), // Default 480p
-            keyframeInterval: 2.0,
-            qualityLevels: qualityLevels
+            targetResolution: .zero, // Not used by FFmpeg wrapper
+            keyframeInterval: 0,     // Not used by FFmpeg wrapper
+            qualityLevels: []        // Not used by FFmpeg wrapper
         )
         
         let hlsOutputDir = tempDir.appendingPathComponent("hls_output")
@@ -948,22 +938,20 @@ final class HproseInstance: ObservableObject {
                 typeIdentifier: "public.data",
                 fileName: fileName?.replacingOccurrences(of: ".mp4", with: "_hls.tar") ?? "hls_package.tar",
                 referenceId: referenceId,
-                service: service,
                 mediaType: .video
             )
             
         } catch {
             print("Error converting video to HLS: \(error)")
-            print("DEBUG: Falling back to regular video upload")
+            print("DEBUG: HLS conversion failed - throwing unsupported format error")
             
-            // Fallback: Upload original video as regular file
-            return try await uploadRegularFile(
-                data: data,
-                typeIdentifier: typeIdentifier,
-                fileName: fileName,
-                referenceId: referenceId,
-                service: service,
-                mediaType: .video
+            // Throw error indicating unsupported video format instead of falling back
+            throw NSError(
+                domain: "HproseService", 
+                code: -1, 
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Video format not supported for HLS conversion. Please use a supported video format (MP4, MOV, M4V, MKV, AVI, FLV, WMV, WebM, TS)."
+                ]
             )
         }
     }
@@ -1158,7 +1146,6 @@ final class HproseInstance: ObservableObject {
         typeIdentifier: String,
         fileName: String?,
         referenceId: String?,
-        service: AnyObject,
         mediaType: MediaType
     ) async throws -> MimeiFileType? {
         print("DEBUG: uploadRegularFile called with mediaType: \(mediaType.rawValue), data size: \(data.count) bytes")
@@ -1198,7 +1185,7 @@ final class HproseInstance: ObservableObject {
                 if data.isEmpty { break }
                 
                 let nsData = data as NSData
-                if let fsid = service.runMApp("upload_ipfs", request, [nsData]) as? String {
+                if let fsid = appUser.uploadService?.runMApp("upload_ipfs", request, [nsData]) as? String {
                     offset += Int64(data.count)
                     request["offset"] = offset
                     request["fsid"] = fsid
@@ -1211,7 +1198,7 @@ final class HproseInstance: ObservableObject {
                 request["referenceid"] = referenceId
             }
             
-            guard let cid = service.runMApp("upload_ipfs", request, nil) as? String else {
+            guard let cid = appUser.uploadService?.runMApp("upload_ipfs", request, nil) as? String else {
                 return nil
             }
             
