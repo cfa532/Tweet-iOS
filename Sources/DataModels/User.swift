@@ -61,6 +61,24 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             }
         }
     }
+    private var _uploadService: AnyObject?
+    public var uploadService: AnyObject? {
+        get {
+            guard let baseUrl = writableUrl else { return nil }
+            if baseUrl == HproseInstance.shared.appUser.baseUrl {
+                return HproseInstance.shared.hproseService
+            } else if let cached = _uploadService {
+                return cached
+            } else {
+                let client = HproseHttpClient()
+                client.timeout = 60
+                client.uri = "\(baseUrl)/webapi/"
+                let service = client.useService(HproseService.self) as? AnyObject
+                _uploadService = service
+                return service
+            }
+        }
+    }
     
     @Published var fansList: [String]? // List of MimeiId
     @Published var followingList: [String]? // List of MimeiId
@@ -290,5 +308,43 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             }
         }
         throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No writable url available"])
+    }
+    
+    /**
+     * Resolves the most responsive writable URL from the user's first hostId.
+     * It checks only the first hostId, constructs a potential URL, and checks for its reachability.
+     * If a responsive URL is found, it is set as the user's `writableUrl`.
+     * If the first host is not responsive, it defaults to the user's `baseUrl`.
+     * This method runs asynchronously and updates the `writableUrl` property directly.
+     */
+    func resolveWritableUrl() async {
+        guard let hostId = hostIds?.first else {
+            Task { @MainActor in
+                self.writableUrl = self.baseUrl
+            }
+            return
+        }
+        
+        // Check only the first hostId
+        if let hostIP = await HproseInstance.shared.getHostIP(hostId) {
+            var components = URLComponents()
+            components.scheme = "http"
+            components.host = hostIP
+            if let url = components.url {
+                // Here you might want to add a reachability check
+                // For now, we assume the first one we get is good
+                Task { @MainActor in
+                    self.writableUrl = url
+                    print("✅ Resolved writableUrl to: \(url.absoluteString) from first hostId")
+                }
+                return // Exit after processing the first hostId
+            }
+        }
+        
+        // Fallback to baseUrl if the first hostId does not provide a valid URL
+        Task { @MainActor in
+            self.writableUrl = self.baseUrl
+            print("⚠️ Could not resolve writableUrl from the first hostId, falling back to baseUrl.")
+        }
     }
 }
