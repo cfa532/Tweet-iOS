@@ -331,13 +331,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         print("[resolveWritableUrl] Current baseUrl: \(baseUrl?.absoluteString ?? "nil")")
         print("[resolveWritableUrl] Current writableUrl: \(writableUrl?.absoluteString ?? "nil")")
         
-        // If we already have a writableUrl, use it
         if let existingWritableUrl = writableUrl {
             print("[resolveWritableUrl] Using existing writableUrl: \(existingWritableUrl.absoluteString)")
             return
         }
         
-        // If we have no hostIds, fall back to baseUrl
         guard let hostIds = hostIds, !hostIds.isEmpty else {
             print("[resolveWritableUrl] No hostIds available, falling back to baseUrl")
             Task { @MainActor in
@@ -350,7 +348,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         let firstHostId = hostIds.first!
         print("[resolveWritableUrl] Attempting to resolve first hostId: \(firstHostId)")
         
-        // Check if the first hostId is valid
         guard !firstHostId.isEmpty else {
             print("[resolveWritableUrl] First hostId is empty, falling back to baseUrl")
             Task { @MainActor in
@@ -360,88 +357,46 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             return
         }
         
-        // Try to get the host IP
         if let hostIP = await HproseInstance.shared.getHostIP(firstHostId) {
             print("[resolveWritableUrl] Successfully resolved hostIP: \(hostIP) for hostId: \(firstHostId)")
-            
-            // Parse the hostIP to extract host and port
-            var host: String
-            var port: Int?
-            
-            if hostIP.contains(":") {
-                // Handle IPv6 addresses with ports: [IPv6]:port
-                if hostIP.hasPrefix("[") && hostIP.contains("]:") {
-                    let endBracketIndex = hostIP.firstIndex(of: "]") ?? hostIP.endIndex
-                    let colonIndex = hostIP.firstIndex(of: ":") ?? hostIP.endIndex
-                    
-                    if endBracketIndex < colonIndex {
-                        // Extract IPv6 address (without brackets)
-                        let ipv6Start = hostIP.index(after: hostIP.startIndex)
-                        host = String(hostIP[ipv6Start..<endBracketIndex])
-                        
-                        // Extract port
-                        let portStart = hostIP.index(after: colonIndex)
-                        if portStart < hostIP.endIndex {
-                            let portString = String(hostIP[portStart...])
-                            port = Int(portString)
-                        }
-                    } else {
-                        // Fallback: treat as regular host:port
-                        let components = hostIP.split(separator: ":", maxSplits: 1)
-                        host = String(components[0])
-                        if components.count > 1 {
-                            port = Int(components[1])
-                        }
-                    }
-                } else {
-                    // Regular IPv4 host:port
-                    let components = hostIP.split(separator: ":", maxSplits: 1)
-                    host = String(components[0])
-                    if components.count > 1 {
-                        port = Int(components[1])
-                    }
+            var urlString: String? = nil
+            if hostIP.hasPrefix("[") && hostIP.contains("]:") {
+                // IPv6 with port, e.g. [240e:391:edf:ad90:b25a:daff:fe87:21d4]:8002
+                if let endBracket = hostIP.firstIndex(of: "]"),
+                   let colon = hostIP[endBracket...].firstIndex(of: ":") {
+                    let ipv6 = String(hostIP[hostIP.index(after: hostIP.startIndex)..<endBracket])
+                    let port = String(hostIP[hostIP.index(after: colon)...]).trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+                    urlString = "http://[\(ipv6)]:\(port)"
                 }
+            } else if hostIP.contains(":") && !hostIP.contains("]:") && !hostIP.contains("[") {
+                // IPv4 with port, e.g. 60.163.239.184:8002
+                let parts = hostIP.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 {
+                    let host = parts[0]
+                    let port = parts[1]
+                    urlString = "http://\(host):\(port)"
+                }
+            } else if hostIP.hasPrefix("[") && hostIP.hasSuffix("]") {
+                // IPv6 without port, e.g. [240e:391:edf:ad90:b25a:daff:fe87:21d4]
+                let ipv6 = String(hostIP.dropFirst().dropLast())
+                urlString = "http://[\(ipv6)]"
             } else {
-                // No port specified
-                host = hostIP
+                // Plain host, no port
+                urlString = "http://\(hostIP)"
             }
-            
-            print("[resolveWritableUrl] Parsed host: \(host), port: \(port?.description ?? "nil")")
-            
-            // Construct URL
-            var components = URLComponents()
-            components.scheme = "http"
-            
-            // Handle IPv6 addresses properly
-            if host.contains(":") {
-                // IPv6 address - wrap in brackets for URL construction
-                components.host = "[\(host)]"
-            } else {
-                components.host = host
-            }
-            
-            if let port = port {
-                components.port = port
-            }
-            
-            if let url = components.url {
-                print("[resolveWritableUrl] Constructed URL: \(url.absoluteString)")
-                
-                // Here you might want to add a reachability check
-                // For now, we assume the first one we get is good
+            print("[resolveWritableUrl] Final constructed urlString: \(urlString ?? "nil")")
+            if let urlString = urlString, let url = URL(string: urlString) {
                 Task { @MainActor in
                     self.writableUrl = url
                     print("✅ Resolved writableUrl to: \(url.absoluteString) from first hostId: \(firstHostId)")
                 }
-                return // Exit after processing the first hostId
+                return
             } else {
                 print("[resolveWritableUrl] Failed to construct URL from hostIP: \(hostIP)")
             }
         } else {
             print("[resolveWritableUrl] Failed to resolve hostIP for hostId: \(firstHostId)")
         }
-        
-        // Fallback to baseUrl if the first hostId does not provide a valid URL
         print("[resolveWritableUrl] Falling back to baseUrl")
         Task { @MainActor in
             self.writableUrl = self.baseUrl
