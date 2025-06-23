@@ -23,13 +23,15 @@ struct SimpleVideoPlayer: View {
     var isMuted: Bool? = nil
     var onMuteChanged: ((Bool) -> Void)? = nil
     let isVisible: Bool
+    var aspectRatio: Float? = nil
+    var contentType: String? = nil
     
     var body: some View {
-        // Check if this is an HLS stream
-        if isHLSStream(url: url) {
+        // Check if this is an HLS stream based on content type
+        if isHLSStream(url: url, contentType: contentType) {
             HLSVideoPlayerWithControls(
-                videoURL: url,
-                aspectRatio: nil
+                videoURL: getHLSPlaylistURL(from: url),
+                aspectRatio: aspectRatio
             )
         } else {
             VideoPlayerView(
@@ -43,23 +45,67 @@ struct SimpleVideoPlayer: View {
     }
     
     /// Check if the URL points to an HLS stream
-    private func isHLSStream(url: URL) -> Bool {
-        // Check for .m3u8 extension
+    private func isHLSStream(url: URL, contentType: String?) -> Bool {
+        print("DEBUG: Checking if URL is HLS stream: \(url.absoluteString), contentType: \(contentType ?? "nil")")
+        
+        // Primary detection: Check content type
+        if let contentType = contentType?.lowercased() {
+            if contentType == "hls_video" {
+                print("DEBUG: Detected HLS by content type: \(contentType)")
+                return true
+            }
+        }
+        
+        // Fallback detection: Check for .m3u8 extension (for direct playlist URLs)
         if url.pathExtension.lowercased() == "m3u8" {
+            print("DEBUG: Detected HLS by .m3u8 extension")
             return true
         }
         
-        // Check for HLS content type in URL
+        // Fallback detection: Check for HLS content type in URL
         if url.absoluteString.contains("playlist.m3u8") {
+            print("DEBUG: Detected HLS by playlist.m3u8 in URL")
             return true
         }
         
-        // Check for HLS-related query parameters
+        // Fallback detection: Check for HLS-related query parameters
         if let query = url.query, query.contains("hls") || query.contains("stream") {
+            print("DEBUG: Detected HLS by query parameters")
             return true
         }
         
+        print("DEBUG: URL is not HLS stream")
         return false
+    }
+    
+    /// Get the correct HLS playlist URL
+    private func getHLSPlaylistURL(from url: URL) -> URL {
+        print("DEBUG: Getting HLS playlist URL from: \(url.absoluteString)")
+        
+        // If URL already ends with .m3u8, return as is
+        if url.pathExtension.lowercased() == "m3u8" {
+            print("DEBUG: URL already ends with .m3u8, returning as is")
+            return url
+        }
+        
+        // If URL contains playlist.m3u8, return as is
+        if url.absoluteString.contains("playlist.m3u8") {
+            print("DEBUG: URL contains playlist.m3u8, returning as is")
+            return url
+        }
+        
+        // For CID-based URLs (no file extension), append playlist.m3u8
+        // This handles both IPFS and regular CID-based URLs
+        if url.pathExtension.isEmpty {
+            let playlistURL = url.appendingPathComponent("playlist.m3u8")
+            print("DEBUG: CID-based URL, appending playlist.m3u8: \(playlistURL.absoluteString)")
+            return playlistURL
+        }
+        
+        // For other URLs, try to append playlist.m3u8
+        let playlistURL = url.appendingPathComponent("playlist.m3u8")
+        print("DEBUG: Appending playlist.m3u8 to URL: \(playlistURL.absoluteString)")
+        return playlistURL
     }
 }
 
@@ -157,6 +203,7 @@ struct HLSVideoPlayerWithControls: View {
     }
     
     private func setupPlayer() {
+        print("DEBUG: Setting up HLS player for URL: \(videoURL.absoluteString)")
         isLoading = true
         errorMessage = nil
         
@@ -176,9 +223,10 @@ struct HLSVideoPlayerWithControls: View {
                 
                 await MainActor.run {
                     self.duration = durationTime.seconds
+                    print("DEBUG: HLS video duration: \(durationTime.seconds) seconds")
                 }
             } catch {
-                print("Failed to get video duration: \(error)")
+                print("DEBUG: Failed to get video duration: \(error)")
             }
         }
         
@@ -190,14 +238,20 @@ struct HLSVideoPlayerWithControls: View {
                 
                 await MainActor.run {
                     if isPlayable {
+                        print("DEBUG: HLS video is playable, setting up player")
                         self.player = avPlayer
                         self.isLoading = false
+                        // Auto-play the HLS stream
+                        avPlayer.play()
+                        self.isPlaying = true
                     } else {
+                        print("DEBUG: HLS video is not playable")
                         self.errorMessage = "Video is not playable"
                         self.isLoading = false
                     }
                 }
             } catch {
+                print("DEBUG: Failed to check if HLS video is playable: \(error)")
                 await MainActor.run {
                     self.errorMessage = "Failed to load video: \(error.localizedDescription)"
                     self.isLoading = false

@@ -2057,7 +2057,7 @@ final class HproseInstance: ObservableObject {
                                             // Create MimeiFileType with the CID
                                             return MimeiFileType(
                                                 mid: cid,
-                                                type: "video", // Keep as video type for HLS
+                                                type: "hls_video", // Set as hls_video type for HLS content
                                                 size: Int64(data.count),
                                                 fileName: fileName,
                                                 timestamp: Date(),

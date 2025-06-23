@@ -110,7 +110,8 @@ struct VideoProcessingView: View {
                         SimpleVideoPlayer(
                             url: processedVideoURL,
                             autoPlay: false,
-                            isVisible: true
+                            isVisible: true,
+                            contentType: "hls_video"
                         )
                         .frame(height: 200)
                         .cornerRadius(10)

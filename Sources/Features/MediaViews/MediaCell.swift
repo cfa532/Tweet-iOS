@@ -233,7 +233,13 @@ struct MediaCell: View {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
                     if shouldLoadVideo {
-                        SimpleVideoPlayer(url: url, autoPlay: play, isVisible: isVisible)
+                        SimpleVideoPlayer(
+                            url: url, 
+                            autoPlay: play, 
+                            isVisible: isVisible,
+                            aspectRatio: attachment.aspectRatio,
+                            contentType: attachment.type
+                        )
                             .environmentObject(MuteState.shared)
                             .onTapGesture {
                                 handleVideoTap()
