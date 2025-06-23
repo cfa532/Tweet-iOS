@@ -1817,20 +1817,47 @@ final class HproseInstance: ObservableObject {
 
     /// Find IP addresses of given nodeId
     func getHostIP(_ nodeId: String) async -> String? {
-        let urlString = "\(appUser.baseUrl!.absoluteString)/getvar?name=ips&arg0=\(nodeId)"
-        guard let url = URL(string: urlString) else { return nil }
+        // Check if we have a valid baseUrl
+        guard let baseUrl = appUser.baseUrl else {
+            print("[getHostIP] Error: No baseUrl available for user")
+            return nil
+        }
+        
+        let urlString = "\(baseUrl.absoluteString)/getvar?name=ips&arg0=\(nodeId)"
+        guard let url = URL(string: urlString) else { 
+            print("[getHostIP] Error: Invalid URL constructed: \(urlString)")
+            return nil 
+        }
+        
         do {
+            print("[getHostIP] Requesting host IP for nodeId: \(nodeId) from: \(urlString)")
             let (data, response) = try await URLSession.shared.data(from: url)
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: CharacterSet(charactersIn: "\" ,\n\r")) ?? ""
-                let ips = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                if !ips.isEmpty {
-                    // For now, just return the first IP (stub for getAccessibleIP2)
-                    return ips.first
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                print("[getHostIP] Response status: \(httpResponse.statusCode)")
+                
+                if httpResponse.statusCode == 200 {
+                    let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: CharacterSet(charactersIn: "\" ,\n\r")) ?? ""
+                    print("[getHostIP] Raw response: '\(text)'")
+                    
+                    let ips = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                    print("[getHostIP] Parsed IPs: \(ips)")
+                    
+                    if !ips.isEmpty {
+                        let firstIP = ips.first!
+                        print("[getHostIP] Returning first IP: \(firstIP)")
+                        return firstIP
+                    } else {
+                        print("[getHostIP] No IPs found in response")
+                    }
+                } else {
+                    print("[getHostIP] HTTP error: \(httpResponse.statusCode)")
                 }
+            } else {
+                print("[getHostIP] Invalid HTTP response")
             }
         } catch {
-            print("[getHostIP] Error: \(error) \(urlString)")
+            print("[getHostIP] Network error: \(error) for URL: \(urlString)")
         }
         return nil
     }

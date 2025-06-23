@@ -23,7 +23,15 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     // MARK: - Properties
     @Published var mid: String
     @Published var baseUrl: URL?
-    @Published var writableUrl: URL?
+    @Published var writableUrl: URL? {
+        didSet {
+            // Clear cached upload service when writableUrl changes
+            if oldValue != writableUrl {
+                _uploadService = nil
+                print("[User] writableUrl changed from \(oldValue?.absoluteString ?? "nil") to \(writableUrl?.absoluteString ?? "nil"), cleared upload service cache")
+            }
+        }
+    }
     @Published var name: String?
     @Published var username: String?
     @Published var password: String?
@@ -318,33 +326,70 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
      * This method runs asynchronously and updates the `writableUrl` property directly.
      */
     func resolveWritableUrl() async {
-        guard let hostId = hostIds?.first else {
+        print("[resolveWritableUrl] Starting resolution for user: \(mid)")
+        print("[resolveWritableUrl] Current hostIds: \(hostIds ?? [])")
+        print("[resolveWritableUrl] Current baseUrl: \(baseUrl?.absoluteString ?? "nil")")
+        print("[resolveWritableUrl] Current writableUrl: \(writableUrl?.absoluteString ?? "nil")")
+        
+        // If we already have a writableUrl, use it
+        if let existingWritableUrl = writableUrl {
+            print("[resolveWritableUrl] Using existing writableUrl: \(existingWritableUrl.absoluteString)")
+            return
+        }
+        
+        // If we have no hostIds, fall back to baseUrl
+        guard let hostIds = hostIds, !hostIds.isEmpty else {
+            print("[resolveWritableUrl] No hostIds available, falling back to baseUrl")
             Task { @MainActor in
                 self.writableUrl = self.baseUrl
+                print("[resolveWritableUrl] Set writableUrl to baseUrl: \(self.baseUrl?.absoluteString ?? "nil")")
             }
             return
         }
         
-        // Check only the first hostId
-        if let hostIP = await HproseInstance.shared.getHostIP(hostId) {
+        let firstHostId = hostIds.first!
+        print("[resolveWritableUrl] Attempting to resolve first hostId: \(firstHostId)")
+        
+        // Check if the first hostId is valid
+        guard !firstHostId.isEmpty else {
+            print("[resolveWritableUrl] First hostId is empty, falling back to baseUrl")
+            Task { @MainActor in
+                self.writableUrl = self.baseUrl
+                print("[resolveWritableUrl] Set writableUrl to baseUrl: \(self.baseUrl?.absoluteString ?? "nil")")
+            }
+            return
+        }
+        
+        // Try to get the host IP
+        if let hostIP = await HproseInstance.shared.getHostIP(firstHostId) {
+            print("[resolveWritableUrl] Successfully resolved hostIP: \(hostIP) for hostId: \(firstHostId)")
+            
             var components = URLComponents()
             components.scheme = "http"
             components.host = hostIP
+            
             if let url = components.url {
+                print("[resolveWritableUrl] Constructed URL: \(url.absoluteString)")
+                
                 // Here you might want to add a reachability check
                 // For now, we assume the first one we get is good
                 Task { @MainActor in
                     self.writableUrl = url
-                    print("✅ Resolved writableUrl to: \(url.absoluteString) from first hostId")
+                    print("✅ Resolved writableUrl to: \(url.absoluteString) from first hostId: \(firstHostId)")
                 }
                 return // Exit after processing the first hostId
+            } else {
+                print("[resolveWritableUrl] Failed to construct URL from hostIP: \(hostIP)")
             }
+        } else {
+            print("[resolveWritableUrl] Failed to resolve hostIP for hostId: \(firstHostId)")
         }
         
         // Fallback to baseUrl if the first hostId does not provide a valid URL
+        print("[resolveWritableUrl] Falling back to baseUrl")
         Task { @MainActor in
             self.writableUrl = self.baseUrl
-            print("⚠️ Could not resolve writableUrl from the first hostId, falling back to baseUrl.")
+            print("⚠️ Could not resolve writableUrl from the first hostId (\(firstHostId)), falling back to baseUrl: \(self.baseUrl?.absoluteString ?? "nil")")
         }
     }
 }
