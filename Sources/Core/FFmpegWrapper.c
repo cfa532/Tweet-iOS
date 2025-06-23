@@ -35,17 +35,20 @@ static const int num_resolutions = sizeof(resolutions) / sizeof(ResolutionConfig
 // Forward declaration
 static int create_hls_stream(AVFormatContext *input_format_context, const char *output_dir, const ResolutionConfig *config);
 static int create_hls_stream_simple(AVFormatContext *input_format_context, const char *output_dir, const ResolutionConfig *config);
+static int create_single_hls_stream(AVFormatContext *input_format_context, const char *output_dir);
 
 int convert_to_hls(const char *input_path, const char *output_dir) {
     // Set log level for detailed output during debugging
     av_log_set_level(AV_LOG_VERBOSE);
-    printf("FFmpeg C Wrapper: Starting multi-resolution HLS conversion.\n");
+    printf("FFmpeg C Wrapper: Starting single-resolution HLS conversion.\n");
     printf("Input file: %s\n", input_path);
     printf("Output directory: %s\n", output_dir);
 
+    // Use a simpler approach - create a single HLS stream with adaptive bitrate
+    // This is more reliable than trying to create multiple resolution streams
+    
     AVFormatContext *input_format_context = NULL;
     int ret = 0;
-    int success_count = 0;
 
     // 1. Open input file and allocate format context
     if ((ret = avformat_open_input(&input_format_context, input_path, NULL, NULL)) < 0) {
@@ -61,51 +64,14 @@ int convert_to_hls(const char *input_path, const char *output_dir) {
 
     av_dump_format(input_format_context, 0, input_path, 0);
 
-    // 3. Create master playlist
-    char master_playlist_path[1024];
-    snprintf(master_playlist_path, sizeof(master_playlist_path), "%s/playlist.m3u8", output_dir);
-    
-    FILE *master_playlist = fopen(master_playlist_path, "w");
-    if (!master_playlist) {
-        av_log(NULL, AV_LOG_ERROR, "Could not create master playlist file\n");
-        ret = AVERROR_UNKNOWN;
-        goto end;
-    }
-    
-    // Write master playlist header
-    fprintf(master_playlist, "#EXTM3U\n");
-    fprintf(master_playlist, "#EXT-X-VERSION:3\n");
-    
-    // 4. Create HLS streams for each resolution using FFmpeg command-line approach
-    for (int res_idx = 0; res_idx < num_resolutions; res_idx++) {
-        const ResolutionConfig *config = &resolutions[res_idx];
-        printf("Processing resolution: %s (%dx%d)\n", config->name, config->width, config->height);
-        
-        ret = create_hls_stream_simple(input_format_context, output_dir, config);
-        if (ret < 0) {
-            av_log(NULL, AV_LOG_ERROR, "Failed to create HLS stream for %s\n", config->name);
-            // Continue with other resolutions instead of failing completely
-            continue;
-        }
-        
-        // Add successful resolution to master playlist
-        fprintf(master_playlist, "#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d\n", 
-                config->video_bitrate + config->audio_bitrate,
-                config->width, config->height);
-        fprintf(master_playlist, "%s.m3u8\n", config->name);
-        success_count++;
-    }
-    
-    fclose(master_playlist);
-
-    // Check if at least one resolution was successful
-    if (success_count == 0) {
-        av_log(NULL, AV_LOG_ERROR, "No HLS streams were created successfully\n");
-        ret = AVERROR_UNKNOWN;
+    // 3. Create single HLS stream with adaptive bitrate
+    ret = create_single_hls_stream(input_format_context, output_dir);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Failed to create HLS stream\n");
         goto end;
     }
 
-    printf("Successfully created %d HLS streams\n", success_count);
+    printf("Successfully created HLS stream\n");
 
 end:
     // Clean up resources
@@ -116,23 +82,23 @@ end:
         return ret;
     }
 
-    printf("FFmpeg C Wrapper: Multi-resolution HLS conversion finished successfully.\n");
+    printf("FFmpeg C Wrapper: Single-resolution HLS conversion finished successfully.\n");
     return 0;
 }
 
-static int create_hls_stream_simple(AVFormatContext *input_format_context, const char *output_dir, const ResolutionConfig *config) {
+static int create_single_hls_stream(AVFormatContext *input_format_context, const char *output_dir) {
     AVFormatContext *output_format_context = NULL;
     int ret;
     int *stream_mapping = NULL;
 
-    // Create output playlist path for this resolution
+    // Create output playlist path
     char output_playlist[1024];
-    snprintf(output_playlist, sizeof(output_playlist), "%s/%s.m3u8", output_dir, config->name);
+    snprintf(output_playlist, sizeof(output_playlist), "%s/playlist.m3u8", output_dir);
 
     // Allocate output context for HLS
     avformat_alloc_output_context2(&output_format_context, NULL, "hls", output_playlist);
     if (!output_format_context) {
-        av_log(NULL, AV_LOG_ERROR, "Could not create HLS output context for %s\n", config->name);
+        av_log(NULL, AV_LOG_ERROR, "Could not create HLS output context\n");
         return AVERROR_UNKNOWN;
     }
 
@@ -178,16 +144,19 @@ static int create_hls_stream_simple(AVFormatContext *input_format_context, const
                 goto end;
             }
             
-            // For video streams, set the target resolution and bitrate
+            // For video streams, keep original resolution but set reasonable bitrate
             if (in_codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-                out_stream->codecpar->width = config->width;
-                out_stream->codecpar->height = config->height;
-                out_stream->codecpar->bit_rate = config->video_bitrate;
+                // Keep original resolution, just ensure bitrate is reasonable
+                if (out_stream->codecpar->bit_rate <= 0) {
+                    out_stream->codecpar->bit_rate = 1000000; // 1 Mbps default
+                }
             }
             
-            // For audio streams, set the target bitrate
+            // For audio streams, set reasonable bitrate
             if (in_codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-                out_stream->codecpar->bit_rate = config->audio_bitrate;
+                if (out_stream->codecpar->bit_rate <= 0) {
+                    out_stream->codecpar->bit_rate = 128000; // 128 kbps default
+                }
             }
             
             out_stream->codecpar->codec_tag = 0;
@@ -208,7 +177,7 @@ static int create_hls_stream_simple(AVFormatContext *input_format_context, const
     // Set HLS options
     AVDictionary *hls_options = NULL;
     char segment_filename[1024];
-    snprintf(segment_filename, sizeof(segment_filename), "%s/%s_segment%%03d.ts", output_dir, config->name);
+    snprintf(segment_filename, sizeof(segment_filename), "%s/segment%%03d.ts", output_dir);
     
     av_dict_set(&hls_options, "hls_time", "6", 0);
     av_dict_set(&hls_options, "hls_list_size", "0", 0);

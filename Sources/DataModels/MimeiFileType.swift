@@ -5,7 +5,7 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
     var mid: String
     var type: String    // Image
     let size: Int64?
-    let fileName: String?
+    var fileName: String?
     let timestamp: Date
     let aspectRatio: Float?
     var url: String?

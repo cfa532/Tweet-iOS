@@ -108,7 +108,7 @@ class Gadget {
 //    }
     
     // Helper function to check if an IP is private
-    static private func isPrivateIP(_ ip: String) -> Bool {
+    static func isPrivateIP(_ ip: String) -> Bool {
         // IPv4 private ranges
         if ip.starts(with: "10.") ||
            ip.starts(with: "192.168.") ||
@@ -134,13 +134,37 @@ class Gadget {
 
     // Check if an IP is a valid public IP address
     static func isValidPublicIpAddress(_ fullIp: String) -> Bool {
-        let ip = fullIp.split(separator: ":").first?.trimmingCharacters(in: CharacterSet(charactersIn: "[]")) ?? ""
-        if isIPv6Address(ip) {
-            return true
+        // Extract clean IP address from the full IP string (which may include port)
+        let cleanIP: String
+        
+        if fullIp.hasPrefix("[") && fullIp.contains("]:") {
+            // IPv6 with port, e.g. [240e:391:edf:ad90:b25a:daff:fe87:21d4]:8002
+            if let endBracket = fullIp.firstIndex(of: "]") {
+                cleanIP = String(fullIp[fullIp.index(after: fullIp.startIndex)..<endBracket])
+            } else {
+                return false
+            }
+        } else if fullIp.contains(":") && !fullIp.contains("]:") && !fullIp.contains("[") {
+            // IPv4 with port, e.g. 60.163.239.184:8002
+            let parts = fullIp.split(separator: ":", maxSplits: 1)
+            if parts.count == 2 {
+                cleanIP = String(parts[0])
+            } else {
+                return false
+            }
+        } else {
+            // No port specified, use the full string
+            cleanIP = fullIp.hasPrefix("[") && fullIp.hasSuffix("]") ? 
+                String(fullIp.dropFirst().dropLast()) : fullIp
+        }
+        
+        if isIPv6Address(cleanIP) {
+            // For IPv6, check if it's NOT a private address
+            return !isPrivateIP(cleanIP)
         } else {
             let ipv4Regex = "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
-            guard ip.range(of: ipv4Regex, options: .regularExpression) != nil else { return false }
-            let octets = ip.split(separator: ".").compactMap { UInt8($0) }
+            guard cleanIP.range(of: ipv4Regex, options: .regularExpression) != nil else { return false }
+            let octets = cleanIP.split(separator: ".").compactMap { UInt8($0) }
             guard octets.count == 4 else { return false }
             // Check for private IP ranges
             if octets[0] == 10 { return false }
@@ -162,7 +186,7 @@ class Gadget {
         for it in ipList {
             let i = it.split(separator: ":").dropLast().joined(separator: ":").trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
             guard let p = Int(it.split(separator: ":").last ?? "") else { continue }
-            if !(8000...8999).contains(p) { continue }
+            if !(8000...9000).contains(p) { continue }
             if Gadget.isIPv6Address(i) {
                 ip6 = "[i]:\(p)"
             } else {

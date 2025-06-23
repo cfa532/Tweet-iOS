@@ -23,15 +23,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     // MARK: - Properties
     @Published var mid: String
     @Published var baseUrl: URL?
-    @Published var writableUrl: URL? {
-        didSet {
-            // Clear cached upload service when writableUrl changes
-            if oldValue != writableUrl {
-                _uploadService = nil
-                print("[User] writableUrl changed from \(oldValue?.absoluteString ?? "nil") to \(writableUrl?.absoluteString ?? "nil"), cleared upload service cache")
-            }
-        }
-    }
+    @Published var writableUrl: URL?
     @Published var name: String?
     @Published var username: String?
     @Published var password: String?
@@ -324,6 +316,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
      * If a responsive URL is found, it is set as the user's `writableUrl`.
      * If the first host is not responsive, it defaults to the user's `baseUrl`.
      * This method runs asynchronously and updates the `writableUrl` property directly.
+     * Only accepts public IP addresses with ports between 8000 and 9000.
      */
     func resolveWritableUrl() async {
         print("[resolveWritableUrl] Starting resolution for user: \(mid)")
@@ -337,11 +330,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
         
         guard let hostIds = hostIds, !hostIds.isEmpty else {
-            print("[resolveWritableUrl] No hostIds available, falling back to baseUrl")
-            Task { @MainActor in
-                self.writableUrl = self.baseUrl
-                print("[resolveWritableUrl] Set writableUrl to baseUrl: \(self.baseUrl?.absoluteString ?? "nil")")
-            }
+            print("[resolveWritableUrl] No hostIds available, keeping existing writableUrl")
             return
         }
         
@@ -349,43 +338,75 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         print("[resolveWritableUrl] Attempting to resolve first hostId: \(firstHostId)")
         
         guard !firstHostId.isEmpty else {
-            print("[resolveWritableUrl] First hostId is empty, falling back to baseUrl")
-            Task { @MainActor in
-                self.writableUrl = self.baseUrl
-                print("[resolveWritableUrl] Set writableUrl to baseUrl: \(self.baseUrl?.absoluteString ?? "nil")")
-            }
+            print("[resolveWritableUrl] First hostId is empty, keeping existing writableUrl")
             return
         }
         
         if let hostIP = await HproseInstance.shared.getHostIP(firstHostId) {
             print("[resolveWritableUrl] Successfully resolved hostIP: \(hostIP) for hostId: \(firstHostId)")
-            var urlString: String? = nil
+            
+            // Extract clean IP and port first
+            let (cleanIP, port): (String, String)
+            
             if hostIP.hasPrefix("[") && hostIP.contains("]:") {
                 // IPv6 with port, e.g. [240e:391:edf:ad90:b25a:daff:fe87:21d4]:8002
                 if let endBracket = hostIP.firstIndex(of: "]"),
                    let colon = hostIP[endBracket...].firstIndex(of: ":") {
                     let ipv6 = String(hostIP[hostIP.index(after: hostIP.startIndex)..<endBracket])
-                    let port = String(hostIP[hostIP.index(after: colon)...]).trimmingCharacters(in: CharacterSet(charactersIn: ":"))
-                    urlString = "http://[\(ipv6)]:\(port)"
+                    port = String(hostIP[hostIP.index(after: colon)...]).trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+                    cleanIP = ipv6
+                } else {
+                    print("[resolveWritableUrl] Failed to parse IPv6 with port: \(hostIP)")
+                    print("⚠️ Failed to parse IPv6 with port (\(hostIP)), keeping existing writableUrl")
+                    return
                 }
             } else if hostIP.contains(":") && !hostIP.contains("]:") && !hostIP.contains("[") {
                 // IPv4 with port, e.g. 60.163.239.184:8002
                 let parts = hostIP.split(separator: ":", maxSplits: 1)
                 if parts.count == 2 {
-                    let host = parts[0]
-                    let port = parts[1]
-                    urlString = "http://\(host):\(port)"
+                    cleanIP = String(parts[0])
+                    port = String(parts[1])
+                } else {
+                    print("[resolveWritableUrl] Failed to parse IPv4 with port: \(hostIP)")
+                    print("⚠️ Failed to parse IPv4 with port (\(hostIP)), keeping existing writableUrl")
+                    return
                 }
-            } else if hostIP.hasPrefix("[") && hostIP.hasSuffix("]") {
-                // IPv6 without port, e.g. [240e:391:edf:ad90:b25a:daff:fe87:21d4]
-                let ipv6 = String(hostIP.dropFirst().dropLast())
-                urlString = "http://[\(ipv6)]"
             } else {
-                // Plain host, no port
-                urlString = "http://\(hostIP)"
+                // No port specified, use default port 8010
+                cleanIP = hostIP.hasPrefix("[") && hostIP.hasSuffix("]") ? 
+                    String(hostIP.dropFirst().dropLast()) : hostIP
+                port = "8010"
             }
-            print("[resolveWritableUrl] Final constructed urlString: \(urlString ?? "nil")")
-            if let urlString = urlString, let url = URL(string: urlString) {
+            
+            // Validate that the cleanIP is a valid public IP address
+            print("[resolveWritableUrl] Validating cleanIP: \(cleanIP)")
+            print("[resolveWritableUrl] Is IPv6: \(Gadget.isIPv6Address(cleanIP))")
+            print("[resolveWritableUrl] Is private: \(Gadget.isPrivateIP(cleanIP))")
+            print("[resolveWritableUrl] Is valid public: \(Gadget.isValidPublicIpAddress(cleanIP))")
+            
+            guard Gadget.isValidPublicIpAddress(cleanIP) else {
+                print("[resolveWritableUrl] CleanIP is not a valid public IP address: \(cleanIP)")
+                print("⚠️ Invalid public IP address (\(cleanIP)), keeping existing writableUrl")
+                return
+            }
+            
+            // Validate port is between 8000-9000
+            guard let portNumber = Int(port), (8000...9000).contains(portNumber) else {
+                print("[resolveWritableUrl] Port \(port) is not in valid range 8000-9000")
+                print("⚠️ Invalid port (\(port)), keeping existing writableUrl")
+                return
+            }
+            
+            // Construct URL string
+            var urlString: String
+            if Gadget.isIPv6Address(cleanIP) {
+                urlString = "http://[\(cleanIP)]:\(port)"
+            } else {
+                urlString = "http://\(cleanIP):\(port)"
+            }
+            
+            print("[resolveWritableUrl] Final constructed urlString: \(urlString)")
+            if let url = URL(string: urlString) {
                 Task { @MainActor in
                     self.writableUrl = url
                     print("✅ Resolved writableUrl to: \(url.absoluteString) from first hostId: \(firstHostId)")
@@ -397,10 +418,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         } else {
             print("[resolveWritableUrl] Failed to resolve hostIP for hostId: \(firstHostId)")
         }
-        print("[resolveWritableUrl] Falling back to baseUrl")
-        Task { @MainActor in
-            self.writableUrl = self.baseUrl
-            print("⚠️ Could not resolve writableUrl from the first hostId (\(firstHostId)), falling back to baseUrl: \(self.baseUrl?.absoluteString ?? "nil")")
-        }
+        print("[resolveWritableUrl] Keeping existing writableUrl")
+        print("⚠️ Could not resolve writableUrl from the first hostId (\(firstHostId)), keeping existing writableUrl")
     }
 }

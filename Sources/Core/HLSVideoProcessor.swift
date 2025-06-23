@@ -148,7 +148,7 @@ public class HLSVideoProcessor {
             return nil
         }
         let size = try await track.load(.naturalSize)
-        return size.width == 0 ? nil : Float(size.height / size.width)
+        return size.height == 0 ? nil : Float(size.width / size.height)
     }
 
     func canHandleVideoFormat(url: URL) async -> Bool {
