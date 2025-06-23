@@ -43,6 +43,11 @@ struct TweetDetailView: View {
                         isInProfile: false,
                         onAvatarTap: { user in
                             // Handle avatar tap - navigate to profile
+                        },
+                        onTap: { tweet in
+                            // Handle tweet tap - navigate to tweet detail
+                            // For now, we'll just print since this view doesn't have navigation state
+                            print("Tweet tapped: \(tweet.mid)")
                         }
                     )
                 }

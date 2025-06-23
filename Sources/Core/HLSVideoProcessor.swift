@@ -100,13 +100,20 @@ public class HLSVideoProcessor {
         )
     }
     
+    /// Check if video format is supported based on file extension
+    public func isSupportedVideoFormat(_ fileName: String) -> Bool {
+        let supportedExtensions = ["mp4", "mov", "m4v", "mkv", "avi", "flv", "wmv", "webm", "ts", "mts", "m2ts", "vob", "dat", "ogv", "ogg", "f4v", "asf"]
+        let fileExtension = fileName.components(separatedBy: ".").last?.lowercased()
+        return fileExtension != nil && supportedExtensions.contains(fileExtension!)
+    }
+    
     /// Convert video to adaptive HLS format with multiple quality levels
     public func convertToAdaptiveHLS(
         inputURL: URL,
         outputDirectory: URL,
         config: HLSConfig
     ) async throws -> URL {
-        print("Starting HLS conversion with FFmpeg...")
+        print("Starting multi-resolution HLS conversion with FFmpeg...")
 
         // Ensure the output directory exists
         try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true, attributes: nil)
@@ -119,7 +126,7 @@ public class HLSVideoProcessor {
         
         switch result {
         case .success(let playlistPath):
-            print("✅ FFmpeg HLS conversion successful.")
+            print("✅ FFmpeg multi-resolution HLS conversion successful.")
             let playlistURL = URL(fileURLWithPath: playlistPath)
             
             if FileManager.default.fileExists(atPath: playlistURL.path) {
@@ -223,13 +230,6 @@ extension HLSVideoProcessor {
             // Audio formats (for video with audio)
             "mp3", "aac", "wav", "flac", "m4a"
         ]
-    }
-    
-    /// Check if a file is a supported video format
-    public func isSupportedVideoFormat(_ filePath: String) -> Bool {
-        let supportedExtensions = getSupportedVideoFormats()
-        let fileExtension = (filePath as NSString).pathExtension.lowercased()
-        return supportedExtensions.contains(fileExtension)
     }
     
     /// Create adaptive HLS with standard quality levels

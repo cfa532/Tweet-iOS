@@ -892,8 +892,7 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video format not supported by AVFoundation"])
         }
         
-        // Configure a simple HLS configuration.
-        // The actual settings like segment duration are now controlled by the C wrapper.
+        // Configure HLS configuration for multi-resolution output
         let hlsConfig = HLSVideoProcessor.HLSConfig(
             segmentDuration: 6.0,
             targetResolution: .zero, // Not used by FFmpeg wrapper
@@ -903,10 +902,10 @@ final class HproseInstance: ObservableObject {
         
         let hlsOutputDir = tempDir.appendingPathComponent("hls_output")
         
-        print("DEBUG: Starting HLS conversion to: \(hlsOutputDir.path)")
+        print("DEBUG: Starting multi-resolution HLS conversion to: \(hlsOutputDir.path)")
         
         do {
-            // Convert video to adaptive HLS format
+            // Convert video to adaptive HLS format with multiple resolutions (360p, 480p, 720p)
             print("DEBUG: Calling convertToAdaptiveHLS...")
             _ = try await hlsProcessor.convertToAdaptiveHLS(
                 inputURL: originalVideoPath,
@@ -914,7 +913,7 @@ final class HproseInstance: ObservableObject {
                 config: hlsConfig
             )
             
-            print("DEBUG: HLS conversion completed successfully")
+            print("DEBUG: Multi-resolution HLS conversion completed successfully")
             
             // Create a simple archive of HLS files
             let archivePath = tempDir.appendingPathComponent("hls_package.tar")
@@ -933,7 +932,7 @@ final class HproseInstance: ObservableObject {
             
             // Upload archive package using original upload logic
             print("DEBUG: Uploading HLS archive...")
-            return try await uploadRegularFile(
+            let uploadedFile = try await uploadRegularFile(
                 data: archiveData,
                 typeIdentifier: "public.data",
                 fileName: fileName?.replacingOccurrences(of: ".mp4", with: "_hls.tar") ?? "hls_package.tar",
@@ -941,16 +940,30 @@ final class HproseInstance: ObservableObject {
                 mediaType: .video
             )
             
+            // Check if upload was successful
+            guard let uploadedFile = uploadedFile else {
+                throw NSError(
+                    domain: "HproseService", 
+                    code: -1, 
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Failed to upload HLS archive package. Tweet upload will be cancelled."
+                    ]
+                )
+            }
+            
+            print("DEBUG: HLS archive uploaded successfully with CID: \(uploadedFile.mid)")
+            return uploadedFile
+            
         } catch {
             print("Error converting video to HLS: \(error)")
-            print("DEBUG: HLS conversion failed - throwing unsupported format error")
+            print("DEBUG: HLS conversion failed - throwing error to fail tweet upload")
             
-            // Throw error indicating unsupported video format instead of falling back
+            // Throw error indicating video processing failure
             throw NSError(
                 domain: "HproseService", 
                 code: -1, 
                 userInfo: [
-                    NSLocalizedDescriptionKey: "Video format not supported for HLS conversion. Please use a supported video format (MP4, MOV, M4V, MKV, AVI, FLV, WMV, WebM, TS)."
+                    NSLocalizedDescriptionKey: "Video processing failed: \(error.localizedDescription). Tweet upload will be cancelled."
                 ]
             )
         }
@@ -1150,23 +1163,27 @@ final class HproseInstance: ObservableObject {
     ) async throws -> MimeiFileType? {
         print("DEBUG: uploadRegularFile called with mediaType: \(mediaType.rawValue), data size: \(data.count) bytes")
         
-        // Handle video files differently - upload HLS tar to post service
-        if mediaType == .video {
-            print("DEBUG: Detected video file, uploading to post service")
-            return try await uploadVideoToPostService(
-                data: data,
-                fileName: fileName,
-                referenceId: referenceId
-            )
+        // Use a mutable variable for uploadService
+        var uploadService = appUser.uploadService
+        if uploadService == nil {
+            print("DEBUG: Upload service is nil - resolving writable URL...")
+            await appUser.resolveWritableUrl()
+            uploadService = appUser.uploadService
+            if uploadService == nil {
+                print("DEBUG: Upload service still nil after resolving writable URL")
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
+            }
+            print("DEBUG: Upload service resolved successfully")
         }
-        
-        print("DEBUG: Processing non-video file with regular upload logic")
+        let uploadServiceUnwrapped = uploadService!
         
         // Handle non-video files with original logic
         // Create temporary file
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try data.write(to: tempURL)
         defer { try? FileManager.default.removeItem(at: tempURL) }
+        
+        print("DEBUG: Created temporary file at: \(tempURL.path)")
         
         var offset: Int64 = 0
         let chunkSize = 1024 * 1024 // 1MB chunks
@@ -1176,21 +1193,36 @@ final class HproseInstance: ObservableObject {
             "offset": offset
         ]
         
+        print("DEBUG: Starting chunked upload with chunk size: \(chunkSize)")
+        
         do {
             let fileHandle = try FileHandle(forReadingFrom: tempURL)
             defer { try? fileHandle.close() }
             
+            var chunkCount = 0
             while true {
                 let data = fileHandle.readData(ofLength: chunkSize)
                 if data.isEmpty { break }
                 
+                chunkCount += 1
+                print("DEBUG: Uploading chunk \(chunkCount), size: \(data.count) bytes")
+                
                 let nsData = data as NSData
-                if let fsid = appUser.uploadService?.runMApp("upload_ipfs", request, [nsData]) as? String {
+                let response = uploadServiceUnwrapped.runMApp("upload_ipfs", request, [nsData])
+                print("DEBUG: Chunk \(chunkCount) upload response: \(String(describing: response))")
+                
+                if let fsid = response as? String {
                     offset += Int64(data.count)
                     request["offset"] = offset
                     request["fsid"] = fsid
+                    print("DEBUG: Chunk \(chunkCount) uploaded successfully, fsid: \(fsid), offset: \(offset)")
+                } else {
+                    print("DEBUG: Chunk \(chunkCount) upload failed, response: \(String(describing: response))")
+                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk \(chunkCount)"])
                 }
             }
+            
+            print("DEBUG: All chunks uploaded, finalizing upload...")
             
             // Mark upload as finished
             request["finished"] = "true"
@@ -1198,9 +1230,15 @@ final class HproseInstance: ObservableObject {
                 request["referenceid"] = referenceId
             }
             
-            guard let cid = appUser.uploadService?.runMApp("upload_ipfs", request, nil) as? String else {
-                return nil
+            let finalResponse = uploadServiceUnwrapped.runMApp("upload_ipfs", request, nil)
+            print("DEBUG: Final upload response: \(String(describing: finalResponse))")
+            
+            guard let cid = finalResponse as? String else {
+                print("DEBUG: Final upload failed, no CID returned")
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get CID from final upload response"])
             }
+            
+            print("DEBUG: Upload completed successfully with CID: \(cid)")
             
             // Get file attributes
             let fileAttributes = try FileManager.default.attributesOfItem(atPath: tempURL.path)
@@ -1228,137 +1266,7 @@ final class HproseInstance: ObservableObject {
             throw error
         }
     }
-    
-    private func uploadVideoToPostService(
-        data: Data,
-        fileName: String?,
-        referenceId: String?
-    ) async throws -> MimeiFileType? {
-        print("DEBUG: ===== uploadVideoToPostService ENTRY POINT =====")
-        print("DEBUG: uploadVideoToPostService started with data size: \(data.count) bytes")
-        print("DEBUG: fileName: \(fileName ?? "nil")")
-        print("DEBUG: referenceId: \(referenceId ?? "nil")")
         
-        // Get user's writable URL and cloud drive port
-        guard let writableUrl = appUser.writableUrl ?? appUser.baseUrl else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "User writable URL not available"])
-        }
-        
-        print("DEBUG: Using writable URL: \(writableUrl.absoluteString)")
-        
-        // Use cloudDrivePort with its default value (8010) if nil
-        let cloudDrivePort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-        
-        print("DEBUG: Using cloud drive port: \(cloudDrivePort)")
-        
-        // Construct the post service URL by replacing the port of writableUrl with cloudDrivePort
-        let postServiceURL: String
-        if let _ = writableUrl.port {
-            // Replace the existing port with cloudDrivePort
-            var components = URLComponents(url: writableUrl, resolvingAgainstBaseURL: false)
-            components?.port = cloudDrivePort
-            postServiceURL = "\(components?.url?.absoluteString ?? writableUrl.absoluteString)/extract-tar"
-        } else {
-            // writableUrl doesn't have a port, append cloudDrivePort
-            postServiceURL = "\(writableUrl.absoluteString):\(cloudDrivePort)/extract-tar"
-        }
-        
-        print("DEBUG: Post service URL: \(postServiceURL)")
-        
-        guard let url = URL(string: postServiceURL) else {
-            print("DEBUG: Failed to create URL from: \(postServiceURL)")
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid post service URL: \(postServiceURL)"])
-        }
-        
-        print("DEBUG: Created URL successfully: \(url.absoluteString)")
-        
-        // Create the request
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        
-        // Create multipart form data with a simpler boundary
-        let boundary = "----WebKitFormBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        
-        print("DEBUG: Using boundary: \(boundary)")
-        
-        var body = Data()
-        
-        // Add reference ID if provided
-        if let referenceId = referenceId {
-            print("DEBUG: Adding referenceId: \(referenceId)")
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(referenceId)\r\n".data(using: .utf8)!)
-        }
-        
-        // Add the tar file with the correct field name
-        let finalFileName = fileName ?? "hls_package.tar"
-        print("DEBUG: Adding tarFile with filename: \(finalFileName)")
-        
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"tarFile\"; filename=\"\(finalFileName)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/x-tar\r\n\r\n".data(using: .utf8)!)
-        body.append(data)
-        body.append("\r\n".data(using: .utf8)!)
-        
-        // End boundary
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-        
-        request.httpBody = body
-        
-        print("DEBUG: Request body size: \(body.count) bytes")
-        print("DEBUG: Content-Type header: \(request.value(forHTTPHeaderField: "Content-Type") ?? "nil")")
-        print("DEBUG: Request URL: \(request.url?.absoluteString ?? "nil")")
-        print("DEBUG: Request method: \(request.httpMethod ?? "nil")")
-        print("DEBUG: Making HTTP request to post service with multipart form data...")
-        
-        do {
-            // Make the request
-            let (responseData, response) = try await URLSession.shared.data(for: request)
-            
-            print("DEBUG: HTTP request completed successfully")
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from post service"])
-            }
-            
-            print("DEBUG: HTTP response status code: \(httpResponse.statusCode)")
-            print("DEBUG: HTTP response headers: \(httpResponse.allHeaderFields)")
-            
-            guard httpResponse.statusCode == 200 else {
-                let errorMessage = String(data: responseData, encoding: .utf8) ?? "Unknown error"
-                print("DEBUG: Post service error: \(errorMessage)")
-                print("DEBUG: Response data: \(String(data: responseData, encoding: .utf8) ?? "nil")")
-                throw NSError(domain: "HproseService", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Post service error: \(errorMessage)"])
-            }
-            
-            // Parse the response to get the mid
-            guard let mid = String(data: responseData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !mid.isEmpty else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from post service - no mid returned"])
-            }
-            
-            print("DEBUG: Successfully uploaded HLS video with mid: \(mid)")
-            
-            // Create MimeiFileType for HLS video
-            return MimeiFileType(
-                mid: mid,
-                type: "hls_video", // Special type for HLS videos
-                size: Int64(data.count),
-                fileName: fileName,
-                timestamp: Date(),
-                aspectRatio: nil, // HLS videos don't need aspect ratio
-                url: nil
-            )
-            
-        } catch {
-            print("DEBUG: HTTP request failed with error: \(error)")
-            print("DEBUG: Error details: \(error.localizedDescription)")
-            throw error
-        }
-    }
-    
     private func getVideoAspectRatio(url: URL) async throws -> Float? {
         return try await HLSVideoProcessor.shared.getVideoAspectRatio(url: url)
     }
@@ -1631,12 +1539,26 @@ final class HproseInstance: ObservableObject {
                         uploadedAttachments.append(contentsOf: pairAttachments)
                     } catch {
                         print("Error uploading pair \(index + 1): \(error)")
+                        await MainActor.run {
+                            NotificationCenter.default.post(
+                                name: .backgroundUploadFailed,
+                                object: nil,
+                                userInfo: ["error": error]
+                            )
+                        }
                         return
                     }
                 }
                 
                 if itemData.count != uploadedAttachments.count {
-                    print("Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)")
+                    let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
+                    await MainActor.run {
+                        NotificationCenter.default.post(
+                            name: .backgroundUploadFailed,
+                            object: nil,
+                            userInfo: ["error": error]
+                        )
+                    }
                     return
                 }
                 
@@ -1653,14 +1575,23 @@ final class HproseInstance: ObservableObject {
                         print("Tweet published successfully \(uploadedTweet)")
                     }
                 } else {
+                    let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
                     await MainActor.run {
-                        print("Failed to publish tweet")
+                        NotificationCenter.default.post(
+                            name: .backgroundUploadFailed,
+                            object: nil,
+                            userInfo: ["error": error]
+                        )
                     }
                 }
             } catch {
                 print("Error in background upload: \(error)")
                 await MainActor.run {
-                    print("Error during upload: \(error.localizedDescription)")
+                    NotificationCenter.default.post(
+                        name: .backgroundUploadFailed,
+                        object: nil,
+                        userInfo: ["error": error]
+                    )
                 }
             }
         }

@@ -13,6 +13,7 @@ struct CommentItemView: View {
     @ObservedObject var comment: Tweet
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
+    var onTap: ((Tweet) -> Void)? = nil
     var commentsVM: CommentsViewModel? = nil
     @State private var showDetail = false
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -38,7 +39,7 @@ struct CommentItemView: View {
                 .onTapGesture { showDetail = true }
                 TweetItemBodyView(tweet: comment, enableTap: false)
                     .contentShape(Rectangle())
-                    .onTapGesture { showDetail = true }
+                    .onTapGesture { onTap?(comment) }
                     .padding(.top, -12)
                 TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
                     .padding(.top, 8)
@@ -46,9 +47,6 @@ struct CommentItemView: View {
         }
         .padding()
         .background(Color(.systemBackground))
-        .navigationDestination(isPresented: $showDetail) {
-            CommentDetailView(comment: comment, parentTweet: parentTweet)
-        }
     }
 }
 

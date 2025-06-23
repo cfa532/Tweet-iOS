@@ -181,7 +181,12 @@ struct CommentDetailView: View {
                 CommentItemView(
                     parentTweet: comment,
                     comment: reply,
-                    onAvatarTap: { user in selectedUser = user }
+                    onAvatarTap: { user in selectedUser = user },
+                    onTap: { reply in
+                        // Handle reply tap - navigate to reply detail
+                        // For now, we'll just print since this view doesn't have navigation state
+                        print("Reply tapped: \(reply.mid)")
+                    }
                 )
             }
         )

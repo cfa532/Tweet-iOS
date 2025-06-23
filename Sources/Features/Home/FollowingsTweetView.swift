@@ -4,12 +4,14 @@ import SwiftUI
 struct FollowingsTweetView: View {
     @Binding var isLoading: Bool
     let onAvatarTap: (User) -> Void
+    @Binding var selectedTweet: Tweet?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @StateObject private var viewModel: FollowingsTweetViewModel
 
-    init(isLoading: Binding<Bool>, onAvatarTap: @escaping (User) -> Void) {
+    init(isLoading: Binding<Bool>, onAvatarTap: @escaping (User) -> Void, selectedTweet: Binding<Tweet?>) {
         self._isLoading = isLoading
         self.onAvatarTap = onAvatarTap
+        self._selectedTweet = selectedTweet
         self._viewModel = StateObject(wrappedValue: FollowingsTweetViewModel(hproseInstance: HproseInstance.shared))
     }
 
@@ -54,6 +56,9 @@ struct FollowingsTweetView: View {
                         isInProfile: false,
                         onAvatarTap: { user in
                             onAvatarTap(user)
+                        },
+                        onTap: { tweet in
+                            selectedTweet = tweet
                         },
                         onRemove: { tweetId in
                             if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {

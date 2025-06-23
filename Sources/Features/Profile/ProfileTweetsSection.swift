@@ -160,6 +160,11 @@ struct ProfileTweetsSection: View {
                             onAvatarTap: { user in
                                 onUserSelect(user)
                             },
+                            onTap: { tweet in
+                                // Handle tweet tap - navigate to tweet detail
+                                // For now, we'll just print since this view doesn't have navigation state
+                                print("Tweet tapped: \(tweet.mid)")
+                            },
                             onRemove: { tweetId in
                                 if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {
                                     viewModel.tweets.remove(at: idx)

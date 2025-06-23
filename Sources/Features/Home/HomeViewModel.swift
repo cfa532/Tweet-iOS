@@ -9,6 +9,7 @@ struct HomeView: View {
     @State private var isScrolling = false
     @State private var scrollOffset: CGFloat = 0
     @State private var selectedUser: User? = nil
+    @State private var selectedTweet: Tweet? = nil
 
     @EnvironmentObject private var hproseInstance: HproseInstance
 
@@ -36,6 +37,7 @@ struct HomeView: View {
                         onAvatarTap: { user in
                             selectedUser = user
                         },
+                        selectedTweet: $selectedTweet
                     )
                     .tag(0)
 
@@ -48,6 +50,14 @@ struct HomeView: View {
                 ProfileView(user: user, onLogout: {
                     selectedTab = 0
                 })
+            }
+            .navigationDestination(isPresented: Binding(
+                get: { selectedTweet != nil },
+                set: { if !$0 { selectedTweet = nil } }
+            )) {
+                if let selectedTweet = selectedTweet {
+                    TweetDetailView(tweet: selectedTweet)
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
                 Task {

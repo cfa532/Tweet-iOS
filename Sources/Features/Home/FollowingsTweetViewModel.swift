@@ -9,6 +9,8 @@
 class FollowingsTweetViewModel: ObservableObject {
     @Published var tweets: [Tweet] = []     // tweet list to be displayed on screen.
     @Published var isLoading: Bool = false
+    @Published var showTweetDetail: Bool = false
+    @Published var selectedTweet: Tweet?
     private let hproseInstance: HproseInstance
     
     init(hproseInstance: HproseInstance) {
@@ -54,5 +56,10 @@ class FollowingsTweetViewModel: ObservableObject {
     func handleDeletedTweet(_ tweetId: String) {
         tweets.removeAll { $0.mid == tweetId }
         TweetCacheManager.shared.deleteTweet(mid: tweetId)
+    }
+    
+    func showTweetDetail(_ tweet: Tweet) {
+        selectedTweet = tweet
+        showTweetDetail = true
     }
 }

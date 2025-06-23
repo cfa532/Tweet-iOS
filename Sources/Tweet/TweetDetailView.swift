@@ -182,7 +182,12 @@ struct TweetDetailView: View {
                 CommentItemView(
                     parentTweet: tweet,
                     comment: comment,
-                    onAvatarTap: { user in selectedUser = user }
+                    onAvatarTap: { user in selectedUser = user },
+                    onTap: { comment in
+                        // Handle comment tap - navigate to comment detail
+                        // For now, we'll just print since this view doesn't have navigation state
+                        print("Comment tapped: \(comment.mid)")
+                    }
                 )
             }
         )

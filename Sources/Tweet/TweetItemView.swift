@@ -7,6 +7,7 @@ struct TweetItemView: View {
     var isPinned: Bool = false
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
+    var onTap: ((Tweet) -> Void)? = nil
     @State private var showDetail = false
     @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
     @State private var originalTweet: Tweet?
@@ -55,16 +56,14 @@ struct TweetItemView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            detailTweet = originalTweet
-                            showDetail = true
+                            onTap?(detailTweet)
                         }
 
                         TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
                             .padding(.top, -12)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                detailTweet = originalTweet
-                                showDetail = true
+                                onTap?(detailTweet)
                             }
 
                         TweetActionButtonsView(tweet: originalTweet)
@@ -88,15 +87,23 @@ struct TweetItemView: View {
                             TweetMenu(tweet: tweet, isPinned: isPinned)
                         }
                         .contentShape(Rectangle())
-                        .onTapGesture { showDetail = true }
+                        .onTapGesture {
+                            onTap?(detailTweet)
+                        }
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                             .padding(.top, -12)
                             .contentShape(Rectangle())
-                            .onTapGesture { showDetail = true }
+                            .onTapGesture {
+                                onTap?(detailTweet)
+                            }
                         
                         // Embedded original tweet
                         VStack(alignment: .leading, spacing: 8) {
-                            TweetItemView(tweet: originalTweet, isPinned: isPinned)
+                            TweetItemView(
+                                tweet: originalTweet, 
+                                isPinned: isPinned,
+                                onTap: onTap
+                            )
                         }
                         .padding()
                         .background(Color(.secondarySystemBackground))
@@ -124,11 +131,15 @@ struct TweetItemView: View {
                         TweetMenu(tweet: tweet, isPinned: isPinned)
                     }
                     .contentShape(Rectangle())
-                    .onTapGesture { showDetail = true }
+                    .onTapGesture {
+                        onTap?(detailTweet)
+                    }
                     TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                         .padding(.top, -12)
                         .contentShape(Rectangle())
-                        .onTapGesture { showDetail = true }
+                        .onTapGesture {
+                            onTap?(detailTweet)
+                        }
                     
                     TweetActionButtonsView(tweet: tweet)
                         .padding(.top, 8)
@@ -137,9 +148,6 @@ struct TweetItemView: View {
         }
         .padding()
         .background(Color(.systemBackground))
-        .navigationDestination(isPresented: $showDetail) {
-            TweetDetailView(tweet: detailTweet)
-        }
         .task {
             isVisible = true
             tweet.isVisible = true
