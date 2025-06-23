@@ -33,11 +33,11 @@ public class HLSVideoProcessor {
             self.segmentDuration = segmentDuration
             self.targetResolution = targetResolution
             self.keyframeInterval = keyframeInterval
-            self.qualityLevels = qualityLevels.isEmpty ? [QualityLevel.default] : qualityLevels
+            self.qualityLevels = qualityLevels.isEmpty ? [QualityLevel.medium] : qualityLevels
         }
     }
     
-    /// Quality level configuration for adaptive bitrate streaming
+    /// Quality level configuration for medium quality HLS transcoding
     public struct QualityLevel {
         let name: String
         let resolution: CGSize
@@ -59,44 +59,12 @@ public class HLSVideoProcessor {
             self.bandwidth = bandwidth ?? (videoBitrate + audioBitrate)
         }
         
-        /// Default quality level (480p)
-        public static let `default` = QualityLevel(
-            name: "480p",
-            resolution: CGSize(width: 480, height: 270),
-            videoBitrate: 1000000,
-            audioBitrate: 128000
-        )
-        
-        /// High quality level (720p)
-        public static let high = QualityLevel(
-            name: "720p",
-            resolution: CGSize(width: 720, height: 405),
-            videoBitrate: 2000000,
-            audioBitrate: 192000
-        )
-        
-        /// Medium quality level (480p)
+        /// Medium quality level (480p) - default for HLS transcoding
         public static let medium = QualityLevel(
             name: "480p",
             resolution: CGSize(width: 480, height: 270),
             videoBitrate: 1000000,
             audioBitrate: 128000
-        )
-        
-        /// Low quality level (360p)
-        public static let low = QualityLevel(
-            name: "360p",
-            resolution: CGSize(width: 360, height: 202),
-            videoBitrate: 500000,
-            audioBitrate: 96000
-        )
-        
-        /// Ultra low quality level (240p)
-        public static let ultraLow = QualityLevel(
-            name: "240p",
-            resolution: CGSize(width: 240, height: 135),
-            videoBitrate: 250000,
-            audioBitrate: 64000
         )
     }
     
@@ -107,13 +75,13 @@ public class HLSVideoProcessor {
         return fileExtension != nil && supportedExtensions.contains(fileExtension!)
     }
     
-    /// Convert video to adaptive HLS format with multiple quality levels
+    /// Convert video to medium quality HLS format with proper transcoding
     public func convertToAdaptiveHLS(
         inputURL: URL,
         outputDirectory: URL,
         config: HLSConfig
     ) async throws -> URL {
-        print("Starting multi-resolution HLS conversion with FFmpeg...")
+        print("Starting medium quality HLS conversion with FFmpeg transcoding...")
 
         // Ensure the output directory exists
         try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true, attributes: nil)
@@ -121,12 +89,19 @@ public class HLSVideoProcessor {
         let inputPath = inputURL.path
         let outputPath = outputDirectory.path
 
-        // Use the new FFmpegManager for better error handling
-        let result = FFmpegManager.shared.convertToHLS(inputPath: inputPath, outputDirectory: outputPath)
+        // Use the new FFmpegManager for transcoding with target resolution
+        let targetWidth = Int32(config.targetResolution.width)
+        let targetHeight = Int32(config.targetResolution.height)
+        let result = FFmpegManager.shared.convertToHLS(
+            inputPath: inputPath, 
+            outputDirectory: outputPath,
+            targetWidth: targetWidth,
+            targetHeight: targetHeight
+        )
         
         switch result {
         case .success(let playlistPath):
-            print("✅ FFmpeg multi-resolution HLS conversion successful.")
+            print("✅ FFmpeg medium quality HLS conversion successful.")
             let playlistURL = URL(fileURLWithPath: playlistPath)
             
             if FileManager.default.fileExists(atPath: playlistURL.path) {
@@ -143,12 +118,17 @@ public class HLSVideoProcessor {
     
     /// Get video aspect ratio
     public func getVideoAspectRatio(url: URL) async throws -> Float? {
+        print("DEBUG: Getting video aspect ratio for URL: \(url)")
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+            print("DEBUG: No video track found in getVideoAspectRatio")
             return nil
         }
         let size = try await track.load(.naturalSize)
-        return size.height == 0 ? nil : Float(size.width / size.height)
+        print("DEBUG: Video dimensions: \(size.width) x \(size.height)")
+        let aspectRatio = size.height == 0 ? nil : Float(size.width / size.height)
+        print("DEBUG: Calculated aspect ratio: \(aspectRatio ?? 0)")
+        return aspectRatio
     }
 
     func canHandleVideoFormat(url: URL) async -> Bool {
@@ -180,6 +160,28 @@ public class HLSVideoProcessor {
         // Clean up
         exportSession.outputURL = nil
         return true
+    }
+
+    /// Get video dimensions (width and height) from a video file
+    public func getVideoDimensions(url: URL) async -> CGSize {
+        print("DEBUG: Getting video dimensions for URL: \(url)")
+        let asset = AVAsset(url: url)
+        
+        do {
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            print("DEBUG: Found \(tracks.count) video tracks")
+            guard let videoTrack = tracks.first else {
+                print("DEBUG: No video track found, using default fallback")
+                return CGSize(width: 480, height: 270) // Default fallback
+            }
+            
+            let size = try await videoTrack.load(.naturalSize)
+            print("DEBUG: Loaded video dimensions: \(size)")
+            return size
+        } catch {
+            print("DEBUG: Error getting video dimensions: \(error)")
+            return CGSize(width: 480, height: 270) // Default fallback
+        }
     }
 }
 
@@ -232,63 +234,16 @@ extension HLSVideoProcessor {
         ]
     }
     
-    /// Create adaptive HLS with standard quality levels
-    public func createStandardAdaptiveHLS(
+    /// Create medium quality HLS (main method for video uploads)
+    public func createMediumQualityHLS(
         inputURL: URL,
         outputDirectory: URL
     ) async throws -> URL {
-        let qualityLevels = [
-            QualityLevel.high,    // 720p - 2 Mbps
-            QualityLevel.medium,  // 480p - 1 Mbps
-            QualityLevel.low,     // 360p - 500 Kbps
-            QualityLevel.ultraLow // 240p - 250 Kbps
-        ]
-        
         let config = HLSConfig(
             segmentDuration: 6.0,
             targetResolution: CGSize(width: 480, height: 270),
             keyframeInterval: 2.0,
-            qualityLevels: qualityLevels
-        )
-        
-        return try await convertToAdaptiveHLS(
-            inputURL: inputURL,
-            outputDirectory: outputDirectory,
-            config: config
-        )
-    }
-    
-    /// Create adaptive HLS with custom quality levels
-    public func createCustomAdaptiveHLS(
-        inputURL: URL,
-        outputDirectory: URL,
-        qualityLevels: [QualityLevel]
-    ) async throws -> URL {
-        let config = HLSConfig(
-            segmentDuration: 6.0,
-            targetResolution: qualityLevels.first?.resolution ?? CGSize(width: 480, height: 270),
-            keyframeInterval: 2.0,
-            qualityLevels: qualityLevels
-        )
-        
-        return try await convertToAdaptiveHLS(
-            inputURL: inputURL,
-            outputDirectory: outputDirectory,
-            config: config
-        )
-    }
-    
-    /// Create single quality HLS (for backward compatibility)
-    public func createSingleQualityHLS(
-        inputURL: URL,
-        outputDirectory: URL,
-        qualityLevel: QualityLevel = .medium
-    ) async throws -> URL {
-        let config = HLSConfig(
-            segmentDuration: 6.0,
-            targetResolution: qualityLevel.resolution,
-            keyframeInterval: 2.0,
-            qualityLevels: [qualityLevel]
+            qualityLevels: [QualityLevel.medium]
         )
         
         return try await convertToAdaptiveHLS(

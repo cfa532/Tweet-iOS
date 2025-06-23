@@ -13,8 +13,15 @@ class FFmpegManager {
     /// - Parameters:
     ///   - inputPath: Path to the input video file
     ///   - outputDirectory: Directory where HLS files will be saved
+    ///   - targetWidth: Target width for the HLS stream
+    ///   - targetHeight: Target height for the HLS stream
     /// - Returns: Result indicating success or failure with error message
-    func convertToHLS(inputPath: String, outputDirectory: String) -> Result<String, Error> {
+    func convertToHLS(inputPath: String, outputDirectory: String, targetWidth: Int32, targetHeight: Int32) -> Result<String, Error> {
+        print("FFmpeg C Wrapper: Starting single-resolution HLS conversion.")
+        print("Input file: \(inputPath)")
+        print("Output directory: \(outputDirectory)")
+        print("Target resolution: \(targetWidth)x\(targetHeight)")
+        
         // Ensure output directory exists
         let fileManager = FileManager.default
         if !fileManager.fileExists(atPath: outputDirectory) {
@@ -26,12 +33,14 @@ class FFmpegManager {
         }
         
         // Call the C function
-        let result = convert_to_hls(inputPath, outputDirectory)
+        let result = create_single_hls_stream_with_resolution(inputPath, outputDirectory, targetWidth, targetHeight)
         
         if result == 0 {
+            print("✅ FFmpeg HLS conversion completed successfully")
             let playlistPath = "\(outputDirectory)/playlist.m3u8"
             return .success(playlistPath)
         } else {
+            print("❌ FFmpeg HLS conversion failed: FFmpeg conversion failed with code: \(result)")
             return .failure(FFmpegError.conversionFailed(result))
         }
     }

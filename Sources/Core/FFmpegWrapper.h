@@ -15,4 +15,7 @@
  */
 int convert_to_hls(const char *input_path, const char *output_dir);
 
+// Function to create a single HLS stream with transcoding
+int create_single_hls_stream_with_resolution(const char* input_file, const char* output_dir, int target_width, int target_height);
+
 #endif /* FFmpegWrapper_h */ 

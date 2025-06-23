@@ -782,24 +782,12 @@ final class HproseInstance: ObservableObject {
         referenceId: String? = nil
     ) async throws -> MimeiFileType? {
         await appUser.resolveWritableUrl()
-        
-        print("DEBUG: uploadToIPFS called with typeIdentifier: \(typeIdentifier), fileName: \(fileName ?? "nil")")
+        print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil")")
         
         // Determine media type first
         let mediaType: MediaType
         if typeIdentifier.hasPrefix("public.image") {
-            // Check for specific image types
-            if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
-                mediaType = .image
-            } else if typeIdentifier.contains("png") {
-                mediaType = .image
-            } else if typeIdentifier.contains("gif") {
-                mediaType = .image
-            } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
-                mediaType = .image
-            } else {
-                mediaType = .image // Default to image for any public.image type
-            }
+            mediaType = .image
         } else if typeIdentifier.hasPrefix("public.movie") || typeIdentifier.contains("quicktime-movie") || typeIdentifier.contains("movie") {
             mediaType = .video
         } else if typeIdentifier.hasPrefix("public.audio") || typeIdentifier.contains("audio") {
@@ -808,8 +796,6 @@ final class HproseInstance: ObservableObject {
             mediaType = .pdf
         } else if typeIdentifier == "public.zip-archive" {
             mediaType = .zip
-        } else if typeIdentifier == "public.composite-content" {
-            mediaType = .word
         } else {
             // Try to determine type from file extension
             let fileExtension = typeIdentifier.components(separatedBy: ".").last?.lowercased()
@@ -835,7 +821,7 @@ final class HproseInstance: ObservableObject {
         
         // Handle video conversion to HLS if it's a video
         if mediaType == .video {
-            print("DEBUG: Processing video with HLS conversion")
+            print("Processing video with HLS transcoding")
             return try await uploadVideoAsHLS(
                 data: data,
                 typeIdentifier: typeIdentifier,
@@ -843,7 +829,7 @@ final class HproseInstance: ObservableObject {
                 referenceId: referenceId
             )
         } else {
-            print("DEBUG: Processing non-video file with regular upload")
+            print("Processing non-video file with regular upload")
             // Handle non-video files with original logic
             return try await uploadRegularFile(
                 data: data,
@@ -861,20 +847,16 @@ final class HproseInstance: ObservableObject {
         fileName: String?,
         referenceId: String?
     ) async throws -> MimeiFileType? {
-        print("DEBUG: uploadVideoAsHLS started with data size: \(data.count) bytes")
+        print("Starting HLS conversion, data size: \(data.count) bytes")
         
         // Create temporary directory for video processing
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         
-        print("DEBUG: Created temp directory: \(tempDir.path)")
-        
         // Save original video to temp directory
         let originalVideoPath = tempDir.appendingPathComponent("original_video.mp4")
         try data.write(to: originalVideoPath)
-        
-        print("DEBUG: Saved original video to: \(originalVideoPath.path)")
         
         // Check if the video format is supported
         let hlsProcessor = HLSVideoProcessor.shared
@@ -886,41 +868,58 @@ final class HproseInstance: ObservableObject {
         
         // Then check if AVFoundation can actually handle the format
         let canHandle = await hlsProcessor.canHandleVideoFormat(url: originalVideoPath)
-        print("DEBUG: AVFoundation can handle format: \(canHandle)")
         
         if !canHandle {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video format not supported by AVFoundation"])
         }
         
-        // Configure HLS configuration for multi-resolution output
+        // Get input video aspect ratio to determine orientation
+        let aspectRatio = try await getVideoAspectRatio(url: originalVideoPath)
+        print("DEBUG: Detected input video aspect ratio: \(aspectRatio ?? 0)")
+        
+        // Set target resolution based on input aspect ratio
+        let targetResolution: CGSize
+        if let ratio = aspectRatio {
+            print("DEBUG: Aspect ratio is: \(ratio)")
+            if ratio < 1.0 {
+                // Portrait video: aspect ratio < 1.0 (width < height)
+                targetResolution = CGSize(width: 270, height: 480)
+                print("DEBUG: Aspect ratio < 1.0, detected as PORTRAIT")
+                print("Input video is portrait (aspect ratio: \(ratio)), using portrait output: 270x480")
+            } else {
+                // Landscape video: aspect ratio >= 1.0 (width >= height)
+                targetResolution = CGSize(width: 480, height: 270)
+                print("DEBUG: Aspect ratio >= 1.0, detected as LANDSCAPE")
+                print("Input video is landscape (aspect ratio: \(ratio)), using landscape output: 480x270")
+            }
+        } else {
+            // Fallback to landscape if aspect ratio detection fails
+            targetResolution = CGSize(width: 480, height: 270)
+            print("DEBUG: Aspect ratio detection failed, using fallback LANDSCAPE")
+            print("Input video aspect ratio detection failed, using landscape output: 480x270")
+        }
+        
+        // Configure HLS configuration for medium quality transcoding
         let hlsConfig = HLSVideoProcessor.HLSConfig(
             segmentDuration: 6.0,
-            targetResolution: .zero, // Not used by FFmpeg wrapper
-            keyframeInterval: 0,     // Not used by FFmpeg wrapper
-            qualityLevels: []        // Not used by FFmpeg wrapper
+            targetResolution: targetResolution,
+            keyframeInterval: 2.0,
+            qualityLevels: [] // Not used by FFmpeg wrapper - transcoding is handled in C code
         )
         
         let hlsOutputDir = tempDir.appendingPathComponent("hls_output")
         
-        print("DEBUG: Starting multi-resolution HLS conversion to: \(hlsOutputDir.path)")
-        
         do {
-            // Convert video to adaptive HLS format with multiple resolutions (360p, 480p, 720p)
-            print("DEBUG: Calling convertToAdaptiveHLS...")
+            // Convert video to medium quality HLS format with proper transcoding
             _ = try await hlsProcessor.convertToAdaptiveHLS(
                 inputURL: originalVideoPath,
                 outputDirectory: hlsOutputDir,
                 config: hlsConfig
             )
             
-            print("DEBUG: Multi-resolution HLS conversion completed successfully")
-            
             // Create a simple archive of HLS files
             let archivePath = tempDir.appendingPathComponent("hls_package.tar")
-            print("DEBUG: Creating archive at: \(archivePath.path)")
             let archiveSuccess = await createSimpleArchive(from: hlsOutputDir.path, to: archivePath.path)
-            
-            print("DEBUG: Archive creation result: \(archiveSuccess)")
             
             guard archiveSuccess else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create archive package"])
@@ -928,10 +927,8 @@ final class HproseInstance: ObservableObject {
             
             // Read archive data
             let archiveData = try Data(contentsOf: archivePath)
-            print("DEBUG: Archive data size: \(archiveData.count) bytes")
             
             // Upload archive package to extract-tar endpoint
-            print("DEBUG: Uploading HLS archive to extract-tar endpoint...")
             
             // Create HLS archive filename by replacing any video extension with _hls.tar
             let hlsArchiveFileName: String
@@ -957,12 +954,10 @@ final class HproseInstance: ObservableObject {
                 originalVideoURL: originalVideoPath
             )
             uploadedFile.fileName = fileName
-            print("DEBUG: HLS archive uploaded successfully with CID: \(uploadedFile.mid)")
             return uploadedFile
             
         } catch {
             print("Error converting video to HLS: \(error)")
-            print("DEBUG: HLS conversion failed - throwing error to fail tweet upload")
             
             // Throw error indicating video processing failure
             throw NSError(
@@ -982,8 +977,6 @@ final class HproseInstance: ObservableObject {
             let sourceURL = URL(fileURLWithPath: sourceDir)
             let archiveURL = URL(fileURLWithPath: archivePath)
             
-            print("DEBUG: Creating archive from: \(sourceDir)")
-            
             // Get all files in the source directory recursively
             let enumerator = fileManager.enumerator(at: sourceURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])
             var files: [URL] = []
@@ -995,40 +988,27 @@ final class HproseInstance: ObservableObject {
                 }
             }
             
-            print("DEBUG: Found \(files.count) files to archive")
-            
             // Create tar file data
             var tarData = Data()
             
             for fileURL in files {
-                print("DEBUG: Processing file: \(fileURL.path)")
-                print("DEBUG: Source directory: \(sourceDir)")
-                
                 // Get relative path from source directory
                 let relativePath: String
                 if fileURL.path.hasPrefix(sourceDir) {
                     let sourceDirLength = sourceDir.count
-                    print("DEBUG: Source dir length: \(sourceDirLength)")
-                    print("DEBUG: File path length: \(fileURL.path.count)")
                     
                     if sourceDirLength < fileURL.path.count {
                         let startIndex = fileURL.path.index(fileURL.path.startIndex, offsetBy: sourceDirLength)
                         let remainingPath = String(fileURL.path[startIndex...])
                         relativePath = remainingPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                        print("DEBUG: Remaining path: \(remainingPath)")
-                        print("DEBUG: Relative path: \(relativePath)")
                     } else {
                         relativePath = fileURL.lastPathComponent
-                        print("DEBUG: Using filename as relative path: \(relativePath)")
                     }
                 } else {
                     relativePath = fileURL.lastPathComponent
-                    print("DEBUG: Path doesn't start with source dir, using filename: \(relativePath)")
                 }
                 
                 let fileName = relativePath.isEmpty ? fileURL.lastPathComponent : relativePath
-                
-                print("DEBUG: Final filename for archive: \(fileName)")
                 
                 // Ensure filename fits in tar header (100 bytes max)
                 let maxFileNameLength = 100
@@ -1037,7 +1017,6 @@ final class HproseInstance: ObservableObject {
                     // Truncate filename if too long
                     let truncated = String(fileName.prefix(maxFileNameLength - 4)) + ".ts"
                     finalFileName = truncated
-                    print("DEBUG: Filename truncated to: \(finalFileName)")
                 } else {
                     finalFileName = fileName
                 }
@@ -1151,7 +1130,6 @@ final class HproseInstance: ObservableObject {
             
             // Write the tar file
             try tarData.write(to: archiveURL)
-            print("DEBUG: Successfully created tar archive: \(archivePath)")
             return true
             
         } catch {
@@ -1167,19 +1145,16 @@ final class HproseInstance: ObservableObject {
         referenceId: String?,
         mediaType: MediaType
     ) async throws -> MimeiFileType {
-        print("DEBUG: uploadRegularFile called with mediaType: \(mediaType.rawValue), data size: \(data.count) bytes")
+        print("Uploading regular file: type=\(mediaType.rawValue), size=\(data.count) bytes")
         
         // Use a mutable variable for uploadService
         var uploadService = appUser.uploadService
         if uploadService == nil {
-            print("DEBUG: Upload service is nil - resolving writable URL...")
             await appUser.resolveWritableUrl()
             uploadService = appUser.uploadService
             if uploadService == nil {
-                print("DEBUG: Upload service still nil after resolving writable URL")
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
             }
-            print("DEBUG: Upload service resolved successfully")
         }
         let uploadServiceUnwrapped = uploadService!
         
@@ -1189,8 +1164,6 @@ final class HproseInstance: ObservableObject {
         try data.write(to: tempURL)
         defer { try? FileManager.default.removeItem(at: tempURL) }
         
-        print("DEBUG: Created temporary file at: \(tempURL.path)")
-        
         var offset: Int64 = 0
         let chunkSize = 1024 * 1024 // 1MB chunks
         var request: [String: Any] = [
@@ -1198,8 +1171,6 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "offset": offset
         ]
-        
-        print("DEBUG: Starting chunked upload with chunk size: \(chunkSize)")
         
         do {
             let fileHandle = try FileHandle(forReadingFrom: tempURL)
@@ -1211,7 +1182,6 @@ final class HproseInstance: ObservableObject {
                 if data.isEmpty { break }
                 
                 chunkCount += 1
-                print("DEBUG: Uploading chunk \(chunkCount), size: \(data.count) bytes")
                 
                 // Add retry logic for chunk upload
                 let nsData = data as NSData
@@ -1226,14 +1196,10 @@ final class HproseInstance: ObservableObject {
                     offset += Int64(data.count)
                     request["offset"] = offset
                     request["fsid"] = fsid
-                    print("DEBUG: Chunk \(chunkCount) uploaded successfully, fsid: \(fsid), offset: \(offset)")
                 } else {
-                    print("DEBUG: Chunk \(chunkCount) upload failed, response: \(String(describing: response))")
                     throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk \(chunkCount)"])
                 }
             }
-            
-            print("DEBUG: All chunks uploaded, finalizing upload...")
             
             // Mark upload as finished
             request["finished"] = "true"
@@ -1242,14 +1208,10 @@ final class HproseInstance: ObservableObject {
             }
             
             let finalResponse = uploadServiceUnwrapped.runMApp("upload_ipfs", request, nil)
-            print("DEBUG: Final upload response: \(String(describing: finalResponse))")
             
             guard let cid = finalResponse as? String else {
-                print("DEBUG: Final upload failed, no CID returned")
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get CID from final upload response"])
             }
-            
-            print("DEBUG: Upload completed successfully with CID: \(cid)")
             
             // Get file attributes
             let fileAttributes = try FileManager.default.attributesOfItem(atPath: tempURL.path)
@@ -1289,18 +1251,15 @@ final class HproseInstance: ObservableObject {
         
         for attempt in 1...maxRetries {
             do {
-                print("DEBUG: Attempting chunk \(chunkNumber) upload (attempt \(attempt)/\(maxRetries))")
                 let response = uploadService.runMApp("upload_ipfs", request, [data])
-                print("DEBUG: Chunk \(chunkNumber) upload response: \(String(describing: response))")
                 return response
             } catch {
                 lastError = error
-                print("DEBUG: Chunk \(chunkNumber) upload attempt \(attempt) failed: \(error)")
+                print("Chunk upload attempt \(attempt) failed: \(error)")
                 
                 if attempt < maxRetries {
                     // Wait before retrying (exponential backoff)
                     let delay = TimeInterval(attempt * 2) // 2, 4, 6 seconds
-                    print("DEBUG: Waiting \(delay) seconds before retry...")
                     try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     
                     // Re-resolve writable URL in case it changed
@@ -1310,8 +1269,7 @@ final class HproseInstance: ObservableObject {
         }
         
         // All retries failed
-        print("DEBUG: Chunk \(chunkNumber) upload failed after \(maxRetries) attempts")
-        throw lastError ?? NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk \(chunkNumber) after \(maxRetries) attempts"])
+        throw lastError ?? NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk after \(maxRetries) attempts"])
     }
     
     private func getVideoAspectRatio(url: URL) async throws -> Float? {
@@ -1362,59 +1320,6 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Network error: All retries failed."])
     }
     
-//    func sendMessage(receiptId: String, message: ChatMessage) async throws {
-//        try await withRetry {
-//            let entry = "message_outgoing"
-//            let encodedMsg = try JSONEncoder().encode(message).base64EncodedString()
-//            
-//            let params: [Any] = [
-//                appId,
-//                "last",
-//                entry,
-//                appUser.id,
-//                receiptId,
-//                encodedMsg,
-//                appUser.hostIds?.first ?? ""
-//            ]
-//            
-//            
-//            // Write message to receipt's Mimei db
-//            if let receipt = try await getUser(receiptId) {
-//                client.uri = receipt.baseUrl
-//                let receiptEntry = "message_incoming"
-//                let receiptParams: [Any] = [
-//                    appId,
-//                    "last",
-//                    receiptEntry,
-//                    appUser.id,
-//                    receiptId,
-//                    encodedMsg
-//                ]
-//
-//            }
-//        }
-//    }
-    
-//    func fetchMessages(senderId: String, messageCount: Int = 50) async throws -> [ChatMessage]? {
-//        try await withRetry {
-//            client.uri = appUser.baseUrl
-//            let entry = "message_fetch"
-//            let params: [Any] = [
-//                appId,
-//                "last",
-//                entry,
-//                appUser.id,
-//                senderId
-//            ]
-//            
-//            let response = try await client.invoke("fetchMessages", params) as? [[String: Any]]
-//            return try response?.compactMap { dict in
-//                let data = try JSONSerialization.data(withJSONObject: dict)
-//                return try JSONDecoder().decode(ChatMessage.self, from: data)
-//            }
-//        }
-//    }
-    
     // MARK: - Background Upload
     struct PendingUpload: Codable {
         let tweet: Tweet
@@ -1441,12 +1346,9 @@ final class HproseInstance: ObservableObject {
             do {
                 let data = try Data(contentsOf: tempFileURL)
                 guard let pendingUpload = try? JSONDecoder().decode(PendingUpload.self, from: data) else {
-                    print("DEBUG: Failed to decode pending upload data")
                     task.setTaskCompleted(success: false)
                     return
                 }
-                
-                print("DEBUG: Found pending upload with \(pendingUpload.selectedItemData.count) items")
                 
                 // Clean up the temporary file immediately after reading
                 try? FileManager.default.removeItem(at: tempFileURL)
@@ -1456,23 +1358,18 @@ final class HproseInstance: ObservableObject {
                 
                 // Process items in pairs
                 let itemPairs = pendingUpload.selectedItemData.chunked(into: 2)
-                print("DEBUG: Processing \(itemPairs.count) item pairs")
                 
                 for (index, pair) in itemPairs.enumerated() {
-                    print("DEBUG: Processing pair \(index + 1)")
                     do {
                         let pairAttachments = try await shared.uploadItemPair(pair)
-                        print("DEBUG: Successfully uploaded pair \(index + 1)")
                         uploadedAttachments.append(contentsOf: pairAttachments)
                     } catch {
-                        print("DEBUG: Error uploading pair \(index + 1): \(error)")
                         task.setTaskCompleted(success: false)
                         return
                     }
                 }
                 
                 if pendingUpload.selectedItemData.count != uploadedAttachments.count {
-                    print("DEBUG: Attachment count mismatch. Expected: \(pendingUpload.selectedItemData.count), Got: \(uploadedAttachments.count)")
                     task.setTaskCompleted(success: false)
                     return
                 }
@@ -1481,16 +1378,12 @@ final class HproseInstance: ObservableObject {
                 tweet.attachments = uploadedAttachments
                 
                 // Upload the tweet
-                print("DEBUG: Uploading final tweet")
                 if let uploadedTweet = try await shared.uploadTweet(tweet) {
-                    print("DEBUG: Successfully uploaded tweet: \(uploadedTweet)")
                     task.setTaskCompleted(success: true)
                 } else {
-                    print("DEBUG: Failed to upload tweet")
                     task.setTaskCompleted(success: false)
                 }
             } catch {
-                print("DEBUG: Error in background task: \(error)")
                 task.setTaskCompleted(success: false)
             }
         }
@@ -1509,7 +1402,6 @@ final class HproseInstance: ObservableObject {
         
         do {
             try BGTaskScheduler.shared.submit(request)
-            print("Successfully scheduled next background task")
         } catch {
             print("Could not schedule next background task: \(error)")
         }
@@ -1612,7 +1504,6 @@ final class HproseInstance: ObservableObject {
                 tweet.attachments = uploadedAttachments
                 
                 if let uploadedTweet = try await self.uploadTweet(tweet) {
-                    print("DEBUG: tweet uploaded. \(tweet)")
                     await MainActor.run {
                         // Post notification for new tweet
                         NotificationCenter.default.post(
@@ -1620,7 +1511,6 @@ final class HproseInstance: ObservableObject {
                             object: nil,
                             userInfo: ["tweet": uploadedTweet]
                         )
-                        print("Tweet published successfully \(uploadedTweet)")
                     }
                 } else {
                     let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
@@ -1654,11 +1544,6 @@ final class HproseInstance: ObservableObject {
             do {
                 let comment = comment
                 var uploadedAttachments: [MimeiFileType] = []
-                
-                // Post notification that comment upload is starting
-                if !itemData.isEmpty {
-                    print("Uploading comment with attachments...")
-                }
                 
                 let itemPairs = itemData.chunked(into: 2)
                 for (index, pair) in itemPairs.enumerated() {
@@ -1867,29 +1752,22 @@ final class HproseInstance: ObservableObject {
     func getHostIP(_ nodeId: String) async -> String? {
         // Check if we have a valid baseUrl
         guard let baseUrl = appUser.baseUrl else {
-            print("[getHostIP] Error: No baseUrl available for user")
             return nil
         }
         
         let urlString = "\(baseUrl.absoluteString)/getvar?name=ips&arg0=\(nodeId)"
         guard let url = URL(string: urlString) else { 
-            print("[getHostIP] Error: Invalid URL constructed: \(urlString)")
             return nil 
         }
         
         do {
-            print("[getHostIP] Requesting host IP for nodeId: \(nodeId) from: \(urlString)")
             let (data, response) = try await URLSession.shared.data(from: url)
             
             if let httpResponse = response as? HTTPURLResponse {
-                print("[getHostIP] Response status: \(httpResponse.statusCode)")
-                
                 if httpResponse.statusCode == 200 {
                     let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: CharacterSet(charactersIn: "\" ,\n\r")) ?? ""
-                    print("[getHostIP] Raw response: '\(text)'")
                     
                     let ips = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                    print("[getHostIP] Parsed IPs: \(ips)")
                     
                     if !ips.isEmpty {
                         // Find the first available public IP
@@ -1905,7 +1783,6 @@ final class HproseInstance: ObservableObject {
                                     port = String(ip[ip.index(after: colon)...]).trimmingCharacters(in: CharacterSet(charactersIn: ":"))
                                     cleanIP = ipv6
                                 } else {
-                                    print("[getHostIP] Failed to parse IPv6 with port: \(ip)")
                                     continue
                                 }
                             } else if ip.contains(":") && !ip.contains("]:") && !ip.contains("[") {
@@ -1915,7 +1792,6 @@ final class HproseInstance: ObservableObject {
                                     cleanIP = String(parts[0])
                                     port = String(parts[1])
                                 } else {
-                                    print("[getHostIP] Failed to parse IPv4 with port: \(ip)")
                                     continue
                                 }
                             } else {
@@ -1928,31 +1804,18 @@ final class HproseInstance: ObservableObject {
                             // Check if this is a valid public IP with correct port
                             if Gadget.isValidPublicIpAddress(cleanIP) {
                                 if let portNumber = Int(port), (8000...9000).contains(portNumber) {
-                                    print("[getHostIP] Found valid public IP: \(ip)")
                                     return ip
-                                } else {
-                                    print("[getHostIP] IP \(ip) has invalid port \(port)")
                                 }
-                            } else {
-                                print("[getHostIP] IP \(ip) is not a valid public IP (cleanIP: \(cleanIP))")
                             }
                         }
                         
                         // If no public IPs found, return the first IP as fallback
-                        let firstIP = ips.first!
-                        print("[getHostIP] No valid public IPs found, returning first IP as fallback: \(firstIP)")
-                        return firstIP
-                    } else {
-                        print("[getHostIP] No IPs found in response")
+                        return ips.first!
                     }
-                } else {
-                    print("[getHostIP] HTTP error: \(httpResponse.statusCode)")
                 }
-            } else {
-                print("[getHostIP] Invalid HTTP response")
             }
         } catch {
-            print("[getHostIP] Network error: \(error) for URL: \(urlString)")
+            print("Network error getting host IP: \(error)")
         }
         
         return nil
@@ -1964,15 +1827,11 @@ final class HproseInstance: ObservableObject {
         referenceId: String?,
         originalVideoURL: URL? = nil
     ) async throws -> MimeiFileType {
-        print("DEBUG: uploadHLSArchive called with data size: \(data.count) bytes")
-        
         // Get the user's cloudDrivePort with fallback to default
         let cloudDrivePort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-        print("DEBUG: Using cloudDrivePort: \(cloudDrivePort)")
         
         // Ensure writableUrl is available
         if appUser.writableUrl == nil {
-            print("DEBUG: WritableUrl is nil, resolving...")
             await appUser.resolveWritableUrl()
         }
         
@@ -1985,8 +1844,6 @@ final class HproseInstance: ObservableObject {
         guard let url = URL(string: extractTarURL) else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid extract-tar URL"])
         }
-        
-        print("DEBUG: Uploading HLS archive to: \(extractTarURL)")
         
         // Create multipart form data
         let boundary = "Boundary-\(UUID().uuidString)"
@@ -2035,25 +1892,18 @@ final class HproseInstance: ObservableObject {
         
         for attempt in 1...3 {
             do {
-                print("DEBUG: Attempting HLS archive upload (attempt \(attempt)/3)")
                 let (responseData, response) = try await URLSession.shared.data(for: request)
                 
                 if let httpResponse = response as? HTTPURLResponse {
-                    print("DEBUG: HLS archive upload response status: \(httpResponse.statusCode)")
-                    
                     if httpResponse.statusCode == 200 {
                         // Parse the JSON response to get the CID
                         if let responseString = String(data: responseData, encoding: .utf8) {
-                            print("DEBUG: HLS archive upload response: \(responseString)")
-                            
                             do {
                                 if let jsonData = responseString.data(using: .utf8),
                                    let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
                                     
                                     if let success = json["success"] as? Bool, success {
                                         if let cid = json["cid"] as? String, !cid.isEmpty {
-                                            print("DEBUG: HLS archive uploaded successfully with CID: \(cid)")
-                                            
                                             // Create MimeiFileType with the CID
                                             return MimeiFileType(
                                                 mid: cid,
@@ -2088,12 +1938,11 @@ final class HproseInstance: ObservableObject {
                 }
             } catch {
                 lastError = error
-                print("DEBUG: HLS archive upload attempt \(attempt) failed: \(error)")
+                print("HLS archive upload attempt \(attempt) failed: \(error)")
                 
                 if attempt < 3 {
                     // Wait before retrying (exponential backoff)
                     let delay = TimeInterval(attempt * 2) // 2, 4 seconds
-                    print("DEBUG: Waiting \(delay) seconds before retry...")
                     try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     
                     // Re-resolve writable URL in case it changed
@@ -2103,7 +1952,6 @@ final class HproseInstance: ObservableObject {
         }
         
         // All retries failed
-        print("DEBUG: HLS archive upload failed after 3 attempts")
         throw lastError ?? NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload HLS archive after 3 attempts"])
     }
 }
