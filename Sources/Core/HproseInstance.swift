@@ -1247,29 +1247,13 @@ final class HproseInstance: ObservableObject {
         chunkNumber: Int,
         maxRetries: Int = 3
     ) async throws -> Any {
-        var lastError: Error?
-        
-        for attempt in 1...maxRetries {
-            do {
-                let response = uploadService.runMApp("upload_ipfs", request, [data])
-                return response
-            } catch {
-                lastError = error
-                print("Chunk upload attempt \(attempt) failed: \(error)")
-                
-                if attempt < maxRetries {
-                    // Wait before retrying (exponential backoff)
-                    let delay = TimeInterval(attempt * 2) // 2, 4, 6 seconds
-                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    
-                    // Re-resolve writable URL in case it changed
-                    await appUser.resolveWritableUrl()
-                }
-            }
+        for _ in 1...maxRetries {
+            let response = uploadService.runMApp("upload_ipfs", request, [data]) as Any
+            return response
         }
         
         // All retries failed
-        throw lastError ?? NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk after \(maxRetries) attempts"])
+        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk after \(maxRetries) attempts"])
     }
     
     private func getVideoAspectRatio(url: URL) async throws -> Float? {
@@ -1359,12 +1343,19 @@ final class HproseInstance: ObservableObject {
                 // Process items in pairs
                 let itemPairs = pendingUpload.selectedItemData.chunked(into: 2)
                 
-                for (index, pair) in itemPairs.enumerated() {
+                for (pairIndex, pair) in itemPairs.enumerated() {
                     do {
                         let pairAttachments = try await shared.uploadItemPair(pair)
                         uploadedAttachments.append(contentsOf: pairAttachments)
                     } catch {
-                        task.setTaskCompleted(success: false)
+                        print("Error uploading pair \(pairIndex + 1): \(error)")
+                        await MainActor.run {
+                            NotificationCenter.default.post(
+                                name: .backgroundUploadFailed,
+                                object: nil,
+                                userInfo: ["error": error]
+                            )
+                        }
                         return
                     }
                 }
@@ -1378,7 +1369,7 @@ final class HproseInstance: ObservableObject {
                 tweet.attachments = uploadedAttachments
                 
                 // Upload the tweet
-                if let uploadedTweet = try await shared.uploadTweet(tweet) {
+                if try await shared.uploadTweet(tweet) != nil {
                     task.setTaskCompleted(success: true)
                 } else {
                     task.setTaskCompleted(success: false)
@@ -1472,12 +1463,12 @@ final class HproseInstance: ObservableObject {
                 
                 let itemPairs = itemData.chunked(into: 2)
                 
-                for (index, pair) in itemPairs.enumerated() {
+                for (pairIndex, pair) in itemPairs.enumerated() {
                     do {
                         let pairAttachments = try await self.uploadItemPair(pair)
                         uploadedAttachments.append(contentsOf: pairAttachments)
                     } catch {
-                        print("Error uploading pair \(index + 1): \(error)")
+                        print("Error uploading pair \(pairIndex + 1): \(error)")
                         await MainActor.run {
                             NotificationCenter.default.post(
                                 name: .backgroundUploadFailed,
@@ -1546,12 +1537,12 @@ final class HproseInstance: ObservableObject {
                 var uploadedAttachments: [MimeiFileType] = []
                 
                 let itemPairs = itemData.chunked(into: 2)
-                for (index, pair) in itemPairs.enumerated() {
+                for (pairIndex, pair) in itemPairs.enumerated() {
                     do {
                         let pairAttachments = try await self.uploadItemPair(pair)
                         uploadedAttachments.append(contentsOf: pairAttachments)
                     } catch {
-                        print("Error uploading pair \(index + 1): \(error)")
+                        print("Error uploading pair \(pairIndex + 1): \(error)")
                         await MainActor.run {
                             NotificationCenter.default.post(
                                 name: .backgroundUploadFailed,

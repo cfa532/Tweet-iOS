@@ -27,17 +27,9 @@ typedef struct {
     const char* name;
 } ResolutionConfig;
 
-static const ResolutionConfig resolutions[] = {
-    {360, 202, 500000, 96000, "360p"},
-    {480, 270, 1000000, 128000, "480p"},
-    {720, 405, 2000000, 192000, "720p"}
-};
-
-static const int num_resolutions = sizeof(resolutions) / sizeof(ResolutionConfig);
-
-// Forward declaration
-static int create_hls_stream(AVFormatContext *input_format_context, const char *output_dir, const ResolutionConfig *config);
-static int create_hls_stream_simple(AVFormatContext *input_format_context, const char *output_dir, const ResolutionConfig *config);
+// Remove unused function declarations
+// static int create_hls_stream(AVFormatContext *input_format_context, const char *output_dir, const ResolutionConfig *config);
+// static int create_hls_stream_simple(AVFormatContext *input_format_context, const char *output_dir, const ResolutionConfig *config);
 static int create_single_hls_stream(AVFormatContext *input_format_context, const char *output_dir, int target_width, int target_height);
 
 int convert_to_hls(const char *input_path, const char *output_dir) {
@@ -100,12 +92,25 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
     AVStream *input_video_stream = NULL;
     AVStream *input_audio_stream = NULL;
     int ret;
-    int *stream_mapping = NULL;
     int video_stream_index = -1;
     int audio_stream_index = -1;
+    char output_playlist[1024];
+    AVDictionary *hls_options = NULL;
+    char segment_filename[1024];
+    AVPacket input_pkt;
+    AVFrame *input_frame = NULL;
+    AVFrame *output_frame = NULL;
+    struct SwsContext *sws_ctx = NULL;
+    struct SwrContext *swr_ctx = NULL;
+    AVCodecContext *input_video_codec_ctx = NULL;
+    AVCodecContext *input_audio_codec_ctx = NULL;
+    AVFrame *audio_buffer_frame = NULL;
+    uint8_t *audio_buffer = NULL;
+    int audio_buffer_samples = 0;
+    int max_audio_buffer_samples = 0;
+    int audio_buffer_size = 0;
 
     // Create output playlist path
-    char output_playlist[1024];
     snprintf(output_playlist, sizeof(output_playlist), "%s/playlist.m3u8", output_dir);
 
     // Allocate output context for HLS
@@ -133,6 +138,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         if (!video_stream) {
             av_log(NULL, AV_LOG_ERROR, "Could not create video stream\n");
             ret = AVERROR_UNKNOWN;
+            video_codec_context = NULL;
             goto end;
         }
 
@@ -141,6 +147,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         if (!video_codec) {
             av_log(NULL, AV_LOG_ERROR, "H.264 encoder not found\n");
             ret = AVERROR_UNKNOWN;
+            video_codec_context = NULL;
             goto end;
         }
 
@@ -149,6 +156,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         if (!video_codec_context) {
             av_log(NULL, AV_LOG_ERROR, "Could not allocate video codec context\n");
             ret = AVERROR_UNKNOWN;
+            video_codec_context = NULL;
             goto end;
         }
 
@@ -172,6 +180,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         ret = avcodec_open2(video_codec_context, video_codec, NULL);
         if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Could not open video codec: %s\n", av_err2str(ret));
+            video_codec_context = NULL;
             goto end;
         }
 
@@ -179,6 +188,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         ret = avcodec_parameters_from_context(video_stream->codecpar, video_codec_context);
         if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Could not copy video codec params: %s\n", av_err2str(ret));
+            video_codec_context = NULL;
             goto end;
         }
     }
@@ -189,6 +199,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         if (!audio_stream) {
             av_log(NULL, AV_LOG_ERROR, "Could not create audio stream\n");
             ret = AVERROR_UNKNOWN;
+            audio_codec_context = NULL;
             goto end;
         }
 
@@ -197,6 +208,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         if (!audio_codec) {
             av_log(NULL, AV_LOG_ERROR, "AAC encoder not found\n");
             ret = AVERROR_UNKNOWN;
+            audio_codec_context = NULL;
             goto end;
         }
 
@@ -205,6 +217,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         if (!audio_codec_context) {
             av_log(NULL, AV_LOG_ERROR, "Could not allocate audio codec context\n");
             ret = AVERROR_UNKNOWN;
+            audio_codec_context = NULL;
             goto end;
         }
 
@@ -220,6 +233,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         ret = avcodec_open2(audio_codec_context, audio_codec, NULL);
         if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Could not open audio codec: %s\n", av_err2str(ret));
+            audio_codec_context = NULL;
             goto end;
         }
 
@@ -227,6 +241,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         ret = avcodec_parameters_from_context(audio_stream->codecpar, audio_codec_context);
         if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Could not copy audio codec params: %s\n", av_err2str(ret));
+            audio_codec_context = NULL;
             goto end;
         }
     }
@@ -241,8 +256,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
     }
 
     // Set HLS options
-    AVDictionary *hls_options = NULL;
-    char segment_filename[1024];
+    hls_options = NULL;
     snprintf(segment_filename, sizeof(segment_filename), "%s/segment%%03d.ts", output_dir);
     
     av_dict_set(&hls_options, "hls_time", "6", 0);
@@ -258,13 +272,6 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
     av_dict_free(&hls_options);
 
     // Transcode packets from input to output
-    AVPacket input_pkt;
-    AVFrame *input_frame = NULL;
-    AVFrame *output_frame = NULL;
-    struct SwsContext *sws_ctx = NULL;
-    struct SwrContext *swr_ctx = NULL;
-    
-    // Allocate frames
     input_frame = av_frame_alloc();
     output_frame = av_frame_alloc();
     if (!input_frame || !output_frame) {
@@ -313,15 +320,14 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
     }
 
     // Create input codec contexts for decoding
-    AVCodecContext *input_video_codec_ctx = NULL;
-    AVCodecContext *input_audio_codec_ctx = NULL;
-    
     if (input_video_stream) {
         const AVCodec *input_video_codec = avcodec_find_decoder(input_video_stream->codecpar->codec_id);
         if (input_video_codec) {
             input_video_codec_ctx = avcodec_alloc_context3(input_video_codec);
-            avcodec_parameters_to_context(input_video_codec_ctx, input_video_stream->codecpar);
-            avcodec_open2(input_video_codec_ctx, input_video_codec, NULL);
+            if (input_video_codec_ctx) {
+                avcodec_parameters_to_context(input_video_codec_ctx, input_video_stream->codecpar);
+                avcodec_open2(input_video_codec_ctx, input_video_codec, NULL);
+            }
         }
     }
     
@@ -329,18 +335,14 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         const AVCodec *input_audio_codec = avcodec_find_decoder(input_audio_stream->codecpar->codec_id);
         if (input_audio_codec) {
             input_audio_codec_ctx = avcodec_alloc_context3(input_audio_codec);
-            avcodec_parameters_to_context(input_audio_codec_ctx, input_audio_stream->codecpar);
-            avcodec_open2(input_audio_codec_ctx, input_audio_codec, NULL);
+            if (input_audio_codec_ctx) {
+                avcodec_parameters_to_context(input_audio_codec_ctx, input_audio_stream->codecpar);
+                avcodec_open2(input_audio_codec_ctx, input_audio_codec, NULL);
+            }
         }
     }
 
     // Audio buffer for handling variable frame sizes
-    AVFrame *audio_buffer_frame = NULL;
-    uint8_t *audio_buffer = NULL;
-    int audio_buffer_samples = 0;
-    int max_audio_buffer_samples = 0;
-    int audio_buffer_size = 0;
-    
     if (input_audio_stream && audio_codec_context) {
         // Allocate audio buffer for accumulating samples
         max_audio_buffer_samples = audio_codec_context->frame_size * 4; // Buffer up to 4 frames worth
@@ -437,7 +439,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
                     goto end;
                 }
                 
-                ret = sws_scale(sws_ctx, input_frame->data, input_frame->linesize, 0, 
+                ret = sws_scale(sws_ctx, (const uint8_t *const *)input_frame->data, input_frame->linesize, 0, 
                                input_frame->height, output_frame->data, output_frame->linesize);
                 if (ret < 0) {
                     av_log(NULL, AV_LOG_ERROR, "Error scaling video frame\n");
@@ -490,12 +492,11 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
                     }
                     
                     // Ensure DTS is monotonically increasing
-                    static int64_t last_dts = 0;
-                    if (output_pkt->dts != AV_NOPTS_VALUE && output_pkt->dts <= last_dts) {
-                        output_pkt->dts = last_dts + 1;
+                    if (output_pkt->dts != AV_NOPTS_VALUE && output_pkt->dts <= last_audio_dts) {
+                        output_pkt->dts = last_audio_dts + 1;
                     }
                     if (output_pkt->dts != AV_NOPTS_VALUE) {
-                        last_dts = output_pkt->dts;
+                        last_audio_dts = output_pkt->dts;
                     }
                     
                     // Ensure PTS is greater than or equal to DTS
@@ -958,7 +959,6 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
             }
             
             // Ensure DTS is monotonically increasing
-            static int64_t last_audio_dts = 0;
             if (output_pkt->dts != AV_NOPTS_VALUE && output_pkt->dts <= last_audio_dts) {
                 output_pkt->dts = last_audio_dts + 1;
             }
@@ -985,23 +985,20 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
     av_write_trailer(output_format_context);
 
 end:
-    // Clean up
-    if (input_video_codec_ctx) avcodec_free_context(&input_video_codec_ctx);
-    if (input_audio_codec_ctx) avcodec_free_context(&input_audio_codec_ctx);
-    if (video_codec_context) avcodec_free_context(&video_codec_context);
-    if (audio_codec_context) avcodec_free_context(&audio_codec_context);
-    if (input_frame) av_frame_free(&input_frame);
-    if (output_frame) av_frame_free(&output_frame);
-    if (audio_buffer_frame) av_frame_free(&audio_buffer_frame);
-    if (audio_buffer) av_free(audio_buffer);
-    if (sws_ctx) sws_freeContext(sws_ctx);
-    if (swr_ctx) swr_free(&swr_ctx);
-    if (output_format_context) {
-        avio_closep(&output_format_context->pb);
-        avformat_free_context(output_format_context);
-    }
-    if (stream_mapping) av_freep(&stream_mapping);
-
+    // Cleanup with proper NULL checks
+    if (input_frame) { av_frame_free(&input_frame); }
+    if (output_frame) { av_frame_free(&output_frame); }
+    if (audio_buffer_frame) { av_frame_free(&audio_buffer_frame); }
+    if (audio_buffer) { av_free(audio_buffer); }
+    if (sws_ctx) { sws_freeContext(sws_ctx); sws_ctx = NULL; }
+    if (swr_ctx) { swr_free(&swr_ctx); swr_ctx = NULL; }
+    if (input_video_codec_ctx) { avcodec_free_context(&input_video_codec_ctx); }
+    if (input_audio_codec_ctx) { avcodec_free_context(&input_audio_codec_ctx); }
+    if (video_codec_context) { avcodec_free_context(&video_codec_context); }
+    if (audio_codec_context) { avcodec_free_context(&audio_codec_context); }
+    if (output_format_context) { avio_closep(&output_format_context->pb); avformat_free_context(output_format_context); }
+    if (input_format_context) { avformat_close_input(&input_format_context); }
+    
     return ret;
 }
 
