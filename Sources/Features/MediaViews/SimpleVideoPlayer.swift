@@ -134,38 +134,42 @@ struct HLSVideoPlayerWithControls: View {
                     .aspectRatio(aspectRatio.map { CGFloat($0) } ?? 16.0/9.0, contentMode: .fit)
                     .overlay(
                         // Custom controls overlay
-                        VStack {
-                            Spacer()
+                        Group {
                             if showControls {
-                                HStack {
-                                    Button(action: togglePlayPause) {
-                                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                            .font(.title2)
+                                VStack {
+                                    Spacer()
+                                    HStack {
+                                        Button(action: togglePlayPause) {
+                                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                                .foregroundColor(.white)
+                                                .font(.title2)
+                                        }
+                                        .padding()
+                                        
+                                        Spacer()
+                                        
+                                        Text(formatTime(currentTime))
                                             .foregroundColor(.white)
+                                            .font(.caption)
+                                        
+                                        Text("/")
+                                            .foregroundColor(.white)
+                                            .font(.caption)
+                                        
+                                        Text(formatTime(duration))
+                                            .foregroundColor(.white)
+                                            .font(.caption)
                                     }
-                                    .padding()
-                                    
-                                    Text(formatTime(currentTime))
-                                        .foregroundColor(.white)
-                                        .font(.caption)
-                                    
-                                    Slider(
-                                        value: Binding(
-                                            get: { currentTime },
-                                            set: { seekTo($0) }
-                                        ),
-                                        in: 0...max(duration, 1)
-                                    )
-                                    .accentColor(.white)
-                                    
-                                    Text(formatTime(duration))
-                                        .foregroundColor(.white)
-                                        .font(.caption)
+                                    .padding(.horizontal)
+                                    .padding(.bottom)
                                 }
-                                .padding()
-                                .background(Color.black.opacity(0.5))
-                                .cornerRadius(10)
-                                .padding()
+                                .background(
+                                    LinearGradient(
+                                        gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]),
+                                        startPoint: .bottom,
+                                        endPoint: .top
+                                    )
+                                )
                             }
                         }
                     )
@@ -174,31 +178,33 @@ struct HLSVideoPlayerWithControls: View {
                             showControls.toggle()
                         }
                     }
-                    .onAppear {
-                        setupPlayer()
-                    }
-                    .onDisappear {
-                        cleanupPlayer()
-                    }
             } else if isLoading {
-                ProgressView("Loading video...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                    Text("Loading HLS stream...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             } else if let errorMessage = errorMessage {
                 VStack {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.largeTitle)
                         .foregroundColor(.red)
-                    Text("Video Error")
+                    Text("HLS Playback Error")
                         .font(.headline)
                     Text(errorMessage)
                         .font(.caption)
                         .multilineTextAlignment(.center)
+                        .padding()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear {
             setupPlayer()
+        }
+        .onDisappear {
+            cleanupPlayer()
         }
     }
     
@@ -206,6 +212,14 @@ struct HLSVideoPlayerWithControls: View {
         print("DEBUG: Setting up HLS player for URL: \(videoURL.absoluteString)")
         isLoading = true
         errorMessage = nil
+        
+        // Add error handling for URL validation
+        guard videoURL.scheme != nil else {
+            print("DEBUG: Invalid URL scheme: \(videoURL)")
+            errorMessage = "Invalid video URL"
+            isLoading = false
+            return
+        }
         
         let avPlayer = AVPlayer(url: videoURL)
         
@@ -227,10 +241,14 @@ struct HLSVideoPlayerWithControls: View {
                 }
             } catch {
                 print("DEBUG: Failed to get video duration: \(error)")
+                await MainActor.run {
+                    self.errorMessage = "Failed to get video duration: \(error.localizedDescription)"
+                    self.isLoading = false
+                }
             }
         }
         
-        // Check if video is playable
+        // Check if video is playable and monitor player status
         Task {
             do {
                 let asset = AVAsset(url: videoURL)
@@ -241,6 +259,10 @@ struct HLSVideoPlayerWithControls: View {
                         print("DEBUG: HLS video is playable, setting up player")
                         self.player = avPlayer
                         self.isLoading = false
+                        
+                        // Monitor player item status
+                        self.monitorPlayerStatus(avPlayer)
+                        
                         // Auto-play the HLS stream
                         avPlayer.play()
                         self.isPlaying = true
@@ -256,6 +278,34 @@ struct HLSVideoPlayerWithControls: View {
                     self.errorMessage = "Failed to load video: \(error.localizedDescription)"
                     self.isLoading = false
                 }
+            }
+        }
+    }
+    
+    private func monitorPlayerStatus(_ player: AVPlayer) {
+        // Monitor player item status using a timer
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
+            guard let playerItem = player.currentItem else {
+                timer.invalidate()
+                return
+            }
+            
+            switch playerItem.status {
+            case .readyToPlay:
+                print("DEBUG: HLS player item is ready to play")
+                self.isLoading = false
+                self.duration = playerItem.duration.seconds
+                timer.invalidate()
+            case .failed:
+                print("DEBUG: HLS player item failed: \(playerItem.error?.localizedDescription ?? "Unknown error")")
+                self.isLoading = false
+                self.errorMessage = playerItem.error?.localizedDescription ?? "Failed to load HLS stream"
+                timer.invalidate()
+            case .unknown:
+                print("DEBUG: HLS player item status is unknown")
+                break
+            @unknown default:
+                break
             }
         }
     }

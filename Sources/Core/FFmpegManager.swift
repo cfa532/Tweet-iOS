@@ -45,6 +45,39 @@ class FFmpegManager {
         }
     }
     
+    /// Converts a video file to multiple quality HLS streams with adaptive bitrate
+    /// - Parameters:
+    ///   - inputPath: Path to the input video file
+    ///   - outputDirectory: Directory where HLS files will be saved
+    /// - Returns: Result indicating success or failure with error message
+    func convertToMultiQualityHLS(inputPath: String, outputDirectory: String) -> Result<String, Error> {
+        print("FFmpeg C Wrapper: Starting multi-quality HLS conversion.")
+        print("Input file: \(inputPath)")
+        print("Output directory: \(outputDirectory)")
+        
+        // Ensure output directory exists
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: outputDirectory) {
+            do {
+                try fileManager.createDirectory(atPath: outputDirectory, withIntermediateDirectories: true)
+            } catch {
+                return .failure(FFmpegError.directoryCreationFailed(error))
+            }
+        }
+        
+        // Call the C function for multi-quality conversion
+        let result = convert_to_multi_quality_hls(inputPath, outputDirectory)
+        
+        if result == 0 {
+            print("✅ FFmpeg multi-quality HLS conversion completed successfully")
+            let masterPlaylistPath = "\(outputDirectory)/master.m3u8"
+            return .success(masterPlaylistPath)
+        } else {
+            print("❌ FFmpeg multi-quality HLS conversion failed: FFmpeg conversion failed with code: \(result)")
+            return .failure(FFmpegError.conversionFailed(result))
+        }
+    }
+    
     /// Gets video information using FFmpeg
     /// - Parameter filePath: Path to the video file
     /// - Returns: Video information or error
@@ -107,6 +140,44 @@ class FFmpegManager {
             }
         } catch {
             return .failure(FFmpegError.thumbnailGenerationFailed)
+        }
+    }
+    
+    /// Convert video to medium quality HLS only (for testing)
+    func convertToMediumHLS(inputPath: String, outputDirectory: String) -> Result<String, Error> {
+        print("🎬 Starting medium-only HLS conversion...")
+        
+        let result = convert_to_medium_hls(inputPath, outputDirectory)
+        
+        if result == 0 {
+            let masterPlaylistPath = "\(outputDirectory)/playlist.m3u8"
+            print("✅ Medium-only HLS conversion successful")
+            return .success(masterPlaylistPath)
+        } else {
+            let error = NSError(domain: "FFmpegManager", code: Int(result), userInfo: [
+                NSLocalizedDescriptionKey: "Medium-only HLS conversion failed with error code: \(result)"
+            ])
+            print("❌ Medium-only HLS conversion failed: \(error.localizedDescription)")
+            return .failure(error)
+        }
+    }
+    
+    /// Convert video to medium quality HLS with specified resolution
+    func convertToMediumHLSWithResolution(inputPath: String, outputDirectory: String, width: Int32, height: Int32) -> Result<String, Error> {
+        print("🎬 Starting medium-only HLS conversion with resolution \(width)x\(height)...")
+        
+        let result = convert_to_medium_hls_with_resolution(inputPath, outputDirectory, width, height)
+        
+        if result == 0 {
+            let masterPlaylistPath = "\(outputDirectory)/playlist.m3u8"
+            print("✅ Medium-only HLS conversion with resolution \(width)x\(height) successful")
+            return .success(masterPlaylistPath)
+        } else {
+            let error = NSError(domain: "FFmpegManager", code: Int(result), userInfo: [
+                NSLocalizedDescriptionKey: "Medium-only HLS conversion failed with error code: \(result)"
+            ])
+            print("❌ Medium-only HLS conversion failed: \(error.localizedDescription)")
+            return .failure(error)
         }
     }
 }

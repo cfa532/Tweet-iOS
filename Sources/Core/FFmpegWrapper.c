@@ -18,6 +18,11 @@
 #include "libswresample/swresample.h"
 #include "libavutil/opt.h"
 
+// Add system headers for directory operations
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+
 // Define resolution configurations
 typedef struct {
     int width;
@@ -27,10 +32,10 @@ typedef struct {
     const char* name;
 } ResolutionConfig;
 
-// Remove unused function declarations
-// static int create_hls_stream(AVFormatContext *input_format_context, const char *output_dir, const ResolutionConfig *config);
-// static int create_hls_stream_simple(AVFormatContext *input_format_context, const char *output_dir, const ResolutionConfig *config);
+// Forward declarations
 static int create_single_hls_stream(AVFormatContext *input_format_context, const char *output_dir, int target_width, int target_height);
+static int create_master_playlist(const char *output_dir, const char *high_dir, const char *medium_dir);
+static int create_directory(const char *path);
 
 int convert_to_hls(const char *input_path, const char *output_dir) {
     // Set log level for detailed output during debugging
@@ -71,7 +76,7 @@ int convert_to_hls(const char *input_path, const char *output_dir) {
 end:
     // Clean up resources
     if (input_format_context) {
-        avformat_close_input(&input_format_context);
+    avformat_close_input(&input_format_context);
     }
 
     if (ret < 0 && ret != AVERROR_EOF) {
@@ -106,6 +111,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
     AVCodecContext *input_audio_codec_ctx = NULL;
     AVFrame *audio_buffer_frame = NULL;
     uint8_t *audio_buffer = NULL;
+    uint8_t *resampled_buffer = NULL;
     int audio_buffer_samples = 0;
     int max_audio_buffer_samples = 0;
     int audio_buffer_size = 0;
@@ -141,7 +147,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
             video_codec_context = NULL;
             goto end;
         }
-
+        
         // Find H.264 encoder
         const AVCodec *video_codec = avcodec_find_encoder(AV_CODEC_ID_H264);
         if (!video_codec) {
@@ -155,11 +161,11 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         video_codec_context = avcodec_alloc_context3(video_codec);
         if (!video_codec_context) {
             av_log(NULL, AV_LOG_ERROR, "Could not allocate video codec context\n");
-            ret = AVERROR_UNKNOWN;
+                ret = AVERROR_UNKNOWN;
             video_codec_context = NULL;
-            goto end;
-        }
-
+                goto end;
+            }
+            
         // Set video encoding parameters for medium quality
         video_codec_context->width = target_width;
         video_codec_context->height = target_height;
@@ -178,12 +184,12 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
 
         // Open video codec
         ret = avcodec_open2(video_codec_context, video_codec, NULL);
-        if (ret < 0) {
+            if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Could not open video codec: %s\n", av_err2str(ret));
             video_codec_context = NULL;
-            goto end;
-        }
-
+                goto end;
+            }
+            
         // Copy parameters to stream
         ret = avcodec_parameters_from_context(video_stream->codecpar, video_codec_context);
         if (ret < 0) {
@@ -315,6 +321,19 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         
         if ((ret = swr_init(swr_ctx)) < 0) {
             fprintf(stderr, "Failed to initialize the resampling context\n");
+            goto end;
+        }
+        
+        // Allocate resampled buffer
+        int max_resampled_samples = audio_codec_context->frame_size * 2; // Buffer up to 2 frames worth
+        int bytes_per_sample = av_get_bytes_per_sample(audio_codec_context->sample_fmt);
+        int channels = audio_codec_context->ch_layout.nb_channels;
+        int resampled_buffer_size = max_resampled_samples * bytes_per_sample * channels;
+        
+        resampled_buffer = av_malloc(resampled_buffer_size);
+        if (!resampled_buffer) {
+            av_log(NULL, AV_LOG_ERROR, "Could not allocate resampled buffer\n");
+            ret = AVERROR_UNKNOWN;
             goto end;
         }
     }
@@ -520,7 +539,7 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
                     if (isnan(input_data[i]) || isinf(input_data[i])) {
                         has_nan_input = 1;
                         av_log(NULL, AV_LOG_ERROR, "NaN/Inf in input audio at sample %d: %f\n", i, input_data[i]);
-                        break;
+            break;
                     }
                 }
                 if (has_nan_input) {
@@ -678,26 +697,40 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
                         goto end;
                     }
                     
-                    // Resample audio frame into temporary frame
-                    int resampled_samples = swr_convert(swr_ctx, 
-                        resampled_frame->data,
-                        resampled_frame->nb_samples,
-                        (const uint8_t**)input_frame->data, input_frame->nb_samples);
-                    
+                    // Resample audio
+                    int resampled_samples = swr_convert(swr_ctx, &resampled_buffer, input_frame->nb_samples,
+                                                       (const uint8_t **)input_frame->data, input_frame->nb_samples);
                     if (resampled_samples < 0) {
-                        av_log(NULL, AV_LOG_ERROR, "Error resampling audio frame: %s\n", av_err2str(resampled_samples));
+                        av_log(NULL, AV_LOG_ERROR, "Error resampling audio: %s\n", av_err2str(resampled_samples));
                         goto end;
                     }
                     
                     av_log(NULL, AV_LOG_INFO, "Resampled audio: input_samples=%d, output_samples=%d\n", 
                            input_frame->nb_samples, resampled_samples);
                     
+                    // Validate resampled audio data for NaN/Inf values
+                    float *resampled_data = (float *)resampled_buffer;
+                    int has_nan_resampled = 0;
+                    int total_samples = resampled_samples * audio_codec_context->ch_layout.nb_channels;
+                    
+                    for (int i = 0; i < total_samples; i++) {
+                        if (isnan(resampled_data[i]) || isinf(resampled_data[i])) {
+                            has_nan_resampled = 1;
+                            av_log(NULL, AV_LOG_WARNING, "NaN/Inf in resampled audio at sample %d: %f, replacing with 0\n", i, resampled_data[i]);
+                            resampled_data[i] = 0.0f;  // Replace with zero
+                        }
+                    }
+                    
+                    if (has_nan_resampled) {
+                        av_log(NULL, AV_LOG_WARNING, "Resampled audio contained NaN/Inf values, replaced with zeros\n");
+                    }
+                    
                     // Copy resampled samples to buffer
                     int bytes_per_sample = av_get_bytes_per_sample(audio_codec_context->sample_fmt);
                     int channels = audio_codec_context->ch_layout.nb_channels;
                     
                     memcpy(audio_buffer + audio_buffer_samples * bytes_per_sample * channels,
-                           resampled_frame->data[0],
+                           resampled_buffer,
                            resampled_samples * bytes_per_sample * channels);
                     
                     audio_buffer_samples += resampled_samples;
@@ -990,6 +1023,7 @@ end:
     if (output_frame) { av_frame_free(&output_frame); }
     if (audio_buffer_frame) { av_frame_free(&audio_buffer_frame); }
     if (audio_buffer) { av_free(audio_buffer); }
+    if (resampled_buffer) { av_free(resampled_buffer); }
     if (sws_ctx) { sws_freeContext(sws_ctx); sws_ctx = NULL; }
     if (swr_ctx) { swr_free(&swr_ctx); swr_ctx = NULL; }
     if (input_video_codec_ctx) { avcodec_free_context(&input_video_codec_ctx); }
@@ -997,7 +1031,6 @@ end:
     if (video_codec_context) { avcodec_free_context(&video_codec_context); }
     if (audio_codec_context) { avcodec_free_context(&audio_codec_context); }
     if (output_format_context) { avio_closep(&output_format_context->pb); avformat_free_context(output_format_context); }
-    if (input_format_context) { avformat_close_input(&input_format_context); }
     
     return ret;
 }
@@ -1027,5 +1060,233 @@ int create_single_hls_stream_with_resolution(const char* input_file, const char*
     // Cleanup
     avformat_close_input(&input_format_context);
     
+    return ret;
+}
+
+// Add new function for multi-quality HLS conversion
+int convert_to_multi_quality_hls(const char *input_path, const char *output_dir) {
+    av_log_set_level(AV_LOG_VERBOSE);
+    printf("FFmpeg C Wrapper: Starting multi-quality HLS conversion.\n");
+    printf("Input file: %s\n", input_path);
+    printf("Output directory: %s\n", output_dir);
+
+    AVFormatContext *input_format_context = NULL;
+    int ret = 0;
+
+    // Open input file
+    if ((ret = avformat_open_input(&input_format_context, input_path, NULL, NULL)) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Could not open input file '%s': %s\n", input_path, av_err2str(ret));
+        return ret;
+    }
+
+    // Find stream information
+    if ((ret = avformat_find_stream_info(input_format_context, NULL)) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Failed to find stream information: %s\n", av_err2str(ret));
+        goto end;
+    }
+
+    // Create directories for each quality level
+    char high_quality_dir[1024];
+    char medium_quality_dir[1024];
+    snprintf(high_quality_dir, sizeof(high_quality_dir), "%s/high", output_dir);
+    snprintf(medium_quality_dir, sizeof(medium_quality_dir), "%s/medium", output_dir);
+
+    // Create directories
+    if (create_directory(high_quality_dir) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Failed to create high quality directory\n");
+        goto end;
+    }
+    if (create_directory(medium_quality_dir) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Failed to create medium quality directory\n");
+        goto end;
+    }
+
+    // Generate high quality stream (720p)
+    printf("Generating high quality stream (720p)...\n");
+    ret = create_single_hls_stream(input_format_context, high_quality_dir, 1280, 720);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Failed to create high quality HLS stream\n");
+        goto end;
+    }
+
+    // Generate medium quality stream (480p)
+    printf("Generating medium quality stream (480p)...\n");
+    ret = create_single_hls_stream(input_format_context, medium_quality_dir, 854, 480);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Failed to create medium quality HLS stream\n");
+        goto end;
+    }
+
+    // Create master playlist
+    printf("Creating master playlist...\n");
+    ret = create_master_playlist(output_dir, high_quality_dir, medium_quality_dir);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Failed to create master playlist\n");
+        goto end;
+    }
+
+    printf("Successfully created multi-quality HLS streams\n");
+
+end:
+    if (input_format_context) {
+        avformat_close_input(&input_format_context);
+    }
+
+    if (ret < 0 && ret != AVERROR_EOF) {
+        av_log(NULL, AV_LOG_ERROR, "Error occurred during conversion: %s\n", av_err2str(ret));
+        return ret;
+    }
+
+    printf("FFmpeg C Wrapper: Multi-quality HLS conversion finished successfully.\n");
+    return 0;
+}
+
+// Create master playlist for adaptive bitrate streaming
+static int create_master_playlist(const char *output_dir, const char *high_dir, const char *medium_dir) {
+    char master_playlist_path[1024];
+    snprintf(master_playlist_path, sizeof(master_playlist_path), "%s/master.m3u8", output_dir);
+    
+    FILE *master_file = fopen(master_playlist_path, "w");
+    if (!master_file) {
+        av_log(NULL, AV_LOG_ERROR, "Could not create master playlist file\n");
+        return AVERROR_UNKNOWN;
+    }
+
+    // Write master playlist content
+    fprintf(master_file, "#EXTM3U\n");
+    fprintf(master_file, "#EXT-X-VERSION:3\n");
+    fprintf(master_file, "\n");
+    
+    // High quality variant
+    fprintf(master_file, "#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720,CODECS=\"avc1.64001f,mp4a.40.2\"\n");
+    fprintf(master_file, "high/playlist.m3u8\n");
+    fprintf(master_file, "\n");
+    
+    // Medium quality variant
+    fprintf(master_file, "#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=854x480,CODECS=\"avc1.64001f,mp4a.40.2\"\n");
+    fprintf(master_file, "medium/playlist.m3u8\n");
+
+    fclose(master_file);
+    return 0;
+}
+
+// Helper function to create directory
+static int create_directory(const char *path) {
+#ifdef _WIN32
+    return _mkdir(path);
+#else
+    return mkdir(path, 0755);
+#endif
+}
+
+int convert_to_medium_hls_with_resolution(const char *input_path, const char *output_dir, int target_width, int target_height) {
+    av_log(NULL, AV_LOG_INFO, "Starting medium-only HLS conversion with resolution %dx%d...\n", target_width, target_height);
+    
+    AVFormatContext *input_format_context = NULL;
+    int ret = 0;
+    int input_closed = 0;
+    
+    // Open input file
+    if ((ret = avformat_open_input(&input_format_context, input_path, NULL, NULL)) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Could not open input file '%s'\n", input_path);
+        return ret;
+    }
+    
+    // Find stream info
+    if ((ret = avformat_find_stream_info(input_format_context, NULL)) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Could not find stream information\n");
+        goto end;
+    }
+    
+    // Create output directory
+    if (create_directory(output_dir) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Failed to create output directory\n");
+        ret = -1;
+        goto end;
+    }
+    
+    // Convert to specified resolution
+    ret = create_single_hls_stream(input_format_context, output_dir, target_width, target_height);
+    
+end:
+    if (input_format_context && !input_closed) {
+        av_log(NULL, AV_LOG_INFO, "Before avformat_close_input: %p\n", input_format_context);
+        av_log(NULL, AV_LOG_INFO, "About to call avformat_close_input...\n");
+        
+        // Try to access some fields to check if context is valid (with bounds checking)
+        if (input_format_context && input_format_context->nb_streams >= 0 && input_format_context->nb_streams < 1000) {
+            av_log(NULL, AV_LOG_INFO, "Context has %d streams\n", input_format_context->nb_streams);
+        } else {
+            av_log(NULL, AV_LOG_WARNING, "Context streams count appears invalid\n");
+        }
+        
+        avformat_close_input(&input_format_context);
+        av_log(NULL, AV_LOG_INFO, "After avformat_close_input: %p\n", input_format_context);
+        input_closed = 1;
+        input_format_context = NULL;
+    }
+    
+    if (ret == 0) {
+        av_log(NULL, AV_LOG_INFO, "Medium-only HLS conversion with resolution %dx%d completed successfully\n", target_width, target_height);
+    } else {
+        av_log(NULL, AV_LOG_ERROR, "Medium-only HLS conversion failed with error: %d\n", ret);
+    }
+
+    return ret;
+}
+
+int convert_to_medium_hls(const char *input_path, const char *output_dir) {
+    av_log(NULL, AV_LOG_INFO, "Starting medium-only HLS conversion (480p)...\n");
+    
+    AVFormatContext *input_format_context = NULL;
+    int ret = 0;
+    int input_closed = 0;
+    
+    // Open input file
+    if ((ret = avformat_open_input(&input_format_context, input_path, NULL, NULL)) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Could not open input file '%s'\n", input_path);
+        return ret;
+    }
+    
+    // Find stream info
+    if ((ret = avformat_find_stream_info(input_format_context, NULL)) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Could not find stream information\n");
+        goto end;
+    }
+    
+    // Create output directory
+    if (create_directory(output_dir) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Failed to create output directory\n");
+        ret = -1;
+        goto end;
+    }
+    
+    // Convert to medium quality (480p)
+    ret = create_single_hls_stream(input_format_context, output_dir, 854, 480);
+    
+end:
+    if (input_format_context && !input_closed) {
+        av_log(NULL, AV_LOG_INFO, "Before avformat_close_input: %p\n", input_format_context);
+        av_log(NULL, AV_LOG_INFO, "About to call avformat_close_input...\n");
+        
+        // Try to access some fields to check if context is valid (with bounds checking)
+        if (input_format_context && input_format_context->nb_streams >= 0 && input_format_context->nb_streams < 1000) {
+            av_log(NULL, AV_LOG_INFO, "Context has %d streams\n", input_format_context->nb_streams);
+        } else {
+            av_log(NULL, AV_LOG_WARNING, "Context streams count appears invalid\n");
+        }
+        
+        avformat_close_input(&input_format_context);
+        av_log(NULL, AV_LOG_INFO, "After avformat_close_input: %p\n", input_format_context);
+        input_closed = 1;
+        input_format_context = NULL;
+    }
+    
+    if (ret == 0) {
+        av_log(NULL, AV_LOG_INFO, "Medium-only HLS conversion completed successfully\n");
+    } else {
+        av_log(NULL, AV_LOG_ERROR, "Medium-only HLS conversion failed with error: %d\n", ret);
+    }
+
     return ret;
 } 

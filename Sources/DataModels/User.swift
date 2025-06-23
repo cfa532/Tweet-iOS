@@ -53,7 +53,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 return cached
             } else {
                 let client = HproseHttpClient()
-                client.timeout = 60
+                client.timeout = 300
                 client.uri = "\(baseUrl)/webapi/"
                 let service = client.useService(HproseService.self) as? AnyObject
                 _hproseService = service
@@ -71,7 +71,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 return cached
             } else {
                 let client = HproseHttpClient()
-                client.timeout = 60
+                client.timeout = 300
                 client.uri = "\(baseUrl)/webapi/"
                 let service = client.useService(HproseService.self) as? AnyObject
                 _uploadService = service
@@ -313,12 +313,13 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     /**
      * Resolves the most responsive writable URL from the user's first hostId.
      * It checks only the first hostId, constructs a potential URL, and checks for its reachability.
-     * If a responsive URL is found, it is set as the user's `writableUrl`.
+     * If a responsive URL is found, it is set as the user's `writableUrl` and returned.
      * If the first host is not responsive, it defaults to the user's `baseUrl`.
      * This method runs asynchronously and updates the `writableUrl` property directly.
      * Only accepts public IP addresses with ports between 8000 and 9000.
+     * Returns the resolved URL or nil if resolution fails.
      */
-    func resolveWritableUrl() async {
+    func resolveWritableUrl() async -> URL? {
         print("[resolveWritableUrl] Starting resolution for user: \(mid)")
         print("[resolveWritableUrl] Current hostIds: \(hostIds ?? [])")
         print("[resolveWritableUrl] Current baseUrl: \(baseUrl?.absoluteString ?? "nil")")
@@ -326,12 +327,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         
         if let existingWritableUrl = writableUrl {
             print("[resolveWritableUrl] Using existing writableUrl: \(existingWritableUrl.absoluteString)")
-            return
+            return existingWritableUrl
         }
         
         guard let hostIds = hostIds, !hostIds.isEmpty else {
             print("[resolveWritableUrl] No hostIds available, keeping existing writableUrl")
-            return
+            return writableUrl
         }
         
         let firstHostId = hostIds.first!
@@ -339,7 +340,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         
         guard !firstHostId.isEmpty else {
             print("[resolveWritableUrl] First hostId is empty, keeping existing writableUrl")
-            return
+            return writableUrl
         }
         
         if let hostIP = await HproseInstance.shared.getHostIP(firstHostId) {
@@ -358,7 +359,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 } else {
                     print("[resolveWritableUrl] Failed to parse IPv6 with port: \(hostIP)")
                     print("⚠️ Failed to parse IPv6 with port (\(hostIP)), keeping existing writableUrl")
-                    return
+                    return writableUrl
                 }
             } else if hostIP.contains(":") && !hostIP.contains("]:") && !hostIP.contains("[") {
                 // IPv4 with port, e.g. 60.163.239.184:8002
@@ -369,7 +370,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 } else {
                     print("[resolveWritableUrl] Failed to parse IPv4 with port: \(hostIP)")
                     print("⚠️ Failed to parse IPv4 with port (\(hostIP)), keeping existing writableUrl")
-                    return
+                    return writableUrl
                 }
             } else {
                 // No port specified, use default port 8010
@@ -387,14 +388,14 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             guard Gadget.isValidPublicIpAddress(cleanIP) else {
                 print("[resolveWritableUrl] CleanIP is not a valid public IP address: \(cleanIP)")
                 print("⚠️ Invalid public IP address (\(cleanIP)), keeping existing writableUrl")
-                return
+                return writableUrl
             }
             
             // Validate port is between 8000-9000
             guard let portNumber = Int(port), (8000...9000).contains(portNumber) else {
                 print("[resolveWritableUrl] Port \(port) is not in valid range 8000-9000")
                 print("⚠️ Invalid port (\(port)), keeping existing writableUrl")
-                return
+                return writableUrl
             }
             
             // Construct URL string
@@ -411,7 +412,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     self.writableUrl = url
                     print("✅ Resolved writableUrl to: \(url.absoluteString) from first hostId: \(firstHostId)")
                 }
-                return
+                return url
             } else {
                 print("[resolveWritableUrl] Failed to construct URL from hostIP: \(hostIP)")
             }
@@ -420,5 +421,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
         print("[resolveWritableUrl] Keeping existing writableUrl")
         print("⚠️ Could not resolve writableUrl from the first hostId (\(firstHostId)), keeping existing writableUrl")
+        return writableUrl
     }
 }

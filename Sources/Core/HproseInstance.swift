@@ -60,7 +60,8 @@ final class HproseInstance: ObservableObject {
     
     private lazy var client: HproseClient = {
         let client = HproseHttpClient()
-        client.timeout = 60
+        client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
+        client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
         return client
     }()
     var hproseService: AnyObject?
@@ -435,7 +436,7 @@ final class HproseInstance: ObservableObject {
             "password": loginUser.password!
         ]
         let newClient = HproseHttpClient()
-        newClient.timeout = 60
+        newClient.timeout = 300  // Increased from 60 to 300 seconds for large uploads
         newClient.uri = "\(loginUser.baseUrl!.absoluteString)/webapi/"
         let newService = newClient.useService(HproseService.self) as AnyObject
         guard let response = newService.runMApp(entry, params, nil) as? [String: Any] else {
@@ -484,7 +485,7 @@ final class HproseInstance: ObservableObject {
         var newClient: HproseClient? = nil
         if user.baseUrl != appUser.baseUrl {
             let client = HproseHttpClient()
-            client.timeout = 60
+            client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
             client.uri = "\(user.baseUrl!.absoluteString)/webapi/"
             service = client.useService(HproseService.self) as AnyObject
             newClient = client
@@ -528,7 +529,7 @@ final class HproseInstance: ObservableObject {
         var newClient: HproseClient? = nil
         if user.baseUrl != appUser.baseUrl {
             let client = HproseHttpClient()
-            client.timeout = 60
+            client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
             client.uri = "\(user.baseUrl!.absoluteString)/webapi/"
             service = client.useService(HproseService.self) as AnyObject
             newClient = client
@@ -724,7 +725,7 @@ final class HproseInstance: ObservableObject {
     }
         
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
-        await appUser.resolveWritableUrl()
+        _ = await appUser.resolveWritableUrl()
         guard let uploadService = appUser.uploadService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
         }
@@ -781,7 +782,7 @@ final class HproseInstance: ObservableObject {
         fileName: String? = nil,
         referenceId: String? = nil
     ) async throws -> MimeiFileType? {
-        await appUser.resolveWritableUrl()
+        _ = await appUser.resolveWritableUrl()
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil")")
         
         // Determine media type first
@@ -847,7 +848,7 @@ final class HproseInstance: ObservableObject {
         fileName: String?,
         referenceId: String?
     ) async throws -> MimeiFileType? {
-        print("Starting HLS conversion, data size: \(data.count) bytes")
+        print("Starting multi-quality HLS conversion, data size: \(data.count) bytes")
         
         // Create temporary directory for video processing
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -899,22 +900,14 @@ final class HproseInstance: ObservableObject {
             print("Input video aspect ratio detection failed, using landscape output: 480x270")
         }
         
-        // Configure HLS configuration for medium quality transcoding
-        let hlsConfig = HLSVideoProcessor.HLSConfig(
-            segmentDuration: 6.0,
-            targetResolution: targetResolution,
-            keyframeInterval: 2.0,
-            qualityLevels: [] // Not used by FFmpeg wrapper - transcoding is handled in C code
-        )
-        
         let hlsOutputDir = tempDir.appendingPathComponent("hls_output")
         
         do {
-            // Convert video to medium quality HLS format with proper transcoding
-            _ = try await hlsProcessor.convertToAdaptiveHLS(
+            // Convert video to multi-quality HLS format with adaptive bitrate
+            let _ = try await convertToMultiQualityHLS(
                 inputURL: originalVideoPath,
                 outputDirectory: hlsOutputDir,
-                config: hlsConfig
+                targetResolution: targetResolution
             )
             
             // Create a simple archive of HLS files
@@ -927,8 +920,6 @@ final class HproseInstance: ObservableObject {
             
             // Read archive data
             let archiveData = try Data(contentsOf: archivePath)
-            
-            // Upload archive package to extract-tar endpoint
             
             // Create HLS archive filename by replacing any video extension with _hls.tar
             let hlsArchiveFileName: String
@@ -957,7 +948,7 @@ final class HproseInstance: ObservableObject {
             return uploadedFile
             
         } catch {
-            print("Error converting video to HLS: \(error)")
+            print("Error converting video to multi-quality HLS: \(error)")
             
             // Throw error indicating video processing failure
             throw NSError(
@@ -967,6 +958,33 @@ final class HproseInstance: ObservableObject {
                     NSLocalizedDescriptionKey: "Video processing failed: \(error.localizedDescription). Tweet upload will be cancelled."
                 ]
             )
+        }
+    }
+    
+    /// Convert video to multi-quality HLS with adaptive bitrate
+    private func convertToMultiQualityHLS(
+        inputURL: URL,
+        outputDirectory: URL,
+        targetResolution: CGSize
+    ) async throws -> String {
+        print("Starting medium-only HLS conversion with resolution \(targetResolution.width)x\(targetResolution.height)...")
+        
+        // Use the new FFmpegManager for medium-only conversion with specified resolution
+        let result = FFmpegManager.shared.convertToMediumHLSWithResolution(
+            inputPath: inputURL.path,
+            outputDirectory: outputDirectory.path,
+            width: Int32(targetResolution.width),
+            height: Int32(targetResolution.height)
+        )
+        
+        switch result {
+        case .success(let masterPlaylistPath):
+            print("✅ FFmpeg medium-only HLS conversion with resolution \(targetResolution.width)x\(targetResolution.height) successful.")
+            return masterPlaylistPath
+            
+        case .failure(let error):
+            print("❌ FFmpeg medium-only HLS conversion failed: \(error.localizedDescription)")
+            throw error
         }
     }
     
@@ -1150,7 +1168,7 @@ final class HproseInstance: ObservableObject {
         // Use a mutable variable for uploadService
         var uploadService = appUser.uploadService
         if uploadService == nil {
-            await appUser.resolveWritableUrl()
+            _ = await appUser.resolveWritableUrl()
             uploadService = appUser.uploadService
             if uploadService == nil {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
@@ -1821,13 +1839,14 @@ final class HproseInstance: ObservableObject {
         // Get the user's cloudDrivePort with fallback to default
         let cloudDrivePort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
         
-        // Ensure writableUrl is available
-        if appUser.writableUrl == nil {
-            await appUser.resolveWritableUrl()
+        // Ensure writableUrl is available and get it directly
+        var writableUrl = appUser.writableUrl
+        if writableUrl == nil {
+            writableUrl = await appUser.resolveWritableUrl()
         }
         
         // Use writableUrl to construct the extract-tar endpoint URL
-        guard let writableUrl = appUser.writableUrl else {
+        guard let writableUrl = writableUrl else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available after resolution"])
         }
         
@@ -1881,9 +1900,15 @@ final class HproseInstance: ObservableObject {
         // Upload with retry mechanism
         var lastError: Error?
         
+        // Create a custom URLSession with longer timeout for large uploads
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 300  // 5 minutes
+        config.timeoutIntervalForResource = 600 // 10 minutes
+        let session = URLSession(configuration: config)
+        
         for attempt in 1...3 {
             do {
-                let (responseData, response) = try await URLSession.shared.data(for: request)
+                let (responseData, response) = try await session.data(for: request)
                 
                 if let httpResponse = response as? HTTPURLResponse {
                     if httpResponse.statusCode == 200 {
@@ -1937,7 +1962,13 @@ final class HproseInstance: ObservableObject {
                     try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     
                     // Re-resolve writable URL in case it changed
-                    await appUser.resolveWritableUrl()
+                    if let newWritableUrl = await appUser.resolveWritableUrl() {
+                        let newExtractTarURL = "\(newWritableUrl.scheme ?? "http")://\(newWritableUrl.host ?? newWritableUrl.absoluteString):\(cloudDrivePort)/extract-tar"
+                        if let newURL = URL(string: newExtractTarURL) {
+                            request.url = newURL
+                            print("Retrying with new writable URL: \(newWritableUrl.absoluteString)")
+                        }
+                    }
                 }
             }
         }
