@@ -364,9 +364,65 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         if let hostIP = await HproseInstance.shared.getHostIP(firstHostId) {
             print("[resolveWritableUrl] Successfully resolved hostIP: \(hostIP) for hostId: \(firstHostId)")
             
+            // Parse the hostIP to extract host and port
+            var host: String
+            var port: Int?
+            
+            if hostIP.contains(":") {
+                // Handle IPv6 addresses with ports: [IPv6]:port
+                if hostIP.hasPrefix("[") && hostIP.contains("]:") {
+                    let endBracketIndex = hostIP.firstIndex(of: "]") ?? hostIP.endIndex
+                    let colonIndex = hostIP.firstIndex(of: ":") ?? hostIP.endIndex
+                    
+                    if endBracketIndex < colonIndex {
+                        // Extract IPv6 address (without brackets)
+                        let ipv6Start = hostIP.index(after: hostIP.startIndex)
+                        host = String(hostIP[ipv6Start..<endBracketIndex])
+                        
+                        // Extract port
+                        let portStart = hostIP.index(after: colonIndex)
+                        if portStart < hostIP.endIndex {
+                            let portString = String(hostIP[portStart...])
+                            port = Int(portString)
+                        }
+                    } else {
+                        // Fallback: treat as regular host:port
+                        let components = hostIP.split(separator: ":", maxSplits: 1)
+                        host = String(components[0])
+                        if components.count > 1 {
+                            port = Int(components[1])
+                        }
+                    }
+                } else {
+                    // Regular IPv4 host:port
+                    let components = hostIP.split(separator: ":", maxSplits: 1)
+                    host = String(components[0])
+                    if components.count > 1 {
+                        port = Int(components[1])
+                    }
+                }
+            } else {
+                // No port specified
+                host = hostIP
+            }
+            
+            print("[resolveWritableUrl] Parsed host: \(host), port: \(port?.description ?? "nil")")
+            
+            // Construct URL
             var components = URLComponents()
             components.scheme = "http"
-            components.host = hostIP
+            
+            // Handle IPv6 addresses properly
+            if host.contains(":") {
+                // IPv6 address - wrap in brackets for URL construction
+                components.host = "[\(host)]"
+            } else {
+                components.host = host
+            }
+            
+            if let port = port {
+                components.port = port
+            }
             
             if let url = components.url {
                 print("[resolveWritableUrl] Constructed URL: \(url.absoluteString)")
