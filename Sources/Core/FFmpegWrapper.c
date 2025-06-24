@@ -55,7 +55,8 @@ int convert_to_hls(const char *input_path, const char *output_dir) {
 
     // 1. Open input file and allocate format context
     if ((ret = avformat_open_input(&input_format_context, input_path, NULL, NULL)) < 0) {
-        av_log(NULL, AV_LOG_ERROR, "Could not open input file '%s': %s\n", input_path, av_err2str(ret));
+        printf("Could not open input file: %s\n", input_path);
+        av_log(NULL, AV_LOG_ERROR, "%s\n", av_err2str(ret));
         return ret;
     }
 
@@ -231,6 +232,12 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         video_stream->time_base = video_codec_context->time_base;
         av_log(NULL, AV_LOG_INFO, "Video stream time base: %d/%d\n", 
                video_stream->time_base.num, video_stream->time_base.den);
+        
+        // CRITICAL: Ensure output stream duration matches input for consistent HLS generation
+        if (input_video_stream->duration != AV_NOPTS_VALUE && input_video_stream->duration > 0) {
+            video_stream->duration = input_video_stream->duration;
+            av_log(NULL, AV_LOG_INFO, "Set video stream duration to match input: %lld\n", video_stream->duration);
+        }
     }
 
     // Create audio stream with transcoding
@@ -305,6 +312,12 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
         audio_stream->time_base = audio_codec_context->time_base;
         av_log(NULL, AV_LOG_INFO, "Audio stream time base: %d/%d\n", 
                audio_stream->time_base.num, audio_stream->time_base.den);
+        
+        // CRITICAL: Ensure output stream duration matches input for consistent HLS generation
+        if (input_audio_stream->duration != AV_NOPTS_VALUE && input_audio_stream->duration > 0) {
+            audio_stream->duration = input_audio_stream->duration;
+            av_log(NULL, AV_LOG_INFO, "Set audio stream duration to match input: %lld\n", audio_stream->duration);
+        }
     }
 
     // Open output file
@@ -320,34 +333,47 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
     hls_options = NULL;
     snprintf(segment_filename, sizeof(segment_filename), "%s/segment%%03d.ts", output_dir);
     
-    // Use shorter segment duration for more accurate duration reporting
-    av_dict_set(&hls_options, "hls_time", "2", 0);  // 2-second segments instead of 6
+    // Use 1-second segments for more accurate duration reporting and consistency
     av_dict_set(&hls_options, "hls_list_size", "0", 0);  // Keep all segments
     av_dict_set(&hls_options, "hls_segment_filename", segment_filename, 0);
     
     // Add options for accurate duration calculation
-    av_dict_set(&hls_options, "hls_flags", "independent_segments", 0);  // Each segment is independent
     av_dict_set(&hls_options, "hls_allow_cache", "1", 0);  // Allow caching
     av_dict_set(&hls_options, "hls_base_url", "", 0);  // Base URL for segments
     
-    // Ensure proper duration calculation
+    // Add segment duration validation to ensure consistency
+    av_dict_set(&hls_options, "hls_segment_duration", "1", 0);  // Force exact segment duration
+    av_dict_set(&hls_options, "hls_flags", "independent_segments+discont_start", 0);  // Better segment handling
+    
+    // CRITICAL: Ensure proper time base for segment duration calculation
+    av_dict_set(&hls_options, "hls_time", "1.0", 0);  // Use floating point for precise timing
     av_dict_set(&hls_options, "hls_segment_type", "mpegts", 0);  // Use MPEG-TS segments
     av_dict_set(&hls_options, "hls_playlist_type", "vod", 0);  // Video on demand for accurate duration
     
     // CRITICAL: Add duration calculation to ensure accurate playlist duration
     if (input_video_stream) {
-        double input_duration = (double)input_video_stream->duration * av_q2d(input_video_stream->time_base);
+        double input_duration = 0.0;
+        
+        // Calculate duration more robustly
+        if (input_video_stream->duration != AV_NOPTS_VALUE && input_video_stream->duration > 0) {
+            input_duration = (double)input_video_stream->duration * av_q2d(input_video_stream->time_base);
+        } else {
+            // Fallback: try to get duration from format context
+            if (input_format_context->duration != AV_NOPTS_VALUE && input_format_context->duration > 0) {
+                input_duration = (double)input_format_context->duration / AV_TIME_BASE;
+            }
+        }
+        
         av_log(NULL, AV_LOG_INFO, "Input video duration: %.2f seconds\n", input_duration);
         
-        // Set the duration in the HLS options to ensure accurate playlist generation
-        char duration_str[32];
-        snprintf(duration_str, sizeof(duration_str), "%.2f", input_duration);
-        av_dict_set(&hls_options, "hls_duration", duration_str, 0);
-        
         // Set the output format context duration to match input duration
-        output_format_context->duration = input_video_stream->duration;
-        output_format_context->start_time = input_video_stream->start_time;
-        av_log(NULL, AV_LOG_INFO, "Set output duration to match input: %lld\n", output_format_context->duration);
+        if (input_duration > 0) {
+            output_format_context->duration = input_video_stream->duration;
+            output_format_context->start_time = input_video_stream->start_time;
+            av_log(NULL, AV_LOG_INFO, "Set output duration to match input: %lld\n", output_format_context->duration);
+        } else {
+            av_log(NULL, AV_LOG_WARNING, "Could not determine input duration, using default\n");
+        }
     }
 
     // Write the stream header
@@ -477,9 +503,9 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
     }
 
     // Initialize variables
-    static int64_t audio_pts_counter = 0;  // Global counter for audio frame timestamps
-    static int64_t last_audio_dts = 0;     // Global counter for audio packet DTS
-    static int64_t last_video_dts = 0;     // Global counter for video packet DTS
+    int64_t audio_pts_counter = 0;  // Counter for audio frame timestamps
+    int64_t last_audio_dts = 0;     // Counter for audio packet DTS
+    int64_t last_video_dts = 0;     // Counter for video packet DTS
     int input_finished = 0;
 
     // Process packets with proper frame preservation
@@ -690,11 +716,17 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
                             // Set proper timestamp for audio frame using input frame PTS
                             // Convert input frame PTS to output time base to maintain correct duration
                             if (input_frame->pts != AV_NOPTS_VALUE) {
-                                audio_buffer->pts = av_rescale_q(input_frame->pts, input_audio_stream->time_base, audio_codec_context->time_base);
+                                // Use simple incremental counter for each frame from the buffer
+                                // This ensures continuous timestamps without discontinuities
+                                audio_buffer->pts = av_rescale_q(input_frame->pts, input_audio_stream->time_base, audio_codec_context->time_base) + audio_pts_counter;
+                                audio_pts_counter += audio_buffer->nb_samples;
+                                av_log(NULL, AV_LOG_INFO, "Using incremental PTS: input_pts=%lld, counter_offset=%lld, final_pts=%lld\n", 
+                                       input_frame->pts, audio_pts_counter - audio_buffer->nb_samples, audio_buffer->pts);
                             } else {
                                 // Fallback to manual counter if input PTS is not available
                                 audio_buffer->pts = audio_pts_counter;
                                 audio_pts_counter += audio_buffer->nb_samples;
+                                av_log(NULL, AV_LOG_WARNING, "Input frame PTS not available, using manual counter: pts=%lld\n", audio_buffer->pts);
                             }
                             
                             // FINAL SAFETY CHECK: Validate audio data before sending to encoder
@@ -745,6 +777,8 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
                                         // Ensure DTS is monotonically increasing
                                         if (temp_pkt->dts != AV_NOPTS_VALUE && temp_pkt->dts <= last_audio_dts) {
                                             temp_pkt->dts = last_audio_dts + 1;
+                                            av_log(NULL, AV_LOG_WARNING, "Audio DTS discontinuity detected, corrected: old_dts=%lld, new_dts=%lld\n", 
+                                                   last_audio_dts, temp_pkt->dts);
                                         }
                                         if (temp_pkt->dts != AV_NOPTS_VALUE) {
                                             last_audio_dts = temp_pkt->dts;
@@ -770,7 +804,6 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
                                     if (ret < 0) {
                                         av_log(NULL, AV_LOG_WARNING, "Error sending frame to encoder after retry: %s, skipping frame\n", av_err2str(ret));
                                         // CRITICAL FIX: Even when skipping frame, we must remove the processed samples from buffer
-                                        // to prevent infinite loop
                                         int remaining_samples = buffered_samples - audio_codec_context->frame_size;
                                         if (remaining_samples > 0) {
                                             memmove(audio_buffer->data[0],
@@ -789,6 +822,162 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
                                             memmove(audio_buffer->data[0],
                                                     audio_buffer->data[0] + frame_bytes,
                                                     remaining_samples * bytes_per_sample * channels);
+                                        }
+                                        buffered_samples = remaining_samples;
+                                        av_log(NULL, AV_LOG_INFO, "Buffer updated after successful initial frame send, buffer_samples=%d\n", buffered_samples);
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Resampling is needed - process audio frame
+                        av_log(NULL, AV_LOG_INFO, "Resampling needed - processing audio frame\n");
+                        AVFrame *resampled_frame = NULL;
+                        int64_t out_samples = 0;
+                        int ret_buf = 0;
+                        // Allocate output frame for resampled audio
+                        resampled_frame = av_frame_alloc();
+                        if (!resampled_frame) {
+                            av_log(NULL, AV_LOG_ERROR, "Could not allocate resampled frame\n");
+                            goto end;
+                        }
+                        // Configure resampled frame
+                        resampled_frame->format = audio_codec_context->sample_fmt;
+                        av_channel_layout_copy(&resampled_frame->ch_layout, &audio_codec_context->ch_layout);
+                        resampled_frame->sample_rate = audio_codec_context->sample_rate;
+                        // Calculate output samples (approximate)
+                        out_samples = av_rescale_rnd(swr_get_delay(swr_ctx, input_audio_codec_ctx->sample_rate) + input_frame->nb_samples,
+                            audio_codec_context->sample_rate, input_audio_codec_ctx->sample_rate, AV_ROUND_UP);
+                        resampled_frame->nb_samples = out_samples;
+                        ret_buf = av_frame_get_buffer(resampled_frame, 0);
+                        if (ret_buf < 0) {
+                            av_log(NULL, AV_LOG_ERROR, "Could not allocate resampled frame buffer\n");
+                            av_frame_free(&resampled_frame);
+                            goto end;
+                        }
+                        // Perform resampling
+                        int ret_swr = swr_convert(swr_ctx, resampled_frame->data, out_samples,
+                            (const uint8_t **)input_frame->data, input_frame->nb_samples);
+                        if (ret_swr < 0) {
+                            av_log(NULL, AV_LOG_ERROR, "Error during resampling: %s\n", av_err2str(ret_swr));
+                            av_frame_free(&resampled_frame);
+                            goto end;
+                        }
+                        resampled_frame->nb_samples = ret_swr;
+                        // Set proper timestamp for resampled frame
+                        if (input_frame->pts != AV_NOPTS_VALUE) {
+                            // Use simple incremental counter for resampled frame
+                            resampled_frame->pts = av_rescale_q(input_frame->pts, input_audio_stream->time_base, audio_codec_context->time_base) + audio_pts_counter;
+                            audio_pts_counter += resampled_frame->nb_samples;
+                            av_log(NULL, AV_LOG_INFO, "Resampled frame PTS: input_pts=%lld, counter_offset=%lld, final_pts=%lld\n", 
+                                   input_frame->pts, audio_pts_counter - resampled_frame->nb_samples, resampled_frame->pts);
+                        } else {
+                            resampled_frame->pts = audio_pts_counter;
+                            audio_pts_counter += resampled_frame->nb_samples;
+                            av_log(NULL, AV_LOG_WARNING, "Input frame PTS not available for resampled frame, using manual counter: pts=%lld\n", resampled_frame->pts);
+                        }
+                        // Check if we have enough space in buffer
+                        if (buffered_samples + resampled_frame->nb_samples > max_buffer_samples) {
+                            av_log(NULL, AV_LOG_ERROR, "Audio buffer overflow after resampling\n");
+                            av_frame_free(&resampled_frame);
+                            goto end;
+                        }
+                        // Copy resampled data to buffer
+                        int bytes_per_sample = av_get_bytes_per_sample(audio_codec_context->sample_fmt);
+                        int channels = audio_codec_context->ch_layout.nb_channels;
+                        memcpy(audio_buffer->data[0] + buffered_samples * bytes_per_sample * channels,
+                            resampled_frame->data[0],
+                            resampled_frame->nb_samples * bytes_per_sample * channels);
+                        buffered_samples += resampled_frame->nb_samples;
+                        av_log(NULL, AV_LOG_INFO, "Resampled audio: input_samples=%d, resampled_samples=%d, buffer_samples=%d\n", input_frame->nb_samples, resampled_frame->nb_samples, buffered_samples);
+                        // Process complete frames from buffer after resampling
+                        while (buffered_samples >= audio_codec_context->frame_size) {
+                            av_log(NULL, AV_LOG_INFO, "Processing complete frame after resampling: buffer_samples=%d, required_frame_size=%d\n", buffered_samples, audio_codec_context->frame_size);
+                            int frame_bytes = audio_codec_context->frame_size * bytes_per_sample * channels;
+                            audio_buffer->nb_samples = audio_codec_context->frame_size;
+                            audio_buffer->format = audio_codec_context->sample_fmt;
+                            av_channel_layout_copy(&audio_buffer->ch_layout, &audio_codec_context->ch_layout);
+                            // Set proper timestamp for audio frame using input frame PTS
+                            // Convert input frame PTS to output time base to maintain correct duration
+                            if (input_frame->pts != AV_NOPTS_VALUE) {
+                                // Use simple incremental counter for each frame from the buffer
+                                // This ensures continuous timestamps without discontinuities
+                                audio_buffer->pts = av_rescale_q(input_frame->pts, input_audio_stream->time_base, audio_codec_context->time_base) + audio_pts_counter;
+                                audio_pts_counter += audio_buffer->nb_samples;
+                                av_log(NULL, AV_LOG_INFO, "Using incremental PTS: input_pts=%lld, counter_offset=%lld, final_pts=%lld\n", 
+                                       input_frame->pts, audio_pts_counter - audio_buffer->nb_samples, audio_buffer->pts);
+                            } else {
+                                // Fallback to manual counter if input PTS is not available
+                                audio_buffer->pts = audio_pts_counter;
+                                audio_pts_counter += audio_buffer->nb_samples;
+                                av_log(NULL, AV_LOG_WARNING, "Input frame PTS not available, using manual counter: pts=%lld\n", audio_buffer->pts);
+                            }
+                            // FINAL SAFETY CHECK: Validate audio data before sending to encoder
+                            float *final_audio_data = (float *)audio_buffer->data[0];
+                            int total_final_samples = audio_buffer->nb_samples * audio_buffer->ch_layout.nb_channels;
+                            int has_final_nan = 0;
+                            for (int i = 0; i < total_final_samples; i++) {
+                                if (isnan(final_audio_data[i]) || isinf(final_audio_data[i])) {
+                                    has_final_nan = 1;
+                                    av_log(NULL, AV_LOG_WARNING, "Final NaN/Inf check: sample %d = %f, replacing with 0\n", i, final_audio_data[i]);
+                                    final_audio_data[i] = 0.0f;
+                                }
+                            }
+                            if (has_final_nan) {
+                                av_log(NULL, AV_LOG_WARNING, "Final audio frame contained NaN/Inf values, replaced with zeros\n");
+                            }
+                            av_log(NULL, AV_LOG_INFO, "Sending resampled audio frame: samples=%d, format=%d, channels=%d, pts=%lld\n", audio_buffer->nb_samples, audio_buffer->format, audio_buffer->ch_layout.nb_channels, audio_buffer->pts);
+                            ret = avcodec_send_frame(audio_codec_context, audio_buffer);
+                            if (ret < 0) {
+                                if (ret == AVERROR(EAGAIN)) {
+                                    av_log(NULL, AV_LOG_INFO, "Audio encoder buffer full, receiving packets to free space\n");
+                                    AVPacket *temp_pkt = av_packet_alloc();
+                                    if (!temp_pkt) {
+                                        av_log(NULL, AV_LOG_ERROR, "Could not allocate temporary packet\n");
+                                        av_frame_free(&resampled_frame);
+                                        goto end;
+                                    }
+                                    while (avcodec_receive_packet(audio_codec_context, temp_pkt) >= 0) {
+                                        temp_pkt->stream_index = audio_stream->index;
+                                        if (temp_pkt->pts != AV_NOPTS_VALUE) {
+                                            temp_pkt->pts = av_rescale_q(temp_pkt->pts, audio_codec_context->time_base, audio_stream->time_base);
+                                        }
+                                        if (temp_pkt->dts != AV_NOPTS_VALUE) {
+                                            temp_pkt->dts = av_rescale_q(temp_pkt->dts, audio_codec_context->time_base, audio_stream->time_base);
+                                        }
+                                        if (temp_pkt->dts != AV_NOPTS_VALUE && temp_pkt->dts <= last_audio_dts) {
+                                            temp_pkt->dts = last_audio_dts + 1;
+                                        }
+                                        if (temp_pkt->dts != AV_NOPTS_VALUE) {
+                                            last_audio_dts = temp_pkt->dts;
+                                        }
+                                        if (temp_pkt->pts != AV_NOPTS_VALUE && temp_pkt->dts != AV_NOPTS_VALUE && temp_pkt->pts < temp_pkt->dts) {
+                                            temp_pkt->pts = temp_pkt->dts;
+                                        }
+                                        ret = av_interleaved_write_frame(output_format_context, temp_pkt);
+                                        if (ret < 0) {
+                                            av_log(NULL, AV_LOG_ERROR, "Error writing audio packet: %s\n", av_err2str(ret));
+                                            av_packet_free(&temp_pkt);
+                                            av_frame_free(&resampled_frame);
+                                            goto end;
+                                        }
+                                    }
+                                    av_packet_free(&temp_pkt);
+                                    ret = avcodec_send_frame(audio_codec_context, audio_buffer);
+                                    if (ret < 0) {
+                                        av_log(NULL, AV_LOG_WARNING, "Error sending frame to encoder after retry: %s, skipping frame\n", av_err2str(ret));
+                                        int remaining_samples = buffered_samples - audio_codec_context->frame_size;
+                                        if (remaining_samples > 0) {
+                                            memmove(audio_buffer->data[0], audio_buffer->data[0] + frame_bytes, remaining_samples * bytes_per_sample * channels);
+                                        }
+                                        buffered_samples = remaining_samples;
+                                        av_log(NULL, AV_LOG_WARNING, "Skipped frame due to encoder error, buffer_samples=%d\n", buffered_samples);
+                                        break;
+                                    } else {
+                                        av_log(NULL, AV_LOG_INFO, "Initial audio frame sent successfully, updating buffer\n");
+                                        int remaining_samples = buffered_samples - audio_codec_context->frame_size;
+                                        if (remaining_samples > 0) {
+                                            memmove(audio_buffer->data[0], audio_buffer->data[0] + frame_bytes, remaining_samples * bytes_per_sample * channels);
                                         }
                                         buffered_samples = remaining_samples;
                                         av_log(NULL, AV_LOG_INFO, "Buffer updated after successful initial frame send, buffer_samples=%d\n", buffered_samples);
@@ -958,6 +1147,8 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
             // Ensure DTS is monotonically increasing
             if (output_pkt->dts != AV_NOPTS_VALUE && output_pkt->dts <= last_audio_dts) {
                 output_pkt->dts = last_audio_dts + 1;
+                av_log(NULL, AV_LOG_WARNING, "Audio DTS discontinuity detected, corrected: old_dts=%lld, new_dts=%lld\n", 
+                       last_audio_dts, output_pkt->dts);
             }
             if (output_pkt->dts != AV_NOPTS_VALUE) {
                 last_audio_dts = output_pkt->dts;
