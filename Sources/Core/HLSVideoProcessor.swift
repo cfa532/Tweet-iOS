@@ -119,22 +119,46 @@ public class HLSVideoProcessor {
     /// Get video aspect ratio
     public func getVideoAspectRatio(url: URL) async throws -> Float? {
         print("DEBUG: Getting video aspect ratio for URL: \(url)")
+        
+        // Create a strong reference to the asset to prevent deallocation during async operations
         let asset = AVURLAsset(url: url)
-        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
-            print("DEBUG: No video track found in getVideoAspectRatio")
+        
+        do {
+            // Load tracks synchronously to avoid weak reference issues
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard let track = tracks.first else {
+                print("DEBUG: No video track found in getVideoAspectRatio")
+                return nil
+            }
+            
+            // Load size synchronously
+            let size = try await track.load(.naturalSize)
+            print("DEBUG: Video dimensions: \(size.width) x \(size.height)")
+            
+            // Calculate aspect ratio with safety check
+            guard size.height > 0 else {
+                print("DEBUG: Invalid video height (0), cannot calculate aspect ratio")
+                return nil
+            }
+            
+            let aspectRatio = Float(size.width / size.height)
+            print("DEBUG: Calculated aspect ratio: \(aspectRatio)")
+            return aspectRatio
+            
+        } catch {
+            print("DEBUG: Error getting video aspect ratio: \(error)")
             return nil
         }
-        let size = try await track.load(.naturalSize)
-        print("DEBUG: Video dimensions: \(size.width) x \(size.height)")
-        let aspectRatio = size.height == 0 ? nil : Float(size.width / size.height)
-        print("DEBUG: Calculated aspect ratio: \(aspectRatio ?? 0)")
-        return aspectRatio
     }
 
     func canHandleVideoFormat(url: URL) async -> Bool {
+        // Create a strong reference to the asset to prevent deallocation during async operations
         let asset = AVAsset(url: url)
+        
         do {
-            return try await asset.load(.isPlayable)
+            let isPlayable = try await asset.load(.isPlayable)
+            print("DEBUG: Video playability check result: \(isPlayable)")
+            return isPlayable
         } catch {
             print("Error checking if video is playable: \(error)")
             return false
@@ -165,6 +189,8 @@ public class HLSVideoProcessor {
     /// Get video dimensions (width and height) from a video file
     public func getVideoDimensions(url: URL) async -> CGSize {
         print("DEBUG: Getting video dimensions for URL: \(url)")
+        
+        // Create a strong reference to the asset to prevent deallocation during async operations
         let asset = AVAsset(url: url)
         
         do {
