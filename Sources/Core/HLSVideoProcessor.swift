@@ -9,130 +9,64 @@ import Foundation
 import AVFoundation
 import UIKit
 
-/// HLSVideoProcessor provides native iOS video processing for HLS streaming
-/// Uses AVFoundation for video encoding and manual HLS segmentation
+/// HLSVideoProcessor provides video metadata extraction for backend-based video processing
+/// Since video conversion is now handled on the backend, this class focuses on aspect ratio detection
 public class HLSVideoProcessor {
     
     public static let shared = HLSVideoProcessor()
     
     private init() {}
     
-    /// Configuration for HLS video processing
-    public struct HLSConfig {
-        let segmentDuration: TimeInterval
-        let targetResolution: CGSize
-        let keyframeInterval: Float
-        let qualityLevels: [QualityLevel]
-        
-        public init(
-            segmentDuration: TimeInterval = 6.0,
-            targetResolution: CGSize = CGSize(width: 480, height: 270), // 480p
-            keyframeInterval: Float = 2.0,
-            qualityLevels: [QualityLevel] = []
-        ) {
-            self.segmentDuration = segmentDuration
-            self.targetResolution = targetResolution
-            self.keyframeInterval = keyframeInterval
-            self.qualityLevels = qualityLevels.isEmpty ? [QualityLevel.medium] : qualityLevels
-        }
-    }
-    
-    /// Quality level configuration for medium quality HLS transcoding
-    public struct QualityLevel {
-        let name: String
-        let resolution: CGSize
-        let videoBitrate: Int
-        let audioBitrate: Int
-        let bandwidth: Int
-        
-        public init(
-            name: String,
-            resolution: CGSize,
-            videoBitrate: Int,
-            audioBitrate: Int = 128000,
-            bandwidth: Int? = nil
-        ) {
-            self.name = name
-            self.resolution = resolution
-            self.videoBitrate = videoBitrate
-            self.audioBitrate = audioBitrate
-            self.bandwidth = bandwidth ?? (videoBitrate + audioBitrate)
-        }
-        
-        /// Medium quality level (480p) - default for HLS transcoding
-        public static let medium = QualityLevel(
-            name: "480p",
-            resolution: CGSize(width: 480, height: 270),
-            videoBitrate: 1000000,
-            audioBitrate: 128000
-        )
-    }
-    
-    /// Check if video format is supported based on file extension
-    public func isSupportedVideoFormat(_ fileName: String) -> Bool {
-        let supportedExtensions = ["mp4", "mov", "m4v", "mkv", "avi", "flv", "wmv", "webm", "ts", "mts", "m2ts", "vob", "dat", "ogv", "ogg", "f4v", "asf"]
-        let fileExtension = fileName.components(separatedBy: ".").last?.lowercased()
-        return fileExtension != nil && supportedExtensions.contains(fileExtension!)
-    }
-    
-    /// Convert video to medium quality HLS format with proper transcoding
-    public func convertToAdaptiveHLS(
-        inputURL: URL,
-        outputDirectory: URL,
-        config: HLSConfig
-    ) async throws -> URL {
-        print("Starting medium quality HLS conversion with FFmpeg transcoding...")
-
-        // Ensure the output directory exists
-        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true, attributes: nil)
-
-        let inputPath = inputURL.path
-        let outputPath = outputDirectory.path
-
-        // Use the new FFmpegManager for transcoding with target resolution
-        let targetWidth = Int32(config.targetResolution.width)
-        let targetHeight = Int32(config.targetResolution.height)
-        let result = FFmpegManager.shared.convertToHLS(
-            inputPath: inputPath, 
-            outputDirectory: outputPath,
-            targetWidth: targetWidth,
-            targetHeight: targetHeight
-        )
-        
-        switch result {
-        case .success(let playlistPath):
-            print("✅ FFmpeg medium quality HLS conversion successful.")
-            let playlistURL = URL(fileURLWithPath: playlistPath)
-            
-            if FileManager.default.fileExists(atPath: playlistURL.path) {
-                return playlistURL
-            } else {
-                throw HLSProcessorError.exportFailed(NSError(domain: "HLSVideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "FFmpeg conversion succeeded, but the M3U8 playlist file was not found."]))
-            }
-            
-        case .failure(let error):
-            print("❌ FFmpeg HLS conversion failed: \(error.localizedDescription)")
-            throw HLSProcessorError.exportFailed(error)
-        }
-    }
-    
-    /// Get video aspect ratio
+    /// Get video aspect ratio with multiple fallback approaches
     public func getVideoAspectRatio(url: URL) async throws -> Float? {
         print("DEBUG: Getting video aspect ratio for URL: \(url)")
         
-        // Create a strong reference to the asset to prevent deallocation during async operations
-        let asset = AVURLAsset(url: url)
+        // First, check if the file exists and is readable
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            print("DEBUG: Video file does not exist at path: \(url.path)")
+            return nil
+        }
         
+        // Get file size to ensure it's not empty
         do {
-            // Load tracks synchronously to avoid weak reference issues
+            let fileAttributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let fileSize = fileAttributes[.size] as? UInt64 ?? 0
+            if fileSize == 0 {
+                print("DEBUG: Video file is empty")
+                return nil
+            }
+        } catch {
+            print("DEBUG: Could not get file attributes: \(error)")
+            return nil
+        }
+        
+        // Try multiple approaches to get the aspect ratio
+        
+        // Approach 1: Use AVURLAsset with better error handling
+        do {
+            let asset = AVURLAsset(url: url, options: [
+                AVURLAssetPreferPreciseDurationAndTimingKey: true
+            ])
+            
+            // Check if the asset is playable first
+            let isPlayable = try await asset.load(.isPlayable)
+            if !isPlayable {
+                print("DEBUG: Video asset is not playable")
+                throw NSError(domain: "AVFoundationErrorDomain", code: -11828, userInfo: [NSLocalizedDescriptionKey: "Video is not playable"])
+            }
+            
+            // Load tracks with better error handling
             let tracks = try await asset.loadTracks(withMediaType: .video)
             guard let track = tracks.first else {
-                print("DEBUG: No video track found in getVideoAspectRatio")
+                print("DEBUG: No video track found")
                 return nil
             }
             
-            // Load size synchronously
-            let size = try await track.load(.naturalSize)
+            // Load size with timeout
+            let size = try await withTimeout(seconds: 5.0) {
+                try await track.load(.naturalSize)
+            }
+            
             print("DEBUG: Video dimensions: \(size.width) x \(size.height)")
             
             // Calculate aspect ratio with safety check
@@ -146,44 +80,72 @@ public class HLSVideoProcessor {
             return aspectRatio
             
         } catch {
-            print("DEBUG: Error getting video aspect ratio: \(error)")
-            return nil
+            print("DEBUG: AVURLAsset approach failed: \(error)")
         }
-    }
-
-    func canHandleVideoFormat(url: URL) async -> Bool {
-        // Create a strong reference to the asset to prevent deallocation during async operations
-        let asset = AVAsset(url: url)
         
+        // Approach 2: Try with AVAsset instead of AVURLAsset
         do {
+            let asset = AVAsset(url: url)
+            
+            // Check if the asset is playable
             let isPlayable = try await asset.load(.isPlayable)
-            print("DEBUG: Video playability check result: \(isPlayable)")
-            return isPlayable
+            if !isPlayable {
+                print("DEBUG: Video asset is not playable (AVAsset approach)")
+                return nil
+            }
+            
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard let track = tracks.first else {
+                print("DEBUG: No video track found (AVAsset approach)")
+                return nil
+            }
+            
+            let size = try await withTimeout(seconds: 5.0) {
+                try await track.load(.naturalSize)
+            }
+            
+            guard size.height > 0 else {
+                print("DEBUG: Invalid video height (0) in AVAsset approach")
+                return nil
+            }
+            
+            let aspectRatio = Float(size.width / size.height)
+            print("DEBUG: Calculated aspect ratio (AVAsset approach): \(aspectRatio)")
+            return aspectRatio
+            
         } catch {
-            print("Error checking if video is playable: \(error)")
-            return false
+            print("DEBUG: AVAsset approach also failed: \(error)")
         }
+        
+        // Approach 3: Try to get dimensions using getVideoDimensions method
+        let dimensions = await getVideoDimensions(url: url)
+        if dimensions.height > 0 {
+            let aspectRatio = Float(dimensions.width / dimensions.height)
+            print("DEBUG: Calculated aspect ratio (getVideoDimensions approach): \(aspectRatio)")
+            return aspectRatio
+        }
+        
+        // If all approaches fail, return nil
+        print("DEBUG: All aspect ratio detection approaches failed")
+        return nil
     }
-
-    /// Check if video processing is supported on this device
-    public func isVideoProcessingSupported() -> Bool {
-        // Check if the device supports video export by trying to create an export session
-        // This is a more reliable approach than checking deprecated export presets
-        let dummyURL = URL(fileURLWithPath: "")
-        let dummyAsset = AVAsset(url: dummyURL)
-        
-        // Try to create an export session with a common preset
-        // If this succeeds, video processing is supported
-        guard let exportSession = AVAssetExportSession(
-            asset: dummyAsset,
-            presetName: AVAssetExportPresetPassthrough
-        ) else {
-            return false
+    
+    /// Helper function to add timeout to async operations
+    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
+        return try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                return try await operation()
+            }
+            
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw NSError(domain: "TimeoutError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Operation timed out after \(seconds) seconds"])
+            }
+            
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
         }
-        
-        // Clean up
-        exportSession.outputURL = nil
-        return true
     }
 
     /// Get video dimensions (width and height) from a video file
@@ -209,37 +171,10 @@ public class HLSVideoProcessor {
             return CGSize(width: 480, height: 270) // Default fallback
         }
     }
-}
-
-// MARK: - Error Types
-
-public enum HLSProcessorError: Error, LocalizedError {
-    case exportSessionCreationFailed
-    case exportFailed(Error?)
-    case noVideoTrack
-    case invalidVideoFormat
     
-    public var errorDescription: String? {
-        switch self {
-        case .exportSessionCreationFailed:
-            return "Failed to create export session"
-        case .exportFailed(let error):
-            return "Export failed: \(error?.localizedDescription ?? "Unknown error")"
-        case .noVideoTrack:
-            return "No video track found in asset"
-        case .invalidVideoFormat:
-            return "Invalid video format"
-        }
-    }
-}
-
-// MARK: - Convenience Extensions
-
-extension HLSVideoProcessor {
-    
-    /// Get supported video formats
-    public func getSupportedVideoFormats() -> [String] {
-        return [
+    /// Check if video format is supported based on file extension
+    public func isSupportedVideoFormat(_ fileName: String) -> Bool {
+        let supportedExtensions = [
             // Common formats
             "mp4", "mov", "m4v", "3gp",
             
@@ -253,29 +188,9 @@ extension HLSVideoProcessor {
             "mkv", "ogv", "ogg",
             
             // Other formats
-            "ts", "mts", "m2ts", "vob", "dat",
-            
-            // Audio formats (for video with audio)
-            "mp3", "aac", "wav", "flac", "m4a"
+            "ts", "mts", "m2ts", "vob", "dat"
         ]
-    }
-    
-    /// Create medium quality HLS (main method for video uploads)
-    public func createMediumQualityHLS(
-        inputURL: URL,
-        outputDirectory: URL
-    ) async throws -> URL {
-        let config = HLSConfig(
-            segmentDuration: 6.0,
-            targetResolution: CGSize(width: 480, height: 270),
-            keyframeInterval: 2.0,
-            qualityLevels: [QualityLevel.medium]
-        )
-        
-        return try await convertToAdaptiveHLS(
-            inputURL: inputURL,
-            outputDirectory: outputDirectory,
-            config: config
-        )
+        let fileExtension = fileName.components(separatedBy: ".").last?.lowercased()
+        return fileExtension != nil && supportedExtensions.contains(fileExtension!)
     }
 } 

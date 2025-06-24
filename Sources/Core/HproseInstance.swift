@@ -522,7 +522,7 @@ final class HproseInstance: ObservableObject {
             "ps": pageSize,
             "appuserid": appUser.mid
         ] as [String : Any]
-        guard var service = hproseService else {
+        guard var service = user.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         
@@ -785,437 +785,285 @@ final class HproseInstance: ObservableObject {
         _ = await appUser.resolveWritableUrl()
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil")")
         
-        // Determine media type first
-        let mediaType: MediaType
-        if typeIdentifier.hasPrefix("public.image") {
-            mediaType = .image
-        } else if typeIdentifier.hasPrefix("public.movie") || typeIdentifier.contains("quicktime-movie") || typeIdentifier.contains("movie") {
-            mediaType = .video
-        } else if typeIdentifier.hasPrefix("public.audio") || typeIdentifier.contains("audio") {
-            mediaType = .audio
-        } else if typeIdentifier == "public.composite-content" {
-            mediaType = .pdf
-        } else if typeIdentifier == "public.zip-archive" {
-            mediaType = .zip
-        } else {
-            // Try to determine type from file extension
-            let fileExtension = typeIdentifier.components(separatedBy: ".").last?.lowercased()
+        // Use VideoProcessor to determine media type and handle upload
+        let videoProcessor = VideoProcessor()
+        return try await videoProcessor.processAndUpload(
+            data: data,
+            typeIdentifier: typeIdentifier,
+            fileName: fileName,
+            referenceId: referenceId,
+            appUser: appUser,
+            appId: appId
+        )
+    }
+    
+    // MARK: - Video Processing
+    /// Consolidated video processing class that handles all video-related operations
+    class VideoProcessor {
+        
+        /// Process and upload video or other media files
+        func processAndUpload(
+            data: Data,
+            typeIdentifier: String,
+            fileName: String?,
+            referenceId: String?,
+            appUser: User,
+            appId: String
+        ) async throws -> MimeiFileType? {
+            
+            // Determine media type
+            let mediaType = detectMediaType(from: typeIdentifier, fileName: fileName)
+            print("DEBUG: Detected media type: \(mediaType.rawValue)")
+            
+            // Handle video files with backend conversion
+            if mediaType == .video {
+                print("Processing video with backend conversion")
+                return try await uploadVideoForBackendConversion(
+                    data: data,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    appUser: appUser
+                )
+            } else {
+                print("Processing non-video file with regular upload")
+                return try await uploadRegularFile(
+                    data: data,
+                    typeIdentifier: typeIdentifier,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    mediaType: mediaType,
+                    appUser: appUser,
+                    appId: appId
+                )
+            }
+        }
+        
+        /// Detect media type from type identifier and filename
+        private func detectMediaType(from typeIdentifier: String, fileName: String?) -> MediaType {
+            // Check type identifier first
+            if typeIdentifier.hasPrefix("public.image") {
+                return .image
+            } else if typeIdentifier.hasPrefix("public.movie") || typeIdentifier.contains("quicktime-movie") || typeIdentifier.contains("movie") {
+                return .video
+            } else if typeIdentifier.hasPrefix("public.audio") || typeIdentifier.contains("audio") {
+                return .audio
+            } else if typeIdentifier == "public.composite-content" {
+                return .pdf
+            } else if typeIdentifier == "public.zip-archive" {
+                return .zip
+            }
+            
+            // Fallback to file extension check
+            let fileExtension = (fileName ?? typeIdentifier).components(separatedBy: ".").last?.lowercased()
             switch fileExtension {
             case "jpg", "jpeg", "png", "gif", "heic", "heif":
-                mediaType = .image
+                return .image
             case "mp4", "mov", "m4v", "mkv", "avi", "flv", "wmv", "webm", "ts", "mts", "m2ts", "vob", "dat", "ogv", "ogg", "f4v", "asf":
-                mediaType = .video
+                return .video
             case "mp3", "m4a", "wav", "flac", "aac":
-                mediaType = .audio
+                return .audio
             case "pdf":
-                mediaType = .pdf
+                return .pdf
             case "zip":
-                mediaType = .zip
+                return .zip
             case "doc", "docx":
-                mediaType = .word
+                return .word
             default:
-                mediaType = .unknown
+                return .unknown
             }
         }
         
-        print("DEBUG: Detected media type: \(mediaType.rawValue)")
-        
-        // Handle video conversion to HLS if it's a video
-        if mediaType == .video {
-            print("Processing video with HLS transcoding")
-            return try await uploadVideoAsHLS(
-                data: data,
-                typeIdentifier: typeIdentifier,
-                fileName: fileName,
-                referenceId: referenceId
-            )
-        } else {
-            print("Processing non-video file with regular upload")
-            // Handle non-video files with original logic
-            return try await uploadRegularFile(
-                data: data,
-                typeIdentifier: typeIdentifier,
-                fileName: fileName,
-                referenceId: referenceId,
-                mediaType: mediaType
-            )
-        }
-    }
-    
-    private func uploadVideoAsHLS(
-        data: Data,
-        typeIdentifier: String,
-        fileName: String?,
-        referenceId: String?
-    ) async throws -> MimeiFileType? {
-        print("Starting multi-quality HLS conversion, data size: \(data.count) bytes")
-        
-        // Create temporary directory for video processing
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        
-        // Save original video to temp directory
-        let originalVideoPath = tempDir.appendingPathComponent("original_video.mp4")
-        try data.write(to: originalVideoPath)
-        
-        // Check if the video format is supported
-        let hlsProcessor = HLSVideoProcessor.shared
-        
-        // First check file extension support
-        if let fileName = fileName, !hlsProcessor.isSupportedVideoFormat(fileName) {
-            print("Warning: File extension not in supported list: \(fileName)")
-        }
-        
-        // Then check if AVFoundation can actually handle the format
-        let canHandle = await hlsProcessor.canHandleVideoFormat(url: originalVideoPath)
-        
-        if !canHandle {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video format not supported by AVFoundation"])
-        }
-        
-        // Get input video aspect ratio to determine orientation
-        let aspectRatio = try await getVideoAspectRatio(url: originalVideoPath)
-        print("DEBUG: Detected input video aspect ratio: \(aspectRatio ?? 0)")
-        
-        // Set target resolution based on input aspect ratio
-        let targetResolution: CGSize
-        if let ratio = aspectRatio {
-            print("DEBUG: Aspect ratio is: \(ratio)")
-            if ratio < 1.0 {
-                // Portrait video: aspect ratio < 1.0 (width < height)
-                targetResolution = CGSize(width: 270, height: 480)
-                print("DEBUG: Aspect ratio < 1.0, detected as PORTRAIT")
-                print("Input video is portrait (aspect ratio: \(ratio)), using portrait output: 270x480")
-            } else {
-                // Landscape video: aspect ratio >= 1.0 (width >= height)
-                targetResolution = CGSize(width: 480, height: 270)
-                print("DEBUG: Aspect ratio >= 1.0, detected as LANDSCAPE")
-                print("Input video is landscape (aspect ratio: \(ratio)), using landscape output: 480x270")
-            }
-        } else {
-            // Fallback to landscape if aspect ratio detection fails
-            targetResolution = CGSize(width: 480, height: 270)
-            print("DEBUG: Aspect ratio detection failed, using fallback LANDSCAPE")
-            print("Input video aspect ratio detection failed, using landscape output: 480x270")
-        }
-        
-        let hlsOutputDir = tempDir.appendingPathComponent("hls_output")
-        
-        do {
-            // Convert video to multi-quality HLS format with adaptive bitrate
-            let _ = try await convertToMultiQualityHLS(
-                inputURL: originalVideoPath,
-                outputDirectory: hlsOutputDir,
-                targetResolution: targetResolution
-            )
+        /// Upload video to backend for conversion
+        private func uploadVideoForBackendConversion(
+            data: Data,
+            fileName: String?,
+            referenceId: String?,
+            appUser: User
+        ) async throws -> MimeiFileType? {
+            print("Uploading original video to backend for conversion, data size: \(data.count) bytes")
             
-            // Create a simple archive of HLS files
-            let archivePath = tempDir.appendingPathComponent("hls_package.tar")
-            let archiveSuccess = await createSimpleArchive(from: hlsOutputDir.path, to: archivePath.path)
+            // Get the user's cloudDrivePort with fallback to default
+            let cloudDrivePort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
             
-            guard archiveSuccess else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create archive package"])
+            // Ensure writableUrl is available
+            var writableUrl = appUser.writableUrl
+            if writableUrl == nil {
+                writableUrl = await appUser.resolveWritableUrl()
             }
             
-            // Read archive data
-            let archiveData = try Data(contentsOf: archivePath)
-            
-            // Create HLS archive filename by replacing any video extension with _hls.tar
-            let hlsArchiveFileName: String
-            if let originalFileName = fileName {
-                // Handle various video extensions
-                let videoExtensions = [".mp4", ".mov", ".m4v", ".avi", ".mkv", ".flv", ".wmv", ".webm", ".3gp"]
-                var newFileName = originalFileName
-                for ext in videoExtensions {
-                    if originalFileName.lowercased().hasSuffix(ext) {
-                        newFileName = String(originalFileName.dropLast(ext.count)) + "_hls.tar"
-                        break
-                    }
-                }
-                hlsArchiveFileName = newFileName
-            } else {
-                hlsArchiveFileName = "hls_package.tar"
+            guard let writableUrl = writableUrl else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
-            var uploadedFile = try await uploadHLSArchive(
-                data: archiveData,
-                fileName: hlsArchiveFileName,
-                referenceId: referenceId,
-                originalVideoURL: originalVideoPath
-            )
-            uploadedFile.fileName = fileName
-            return uploadedFile
-            
-        } catch {
-            print("Error converting video to multi-quality HLS: \(error)")
-            
-            // Throw error indicating video processing failure
-            throw NSError(
-                domain: "HproseService", 
-                code: -1, 
-                userInfo: [
-                    NSLocalizedDescriptionKey: "Video processing failed: \(error.localizedDescription). Tweet upload will be cancelled."
-                ]
-            )
-        }
-    }
-    
-    /// Convert video to multi-quality HLS with adaptive bitrate
-    private func convertToMultiQualityHLS(
-        inputURL: URL,
-        outputDirectory: URL,
-        targetResolution: CGSize
-    ) async throws -> String {
-        print("Starting medium-only HLS conversion with resolution \(targetResolution.width)x\(targetResolution.height)...")
-        
-        // Use the new FFmpegManager for medium-only conversion with specified resolution
-        let result = FFmpegManager.shared.convertToMediumHLSWithResolution(
-            inputPath: inputURL.path,
-            outputDirectory: outputDirectory.path,
-            width: Int32(targetResolution.width),
-            height: Int32(targetResolution.height)
-        )
-        
-        switch result {
-        case .success(let masterPlaylistPath):
-            print("✅ FFmpeg medium-only HLS conversion with resolution \(targetResolution.width)x\(targetResolution.height) successful.")
-            return masterPlaylistPath
-            
-        case .failure(let error):
-            print("❌ FFmpeg medium-only HLS conversion failed: \(error.localizedDescription)")
-            throw error
-        }
-    }
-    
-    private func createSimpleArchive(from sourceDir: String, to archivePath: String) async -> Bool {
-        // Create a proper tar file for iOS compatibility
-        do {
-            let fileManager = FileManager.default
-            let sourceURL = URL(fileURLWithPath: sourceDir)
-            let archiveURL = URL(fileURLWithPath: archivePath)
-            
-            // Get all files in the source directory recursively
-            let enumerator = fileManager.enumerator(at: sourceURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])
-            var files: [URL] = []
-            
-            while let fileURL = enumerator?.nextObject() as? URL {
-                let resourceValues = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
-                if resourceValues.isRegularFile == true {
-                    files.append(fileURL)
-                }
+            // Construct convert-video endpoint URL
+            let convertVideoURL = "\(writableUrl.scheme ?? "http")://\(writableUrl.host ?? writableUrl.absoluteString):\(cloudDrivePort)/convert-video"
+            guard let url = URL(string: convertVideoURL) else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid convert-video URL"])
             }
             
-            // Create tar file data
-            var tarData = Data()
+            // Determine content type based on file extension
+            let contentType = determineVideoContentType(fileName: fileName)
+            print("DEBUG: Determined content type: \(contentType)")
             
-            for fileURL in files {
-                // Get relative path from source directory
-                let relativePath: String
-                if fileURL.path.hasPrefix(sourceDir) {
-                    let sourceDirLength = sourceDir.count
-                    
-                    if sourceDirLength < fileURL.path.count {
-                        let startIndex = fileURL.path.index(fileURL.path.startIndex, offsetBy: sourceDirLength)
-                        let remainingPath = String(fileURL.path[startIndex...])
-                        relativePath = remainingPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                    } else {
-                        relativePath = fileURL.lastPathComponent
-                    }
+            // Create multipart form data
+            let boundary = "Boundary-\(UUID().uuidString)"
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            
+            var body = Data()
+            
+            // Add filename if provided (server expects this field)
+            if let fileName = fileName {
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"filename\"\r\n\r\n".data(using: .utf8)!)
+                body.append("\(fileName)\r\n".data(using: .utf8)!)
+            }
+            
+            // Add reference ID if provided (server expects this field)
+            if let referenceId = referenceId {
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n\r\n".data(using: .utf8)!)
+                body.append("\(referenceId)\r\n".data(using: .utf8)!)
+            }
+            
+            // Add the video file (server expects field name "videoFile")
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"videoFile\"; filename=\"\(fileName ?? "video.mp4")\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
+            body.append(data)
+            body.append("\r\n".data(using: .utf8)!)
+            
+            // End boundary
+            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+            
+            request.httpBody = body
+            request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
+            
+            // Get aspect ratio from original video for metadata (with fallback)
+            let aspectRatio = await getVideoAspectRatioWithFallback(from: data)
+            
+            // Upload with retry mechanism
+            return try await uploadWithRetry(request: request, data: data, fileName: fileName, aspectRatio: aspectRatio)
+        }
+        
+        /// Determine video content type based on file extension
+        private func determineVideoContentType(fileName: String?) -> String {
+            guard let fileName = fileName else {
+                return "video/mp4" // Default fallback
+            }
+            
+            let fileExtension = fileName.components(separatedBy: ".").last?.lowercased()
+            
+            switch fileExtension {
+            case "mp4", "m4v":
+                return "video/mp4"
+            case "avi":
+                return "video/avi"
+            case "mov":
+                return "video/mov"
+            case "mkv":
+                return "video/mkv"
+            case "wmv":
+                return "video/wmv"
+            case "flv":
+                return "video/flv"
+            case "webm":
+                return "video/webm"
+            case "ts", "mts", "m2ts":
+                return "video/mp2t"
+            case "vob":
+                return "video/mpeg"
+            case "dat":
+                return "video/mpeg"
+            case "ogv":
+                return "video/ogg"
+            case "f4v":
+                return "video/x-f4v"
+            case "asf":
+                return "video/x-ms-asf"
+            default:
+                return "video/mp4" // Default fallback
+            }
+        }
+        
+        /// Get video aspect ratio with fallback to default values
+        private func getVideoAspectRatioWithFallback(from data: Data) async -> Float? {
+            do {
+                let aspectRatio = try await getVideoAspectRatio(from: data)
+                if let ratio = aspectRatio, ratio > 0 {
+                    print("DEBUG: Successfully determined aspect ratio: \(ratio)")
+                    return ratio
                 } else {
-                    relativePath = fileURL.lastPathComponent
+                    print("DEBUG: Aspect ratio detection failed, using default 16:9")
+                    return 16.0 / 9.0 // Default to 16:9 aspect ratio
                 }
-                
-                let fileName = relativePath.isEmpty ? fileURL.lastPathComponent : relativePath
-                
-                // Ensure filename fits in tar header (100 bytes max)
-                let maxFileNameLength = 100
-                let finalFileName: String
-                if fileName.count > maxFileNameLength {
-                    // Truncate filename if too long
-                    let truncated = String(fileName.prefix(maxFileNameLength - 4)) + ".ts"
-                    finalFileName = truncated
-                } else {
-                    finalFileName = fileName
-                }
-                
-                let fileData = try Data(contentsOf: fileURL)
-                
-                // Create tar header (512 bytes)
-                var header = Data(count: 512)
-                var offset = 0
-                
-                // Helper function to safely write string data to header
-                func writeStringToHeader(_ string: String, maxLength: Int) {
-                    let stringData = string.data(using: .ascii) ?? Data()
-                    let writeLength = min(stringData.count, maxLength)
-                    if writeLength > 0 && offset + writeLength <= header.count {
-                        header.replaceSubrange(offset..<(offset + writeLength), with: stringData)
-                    }
-                    offset += maxLength
-                }
-                
-                // File name (100 bytes)
-                writeStringToHeader(finalFileName, maxLength: 100)
-                
-                // File mode (8 bytes) - 0644 for regular files
-                writeStringToHeader("0000644", maxLength: 8)
-                
-                // Owner ID (8 bytes)
-                writeStringToHeader("0000000", maxLength: 8)
-                
-                // Group ID (8 bytes)
-                writeStringToHeader("0000000", maxLength: 8)
-                
-                // File size (12 bytes) - octal format
-                let sizeOctal = String(format: "%011o", fileData.count)
-                writeStringToHeader(sizeOctal, maxLength: 12)
-                
-                // Modification time (12 bytes) - current time in octal
-                let timeOctal = String(format: "%011o", Int(Date().timeIntervalSince1970))
-                writeStringToHeader(timeOctal, maxLength: 12)
-                
-                // Checksum placeholder (8 bytes) - filled with spaces initially
-                writeStringToHeader("        ", maxLength: 8)
-                
-                // Type flag (1 byte) - '0' for regular file
-                if offset < header.count {
-                    header[offset] = UInt8("0".utf8.first!)
-                }
-                offset += 1
-                
-                // Link name (100 bytes) - empty for regular files
-                offset += 100
-                
-                // Magic (6 bytes) - "ustar"
-                writeStringToHeader("ustar ", maxLength: 6)
-                
-                // Version (2 bytes) - "00"
-                writeStringToHeader("00", maxLength: 2)
-                
-                // User name (32 bytes)
-                writeStringToHeader("root", maxLength: 32)
-                
-                // Group name (32 bytes)
-                writeStringToHeader("root", maxLength: 32)
-                
-                // Device major (8 bytes)
-                offset += 8
-                
-                // Device minor (8 bytes)
-                offset += 8
-                
-                // Prefix (155 bytes) - empty for files in current directory
-                offset += 155
-                
-                // Calculate checksum (sum of all bytes in header, treating them as unsigned)
-                var checksum: UInt32 = 0
-                for i in 0..<512 {
-                    if i >= 148 && i < 156 { // Skip checksum field itself
-                        checksum += UInt32(" ".utf8.first!)
-                    } else {
-                        checksum += UInt32(header[i])
-                    }
-                }
-                
-                // Write checksum (6 bytes, octal format)
-                let checksumOctal = String(format: "%06o", checksum)
-                let checksumData = checksumOctal.data(using: .ascii) ?? Data()
-                let checksumLength = min(checksumData.count, 6)
-                if checksumLength > 0 && 148 + checksumLength <= header.count {
-                    header.replaceSubrange(148..<(148 + checksumLength), with: checksumData)
-                }
-                if 154 < header.count {
-                    header[154] = UInt8(" ".utf8.first!)
-                }
-                if 155 < header.count {
-                    header[155] = UInt8(" ".utf8.first!)
-                }
-                
-                // Add header to tar data
-                tarData.append(header)
-                
-                // Add file data, padded to 512-byte boundary
-                tarData.append(fileData)
-                let padding = (512 - (fileData.count % 512)) % 512
-                if padding > 0 {
-                    tarData.append(Data(count: padding))
-                }
+            } catch {
+                print("DEBUG: Aspect ratio detection failed with error: \(error), using default 16:9")
+                return 16.0 / 9.0 // Default to 16:9 aspect ratio
             }
-            
-            // Add two empty blocks at the end (tar convention)
-            tarData.append(Data(count: 1024))
-            
-            // Write the tar file
-            try tarData.write(to: archiveURL)
-            return true
-            
-        } catch {
-            print("Error creating tar archive: \(error)")
-            return false
         }
-    }
-    
-    private func uploadRegularFile(
-        data: Data,
-        typeIdentifier: String,
-        fileName: String?,
-        referenceId: String?,
-        mediaType: MediaType
-    ) async throws -> MimeiFileType {
-        print("Uploading regular file: type=\(mediaType.rawValue), size=\(data.count) bytes")
         
-        // Use a mutable variable for uploadService
-        var uploadService = appUser.uploadService
-        if uploadService == nil {
-            _ = await appUser.resolveWritableUrl()
-            uploadService = appUser.uploadService
+        /// Upload regular (non-video) files
+        private func uploadRegularFile(
+            data: Data,
+            typeIdentifier: String,
+            fileName: String?,
+            referenceId: String?,
+            mediaType: MediaType,
+            appUser: User,
+            appId: String
+        ) async throws -> MimeiFileType {
+            print("Uploading regular file: type=\(mediaType.rawValue), size=\(data.count) bytes")
+            
+            // Get upload service
+            var uploadService = appUser.uploadService
             if uploadService == nil {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
+                _ = await appUser.resolveWritableUrl()
+                uploadService = appUser.uploadService
+                if uploadService == nil {
+                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
+                }
             }
-        }
-        let uploadServiceUnwrapped = uploadService!
-        
-        // Handle non-video files with original logic
-        // Create temporary file
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try data.write(to: tempURL)
-        defer { try? FileManager.default.removeItem(at: tempURL) }
-        
-        var offset: Int64 = 0
-        let chunkSize = 1024 * 1024 // 1MB chunks
-        var request: [String: Any] = [
-            "aid": appId,
-            "ver": "last",
-            "offset": offset
-        ]
-        
-        do {
+            
+            // Create temporary file
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try data.write(to: tempURL)
+            defer { try? FileManager.default.removeItem(at: tempURL) }
+            
+            // Upload in chunks
+            var offset: Int64 = 0
+            let chunkSize = 1024 * 1024 // 1MB chunks
+            var request: [String: Any] = [
+                "aid": appId,
+                "ver": "last",
+                "offset": offset
+            ]
+            
             let fileHandle = try FileHandle(forReadingFrom: tempURL)
             defer { try? fileHandle.close() }
             
             var chunkCount = 0
             while true {
-                let data = fileHandle.readData(ofLength: chunkSize)
-                if data.isEmpty { break }
+                let chunkData = fileHandle.readData(ofLength: chunkSize)
+                if chunkData.isEmpty { break }
                 
                 chunkCount += 1
                 
-                // Add retry logic for chunk upload
-                let nsData = data as NSData
+                let nsData = chunkData as NSData
                 let response = try await uploadChunkWithRetry(
-                    uploadService: uploadServiceUnwrapped,
+                    uploadService: uploadService!,
                     request: request,
                     data: nsData,
                     chunkNumber: chunkCount
                 )
                 
                 if let fsid = response as? String {
-                    offset += Int64(data.count)
+                    offset += Int64(chunkData.count)
                     request["offset"] = offset
                     request["fsid"] = fsid
                 } else {
-                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk \(chunkCount)"])
+                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk \(chunkCount)"])
                 }
             }
             
@@ -1225,10 +1073,10 @@ final class HproseInstance: ObservableObject {
                 request["referenceid"] = referenceId
             }
             
-            let finalResponse = uploadServiceUnwrapped.runMApp("upload_ipfs", request, nil)
+            let finalResponse = uploadService!.runMApp("upload_ipfs", request, nil)
             
             guard let cid = finalResponse as? String else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get CID from final upload response"])
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get CID from final upload response"])
             }
             
             // Get file attributes
@@ -1239,10 +1087,9 @@ final class HproseInstance: ObservableObject {
             // Get aspect ratio for videos (only for original videos, not HLS packages)
             var aspectRatio: Float?
             if mediaType == .video {
-                aspectRatio = try await getVideoAspectRatio(url: tempURL)
+                aspectRatio = try await getVideoAspectRatio(from: data)
             }
             
-            // Create MimeiFileType with the CID
             return MimeiFileType(
                 mid: cid,
                 type: mediaType.rawValue,
@@ -1252,30 +1099,174 @@ final class HproseInstance: ObservableObject {
                 aspectRatio: aspectRatio,
                 url: nil
             )
-        } catch {
-            print("Error uploading file: \(error)")
-            throw error
-        }
-    }
-    
-    private func uploadChunkWithRetry(
-        uploadService: AnyObject,
-        request: [String: Any],
-        data: NSData,
-        chunkNumber: Int,
-        maxRetries: Int = 3
-    ) async throws -> Any {
-        for _ in 1...maxRetries {
-            let response = uploadService.runMApp("upload_ipfs", request, [data]) as Any
-            return response
         }
         
-        // All retries failed
-        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk after \(maxRetries) attempts"])
-    }
-    
-    private func getVideoAspectRatio(url: URL) async throws -> Float? {
-        return try await HLSVideoProcessor.shared.getVideoAspectRatio(url: url)
+        /// Get video aspect ratio from data
+        private func getVideoAspectRatio(from data: Data) async throws -> Float? {
+            do {
+                // Create a temporary file with a proper extension to help AVFoundation identify the format
+                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
+                try data.write(to: tempURL)
+                
+                // Ensure the file exists and is readable
+                guard FileManager.default.fileExists(atPath: tempURL.path) else {
+                    print("Warning: Temporary video file was not created successfully")
+                    return nil
+                }
+                
+                // Get file size to ensure it's not empty
+                let fileAttributes = try FileManager.default.attributesOfItem(atPath: tempURL.path)
+                let fileSize = fileAttributes[.size] as? UInt64 ?? 0
+                
+                if fileSize == 0 {
+                    print("Warning: Temporary video file is empty")
+                    try? FileManager.default.removeItem(at: tempURL)
+                    return nil
+                }
+                
+                // Try to get aspect ratio with proper error handling
+                let aspectRatio = try await HLSVideoProcessor.shared.getVideoAspectRatio(url: tempURL)
+                
+                // Clean up the temporary file after successful processing
+                try? FileManager.default.removeItem(at: tempURL)
+                
+                return aspectRatio
+            } catch {
+                print("Warning: Could not determine video aspect ratio: \(error)")
+                // Clean up any temporary files that might have been created
+                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
+                try? FileManager.default.removeItem(at: tempURL)
+                return nil
+            }
+        }
+        
+        /// Upload with retry mechanism for video conversion
+        private func uploadWithRetry(
+            request: URLRequest,
+            data: Data,
+            fileName: String?,
+            aspectRatio: Float?
+        ) async throws -> MimeiFileType? {
+            var lastError: Error?
+            
+            // Create a custom URLSession with longer timeout for large uploads
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 300  // 5 minutes
+            config.timeoutIntervalForResource = 600 // 10 minutes
+            let session = URLSession(configuration: config)
+            
+            for attempt in 1...3 {
+                do {
+                    print("DEBUG: Video upload attempt \(attempt)/3")
+                    let (responseData, response) = try await session.data(for: request)
+                    
+                    if let httpResponse = response as? HTTPURLResponse {
+                        print("DEBUG: HTTP status code: \(httpResponse.statusCode)")
+                        
+                        if httpResponse.statusCode == 200 {
+                            return try parseVideoConversionResponse(
+                                responseData: responseData,
+                                data: data,
+                                fileName: fileName,
+                                aspectRatio: aspectRatio
+                            )
+                        } else if httpResponse.statusCode == 400 {
+                            // Bad request - don't retry, parse error message
+                            let errorMessage = String(data: responseData, encoding: .utf8) ?? "Bad request"
+                            throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Bad request: \(errorMessage)"])
+                        } else if httpResponse.statusCode == 413 {
+                            // Payload too large - don't retry
+                            throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Video file too large for processing"])
+                        } else if httpResponse.statusCode >= 500 {
+                            // Server error - retry
+                            throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server error (HTTP \(httpResponse.statusCode))"])
+                        } else {
+                            throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode) error"])
+                        }
+                    } else {
+                        throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid HTTP response"])
+                    }
+                } catch {
+                    lastError = error
+                    print("DEBUG: Video upload attempt \(attempt) failed: \(error)")
+                    
+                    if attempt < 3 {
+                        // Wait before retrying (exponential backoff)
+                        let delay = TimeInterval(attempt * 2) // 2, 4 seconds
+                        print("DEBUG: Waiting \(delay) seconds before retry...")
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    }
+                }
+            }
+            
+            // All retries failed
+            print("DEBUG: All video upload attempts failed")
+            throw lastError ?? NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload video after 3 attempts"])
+        }
+        
+        /// Parse video conversion response
+        private func parseVideoConversionResponse(
+            responseData: Data,
+            data: Data,
+            fileName: String?,
+            aspectRatio: Float?
+        ) throws -> MimeiFileType? {
+            guard let responseString = String(data: responseData, encoding: .utf8) else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response encoding"])
+            }
+            
+            print("DEBUG: Server response: \(responseString)")
+            
+            do {
+                guard let jsonData = responseString.data(using: .utf8),
+                      let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON response"])
+                }
+                
+                if let success = json["success"] as? Bool, success {
+                    if let cid = json["cid"] as? String, !cid.isEmpty {
+                        print("DEBUG: Video conversion successful, CID: \(cid)")
+                        return MimeiFileType(
+                            mid: cid,
+                            type: "hls_video",
+                            size: Int64(data.count),
+                            fileName: fileName,
+                            timestamp: Date(),
+                            aspectRatio: aspectRatio,
+                            url: nil
+                        )
+                    } else {
+                        throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "No CID in response"])
+                    }
+                } else {
+                    let message = json["message"] as? String ?? "Unknown error"
+                    let error = json["error"] as? String
+                    let errorMessage = error != nil ? "\(message). Error: \(error!)" : message
+                    
+                    print("DEBUG: Server reported error: \(errorMessage)")
+                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server error: \(errorMessage)"])
+                }
+            } catch {
+                print("DEBUG: Failed to parse response: \(error)")
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse response: \(error.localizedDescription)"])
+            }
+        }
+        
+        /// Upload chunk with retry for regular files
+        private func uploadChunkWithRetry(
+            uploadService: AnyObject,
+            request: [String: Any],
+            data: NSData,
+            chunkNumber: Int,
+            maxRetries: Int = 3
+        ) async throws -> Any {
+            for _ in 1...maxRetries {
+                let response = uploadService.runMApp("upload_ipfs", request, [data]) as Any
+                return response
+            }
+            
+            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk after \(maxRetries) attempts"])
+        }
     }
     
     // MARK: - Private Methods
@@ -1826,154 +1817,6 @@ final class HproseInstance: ObservableObject {
         } catch {
             print("Network error getting host IP: \(error)")
         }
-        
         return nil
-    }
-    
-    private func uploadHLSArchive(
-        data: Data,
-        fileName: String?,
-        referenceId: String?,
-        originalVideoURL: URL? = nil
-    ) async throws -> MimeiFileType {
-        // Get the user's cloudDrivePort with fallback to default
-        let cloudDrivePort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-        
-        // Ensure writableUrl is available and get it directly
-        var writableUrl = appUser.writableUrl
-        if writableUrl == nil {
-            writableUrl = await appUser.resolveWritableUrl()
-        }
-        
-        // Use writableUrl to construct the extract-tar endpoint URL
-        guard let writableUrl = writableUrl else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available after resolution"])
-        }
-        
-        let extractTarURL = "\(writableUrl.scheme ?? "http")://\(writableUrl.host ?? writableUrl.absoluteString):\(cloudDrivePort)/extract-tar"
-        guard let url = URL(string: extractTarURL) else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid extract-tar URL"])
-        }
-        
-        // Create multipart form data
-        let boundary = "Boundary-\(UUID().uuidString)"
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        
-        // Build multipart form data
-        var body = Data()
-        
-        // Add filename if provided (use original video filename, not archive filename)
-        if let fileName = fileName {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"filename\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(fileName)\r\n".data(using: .utf8)!)
-        }
-        
-        // Add reference ID if provided
-        if let referenceId = referenceId {
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(referenceId)\r\n".data(using: .utf8)!)
-        }
-        
-        // Add the tar file
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"tarFile\"; filename=\"\(fileName ?? "hls_package.tar")\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/x-tar\r\n\r\n".data(using: .utf8)!)
-        body.append(data)
-        body.append("\r\n".data(using: .utf8)!)
-        
-        // End boundary
-        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-        
-        request.httpBody = body
-        request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
-        
-        // Get aspect ratio from original video if available
-        var aspectRatio: Float?
-        if let originalVideoURL = originalVideoURL {
-            aspectRatio = try await getVideoAspectRatio(url: originalVideoURL)
-        }
-        
-        // Upload with retry mechanism
-        var lastError: Error?
-        
-        // Create a custom URLSession with longer timeout for large uploads
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 300  // 5 minutes
-        config.timeoutIntervalForResource = 600 // 10 minutes
-        let session = URLSession(configuration: config)
-        
-        for attempt in 1...3 {
-            do {
-                let (responseData, response) = try await session.data(for: request)
-                
-                if let httpResponse = response as? HTTPURLResponse {
-                    if httpResponse.statusCode == 200 {
-                        // Parse the JSON response to get the CID
-                        if let responseString = String(data: responseData, encoding: .utf8) {
-                            do {
-                                if let jsonData = responseString.data(using: .utf8),
-                                   let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
-                                    
-                                    if let success = json["success"] as? Bool, success {
-                                        if let cid = json["cid"] as? String, !cid.isEmpty {
-                                            // Create MimeiFileType with the CID
-                                            return MimeiFileType(
-                                                mid: cid,
-                                                type: "hls_video", // Set as hls_video type for HLS content
-                                                size: Int64(data.count),
-                                                fileName: fileName,
-                                                timestamp: Date(),
-                                                aspectRatio: aspectRatio,
-                                                url: nil
-                                            )
-                                        } else {
-                                            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No CID in response"])
-                                        }
-                                    } else {
-                                        let message = json["message"] as? String ?? "Unknown error"
-                                        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server error: \(message)"])
-                                    }
-                                } else {
-                                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON response"])
-                                }
-                            } catch {
-                                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse response: \(error.localizedDescription)"])
-                            }
-                        }
-                        
-                        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from extract-tar endpoint"])
-                    } else {
-                        throw NSError(domain: "HproseService", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode) error"])
-                    }
-                } else {
-                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid HTTP response"])
-                }
-            } catch {
-                lastError = error
-                print("HLS archive upload attempt \(attempt) failed: \(error)")
-                
-                if attempt < 3 {
-                    // Wait before retrying (exponential backoff)
-                    let delay = TimeInterval(attempt * 2) // 2, 4 seconds
-                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    
-                    // Re-resolve writable URL in case it changed
-                    if let newWritableUrl = await appUser.resolveWritableUrl() {
-                        let newExtractTarURL = "\(newWritableUrl.scheme ?? "http")://\(newWritableUrl.host ?? newWritableUrl.absoluteString):\(cloudDrivePort)/extract-tar"
-                        if let newURL = URL(string: newExtractTarURL) {
-                            request.url = newURL
-                            print("Retrying with new writable URL: \(newWritableUrl.absoluteString)")
-                        }
-                    }
-                }
-            }
-        }
-        
-        // All retries failed
-        throw lastError ?? NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload HLS archive after 3 attempts"])
     }
 }

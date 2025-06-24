@@ -147,26 +147,182 @@ struct AdaptiveVideoPlayer: View {
         isLoading = true
         errorMessage = nil
         
+        // Try to set up the player with fallback for single-resolution HLS
+        setupPlayerWithFallback()
+    }
+    
+    private func setupPlayerWithFallback() {
+        let hlsURL = getHLSPlaylistURL(from: videoURL)
+        print("DEBUG: AdaptiveVideoPlayer attempting to play HLS URL: \(hlsURL.absoluteString)")
+        
         // Create AVPlayer with adaptive streaming support
-        let playerItem = AVPlayerItem(url: videoURL)
-        player = AVPlayer(playerItem: playerItem)
+        let playerItem = AVPlayerItem(url: hlsURL)
+        let avPlayer = AVPlayer(playerItem: playerItem)
         
         // Enable automatic quality switching
         playerItem.preferredForwardBufferDuration = 10.0
         
         // Add observers
-        player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 1), queue: .main) { time in
+        avPlayer.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 1), queue: DispatchQueue.main) { time in
             currentTime = time.seconds
         }
         
-        // Observe player item status
-        playerItem.addObserver(self, forKeyPath: "status", options: [.new, .old], context: nil)
+        // Check if the HLS stream is playable
+        Task {
+            do {
+                let asset = AVAsset(url: hlsURL)
+                let isPlayable = try await asset.load(.isPlayable)
+                
+                await MainActor.run {
+                    if isPlayable {
+                        print("DEBUG: AdaptiveVideoPlayer HLS video is playable")
+                        self.player = avPlayer
+                        self.isLoading = false
+                        
+                        // Observe player item status
+                        playerItem.addObserver(self, forKeyPath: "status", options: [.new, .old], context: nil)
+                        
+                        // Observe duration
+                        playerItem.addObserver(self, forKeyPath: "duration", options: [.new, .old], context: nil)
+                        
+                        // Observe loading status
+                        playerItem.addObserver(self, forKeyPath: "loadedTimeRanges", options: [.new, .old], context: nil)
+                        
+                        // Auto-play the HLS stream
+                        avPlayer.play()
+                        self.isPlaying = true
+                        
+                        // Get video duration
+                        self.getVideoDuration(asset: asset)
+                    } else {
+                        print("DEBUG: AdaptiveVideoPlayer HLS video is not playable, trying fallback")
+                        self.tryFallbackPlaylist()
+                    }
+                }
+            } catch {
+                print("DEBUG: AdaptiveVideoPlayer failed to check if HLS video is playable: \(error)")
+                await MainActor.run {
+                    print("DEBUG: AdaptiveVideoPlayer trying fallback playlist due to error")
+                    self.tryFallbackPlaylist()
+                }
+            }
+        }
+    }
+    
+    private func tryFallbackPlaylist() {
+        // Only try fallback if we're not already using playlist.m3u8
+        if !videoURL.absoluteString.contains("playlist.m3u8") && !videoURL.absoluteString.contains("master.m3u8") {
+            let fallbackURL = videoURL.appendingPathComponent("playlist.m3u8")
+            print("DEBUG: AdaptiveVideoPlayer trying fallback playlist: \(fallbackURL.absoluteString)")
+            
+            // Create AVPlayer with adaptive streaming support
+            let playerItem = AVPlayerItem(url: fallbackURL)
+            let avPlayer = AVPlayer(playerItem: playerItem)
+            
+            // Enable automatic quality switching
+            playerItem.preferredForwardBufferDuration = 10.0
+            
+            // Add observers
+            avPlayer.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 1), queue: DispatchQueue.main) { time in
+                currentTime = time.seconds
+            }
+            
+            Task {
+                do {
+                    let asset = AVAsset(url: fallbackURL)
+                    let isPlayable = try await asset.load(.isPlayable)
+                    
+                    await MainActor.run {
+                        if isPlayable {
+                            print("DEBUG: AdaptiveVideoPlayer fallback HLS video is playable")
+                            self.player = avPlayer
+                            self.isLoading = false
+                            
+                            // Observe player item status
+                            playerItem.addObserver(self, forKeyPath: "status", options: [.new, .old], context: nil)
+                            
+                            // Observe duration
+                            playerItem.addObserver(self, forKeyPath: "duration", options: [.new, .old], context: nil)
+                            
+                            // Observe loading status
+                            playerItem.addObserver(self, forKeyPath: "loadedTimeRanges", options: [.new, .old], context: nil)
+                            
+                            // Auto-play the HLS stream
+                            avPlayer.play()
+                            self.isPlaying = true
+                            
+                            // Get video duration
+                            self.getVideoDuration(asset: asset)
+                        } else {
+                            print("DEBUG: AdaptiveVideoPlayer both master and playlist HLS are not playable")
+                            self.errorMessage = "HLS video is not playable"
+                            self.isLoading = false
+                        }
+                    }
+                } catch {
+                    print("DEBUG: AdaptiveVideoPlayer fallback HLS also failed: \(error)")
+                    await MainActor.run {
+                        self.errorMessage = "Failed to load HLS stream: \(error.localizedDescription)"
+                        self.isLoading = false
+                    }
+                }
+            }
+        } else {
+            // Already tried the fallback or using direct playlist URL
+            self.errorMessage = "HLS video is not playable"
+            self.isLoading = false
+        }
+    }
+    
+    private func getHLSPlaylistURL(from url: URL) -> URL {
+        print("DEBUG: AdaptiveVideoPlayer getting HLS playlist URL from: \(url.absoluteString)")
         
-        // Observe duration
-        playerItem.addObserver(self, forKeyPath: "duration", options: [.new, .old], context: nil)
+        // If URL already ends with .m3u8, return as is
+        if url.pathExtension.lowercased() == "m3u8" {
+            print("DEBUG: AdaptiveVideoPlayer URL already ends with .m3u8, returning as is")
+            return url
+        }
         
-        // Observe loading status
-        playerItem.addObserver(self, forKeyPath: "loadedTimeRanges", options: [.new, .old], context: nil)
+        // If URL contains playlist.m3u8 or master.m3u8, return as is
+        if url.absoluteString.contains("playlist.m3u8") || url.absoluteString.contains("master.m3u8") {
+            print("DEBUG: AdaptiveVideoPlayer URL contains playlist.m3u8 or master.m3u8, returning as is")
+            return url
+        }
+        
+        // For CID-based URLs (no file extension), try to detect multi-resolution HLS first
+        if url.pathExtension.isEmpty {
+            // Check if this is a multi-resolution HLS stream by trying master.m3u8 first
+            let masterPlaylistURL = url.appendingPathComponent("master.m3u8")
+            print("DEBUG: AdaptiveVideoPlayer CID-based URL, trying master.m3u8 first: \(masterPlaylistURL.absoluteString)")
+            
+            // Note: We'll let AVPlayer handle the actual validation of the master playlist
+            // If master.m3u8 doesn't exist, AVPlayer will fail gracefully and we can fall back
+            return masterPlaylistURL
+        }
+        
+        // For other URLs, try to append master.m3u8 first (for multi-resolution)
+        let masterPlaylistURL = url.appendingPathComponent("master.m3u8")
+        print("DEBUG: AdaptiveVideoPlayer appending master.m3u8 to URL: \(masterPlaylistURL.absoluteString)")
+        return masterPlaylistURL
+    }
+    
+    private func getVideoDuration(asset: AVAsset) {
+        Task {
+            do {
+                let durationTime = try await asset.load(.duration)
+                
+                await MainActor.run {
+                    self.duration = durationTime.seconds
+                    print("DEBUG: AdaptiveVideoPlayer HLS video duration: \(durationTime.seconds) seconds")
+                }
+            } catch {
+                print("DEBUG: AdaptiveVideoPlayer failed to get video duration: \(error)")
+                await MainActor.run {
+                    self.errorMessage = "Failed to get video duration: \(error.localizedDescription)"
+                    self.isLoading = false
+                }
+            }
+        }
     }
     
     private func cleanupPlayer() {
@@ -214,7 +370,15 @@ extension AdaptiveVideoPlayer {
                     self.duration = playerItem.duration.seconds
                 case .failed:
                     self.isLoading = false
-                    self.errorMessage = playerItem.error?.localizedDescription ?? "Failed to load video"
+                    
+                    // Check if this is a master playlist failure and try fallback
+                    if let error = playerItem.error as NSError?,
+                       error.domain == "CoreMediaErrorDomain" && error.code == -12642 {
+                        print("DEBUG: AdaptiveVideoPlayer master playlist parse error detected, trying fallback")
+                        self.tryFallbackPlaylist()
+                    } else {
+                        self.errorMessage = playerItem.error?.localizedDescription ?? "Failed to load video"
+                    }
                 case .unknown:
                     break
                 @unknown default:
