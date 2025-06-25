@@ -68,7 +68,7 @@ class ComposeTweetViewModel: ObservableObject {
         )
         
         // Prepare item data
-        var itemData: [HproseInstance.PendingUpload.ItemData] = []
+        var itemData: [HproseInstance.PendingTweetUpload.ItemData] = []
         
         for item in selectedItems {
             do {
@@ -103,7 +103,7 @@ class ComposeTweetViewModel: ObservableObject {
                     let timestamp = Int(Date().timeIntervalSince1970)
                     let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
                     
-                    itemData.append(HproseInstance.PendingUpload.ItemData(
+                    itemData.append(HproseInstance.PendingTweetUpload.ItemData(
                         identifier: item.itemIdentifier ?? UUID().uuidString,
                         typeIdentifier: typeIdentifier,
                         data: data,
@@ -122,6 +122,11 @@ class ComposeTweetViewModel: ObservableObject {
             }
         }
         
+        // Show toast before starting upload
+        toastMessage = "Uploading tweet..."
+        toastType = .info
+        showToast = true
+        
         // Set uploading state
         isUploading = true
         
@@ -132,5 +137,10 @@ class ComposeTweetViewModel: ObservableObject {
         tweetContent = ""
         selectedItems = []
         isUploading = false
+        
+        // Hide the upload toast after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            withAnimation { self.showToast = false }
+        }
     }
 }

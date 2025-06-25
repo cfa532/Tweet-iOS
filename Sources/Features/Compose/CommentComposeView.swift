@@ -157,7 +157,7 @@ struct CommentComposeView: View {
         
         // Prepare item data
         print("DEBUG: Preparing item data for \(selectedItems.count) items")
-        var itemData: [HproseInstance.PendingUpload.ItemData] = []
+        var itemData: [HproseInstance.PendingTweetUpload.ItemData] = []
         
         for item in selectedItems {
             print("DEBUG: Processing item: \(item.itemIdentifier ?? "unknown")")
@@ -193,7 +193,7 @@ struct CommentComposeView: View {
                     let timestamp = Int(Date().timeIntervalSince1970)
                     let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
                     
-                    itemData.append(HproseInstance.PendingUpload.ItemData(
+                    itemData.append(HproseInstance.PendingTweetUpload.ItemData(
                         identifier: item.itemIdentifier ?? UUID().uuidString,
                         typeIdentifier: typeIdentifier,
                         data: data,

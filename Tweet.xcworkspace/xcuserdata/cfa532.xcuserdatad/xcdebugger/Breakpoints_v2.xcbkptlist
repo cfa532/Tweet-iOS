@@ -32,7 +32,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1523"
             endingLineNumber = "1523"
-            landmarkName = "scheduleTweetUpload(tweet:itemData:)"
+            landmarkName = "removePendingUpload()"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -40,7 +40,7 @@
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
             uuid = "C0D59B1C-F9B7-4B7F-9CAA-41DCD3986CF5"
-            shouldBeEnabled = "Yes"
+            shouldBeEnabled = "No"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
             filePath = "Sources/Screens/Login.swift"
@@ -50,92 +50,6 @@
             endingLineNumber = "138"
             landmarkName = "login()"
             landmarkType = "7">
-            <Locations>
-               <Location
-                  uuid = "C0D59B1C-F9B7-4B7F-9CAA-41DCD3986CF5 - 40cdb30c6837af9a"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(1) suspend resume partial function for Tweet.LoginView.login() async -&gt; ()"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Screens/Login.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "138"
-                  endingLineNumber = "138">
-               </Location>
-               <Location
-                  uuid = "C0D59B1C-F9B7-4B7F-9CAA-41DCD3986CF5 - c3644600292ecd94"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(3) suspend resume partial function for Tweet.LoginView.login() async -&gt; ()"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Screens/Login.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "138"
-                  endingLineNumber = "138">
-               </Location>
-               <Location
-                  uuid = "C0D59B1C-F9B7-4B7F-9CAA-41DCD3986CF5 - 431cdd07ee056b96"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(5) suspend resume partial function for Tweet.LoginView.login() async -&gt; ()"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Screens/Login.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "138"
-                  endingLineNumber = "138">
-               </Location>
-               <Location
-                  uuid = "C0D59B1C-F9B7-4B7F-9CAA-41DCD3986CF5 - c3bb703baffd8990"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(7) suspend resume partial function for Tweet.LoginView.login() async -&gt; ()"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Screens/Login.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "138"
-                  endingLineNumber = "138">
-               </Location>
-               <Location
-                  uuid = "C0D59B1C-F9B7-4B7F-9CAA-41DCD3986CF5 - 387bdbd4c686693"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(8) suspend resume partial function for Tweet.LoginView.login() async -&gt; ()"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Screens/Login.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "138"
-                  endingLineNumber = "138">
-               </Location>
-               <Location
-                  uuid = "C0D59B1C-F9B7-4B7F-9CAA-41DCD3986CF5 - 4252073f6cd43792"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(9) suspend resume partial function for Tweet.LoginView.login() async -&gt; ()"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Screens/Login.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "138"
-                  endingLineNumber = "138">
-               </Location>
-            </Locations>
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>

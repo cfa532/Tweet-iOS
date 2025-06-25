@@ -2,7 +2,6 @@ import Foundation
 import hprose
 import PhotosUI
 import AVFoundation
-import BackgroundTasks
 
 @objc protocol HproseService {
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
@@ -88,6 +87,9 @@ final class HproseInstance: ObservableObject {
         }
         
         TweetCacheManager.shared.deleteExpiredTweets()
+        
+        // Recover any pending uploads
+        await recoverPendingUploads()
     }
     
     private func initAppEntry() async throws {
@@ -705,14 +707,14 @@ final class HproseInstance: ObservableObject {
     }
     
     /**
-     * Delete a tweet and returned the deleted tweetId
+     * Delete a tweet and returned the deleted tweetId. Only appUser can delete its own tweet.
      * */
     func deleteTweet(_ tweetId: String) async throws -> String? {
         let entry = "delete_tweet"
         let params = [
             "aid": appId,
             "ver": "last",
-            "appuserid": appUser.mid,
+            "authorid": appUser.mid,
             "tweetid": tweetId
         ]
         guard let service = hproseService else {
@@ -740,18 +742,35 @@ final class HproseInstance: ObservableObject {
         ]
         let entry = "add_comment"
         guard let response = uploadService.runMApp(entry, params, nil) as? [String: Any] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Invalid response"])
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Invalid response format"])
         }
-        if let commentId = response["commentId"] as? String,
-           let count = response["count"] as? Int {
+        
+        // Handle the new JSON response format
+        guard let success = response["success"] as? Bool else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Invalid response format: missing success field"])
+        }
+        
+        if success {
+            // Success case: extract comment ID and count
+            guard let commentId = response["mid"] as? String else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Success response missing comment ID"])
+            }
+            
+            guard let count = response["count"] as? Int else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Success response missing comment count"])
+            }
+            
             await MainActor.run {
                 comment.mid = commentId
                 comment.author = appUser
                 tweet.commentCount = count
             }
             return comment
+        } else {
+            // Failure case: extract error message
+            let errorMessage = response["message"] as? String ?? "Unknown comment upload error"
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
         }
-        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: No commentId or count"])
     }
 
     // both author and tweet author can delete this comment
@@ -1125,7 +1144,7 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 // Try to get aspect ratio with proper error handling
-                let aspectRatio = try await HLSVideoProcessor.shared.getVideoAspectRatio(url: tempURL)
+                let aspectRatio = try await HLSVideoProcessor.shared.getVideoAspectRatio(filePath: tempURL.path)
                 
                 // Clean up the temporary file after successful processing
                 try? FileManager.default.removeItem(at: tempURL)
@@ -1151,7 +1170,7 @@ final class HproseInstance: ObservableObject {
             
             // Create a custom URLSession with longer timeout for large uploads
             let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 300  // 5 minutes
+            config.timeoutIntervalForRequest = 600  // 5 minutes
             config.timeoutIntervalForResource = 600 // 10 minutes
             let session = URLSession(configuration: config)
             
@@ -1314,9 +1333,14 @@ final class HproseInstance: ObservableObject {
     }
     
     // MARK: - Background Upload
-    struct PendingUpload: Codable {
+    // Background task approach removed - using immediate upload with persistence instead
+    
+    // MARK: - Persistence and Retry
+    struct PendingTweetUpload: Codable {
         let tweet: Tweet
-        let selectedItemData: [ItemData]
+        let itemData: [ItemData]
+        let timestamp: Date
+        let retryCount: Int
         
         struct ItemData: Codable {
             let identifier: String
@@ -1324,88 +1348,17 @@ final class HproseInstance: ObservableObject {
             let data: Data
             let fileName: String
         }
-    }
-    
-    // MARK: - Background Tasks
-    static func handleBackgroundTask(task: BGProcessingTask) {
-        // Schedule the next background task
-        scheduleNextBackgroundTask()
         
-        // Create a task to handle the upload
-        let uploadTask = Task {
-            // Look for the temporary file
-            let tempFileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-            
-            do {
-                let data = try Data(contentsOf: tempFileURL)
-                guard let pendingUpload = try? JSONDecoder().decode(PendingUpload.self, from: data) else {
-                    task.setTaskCompleted(success: false)
-                    return
-                }
-                
-                // Clean up the temporary file immediately after reading
-                try? FileManager.default.removeItem(at: tempFileURL)
-                
-                let tweet = pendingUpload.tweet
-                var uploadedAttachments: [MimeiFileType] = []
-                
-                // Process items in pairs
-                let itemPairs = pendingUpload.selectedItemData.chunked(into: 2)
-                
-                for (pairIndex, pair) in itemPairs.enumerated() {
-                    do {
-                        let pairAttachments = try await shared.uploadItemPair(pair)
-                        uploadedAttachments.append(contentsOf: pairAttachments)
-                    } catch {
-                        print("Error uploading pair \(pairIndex + 1): \(error)")
-                        await MainActor.run {
-                            NotificationCenter.default.post(
-                                name: .backgroundUploadFailed,
-                                object: nil,
-                                userInfo: ["error": error]
-                            )
-                        }
-                        return
-                    }
-                }
-                
-                if pendingUpload.selectedItemData.count != uploadedAttachments.count {
-                    task.setTaskCompleted(success: false)
-                    return
-                }
-                
-                // Update tweet with uploaded attachments
-                tweet.attachments = uploadedAttachments
-                
-                // Upload the tweet
-                if try await shared.uploadTweet(tweet) != nil {
-                    task.setTaskCompleted(success: true)
-                } else {
-                    task.setTaskCompleted(success: false)
-                }
-            } catch {
-                task.setTaskCompleted(success: false)
-            }
-        }
-        
-        // Set up the task expiration handler
-        task.expirationHandler = {
-            uploadTask.cancel()
+        init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0) {
+            self.tweet = tweet
+            self.itemData = itemData
+            self.timestamp = Date()
+            self.retryCount = retryCount
         }
     }
     
-    private static func scheduleNextBackgroundTask() {
-        let request = BGProcessingTaskRequest(identifier: "com.tweet.upload")
-        request.requiresNetworkConnectivity = true
-        request.requiresExternalPower = false
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 3600) // Schedule next task in 1 hour
-        
-        do {
-            try BGTaskScheduler.shared.submit(request)
-        } catch {
-            print("Could not schedule next background task: \(error)")
-        }
-    }
+    private let maxRetryAttempts = 3
+    private let retryDelaySeconds: TimeInterval = 5.0
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
         return try await withRetry {
@@ -1422,18 +1375,35 @@ final class HproseInstance: ObservableObject {
             ]
             
             let rawResponse = service.runMApp("add_tweet", params, nil)
-            guard let newTweetId = rawResponse as? String else {
-                return Tweet?.none
+            
+            // Handle the JSON response format
+            guard let responseDict = rawResponse as? [String: Any] else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
             }
             
-            let uploadedTweet = tweet
-            uploadedTweet.mid = newTweetId
-            uploadedTweet.author = try? await self.fetchUser(tweet.authorId)
-            return uploadedTweet
+            guard let success = responseDict["success"] as? Bool else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format: missing success field"])
+            }
+            
+            if success {
+                // Success case: extract the tweet ID
+                guard let newTweetId = responseDict["mid"] as? String else {
+                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
+                }
+                
+                let uploadedTweet = tweet
+                uploadedTweet.mid = newTweetId
+                uploadedTweet.author = try? await self.fetchUser(tweet.authorId)
+                return uploadedTweet
+            } else {
+                // Failure case: extract error message
+                let errorMessage = responseDict["message"] as? String ?? "Unknown upload error"
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            }
         }
     }
     
-    private func uploadItemPair(_ pair: [PendingUpload.ItemData]) async throws -> [MimeiFileType] {
+    private func uploadItemPair(_ pair: [PendingTweetUpload.ItemData]) async throws -> [MimeiFileType] {
         let uploadTasks = pair.map { itemData in
             Task {
                 return try await uploadToIPFS(
@@ -1464,66 +1434,48 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func scheduleTweetUpload(tweet: Tweet, itemData: [PendingUpload.ItemData]) {
+    func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
         Task.detached(priority: .background) {
-            do {
-                let tweet = tweet
-                var uploadedAttachments: [MimeiFileType] = []
-                
-                let itemPairs = itemData.chunked(into: 2)
-                
-                for (pairIndex, pair) in itemPairs.enumerated() {
-                    do {
-                        let pairAttachments = try await self.uploadItemPair(pair)
-                        uploadedAttachments.append(contentsOf: pairAttachments)
-                    } catch {
-                        print("Error uploading pair \(pairIndex + 1): \(error)")
-                        await MainActor.run {
-                            NotificationCenter.default.post(
-                                name: .backgroundUploadFailed,
-                                object: nil,
-                                userInfo: ["error": error]
-                            )
-                        }
-                        return
-                    }
+            await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
+        }
+    }
+    
+    private func uploadTweetWithPersistenceAndRetry(tweet: Tweet, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0) async {
+        // Save pending upload to disk for persistence
+        let pendingUpload = PendingTweetUpload(tweet: tweet, itemData: itemData, retryCount: retryCount)
+        await savePendingUpload(pendingUpload)
+        
+        do {
+            // Upload attachments first
+            let uploadedAttachments = try await uploadAttachmentsWithRetry(itemData: itemData, retryCount: retryCount)
+            
+            // Update tweet with uploaded attachments
+            tweet.attachments = uploadedAttachments
+            
+            // Upload the tweet
+            if let uploadedTweet = try await self.uploadTweet(tweet) {
+                // Success - remove pending upload and notify
+                await removePendingUpload()
+                await MainActor.run {
+                    NotificationCenter.default.post(
+                        name: .newTweetCreated,
+                        object: nil,
+                        userInfo: ["tweet": uploadedTweet]
+                    )
                 }
-                
-                if itemData.count != uploadedAttachments.count {
-                    let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
-                    await MainActor.run {
-                        NotificationCenter.default.post(
-                            name: .backgroundUploadFailed,
-                            object: nil,
-                            userInfo: ["error": error]
-                        )
-                    }
-                    return
-                }
-                
-                tweet.attachments = uploadedAttachments
-                
-                if let uploadedTweet = try await self.uploadTweet(tweet) {
-                    await MainActor.run {
-                        // Post notification for new tweet
-                        NotificationCenter.default.post(
-                            name: .newTweetCreated,
-                            object: nil,
-                            userInfo: ["tweet": uploadedTweet]
-                        )
-                    }
-                } else {
-                    let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
-                    await MainActor.run {
-                        NotificationCenter.default.post(
-                            name: .backgroundUploadFailed,
-                            object: nil,
-                            userInfo: ["error": error]
-                        )
-                    }
-                }
-            } catch {
-                print("Error in background upload: \(error)")
+            } else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
+            }
+        } catch {
+            print("Error uploading tweet (attempt \(retryCount + 1)/\(maxRetryAttempts)): \(error)")
+            
+            if retryCount < maxRetryAttempts - 1 {
+                // Retry after delay
+                print("Retrying upload in \(retryDelaySeconds) seconds...")
+                try? await Task.sleep(nanoseconds: UInt64(retryDelaySeconds * 1_000_000_000))
+                await uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData, retryCount: retryCount + 1)
+            } else {
+                // Max retries reached - notify failure but keep pending upload for manual retry
                 await MainActor.run {
                     NotificationCenter.default.post(
                         name: .backgroundUploadFailed,
@@ -1535,10 +1487,81 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    private func uploadAttachmentsWithRetry(itemData: [PendingTweetUpload.ItemData], retryCount: Int) async throws -> [MimeiFileType] {
+        var uploadedAttachments: [MimeiFileType] = []
+        let itemPairs = itemData.chunked(into: 2)
+        
+        for (pairIndex, pair) in itemPairs.enumerated() {
+            do {
+                let pairAttachments = try await self.uploadItemPair(pair)
+                uploadedAttachments.append(contentsOf: pairAttachments)
+            } catch {
+                print("Error uploading pair \(pairIndex + 1): \(error)")
+                throw error
+            }
+        }
+        
+        if itemData.count != uploadedAttachments.count {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
+        }
+        
+        return uploadedAttachments
+    }
+    
+    private func savePendingUpload(_ pendingUpload: PendingTweetUpload) async {
+        do {
+            let data = try JSONEncoder().encode(pendingUpload)
+            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
+            try data.write(to: fileURL)
+            print("Saved pending upload to disk")
+        } catch {
+            print("Failed to save pending upload: \(error)")
+        }
+    }
+    
+    private func removePendingUpload() async {
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
+        try? FileManager.default.removeItem(at: fileURL)
+        print("Removed pending upload from disk")
+    }
+    
+    // MARK: - Recovery Methods
+    func recoverPendingUploads() async {
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
+        
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return
+        }
+        
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let pendingUpload = try JSONDecoder().decode(PendingTweetUpload.self, from: data)
+            
+            // Check if the pending upload is not too old (e.g., within 24 hours)
+            let maxAge: TimeInterval = 24 * 60 * 60 // 24 hours
+            if Date().timeIntervalSince(pendingUpload.timestamp) < maxAge {
+                print("Recovering pending upload from \(pendingUpload.timestamp)")
+                await uploadTweetWithPersistenceAndRetry(
+                    tweet: pendingUpload.tweet,
+                    itemData: pendingUpload.itemData,
+                    retryCount: pendingUpload.retryCount
+                )
+            } else {
+                // Remove old pending upload
+                try? FileManager.default.removeItem(at: fileURL)
+                print("Removed old pending upload from \(pendingUpload.timestamp)")
+            }
+        } catch {
+            print("Failed to recover pending upload: \(error)")
+            // Remove corrupted file
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+    
     func scheduleCommentUpload(
         comment: Tweet,
         to tweet: Tweet,
-        itemData: [PendingUpload.ItemData]
+        itemData: [PendingTweetUpload.ItemData]
     ) {
         Task.detached(priority: .background) {
             do {

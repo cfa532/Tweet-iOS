@@ -16,7 +16,7 @@ class AppState: ObservableObject {
             
             // Cleanup caches after a delay
             Task.detached(priority: .background) {
-                // Wait 3 seconds after app initialization
+                // Wait 30 seconds after app initialization
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 // Clean up image cache
                 ImageCacheManager.shared.cleanupOldCache()
@@ -36,14 +36,6 @@ struct TweetApp: App {
     @State private var globalAlertMessage = ""
     
     init() {
-        // Configure background task scheduler
-        BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: "com.tweet.upload",
-            using: nil
-        ) { task in
-            HproseInstance.handleBackgroundTask(task: task as! BGProcessingTask)
-        }
-        
         // Initialize MetricKit
         _ = MetricKitManager.shared
     }
