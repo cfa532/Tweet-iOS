@@ -164,13 +164,20 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
             goto end;
         }
         
-        // Find H.264 encoder
-        const AVCodec *video_codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+        // Find H.264 encoder - prefer VideoToolbox for hardware acceleration
+        const AVCodec *video_codec = avcodec_find_encoder_by_name("h264_videotoolbox");
         if (!video_codec) {
-            av_log(NULL, AV_LOG_ERROR, "H.264 encoder not found\n");
-            ret = AVERROR_UNKNOWN;
-            video_codec_context = NULL;
-            goto end;
+            // Fallback to software encoder
+            video_codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+            if (!video_codec) {
+                av_log(NULL, AV_LOG_ERROR, "H.264 encoder not found\n");
+                ret = AVERROR_UNKNOWN;
+                video_codec_context = NULL;
+                goto end;
+            }
+            av_log(NULL, AV_LOG_INFO, "Using software H.264 encoder\n");
+        } else {
+            av_log(NULL, AV_LOG_INFO, "Using VideoToolbox hardware H.264 encoder\n");
         }
 
         // Create codec context for video
@@ -203,14 +210,29 @@ static int create_single_hls_stream(AVFormatContext *input_format_context, const
                (float)input_framerate.num / input_framerate.den);
         
         video_codec_context->gop_size = 60; // 2 seconds at 30fps
-        video_codec_context->max_b_frames = 2;
+        video_codec_context->max_b_frames = 0; // No B-frames for better compatibility
         video_codec_context->pix_fmt = AV_PIX_FMT_YUV420P;
         
-        // Set H.264 specific options for better compatibility
-        av_opt_set(video_codec_context->priv_data, "preset", "medium", 0);
-        av_opt_set(video_codec_context->priv_data, "tune", "zerolatency", 0);
-        av_opt_set(video_codec_context->priv_data, "profile", "baseline", 0);
-        av_opt_set(video_codec_context->priv_data, "level", "3.1", 0);
+        // Set H.264 specific options for hardware acceleration compatibility
+        if (strcmp(video_codec->name, "h264_videotoolbox") == 0) {
+            // VideoToolbox hardware encoder settings
+            av_opt_set(video_codec_context->priv_data, "profile", "baseline", 0);
+            av_opt_set(video_codec_context->priv_data, "level", "3.1", 0);
+            av_opt_set(video_codec_context->priv_data, "allow_sw", "0", 0); // Force hardware
+        } else {
+            // Software encoder settings - more compatible but less restrictive
+            av_opt_set(video_codec_context->priv_data, "preset", "fast", 0);
+            av_opt_set(video_codec_context->priv_data, "tune", "zerolatency", 0);
+            av_opt_set(video_codec_context->priv_data, "profile", "baseline", 0);
+            av_opt_set(video_codec_context->priv_data, "level", "3.1", 0);
+            
+            // Basic compatibility settings without being overly restrictive
+            av_opt_set(video_codec_context->priv_data, "x264opts", "ref=3:deblock=1,1:me=hex:subme=7", 0);
+        }
+        
+        // Use baseline profile for maximum compatibility
+        video_codec_context->profile = AV_PROFILE_H264_BASELINE;
+        video_codec_context->level = 31; // Level 3.1 for better quality
 
         // Open video codec
         ret = avcodec_open2(video_codec_context, video_codec, NULL);
@@ -1333,13 +1355,13 @@ static int create_master_playlist(const char *output_dir, const char *high_dir, 
     fprintf(master_file, "#EXT-X-VERSION:3\n");
     fprintf(master_file, "\n");
     
-    // High quality variant
-    fprintf(master_file, "#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720,CODECS=\"avc1.64001f,mp4a.40.2\"\n");
+    // High quality variant - using Baseline Profile for hardware acceleration compatibility
+    fprintf(master_file, "#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720,CODECS=\"avc1.42001f,mp4a.40.2\"\n");
     fprintf(master_file, "high/playlist.m3u8\n");
     fprintf(master_file, "\n");
     
-    // Medium quality variant
-    fprintf(master_file, "#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=854x480,CODECS=\"avc1.64001f,mp4a.40.2\"\n");
+    // Medium quality variant - using Baseline Profile for hardware acceleration compatibility
+    fprintf(master_file, "#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=854x480,CODECS=\"avc1.42001f,mp4a.40.2\"\n");
     fprintf(master_file, "medium/playlist.m3u8\n");
 
     fclose(master_file);

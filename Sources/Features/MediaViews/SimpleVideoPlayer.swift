@@ -280,8 +280,24 @@ struct HLSVideoPlayerWithControls: View {
         isLoading = true
         errorMessage = nil
         
-        // Create AVPlayer with the URL - let AVPlayer handle everything
-        let avPlayer = AVPlayer(url: videoURL)
+        // Create asset with hardware acceleration support
+        let asset = AVURLAsset(url: videoURL, options: [
+            "AVURLAssetOutOfBandMIMETypeKey": "application/x-mpegURL",
+            "AVURLAssetHTTPHeaderFieldsKey": ["Accept": "*/*"]
+        ])
+        
+        // Create player item with asset
+        let playerItem = AVPlayerItem(asset: asset)
+        
+        // Configure player item for better performance
+        playerItem.preferredForwardBufferDuration = 10.0
+        playerItem.preferredPeakBitRate = 0 // Let system decide
+        
+        // Create AVPlayer with the player item
+        let avPlayer = AVPlayer(playerItem: playerItem)
+        
+        // Enable hardware acceleration
+        avPlayer.automaticallyWaitsToMinimizeStalling = true
         
         // Add periodic time observer for progress updates
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
@@ -340,6 +356,15 @@ struct HLSVideoPlayerWithControls: View {
                     case ("CoreMediaErrorDomain", -12644):
                         print("DEBUG: Segment duration error")
                         self.errorMessage = "HLS segment duration error"
+                    case ("CoreMediaErrorDomain", -12645):
+                        print("DEBUG: Codec not supported error")
+                        self.errorMessage = "Video codec not supported by this device"
+                    case ("CoreMediaErrorDomain", -12646):
+                        print("DEBUG: Format not supported error")
+                        self.errorMessage = "Video format not supported by this device"
+                    case ("CoreMediaErrorDomain", -12647):
+                        print("DEBUG: Profile not supported error")
+                        self.errorMessage = "Video profile not supported by this device"
                     case ("NSURLErrorDomain", 404):
                         print("DEBUG: HLS playlist not found (404)")
                         self.errorMessage = "HLS playlist not found"
@@ -351,7 +376,15 @@ struct HLSVideoPlayerWithControls: View {
                         self.errorMessage = "HLS server error"
                     default:
                         print("DEBUG: Unknown HLS error")
-                        self.errorMessage = "HLS playback error: \(error.localizedDescription)"
+                        // Check for common codec compatibility issues
+                        if error.localizedDescription.contains("codec") || 
+                           error.localizedDescription.contains("format") ||
+                           error.localizedDescription.contains("profile") ||
+                           error.localizedDescription.contains("hardware") {
+                            self.errorMessage = "Video codec not compatible with this device. Please try uploading a different video format."
+                        } else {
+                            self.errorMessage = "HLS playback error: \(error.localizedDescription)"
+                        }
                     }
                 }
                 self.isLoading = false
@@ -374,8 +407,49 @@ struct HLSVideoPlayerWithControls: View {
         
         print("DEBUG: Fallback URL: \(fallbackURL.absoluteString)")
         
-        // Create new player with fallback URL
-        let fallbackPlayer = AVPlayer(url: fallbackURL)
+        // Test if this URL is accessible
+        Task {
+            do {
+                let (_, response) = try await URLSession.shared.data(from: fallbackURL)
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    await MainActor.run {
+                        self.setupFallbackPlayer(with: fallbackURL)
+                    }
+                    return
+                }
+            } catch {
+                print("DEBUG: Fallback URL failed: \(error)")
+            }
+            
+            // If fallback fails, show error
+            await MainActor.run {
+                self.errorMessage = "Unable to load video stream"
+                self.isLoading = false
+            }
+        }
+    }
+    
+    private func setupFallbackPlayer(with url: URL) {
+        print("DEBUG: Setting up fallback player with URL: \(url.absoluteString)")
+        
+        // Create asset with hardware acceleration support
+        let asset = AVURLAsset(url: url, options: [
+            "AVURLAssetOutOfBandMIMETypeKey": "application/x-mpegURL",
+            "AVURLAssetHTTPHeaderFieldsKey": ["Accept": "*/*"]
+        ])
+        
+        // Create player item with asset
+        let playerItem = AVPlayerItem(asset: asset)
+        
+        // Configure player item for better performance
+        playerItem.preferredForwardBufferDuration = 10.0
+        playerItem.preferredPeakBitRate = 0 // Let system decide
+        
+        // Create AVPlayer with the player item
+        let fallbackPlayer = AVPlayer(playerItem: playerItem)
+        
+        // Enable hardware acceleration
+        fallbackPlayer.automaticallyWaitsToMinimizeStalling = true
         
         // Add periodic time observer for progress updates
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
