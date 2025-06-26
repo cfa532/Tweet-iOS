@@ -248,16 +248,30 @@ struct MediaCell: View {
                                 showFullScreen = true
                             }
                     } else {
-                        // Video placeholder with play button
+                        // Video snapshot with play button overlay
                         ZStack {
-                            Color.black
+                            if let image = image {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .clipped()
+                            } else if isLoading {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                                    .scaleEffect(1.2)
+                            } else {
+                                Color.black
+                            }
                             Image(systemName: "play.circle.fill")
                                 .resizable()
-                                .frame(width: 50, height: 50)
+                                .frame(width: 40, height: 40)
                                 .foregroundColor(.white)
                         }
                         .onTapGesture {
                             handleTap()
+                        }
+                        .onAppear {
+                            loadVideoThumbnail()
                         }
                     }
                 case "audio":
@@ -347,6 +361,28 @@ struct MediaCell: View {
                 await MainActor.run {
                     self.isLoading = false
                 }
+            }
+        }
+    }
+    
+    private func loadVideoThumbnail() {
+        guard image == nil, !isLoading, let url = attachment.getUrl(baseUrl) else { return }
+        isLoading = true
+        Task {
+            let asset = AVAsset(url: url)
+            let imageGenerator = AVAssetImageGenerator(asset: asset)
+            imageGenerator.appliesPreferredTrackTransform = true
+            let time = CMTime(seconds: 0.1, preferredTimescale: 600)
+            var thumbnail: UIImage? = nil
+            do {
+                let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
+                thumbnail = UIImage(cgImage: cgImage)
+            } catch {
+                print("Failed to generate video thumbnail: \(error)")
+            }
+            await MainActor.run {
+                self.image = thumbnail
+                self.isLoading = false
             }
         }
     }

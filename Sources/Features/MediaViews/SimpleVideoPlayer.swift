@@ -27,10 +27,9 @@ struct SimpleVideoPlayer: View {
     var contentType: String? = nil
     
     var body: some View {
-        // Check if this is an HLS stream based on content type
         if isHLSStream(url: url, contentType: contentType) {
-            HLSVideoPlayerWithControls(
-                videoURL: getHLSPlaylistURL(from: url),
+            HLSDirectoryVideoPlayer(
+                baseURL: url,
                 aspectRatio: aspectRatio,
                 isVisible: isVisible
             )
@@ -593,5 +592,71 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             self.onMuteChanged = onMuteChanged
             self.onTimeUpdate = onTimeUpdate
         }
+    }
+}
+
+struct HLSDirectoryVideoPlayer: View {
+    let baseURL: URL
+    let aspectRatio: Float?
+    let isVisible: Bool
+    @State private var playlistURL: URL? = nil
+    @State private var error: String? = nil
+    @State private var loading = true
+
+    var body: some View {
+        Group {
+            if let playlistURL = playlistURL {
+                HLSVideoPlayerWithControls(
+                    videoURL: playlistURL,
+                    aspectRatio: aspectRatio,
+                    isVisible: isVisible
+                )
+            } else if let error = error {
+                VStack {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.largeTitle)
+                        .foregroundColor(.red)
+                    Text(error)
+                        .foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                }
+            } else {
+                ProgressView("Loading video...")
+            }
+        }
+        .task {
+            if playlistURL == nil && error == nil && loading {
+                loading = false
+                if let url = await getHLSPlaylistURL(baseURL: baseURL) {
+                    playlistURL = url
+                } else {
+                    error = "No valid HLS playlist found (playlist.m3u8 or master.m3u8) in directory."
+                }
+            }
+        }
+    }
+
+    private func getHLSPlaylistURL(baseURL: URL) async -> URL? {
+        let master = baseURL.appendingPathComponent("master.m3u8")
+        let playlist = baseURL.appendingPathComponent("playlist.m3u8")
+        if await urlExists(master) {
+            return master
+        } else if await urlExists(playlist) {
+            return playlist
+        } else {
+            return nil
+        }
+    }
+
+    private func urlExists(_ url: URL) async -> Bool {
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                return httpResponse.statusCode == 200
+            }
+        } catch {}
+        return false
     }
 } 
