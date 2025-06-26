@@ -54,6 +54,7 @@ struct TweetDetailView: View {
             )
             // Existing code
         }
+        .padding(.top)
     }
 
     private func onAvatarTap(tweet: Tweet) {

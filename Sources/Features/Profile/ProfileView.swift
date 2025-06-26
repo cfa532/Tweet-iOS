@@ -142,6 +142,7 @@ struct ProfileView: View {
             )
             .id(user.mid)
         }
+        .padding(.top)
         .sheet(isPresented: $showEditSheet) {
             RegistrationView(onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
                 // TODO: Implement user update logic here
