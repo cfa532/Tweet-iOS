@@ -64,6 +64,7 @@ struct ProfileTweetsSection: View {
     let user: User
     let hproseInstance: HproseInstance
     let onUserSelect: (User) -> Void
+    let onTweetTap: (Tweet) -> Void
     let onPinnedTweetsRefresh: () async -> Void
     let onScroll: (CGFloat) -> Void
     @StateObject private var viewModel: ProfileTweetsViewModel
@@ -75,6 +76,7 @@ struct ProfileTweetsSection: View {
         user: User,
         hproseInstance: HproseInstance,
         onUserSelect: @escaping (User) -> Void,
+        onTweetTap: @escaping (Tweet) -> Void,
         onPinnedTweetsRefresh: @escaping () async -> Void,
         onScroll: @escaping (CGFloat) -> Void
     ) {
@@ -84,6 +86,7 @@ struct ProfileTweetsSection: View {
         self.user = user
         self.hproseInstance = hproseInstance
         self.onUserSelect = onUserSelect
+        self.onTweetTap = onTweetTap
         self.onPinnedTweetsRefresh = onPinnedTweetsRefresh
         self.onScroll = onScroll
         self._viewModel = StateObject(wrappedValue: ProfileTweetsViewModel(
@@ -161,9 +164,7 @@ struct ProfileTweetsSection: View {
                                 onUserSelect(user)
                             },
                             onTap: { tweet in
-                                // Handle tweet tap - navigate to tweet detail
-                                // For now, we'll just print since this view doesn't have navigation state
-                                print("Tweet tapped: \(tweet.mid)")
+                                onTweetTap(tweet)
                             },
                             onRemove: { tweetId in
                                 if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {

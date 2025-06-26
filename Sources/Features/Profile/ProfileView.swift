@@ -48,6 +48,8 @@ struct ProfileView: View {
     @State private var isHeaderVisible = true
     @State private var bookmarks: [Tweet] = []
     @State private var favorites: [Tweet] = []
+    /// The tweet selected when tapping on a tweet item
+    @State private var selectedTweet: Tweet? = nil
 
     init(user: User, onLogout: (() -> Void)? = nil) {
         self.user = user
@@ -127,6 +129,7 @@ struct ProfileView: View {
                 user: user,
                 hproseInstance: hproseInstance,
                 onUserSelect: { user in selectedUser = user },
+                onTweetTap: { tweet in selectedTweet = tweet },
                 onPinnedTweetsRefresh: refreshPinnedTweets,
                 onScroll: { offset in
                     // Show header if at the top or scrolling up
@@ -229,6 +232,14 @@ struct ProfileView: View {
                 }
             }
         }
+        .navigationDestination(isPresented: Binding(
+            get: { selectedTweet != nil },
+            set: { if !$0 { selectedTweet = nil } }
+        )) {
+            if let selectedTweet = selectedTweet {
+                TweetDetailView(tweet: selectedTweet)
+            }
+        }
     }
 
     @ViewBuilder
@@ -295,9 +306,7 @@ struct ProfileView: View {
                         // Handle avatar tap - navigate to profile
                     },
                     onTap: { tweet in
-                        // Handle tweet tap - navigate to tweet detail
-                        // For now, we'll just print since this view doesn't have navigation state
-                        print("Tweet tapped: \(tweet.mid)")
+                        selectedTweet = tweet
                     }
                 )
             }
