@@ -172,7 +172,7 @@ public class HLSVideoProcessor {
             for (index, formatDescription) in formatDescriptions.enumerated() {
                 print("📋 Format Description \(index + 1):")
                 
-                let videoFormatDescription = formatDescription as! CMVideoFormatDescription
+                let videoFormatDescription = formatDescription 
                 let extensions = CMFormatDescriptionGetExtensions(videoFormatDescription) as? [String: Any]
                 
                 if let extensions = extensions {

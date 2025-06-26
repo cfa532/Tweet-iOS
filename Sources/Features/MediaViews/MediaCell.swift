@@ -232,46 +232,28 @@ struct MediaCell: View {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
-                    if shouldLoadVideo {
+                    ZStack {
                         SimpleVideoPlayer(
-                            url: url, 
-                            autoPlay: play, 
-                            isVisible: isVisible,
+                            url: url,
+                            autoPlay: play, // play is false by default, true after tap
+                            isVisible: true,
                             aspectRatio: attachment.aspectRatio,
                             contentType: attachment.type
                         )
-                            .environmentObject(MuteState.shared)
-                            .onTapGesture {
-                                handleVideoTap()
-                            }
-                            .onTapGesture(count: 2) {
-                                showFullScreen = true
-                            }
-                    } else {
-                        // Video snapshot with play button overlay
-                        ZStack {
-                            if let image = image {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .clipped()
-                            } else if isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
-                                    .scaleEffect(1.2)
-                            } else {
-                                Color.black
-                            }
+                        .environmentObject(MuteState.shared)
+                        .onTapGesture {
+                            handleVideoTap()
+                        }
+                        .onTapGesture(count: 2) {
+                            showFullScreen = true
+                        }
+                        // Overlay play button if not playing
+                        if !play {
+                            Color.black.opacity(0.2)
                             Image(systemName: "play.circle.fill")
                                 .resizable()
                                 .frame(width: 40, height: 40)
                                 .foregroundColor(.white)
-                        }
-                        .onTapGesture {
-                            handleTap()
-                        }
-                        .onAppear {
-                            loadVideoThumbnail()
                         }
                     }
                 case "audio":
@@ -361,28 +343,6 @@ struct MediaCell: View {
                 await MainActor.run {
                     self.isLoading = false
                 }
-            }
-        }
-    }
-    
-    private func loadVideoThumbnail() {
-        guard image == nil, !isLoading, let url = attachment.getUrl(baseUrl) else { return }
-        isLoading = true
-        Task {
-            let asset = AVAsset(url: url)
-            let imageGenerator = AVAssetImageGenerator(asset: asset)
-            imageGenerator.appliesPreferredTrackTransform = true
-            let time = CMTime(seconds: 0.1, preferredTimescale: 600)
-            var thumbnail: UIImage? = nil
-            do {
-                let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
-                thumbnail = UIImage(cgImage: cgImage)
-            } catch {
-                print("Failed to generate video thumbnail: \(error)")
-            }
-            await MainActor.run {
-                self.image = thumbnail
-                self.isLoading = false
             }
         }
     }
