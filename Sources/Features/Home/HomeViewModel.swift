@@ -29,6 +29,7 @@ struct HomeView: View {
                 }
                 .padding(.horizontal)
                 .padding(.top, 8)
+                .padding(.leading, -4)
 
                 // Tab Content
                 TabView(selection: $selectedTab) {
@@ -45,6 +46,7 @@ struct HomeView: View {
                         .tag(1)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                .padding(.leading, -4)
             }
             .navigationDestination(item: $selectedUser) { user in
                 ProfileView(user: user, onLogout: {
