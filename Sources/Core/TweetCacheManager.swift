@@ -71,11 +71,14 @@ class TweetCacheManager {
             request.fetchLimit = maxCacheSize
             
             if let allTweets = try? context.fetch(request) {
-                let tweetsToDelete = Array(allTweets[maxCacheSize...])
-                for tweet in tweetsToDelete {
-                    context.delete(tweet)
+                // Only delete tweets if we have more than maxCacheSize
+                if allTweets.count > maxCacheSize {
+                    let tweetsToDelete = Array(allTweets[maxCacheSize...])
+                    for tweet in tweetsToDelete {
+                        context.delete(tweet)
+                    }
+                    try? context.save()
                 }
-                try? context.save()
             }
         }
     }

@@ -799,10 +799,11 @@ final class HproseInstance: ObservableObject {
         data: Data,
         typeIdentifier: String,
         fileName: String? = nil,
-        referenceId: String? = nil
+        referenceId: String? = nil,
+        noResample: Bool = false
     ) async throws -> MimeiFileType? {
         _ = await appUser.resolveWritableUrl()
-        print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil")")
+        print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
         
         // Use VideoProcessor to determine media type and handle upload
         let videoProcessor = VideoProcessor()
@@ -811,6 +812,7 @@ final class HproseInstance: ObservableObject {
             typeIdentifier: typeIdentifier,
             fileName: fileName,
             referenceId: referenceId,
+            noResample: noResample,
             appUser: appUser,
             appId: appId
         )
@@ -826,6 +828,7 @@ final class HproseInstance: ObservableObject {
             typeIdentifier: String,
             fileName: String?,
             referenceId: String?,
+            noResample: Bool,
             appUser: User,
             appId: String
         ) async throws -> MimeiFileType? {
@@ -841,6 +844,7 @@ final class HproseInstance: ObservableObject {
                     data: data,
                     fileName: fileName,
                     referenceId: referenceId,
+                    noResample: noResample,
                     appUser: appUser
                 )
             } else {
@@ -897,6 +901,7 @@ final class HproseInstance: ObservableObject {
             data: Data,
             fileName: String?,
             referenceId: String?,
+            noResample: Bool,
             appUser: User
         ) async throws -> MimeiFileType? {
             print("Uploading original video to backend for conversion, data size: \(data.count) bytes")
@@ -945,6 +950,11 @@ final class HproseInstance: ObservableObject {
                 body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n\r\n".data(using: .utf8)!)
                 body.append("\(referenceId)\r\n".data(using: .utf8)!)
             }
+            
+            // Add noResample parameter - use the value passed from compose view
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"noResample\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(noResample)\r\n".data(using: .utf8)!)
             
             // Add the video file (server expects field name "videoFile")
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
@@ -1347,6 +1357,15 @@ final class HproseInstance: ObservableObject {
             let typeIdentifier: String
             let data: Data
             let fileName: String
+            let noResample: Bool
+            
+            init(identifier: String, typeIdentifier: String, data: Data, fileName: String, noResample: Bool = false) {
+                self.identifier = identifier
+                self.typeIdentifier = typeIdentifier
+                self.data = data
+                self.fileName = fileName
+                self.noResample = noResample
+            }
         }
         
         init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0) {
@@ -1409,7 +1428,8 @@ final class HproseInstance: ObservableObject {
                 return try await uploadToIPFS(
                     data: itemData.data,
                     typeIdentifier: itemData.typeIdentifier,
-                    fileName: itemData.fileName
+                    fileName: itemData.fileName,
+                    noResample: itemData.noResample
                 )
             }
         }

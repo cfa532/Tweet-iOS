@@ -103,11 +103,17 @@ class ComposeTweetViewModel: ObservableObject {
                     let timestamp = Int(Date().timeIntervalSince1970)
                     let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
                     
+                    // Determine if this is a video file for noResample parameter
+                    let isVideo = typeIdentifier.contains("movie") || 
+                                 typeIdentifier.contains("video") || 
+                                 ["mp4", "mov", "m4v", "mkv", "avi", "flv", "wmv", "webm", "ts", "mts", "m2ts", "vob", "dat", "ogv", "ogg", "f4v", "asf"].contains(fileExtension)
+                    
                     itemData.append(HproseInstance.PendingTweetUpload.ItemData(
                         identifier: item.itemIdentifier ?? UUID().uuidString,
                         typeIdentifier: typeIdentifier,
                         data: data,
-                        fileName: filename
+                        fileName: filename,
+                        noResample: false // Set to false for now
                     ))
                 }
             } catch {
