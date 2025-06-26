@@ -141,6 +141,7 @@ struct ProfileView: View {
                 }
             )
             .id(user.mid)
+            .padding(.leading, -4)
         }
         .padding(.top)
         .sheet(isPresented: $showEditSheet) {
