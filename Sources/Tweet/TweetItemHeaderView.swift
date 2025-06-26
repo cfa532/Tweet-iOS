@@ -11,6 +11,7 @@ struct TweetItemHeaderView: View {
                 Text("@\(tweet.author?.username ?? "")")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
+                    .padding(.leading, -6)
             }
             Spacer()
         }

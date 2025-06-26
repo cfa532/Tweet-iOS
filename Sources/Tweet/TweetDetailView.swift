@@ -44,6 +44,7 @@ struct TweetDetailView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 4)
                 commentsListView
+                    .padding(.leading, -4)
             }
             .task {
                 setupInitialData()

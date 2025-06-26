@@ -31,15 +31,17 @@ struct SimpleVideoPlayer: View {
         if isHLSStream(url: url, contentType: contentType) {
             HLSVideoPlayerWithControls(
                 videoURL: getHLSPlaylistURL(from: url),
-                aspectRatio: aspectRatio
+                aspectRatio: aspectRatio,
+                isVisible: isVisible
             )
         } else {
             VideoPlayerView(
                 url: url,
-                autoPlay: autoPlay,
+                autoPlay: autoPlay && isVisible,
                 isMuted: isMuted ?? muteState.isMuted,
                 onMuteChanged: onMuteChanged,
-                onTimeUpdate: onTimeUpdate
+                onTimeUpdate: onTimeUpdate,
+                isVisible: isVisible
             )
         }
     }
@@ -180,6 +182,7 @@ struct SimpleVideoPlayer: View {
 struct HLSVideoPlayerWithControls: View {
     let videoURL: URL
     let aspectRatio: Float?
+    let isVisible: Bool
     
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -189,9 +192,10 @@ struct HLSVideoPlayerWithControls: View {
     @State private var duration: Double = 0
     @State private var showControls = true
     
-    init(videoURL: URL, aspectRatio: Float? = nil) {
+    init(videoURL: URL, aspectRatio: Float? = nil, isVisible: Bool) {
         self.videoURL = videoURL
         self.aspectRatio = aspectRatio
+        self.isVisible = isVisible
     }
     
     var body: some View {
@@ -272,6 +276,13 @@ struct HLSVideoPlayerWithControls: View {
         }
         .onDisappear {
             cleanupPlayer()
+        }
+        .onChange(of: isVisible) { visible in
+            if !visible {
+                player?.pause()
+            } else if isPlaying {
+                player?.play()
+            }
         }
     }
     
@@ -504,6 +515,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     let isMuted: Bool
     let onMuteChanged: ((Bool) -> Void)?
     let onTimeUpdate: ((Double) -> Void)?
+    let isVisible: Bool
     
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
@@ -550,6 +562,11 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
         controller.player?.isMuted = isMuted
+        if !isVisible {
+            controller.player?.pause()
+        } else if autoPlay {
+            controller.player?.play()
+        }
     }
     
     static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {

@@ -37,6 +37,8 @@ struct CommentItemView: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { showDetail = true }
+                .padding(.top, -8)
+                
                 TweetItemBodyView(tweet: comment, enableTap: false)
                     .contentShape(Rectangle())
                     .onTapGesture { onTap?(comment) }

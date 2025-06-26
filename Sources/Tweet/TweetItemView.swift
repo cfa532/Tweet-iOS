@@ -50,6 +50,7 @@ struct TweetItemView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        .padding(.top, -8)
                         HStack(alignment: .top) {
                             TweetItemHeaderView(tweet: originalTweet)
                             TweetMenu(tweet: tweet, isPinned: isPinned)
@@ -86,6 +87,7 @@ struct TweetItemView: View {
                             TweetItemHeaderView(tweet: tweet)
                             TweetMenu(tweet: tweet, isPinned: isPinned)
                         }
+                        .padding(.top, -8)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             onTap?(detailTweet)
@@ -130,6 +132,7 @@ struct TweetItemView: View {
                         TweetItemHeaderView(tweet: tweet)
                         TweetMenu(tweet: tweet, isPinned: isPinned)
                     }
+                    .padding(.top, -8)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         onTap?(detailTweet)

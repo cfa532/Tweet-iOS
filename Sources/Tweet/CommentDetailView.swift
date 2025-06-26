@@ -190,6 +190,7 @@ struct CommentDetailView: View {
                 )
             }
         )
+        .padding(.leading, -4)
     }
     
     private func refreshComment() async {
