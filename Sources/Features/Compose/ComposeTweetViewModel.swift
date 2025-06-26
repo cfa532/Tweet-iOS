@@ -55,6 +55,7 @@ class ComposeTweetViewModel: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 withAnimation { self.showToast = false }
             }
+            isUploading = false
             return
         }
         
@@ -104,7 +105,7 @@ class ComposeTweetViewModel: ObservableObject {
                     let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
                     
                     // Determine if this is a video file for noResample parameter
-                    let isVideo = typeIdentifier.contains("movie") || 
+                    _ = typeIdentifier.contains("movie") || 
                                  typeIdentifier.contains("video") || 
                                  ["mp4", "mov", "m4v", "mkv", "avi", "flv", "wmv", "webm", "ts", "mts", "m2ts", "vob", "dat", "ogv", "ogg", "f4v", "asf"].contains(fileExtension)
                     
@@ -124,6 +125,7 @@ class ComposeTweetViewModel: ObservableObject {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     withAnimation { self.showToast = false }
                 }
+                isUploading = false
                 return
             }
         }
@@ -142,11 +144,13 @@ class ComposeTweetViewModel: ObservableObject {
         // Reset form
         tweetContent = ""
         selectedItems = []
-        isUploading = false
         
         // Hide the upload toast after a short delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             withAnimation { self.showToast = false }
         }
+        
+        // Reset uploading state
+        isUploading = false
     }
 }

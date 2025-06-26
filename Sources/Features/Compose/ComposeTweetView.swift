@@ -33,7 +33,7 @@ struct ComposeTweetView: View {
                         if !viewModel.selectedItems.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 8) {
-                                    ForEach(viewModel.selectedItems, id: \.itemIdentifier) { item in
+                                    ForEach(Array(viewModel.selectedItems.enumerated()), id: \.offset) { index, item in
                                         ThumbnailView(item: item)
                                             .frame(width: 100, height: 100)
                                             .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -119,9 +119,15 @@ struct ComposeTweetView: View {
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Tweet") {
+                        // Immediately dismiss the view and prevent repeated tapping
+                        dismiss()
+                        
+                        // Set uploading state to prevent repeated taps
+                        viewModel.isUploading = true
+                        
+                        // Post tweet in background
                         Task {
                             await viewModel.postTweet()
-                            dismiss()
                         }
                     }
                     .disabled(!viewModel.canPostTweet || viewModel.isUploading)

@@ -32,7 +32,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1523"
             endingLineNumber = "1523"
-            landmarkName = "removePendingUpload()"
+            landmarkName = "uploadAttachmentsWithRetry(itemData:retryCount:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
