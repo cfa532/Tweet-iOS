@@ -2,7 +2,7 @@
 
 # Check if source image exists
 if [ ! -f "Icon-iOS-Marketing.png" ]; then
-    echo "Error: Icon-iOS-Marketing.png not found"
+    echo "Error: Icon.png not found"
     exit 1
 fi
 
