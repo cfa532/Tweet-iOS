@@ -222,7 +222,6 @@ struct MediaGridView: View {
             }
             .frame(width: gridWidth, height: gridHeight)
             .clipped()
-            .cornerRadius(8)
             .onAppear { }
             .onDisappear { }
             .fullScreenCover(isPresented: $showBrowser) {

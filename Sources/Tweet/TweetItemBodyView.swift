@@ -29,8 +29,8 @@ struct TweetItemBodyView: View {
         switch count {
         case 1:
             if let ar = attachments[0].aspectRatio, ar > 0 {
-                if ar < 0.8 {
-                    return 0.8 // Portrait aspect ratio
+                if ar < 1 {
+                    return 1 // Portrait aspect ratio
                 } else {
                     return CGFloat(ar) // Use actual aspect ratio for landscape
                 }
@@ -83,6 +83,7 @@ struct TweetItemBodyView: View {
                     .aspectRatio(gridAspect(for: attachments), contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .clipped()
+                    .cornerRadius(8)
             }
         }
         .sheet(isPresented: $showLoginSheet) {
