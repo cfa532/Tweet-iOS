@@ -239,7 +239,8 @@ struct MediaCell: View {
                             isVisible: true,
                             contentType: attachment.type,
                             cellAspectRatio: 1.0,
-                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0)
+                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                            showNativeControls: false
                         )
                         .environmentObject(MuteState.shared)
                         .onTapGesture {
@@ -250,11 +251,25 @@ struct MediaCell: View {
                         }
                         // Overlay play button if not playing
                         if !play {
-                            Color.black.opacity(0.2)
-                            Image(systemName: "play.circle.fill")
-                                .resizable()
-                                .frame(width: 40, height: 40)
-                                .foregroundColor(.white)
+                            GeometryReader { geometry in
+                                Color.black.opacity(0.2)
+                                    .frame(width: geometry.size.width, height: geometry.size.height)
+                                    .allowsHitTesting(false)
+                                VStack {
+                                    Spacer()
+                                    Button(action: {
+                                        play = true
+                                    }) {
+                                        Image(systemName: "play.circle.fill")
+                                            .resizable()
+                                            .frame(width: 40, height: 40)
+                                            .foregroundColor(.white)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                    Spacer()
+                                }
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                            }
                         }
                     }
                 case "audio":

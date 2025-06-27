@@ -26,6 +26,7 @@ struct SimpleVideoPlayer: View {
     var contentType: String? = nil
     var cellAspectRatio: CGFloat? = nil
     var videoAspectRatio: CGFloat? = nil
+    var showNativeControls: Bool = true
     
     var body: some View {
         GeometryReader { geometry in
@@ -51,7 +52,8 @@ struct SimpleVideoPlayer: View {
                             isMuted: isMuted ?? muteState.isMuted,
                             onMuteChanged: onMuteChanged,
                             onTimeUpdate: onTimeUpdate,
-                            isVisible: isVisible
+                            isVisible: isVisible,
+                            showNativeControls: showNativeControls
                         )
                         .padding(.top, -pad)
                         .aspectRatio(videoAR, contentMode: .fit)
@@ -71,7 +73,8 @@ struct SimpleVideoPlayer: View {
                             isMuted: isMuted ?? muteState.isMuted,
                             onMuteChanged: onMuteChanged,
                             onTimeUpdate: onTimeUpdate,
-                            isVisible: isVisible
+                            isVisible: isVisible,
+                            showNativeControls: showNativeControls
                         )
                     }
                 }
@@ -546,10 +549,11 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     let onMuteChanged: ((Bool) -> Void)?
     let onTimeUpdate: ((Double) -> Void)?
     let isVisible: Bool
+    let showNativeControls: Bool
     
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        controller.showsPlaybackControls = true
+        controller.showsPlaybackControls = showNativeControls
         controller.videoGravity = .resizeAspect
         controller.entersFullScreenWhenPlaybackBegins = false
         controller.exitsFullScreenWhenPlaybackEnds = false
