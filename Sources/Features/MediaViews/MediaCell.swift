@@ -232,46 +232,16 @@ struct MediaCell: View {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
-                    ZStack {
-                        SimpleVideoPlayer(
-                            url: url,
-                            autoPlay: play, // play is false by default, true after tap
-                            isVisible: true,
-                            contentType: attachment.type,
-                            cellAspectRatio: 1.0,
-                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showNativeControls: false
-                        )
-                        .environmentObject(MuteState.shared)
-                        .onTapGesture {
-                            handleVideoTap()
-                        }
-                        .onTapGesture(count: 2) {
-                            showFullScreen = true
-                        }
-                        // Overlay play button if not playing
-                        if !play {
-                            GeometryReader { geometry in
-                                Color.black.opacity(0.2)
-                                    .frame(width: geometry.size.width, height: geometry.size.height)
-                                    .allowsHitTesting(false)
-                                VStack {
-                                    Spacer()
-                                    Button(action: {
-                                        play = true
-                                    }) {
-                                        Image(systemName: "play.circle.fill")
-                                            .resizable()
-                                            .frame(width: 40, height: 40)
-                                            .foregroundColor(.white)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                    Spacer()
-                                }
-                                .frame(width: geometry.size.width, height: geometry.size.height)
-                            }
-                        }
-                    }
+                    SimpleVideoPlayer(
+                        url: url,
+                        autoPlay: play, // play is false by default, true after tap
+                        isVisible: true,
+                        contentType: attachment.type,
+                        cellAspectRatio: 1.0,
+                        videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                        showNativeControls: true
+                    )
+                    .environmentObject(MuteState.shared)
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
                         .onTapGesture {
