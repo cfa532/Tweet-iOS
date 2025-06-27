@@ -13,27 +13,28 @@ struct SimpleVideoPlayer: View {
     let url: URL
     var autoPlay: Bool = true
     var onTimeUpdate: ((Double) -> Void)? = nil
-    var aspectRatio: Float? = nil
     var contentType: String? = nil
     var playerState: VideoPlayerState
     @EnvironmentObject var muteState: MuteState
 
     var body: some View {
-        if isHLSStream(url: url, contentType: contentType) {
-            HLSDirectoryVideoPlayer(
-                baseURL: url,
-                aspectRatio: aspectRatio,
-                autoPlay: autoPlay,
-                playerState: playerState
-            )
-        } else {
-            VideoPlayerView(
-                url: url,
-                autoPlay: autoPlay,
-                onTimeUpdate: onTimeUpdate,
-                playerState: playerState
-            )
+        Group {
+            if isHLSStream(url: url, contentType: contentType) {
+                HLSDirectoryVideoPlayer(
+                    baseURL: url,
+                    autoPlay: autoPlay,
+                    playerState: playerState
+                )
+            } else {
+                VideoPlayerView(
+                    url: url,
+                    autoPlay: autoPlay,
+                    onTimeUpdate: onTimeUpdate,
+                    playerState: playerState
+                )
+            }
         }
+        .frame(maxWidth: .infinity)
     }
     
     /// Check if the URL points to an HLS stream
@@ -171,16 +172,14 @@ struct SimpleVideoPlayer: View {
 /// HLSVideoPlayer with custom controls
 struct HLSVideoPlayerWithControls: View {
     let videoURL: URL
-    let aspectRatio: Float?
     let autoPlay: Bool
     let playerState: VideoPlayerState
     
     @State private var isLoading = true
     @State private var errorMessage: String?
     
-    init(videoURL: URL, aspectRatio: Float? = nil, autoPlay: Bool = true, playerState: VideoPlayerState) {
+    init(videoURL: URL, autoPlay: Bool = true, playerState: VideoPlayerState) {
         self.videoURL = videoURL
-        self.aspectRatio = aspectRatio
         self.autoPlay = autoPlay
         self.playerState = playerState
     }
@@ -189,14 +188,13 @@ struct HLSVideoPlayerWithControls: View {
         ZStack {
             if let player = playerState.player {
                 VideoPlayer(player: player)
-                    .aspectRatio(aspectRatio.map { CGFloat($0) } ?? 16.0/9.0, contentMode: .fit)
             } else if isLoading {
                 VStack {
                     ProgressView()
                         .scaleEffect(1.5)
-                    Text("Loading HLS stream...")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+//                    Text("Loading HLS stream...")
+//                        .font(.caption)
+//                        .foregroundColor(.secondary)
                 }
             } else if let errorMessage = errorMessage {
                 VStack {
@@ -471,7 +469,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 
 struct HLSDirectoryVideoPlayer: View {
     let baseURL: URL
-    let aspectRatio: Float?
     let autoPlay: Bool
     let playerState: VideoPlayerState
     @State private var playlistURL: URL? = nil
@@ -483,7 +480,6 @@ struct HLSDirectoryVideoPlayer: View {
             if let playlistURL = playlistURL {
                 HLSVideoPlayerWithControls(
                     videoURL: playlistURL,
-                    aspectRatio: aspectRatio,
                     autoPlay: autoPlay,
                     playerState: playerState
                 )

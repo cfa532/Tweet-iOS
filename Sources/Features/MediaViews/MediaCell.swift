@@ -53,7 +53,6 @@ struct MediaCell: View {
                             SimpleVideoPlayer(
                                 url: url,
                                 autoPlay: autoPlay,
-                                aspectRatio: aspectRatio,
                                 contentType: attachment.type,
                                 playerState: videoPlayerState
                             )
@@ -75,14 +74,14 @@ struct MediaCell: View {
                                     .foregroundColor(.white)
                             }
 
-                            // Video controls overlay at the bottom
+                            // Video controls overlay at the bottom, flush with the bottom
                             VStack {
                                 Spacer()
                                 VideoControls(
                                     playerState: videoPlayerState,
                                     showControls: true
                                 )
-                                .padding(.bottom, 8)
+                                .padding(.bottom, 0)
                             }
                         }
                     case "audio":

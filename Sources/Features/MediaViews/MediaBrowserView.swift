@@ -47,7 +47,6 @@ struct MediaBrowserView: View {
                                 SimpleVideoPlayer(
                                     url: url,
                                     autoPlay: autoPlay,
-                                    aspectRatio: attachment.aspectRatio,
                                     contentType: attachment.type,
                                     playerState: videoPlayerState
                                 )
