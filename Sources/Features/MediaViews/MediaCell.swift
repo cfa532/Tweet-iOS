@@ -15,13 +15,12 @@ struct MediaCell: View {
     let attachmentIndex: Int
     let aspectRatio: Float
     
-    @State private var image: UIImage?
-    @State private var isLoading = false
     @State private var showFullScreen = false
     @State private var autoPlay: Bool         // play/stop video/audio
     @State private var isVisible = false    // load Image
     @State private var shouldLoadVideo = false
     @StateObject private var videoPlayerState = VideoPlayerState()
+    @StateObject private var imageLoader = MediaImageLoader()
     
     private let imageCache = ImageCacheManager.shared
     
@@ -92,11 +91,11 @@ struct MediaCell: View {
                                 handleTap()
                             }
                     case "image":
-                        if let image = image {
+                        if let image = imageLoader.image {
                             Image(uiImage: image)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
-                        } else if isLoading {
+                        } else if imageLoader.isLoading {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle())
                                 .scaleEffect(1.2)
@@ -117,10 +116,12 @@ struct MediaCell: View {
         }
         .aspectRatio(CGFloat(aspectRatio), contentMode: .fit)
         .clipped()
-        .onAppear(perform: loadImage)
+        .onAppear {
+            imageLoader.loadImage(for: attachment, baseUrl: baseUrl)
+        }
         .onChange(of: isVisible) { newValue in
-            if newValue && image == nil {
-                loadImage()
+            if newValue && imageLoader.image == nil {
+                imageLoader.loadImage(for: attachment, baseUrl: baseUrl)
             }
         }
         .fullScreenCover(isPresented: $showFullScreen) {
@@ -157,30 +158,5 @@ struct MediaCell: View {
     private func handleVideoTap() {
         // For videos that are already loaded, toggle play/pause
         autoPlay.toggle()
-    }
-    
-    private func loadImage() {
-        guard let url = attachment.getUrl(baseUrl) else { return }
-        
-        // First, try to get cached image immediately
-        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-            self.image = cachedImage
-            return
-        }
-        
-        // If no cached image, start loading
-        isLoading = true
-        Task {
-            if let loadedImage = await imageCache.loadAndCacheImage(from: url, for: attachment, baseUrl: baseUrl) {
-                await MainActor.run {
-                    self.image = loadedImage
-                    self.isLoading = false
-                }
-            } else {
-                await MainActor.run {
-                    self.isLoading = false
-                }
-            }
-        }
     }
 }
