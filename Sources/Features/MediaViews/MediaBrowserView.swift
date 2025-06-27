@@ -46,7 +46,6 @@ struct MediaBrowserView: View {
                                 autoPlay: true,
                                 isMuted: false,
                                 isVisible: isVisible && currentIndex == index,
-                                aspectRatio: attachment.aspectRatio,
                                 contentType: attachment.type
                             )
                             .environmentObject(MuteState.shared)

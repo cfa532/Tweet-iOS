@@ -23,14 +23,12 @@ struct SimpleVideoPlayer: View {
     var isMuted: Bool? = nil
     var onMuteChanged: ((Bool) -> Void)? = nil
     let isVisible: Bool
-    var aspectRatio: Float? = nil
     var contentType: String? = nil
     
     var body: some View {
         if isHLSStream(url: url, contentType: contentType) {
             HLSDirectoryVideoPlayer(
                 baseURL: url,
-                aspectRatio: aspectRatio,
                 isVisible: isVisible
             )
         } else {
@@ -180,7 +178,6 @@ struct SimpleVideoPlayer: View {
 /// HLSVideoPlayer with custom controls
 struct HLSVideoPlayerWithControls: View {
     let videoURL: URL
-    let aspectRatio: Float?
     let isVisible: Bool
     
     @State private var player: AVPlayer?
@@ -191,9 +188,8 @@ struct HLSVideoPlayerWithControls: View {
     @State private var duration: Double = 0
     @State private var showControls = true
     
-    init(videoURL: URL, aspectRatio: Float? = nil, isVisible: Bool) {
+    init(videoURL: URL, isVisible: Bool) {
         self.videoURL = videoURL
-        self.aspectRatio = aspectRatio
         self.isVisible = isVisible
     }
     
@@ -201,7 +197,6 @@ struct HLSVideoPlayerWithControls: View {
         ZStack {
             if let player = player {
                 VideoPlayer(player: player)
-                    .aspectRatio(aspectRatio.map { CGFloat($0) } ?? 16.0/9.0, contentMode: .fit)
                     .overlay(
                         // Custom controls overlay
                         Group {
@@ -597,7 +592,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 
 struct HLSDirectoryVideoPlayer: View {
     let baseURL: URL
-    let aspectRatio: Float?
     let isVisible: Bool
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
@@ -608,7 +602,6 @@ struct HLSDirectoryVideoPlayer: View {
             if let playlistURL = playlistURL {
                 HLSVideoPlayerWithControls(
                     videoURL: playlistURL,
-                    aspectRatio: aspectRatio,
                     isVisible: isVisible
                 )
             } else if let error = error {
