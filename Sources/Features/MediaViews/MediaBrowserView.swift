@@ -51,7 +51,6 @@ struct MediaBrowserView: View {
                                 videoAspectRatio: nil
                             )
                             .environmentObject(MuteState.shared)
-//                            .aspectRatio(contentMode: .fit)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
                             SimpleAudioPlayer(

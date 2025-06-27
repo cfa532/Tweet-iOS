@@ -88,7 +88,7 @@ struct TweetDetailView: View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
-                let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
+                let aspect = CGFloat(attachments.first?.aspectRatio ?? 1.0)
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
                         MediaCell(
