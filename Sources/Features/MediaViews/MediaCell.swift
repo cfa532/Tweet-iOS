@@ -242,6 +242,9 @@ struct MediaCell: View {
                         showNativeControls: true
                     )
                     .environmentObject(MuteState.shared)
+                    .onTapGesture(count: 2) {
+                        showFullScreen = true
+                    }
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
                         .onTapGesture {

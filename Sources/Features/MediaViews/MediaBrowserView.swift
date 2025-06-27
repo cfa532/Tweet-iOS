@@ -51,7 +51,7 @@ struct MediaBrowserView: View {
                                 videoAspectRatio: nil
                             )
                             .environmentObject(MuteState.shared)
-                            .aspectRatio(contentMode: .fit)
+//                            .aspectRatio(contentMode: .fit)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
                             SimpleAudioPlayer(
@@ -91,9 +91,11 @@ struct MediaBrowserView: View {
         }
         .onAppear {
             isVisible = true
+            UIApplication.shared.isIdleTimerDisabled = true
         }
         .onDisappear {
             isVisible = false
+            UIApplication.shared.isIdleTimerDisabled = false
         }
     }
     
