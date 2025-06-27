@@ -22,7 +22,6 @@ struct SimpleVideoPlayer: View {
     var onTimeUpdate: ((Double) -> Void)? = nil
     var isMuted: Bool? = nil
     var onMuteChanged: ((Bool) -> Void)? = nil
-    let isVisible: Bool
     var aspectRatio: Float? = nil
     var contentType: String? = nil
     
@@ -30,17 +29,15 @@ struct SimpleVideoPlayer: View {
         if isHLSStream(url: url, contentType: contentType) {
             HLSDirectoryVideoPlayer(
                 baseURL: url,
-                aspectRatio: aspectRatio,
-                isVisible: isVisible
+                aspectRatio: aspectRatio
             )
         } else {
             VideoPlayerView(
                 url: url,
-                autoPlay: autoPlay && isVisible,
+                autoPlay: autoPlay,
                 isMuted: isMuted ?? muteState.isMuted,
                 onMuteChanged: onMuteChanged,
-                onTimeUpdate: onTimeUpdate,
-                isVisible: isVisible
+                onTimeUpdate: onTimeUpdate
             )
         }
     }
@@ -181,7 +178,6 @@ struct SimpleVideoPlayer: View {
 struct HLSVideoPlayerWithControls: View {
     let videoURL: URL
     let aspectRatio: Float?
-    let isVisible: Bool
     
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -191,10 +187,9 @@ struct HLSVideoPlayerWithControls: View {
     @State private var duration: Double = 0
     @State private var showControls = true
     
-    init(videoURL: URL, aspectRatio: Float? = nil, isVisible: Bool) {
+    init(videoURL: URL, aspectRatio: Float? = nil) {
         self.videoURL = videoURL
         self.aspectRatio = aspectRatio
-        self.isVisible = isVisible
     }
     
     var body: some View {
@@ -275,13 +270,6 @@ struct HLSVideoPlayerWithControls: View {
         }
         .onDisappear {
             cleanupPlayer()
-        }
-        .onChange(of: isVisible) { visible in
-            if !visible {
-                player?.pause()
-            } else if isPlaying {
-                player?.play()
-            }
         }
     }
     
@@ -514,7 +502,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     let isMuted: Bool
     let onMuteChanged: ((Bool) -> Void)?
     let onTimeUpdate: ((Double) -> Void)?
-    let isVisible: Bool
     
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
@@ -561,11 +548,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
         controller.player?.isMuted = isMuted
-        if !isVisible {
-            controller.player?.pause()
-        } else if autoPlay {
-            controller.player?.play()
-        }
     }
     
     static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
@@ -598,7 +580,6 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 struct HLSDirectoryVideoPlayer: View {
     let baseURL: URL
     let aspectRatio: Float?
-    let isVisible: Bool
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
     @State private var loading = true
@@ -608,8 +589,7 @@ struct HLSDirectoryVideoPlayer: View {
             if let playlistURL = playlistURL {
                 HLSVideoPlayerWithControls(
                     videoURL: playlistURL,
-                    aspectRatio: aspectRatio,
-                    isVisible: isVisible
+                    aspectRatio: aspectRatio
                 )
             } else if let error = error {
                 VStack {

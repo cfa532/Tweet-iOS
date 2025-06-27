@@ -15,7 +15,6 @@ struct MediaBrowserView: View {
     @State private var currentIndex: Int
     @State private var showVideoPlayer = false
     @State private var play = false
-    @State private var isVisible = true
     @State private var isMuted: Bool = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
     @State private var imageStates: [Int: ImageState] = [:]
     @State private var showControls = true
@@ -45,7 +44,6 @@ struct MediaBrowserView: View {
                                 url: url,
                                 autoPlay: true,
                                 isMuted: false,
-                                isVisible: isVisible && currentIndex == index,
                                 aspectRatio: attachment.aspectRatio,
                                 contentType: attachment.type
                             )
@@ -55,7 +53,7 @@ struct MediaBrowserView: View {
                         } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
                             SimpleAudioPlayer(
                                 url: url,
-                                autoPlay: isVisible && currentIndex == index
+                                autoPlay: true
                             )
                         } else if attachment.type.lowercased() == "image", let url = attachment.getUrl(baseUrl) {
                             ImageViewWithPlaceholder(
@@ -87,12 +85,6 @@ struct MediaBrowserView: View {
                 }
                 Spacer()
             }
-        }
-        .onAppear {
-            isVisible = true
-        }
-        .onDisappear {
-            isVisible = false
         }
     }
     

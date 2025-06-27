@@ -13,6 +13,7 @@ import CryptoKit
 struct MediaCell: View {
     let parentTweet: Tweet
     let attachmentIndex: Int
+    let aspectRatio: Float = 1.0
     @State private var image: UIImage?
     @State private var isLoading = false
     @State private var showFullScreen = false
@@ -43,8 +44,7 @@ struct MediaCell: View {
                         SimpleVideoPlayer(
                             url: url,
                             autoPlay: play, // play is false by default, true after tap
-                            isVisible: true,
-                            aspectRatio: 1,
+                            aspectRatio: aspectRatio,
                             contentType: attachment.type
                         )
                         .frame(width: 320)
@@ -65,7 +65,7 @@ struct MediaCell: View {
                         }
                     }
                 case "audio":
-                    SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
+                    SimpleAudioPlayer(url: url, autoPlay: play)
                         .onTapGesture {
                             handleTap()
                         }
@@ -155,5 +155,3 @@ struct MediaCell: View {
         }
     }
 }
-
-
