@@ -13,15 +13,24 @@ import CryptoKit
 struct MediaCell: View {
     let parentTweet: Tweet
     let attachmentIndex: Int
-    let aspectRatio: Float = 1.0
+    let aspectRatio: Float
+    
     @State private var image: UIImage?
     @State private var isLoading = false
     @State private var showFullScreen = false
-    @State private var play = false
-    @State private var isVisible = false
+    @State private var autoPlay: Bool         // play/stop video/audio
+    @State private var isVisible = false    // load Image
     @State private var shouldLoadVideo = false
+    @StateObject private var videoPlayerState = VideoPlayerState()
     
     private let imageCache = ImageCacheManager.shared
+    
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false) {
+        self.parentTweet = parentTweet
+        self.attachmentIndex = attachmentIndex
+        self.aspectRatio = aspectRatio
+        self._autoPlay = State(initialValue: play)
+    }
     
     private var attachment: MimeiFileType {
         guard let attachments = parentTweet.attachments,
@@ -36,59 +45,78 @@ struct MediaCell: View {
     }
     
     var body: some View {
-        Group {
-            if let url = attachment.getUrl(baseUrl) {
-                switch attachment.type.lowercased() {
-                case "video", "hls_video":
-                    ZStack {
-                        SimpleVideoPlayer(
-                            url: url,
-                            autoPlay: play, // play is false by default, true after tap
-                            aspectRatio: aspectRatio,
-                            contentType: attachment.type
-                        )
-                        .frame(width: 320)
-                        .environmentObject(MuteState.shared)
-                        .onTapGesture {
-                            handleVideoTap()
+        GeometryReader { geometry in
+            Group {
+                if let url = attachment.getUrl(baseUrl) {
+                    switch attachment.type.lowercased() {
+                    case "video", "hls_video":
+                        ZStack {
+                            SimpleVideoPlayer(
+                                url: url,
+                                autoPlay: autoPlay,
+                                aspectRatio: aspectRatio,
+                                contentType: attachment.type,
+                                playerState: videoPlayerState
+                            )
+                            .frame(width: geometry.size.width, height: geometry.size.width / CGFloat(aspectRatio))
+                            .environmentObject(MuteState.shared)
+                            .onTapGesture {
+                                handleVideoTap()
+                            }
+                            .onTapGesture(count: 2) {
+                                showFullScreen = true
+                            }
+
+                            // Overlay play button if not playing
+                            if !autoPlay {
+                                Color.black.opacity(0.2)
+                                Image(systemName: "play.circle.fill")
+                                    .resizable()
+                                    .frame(width: 40, height: 40)
+                                    .foregroundColor(.white)
+                            }
+
+                            // Video controls overlay at the bottom
+                            VStack {
+                                Spacer()
+                                VideoControls(
+                                    playerState: videoPlayerState,
+                                    showControls: true
+                                )
+                                .padding(.bottom, 8)
+                            }
                         }
-                        .onTapGesture(count: 2) {
-                            showFullScreen = true
-                        }
-                        // Overlay play button if not playing
-                        if !play {
-                            Color.black.opacity(0.2)
-                            Image(systemName: "play.circle.fill")
+                    case "audio":
+                        SimpleAudioPlayer(url: url, autoPlay: autoPlay, playerState: videoPlayerState)
+                            .onTapGesture {
+                                handleTap()
+                            }
+                    case "image":
+                        if let image = image {
+                            Image(uiImage: image)
                                 .resizable()
-                                .frame(width: 40, height: 40)
-                                .foregroundColor(.white)
+                                .aspectRatio(contentMode: .fill)
+                        } else if isLoading {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .scaleEffect(1.2)
+                        } else {
+                            Color.gray.opacity(0.3)
                         }
+                    default:
+                        EmptyView()
                     }
-                case "audio":
-                    SimpleAudioPlayer(url: url, autoPlay: play)
-                        .onTapGesture {
-                            handleTap()
-                        }
-                case "image":
-                    if let image = image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .clipped()
-                    } else if isLoading {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
-                            .scaleEffect(1.2)
-                    } else {
-                        Color.gray.opacity(0.3)
-                    }
-                default:
+                } else {
                     EmptyView()
                 }
-            } else {
-                EmptyView()
             }
+            .frame(
+                width: geometry.size.width,
+                height: geometry.size.width / CGFloat(aspectRatio)
+            )
         }
+        .aspectRatio(CGFloat(aspectRatio), contentMode: .fit)
+        .clipped()
         .onAppear(perform: loadImage)
         .onChange(of: isVisible) { newValue in
             if newValue && image == nil {
@@ -99,7 +127,8 @@ struct MediaCell: View {
             if let attachments = parentTweet.attachments {
                 MediaBrowserView(
                     attachments: attachments,
-                    initialIndex: attachmentIndex
+                    initialIndex: attachmentIndex,
+                    autoPlay: true
                 )
             }
         }
@@ -111,11 +140,11 @@ struct MediaCell: View {
             if !shouldLoadVideo {
                 // First tap: load and start video
                 shouldLoadVideo = true
-                play = true
+                autoPlay = true
             }
         case "audio":
             // Toggle audio playback
-            play.toggle()
+            autoPlay.toggle()
         case "image":
             // Open full-screen for images
             showFullScreen = true
@@ -127,7 +156,7 @@ struct MediaCell: View {
     
     private func handleVideoTap() {
         // For videos that are already loaded, toggle play/pause
-        play.toggle()
+        autoPlay.toggle()
     }
     
     private func loadImage() {

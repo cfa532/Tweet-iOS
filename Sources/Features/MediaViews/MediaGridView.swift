@@ -50,16 +50,20 @@ struct MediaGridView: View {
         ZStack {
             switch attachments.count {
             case 1:
-                MediaCell(
-                    parentTweet: parentTweet,
-                    attachmentIndex: 0
-                )
-                .aspectRatio(contentMode: .fill)
-                .clipped()
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    selectedIndex = 0
-                    showBrowser = true
+                if let first = attachments.first {
+                    MediaCell(
+                        parentTweet: parentTweet,
+                        attachmentIndex: 0,
+                        aspectRatio: isPortrait(first) ? 1.0 : Float(first.aspectRatio ?? 1.0),
+                        play: true
+                    )
+                    .aspectRatio(contentMode: .fill)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedIndex = 0
+                        showBrowser = true
+                    }
                 }
                 
             case 2:
@@ -68,7 +72,8 @@ struct MediaGridView: View {
                         ForEach(Array(attachments.enumerated()), id: \ .offset) { idx, att in
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: idx
+                                attachmentIndex: idx,
+                                aspectRatio: Float(att.aspectRatio ?? 1.0)
                             )
                             .aspectRatio(contentMode: .fill)
                             .clipped()
@@ -84,7 +89,8 @@ struct MediaGridView: View {
                         ForEach(Array(attachments.enumerated()), id: \ .offset) { idx, att in
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: idx
+                                attachmentIndex: idx,
+                                aspectRatio: Float(att.aspectRatio ?? 1.0)
                             )
                             .aspectRatio(contentMode: .fill)
                             .clipped()
@@ -102,7 +108,8 @@ struct MediaGridView: View {
                     HStack(spacing: 2) {
                         MediaCell(
                             parentTweet: parentTweet,
-                            attachmentIndex: 0
+                            attachmentIndex: 0,
+                            aspectRatio: Float(attachments[0].aspectRatio ?? 1.0)
                         )
                         .aspectRatio(contentMode: .fill)
                         .clipped()
@@ -116,7 +123,8 @@ struct MediaGridView: View {
                             ForEach(1..<3) { idx in
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: idx
+                                    attachmentIndex: idx,
+                                    aspectRatio: Float(attachments[idx].aspectRatio ?? 1.0)
                                 )
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
@@ -132,7 +140,8 @@ struct MediaGridView: View {
                     VStack(spacing: 2) {
                         MediaCell(
                             parentTweet: parentTweet,
-                            attachmentIndex: 0
+                            attachmentIndex: 0,
+                            aspectRatio: Float(attachments[0].aspectRatio ?? 1.0)
                         )
                         .aspectRatio(contentMode: .fill)
                         .clipped()
@@ -146,7 +155,8 @@ struct MediaGridView: View {
                             ForEach(1..<3) { idx in
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: idx
+                                    attachmentIndex: idx,
+                                    aspectRatio: Float(attachments[idx].aspectRatio ?? 1.0)
                                 )
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
@@ -166,7 +176,8 @@ struct MediaGridView: View {
                         ForEach(0..<2) { idx in
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: idx
+                                attachmentIndex: idx,
+                                aspectRatio: Float(attachments[idx].aspectRatio ?? 1.0)
                             )
                             .aspectRatio(contentMode: .fill)
                             .clipped()
@@ -183,7 +194,8 @@ struct MediaGridView: View {
                                 ZStack {
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: idx
+                                        attachmentIndex: idx,
+                                        aspectRatio: Float(attachments[idx].aspectRatio ?? 1.0)
                                     )
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
@@ -209,7 +221,7 @@ struct MediaGridView: View {
         }
         .clipped()
         .fullScreenCover(isPresented: $showBrowser) {
-            MediaBrowserView(attachments: attachments, initialIndex: selectedIndex)
+            MediaBrowserView(attachments: attachments, initialIndex: selectedIndex, autoPlay: true)
         }
     }
 }

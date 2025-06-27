@@ -56,7 +56,8 @@ struct TweetDetailView: View {
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
                 attachments: displayTweet.attachments ?? [],
-                initialIndex: selectedMediaIndex
+                initialIndex: selectedMediaIndex,
+                autoPlay: true
             )
         }
         .sheet(isPresented: $showLoginSheet) {

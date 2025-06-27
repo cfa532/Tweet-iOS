@@ -4,12 +4,12 @@ import AVFoundation
 struct SimpleAudioPlayer: View {
     let url: URL
     var autoPlay: Bool = true
+    var playerState: VideoPlayerState
     
     @State private var player: AVPlayer?
     @State private var isPlaying: Bool = false
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
-    @State private var isMuted: Bool = PreferenceHelper().getSpeakerMute()
     private let preferenceHelper = PreferenceHelper()
     
     var body: some View {
@@ -68,8 +68,8 @@ struct SimpleAudioPlayer: View {
                     .foregroundColor(.gray)
                 
                 // Mute/Unmute button
-                Button(action: toggleMute) {
-                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                Button(action: playerState.toggleMute) {
+                    Image(systemName: playerState.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                         .foregroundColor(.gray)
                         .padding(.leading, 8)
                 }
@@ -92,7 +92,7 @@ struct SimpleAudioPlayer: View {
     private func setupPlayer() {
         let playerItem = AVPlayerItem(url: url)
         player = AVPlayer(playerItem: playerItem)
-        player?.isMuted = isMuted
+        player?.isMuted = playerState.isMuted
         
         // Get duration using the new load(.duration) method
         Task {
@@ -127,12 +127,6 @@ struct SimpleAudioPlayer: View {
             player?.play()
         }
         isPlaying.toggle()
-    }
-    
-    private func toggleMute() {
-        isMuted.toggle()
-        player?.isMuted = isMuted
-        preferenceHelper.setSpeakerMute(isMuted)
     }
     
     private func formatTime(_ time: Double) -> String {

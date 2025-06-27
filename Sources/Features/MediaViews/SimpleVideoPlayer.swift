@@ -9,35 +9,29 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
-// Global mute state
-class MuteState: ObservableObject {
-    static let shared = MuteState()
-    @Published var isMuted: Bool = false
-}
-
 struct SimpleVideoPlayer: View {
     let url: URL
     var autoPlay: Bool = true
-    @EnvironmentObject var muteState: MuteState
     var onTimeUpdate: ((Double) -> Void)? = nil
-    var isMuted: Bool? = nil
-    var onMuteChanged: ((Bool) -> Void)? = nil
     var aspectRatio: Float? = nil
     var contentType: String? = nil
-    
+    var playerState: VideoPlayerState
+    @EnvironmentObject var muteState: MuteState
+
     var body: some View {
         if isHLSStream(url: url, contentType: contentType) {
             HLSDirectoryVideoPlayer(
                 baseURL: url,
-                aspectRatio: aspectRatio
+                aspectRatio: aspectRatio,
+                autoPlay: autoPlay,
+                playerState: playerState
             )
         } else {
             VideoPlayerView(
                 url: url,
                 autoPlay: autoPlay,
-                isMuted: isMuted ?? muteState.isMuted,
-                onMuteChanged: onMuteChanged,
-                onTimeUpdate: onTimeUpdate
+                onTimeUpdate: onTimeUpdate,
+                playerState: playerState
             )
         }
     }
@@ -178,71 +172,24 @@ struct SimpleVideoPlayer: View {
 struct HLSVideoPlayerWithControls: View {
     let videoURL: URL
     let aspectRatio: Float?
+    let autoPlay: Bool
+    let playerState: VideoPlayerState
     
-    @State private var player: AVPlayer?
-    @State private var isPlaying = false
     @State private var isLoading = true
     @State private var errorMessage: String?
-    @State private var currentTime: Double = 0
-    @State private var duration: Double = 0
-    @State private var showControls = true
     
-    init(videoURL: URL, aspectRatio: Float? = nil) {
+    init(videoURL: URL, aspectRatio: Float? = nil, autoPlay: Bool = true, playerState: VideoPlayerState) {
         self.videoURL = videoURL
         self.aspectRatio = aspectRatio
+        self.autoPlay = autoPlay
+        self.playerState = playerState
     }
     
     var body: some View {
         ZStack {
-            if let player = player {
+            if let player = playerState.player {
                 VideoPlayer(player: player)
                     .aspectRatio(aspectRatio.map { CGFloat($0) } ?? 16.0/9.0, contentMode: .fit)
-                    .overlay(
-                        // Custom controls overlay
-                        Group {
-                            if showControls {
-                                VStack {
-                                    Spacer()
-                                    HStack {
-                                        Button(action: togglePlayPause) {
-                                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                                .foregroundColor(.white)
-                                                .font(.title2)
-                                        }
-                                        .padding()
-                                        
-                                        Spacer()
-                                        
-                                        Text(formatTime(currentTime))
-                                            .foregroundColor(.white)
-                                            .font(.caption)
-                                        
-                                        Text("/")
-                                            .foregroundColor(.white)
-                                            .font(.caption)
-                                        
-                                        Text(formatTime(duration))
-                                            .foregroundColor(.white)
-                                            .font(.caption)
-                                    }
-                                    .padding(.horizontal)
-                                    .padding(.bottom)
-                                }
-                                .background(
-                                    LinearGradient(
-                                        gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]),
-                                        startPoint: .bottom,
-                                        endPoint: .top
-                                    )
-                                )
-                            }
-                        }
-                    )
-                    .onTapGesture {
-                        withAnimation {
-                            showControls.toggle()
-                        }
-                    }
             } else if isLoading {
                 VStack {
                     ProgressView()
@@ -300,18 +247,20 @@ struct HLSVideoPlayerWithControls: View {
         // Add periodic time observer for progress updates
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         avPlayer.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { time in
-            currentTime = time.seconds
+            playerState.currentTime = time.seconds
         }
         
         // Set up the player
-        self.player = avPlayer
+        playerState.setPlayer(avPlayer)
         
         // Monitor player item status
         self.monitorPlayerStatus(avPlayer)
         
-        // Auto-play the HLS stream
-        avPlayer.play()
-        self.isPlaying = true
+        // Auto-play the HLS stream only if autoPlay is true
+        if autoPlay {
+            avPlayer.play()
+            playerState.isPlaying = true
+        }
     }
     
     private func monitorPlayerStatus(_ player: AVPlayer) {
@@ -327,7 +276,7 @@ struct HLSVideoPlayerWithControls: View {
             case .readyToPlay:
                 print("DEBUG: HLS player item is ready to play")
                 self.isLoading = false
-                self.duration = playerItem.duration.seconds
+                playerState.duration = playerItem.duration.seconds
                 timer.invalidate()
             case .failed:
                 print("DEBUG: HLS player item failed: \(playerItem.error?.localizedDescription ?? "Unknown error")")
@@ -452,127 +401,70 @@ struct HLSVideoPlayerWithControls: View {
         // Add periodic time observer for progress updates
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         fallbackPlayer.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { time in
-            currentTime = time.seconds
+            playerState.currentTime = time.seconds
         }
         
         // Set up the fallback player
-        self.player = fallbackPlayer
+        playerState.setPlayer(fallbackPlayer)
         
         // Monitor the fallback player
         self.monitorPlayerStatus(fallbackPlayer)
         
-        // Auto-play the fallback stream
-        fallbackPlayer.play()
-        self.isPlaying = true
-    }
-    
-    private func togglePlayPause() {
-        guard let player = player else { return }
-        
-        if isPlaying {
-            player.pause()
-        } else {
-            player.play()
+        // Auto-play the fallback stream only if autoPlay is true
+        if autoPlay {
+            fallbackPlayer.play()
+            playerState.isPlaying = true
         }
-        isPlaying.toggle()
-    }
-    
-    private func seekTo(_ time: Double) {
-        guard let player = player else { return }
-        let cmTime = CMTime(seconds: time, preferredTimescale: 1)
-        player.seek(to: cmTime)
-    }
-    
-    private func formatTime(_ time: Double) -> String {
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
     }
     
     private func cleanupPlayer() {
-        player?.pause()
-        player = nil
-        isPlaying = false
+        playerState.setPlayer(nil)
+        playerState.isPlaying = false
     }
 }
 
 struct VideoPlayerView: UIViewControllerRepresentable {
     let url: URL
     let autoPlay: Bool
-    let isMuted: Bool
-    let onMuteChanged: ((Bool) -> Void)?
     let onTimeUpdate: ((Double) -> Void)?
+    let playerState: VideoPlayerState
     
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        controller.showsPlaybackControls = true
+        controller.showsPlaybackControls = false // Only show native controls if no external controls
         controller.videoGravity = .resizeAspect
         controller.entersFullScreenWhenPlaybackBegins = false
         controller.exitsFullScreenWhenPlaybackEnds = false
         
-        // Create asset with proper configuration
-        let asset = AVURLAsset(url: url, options: [
-            "AVURLAssetOutOfBandMIMETypeKey": "video/mp4",
-            "AVURLAssetHTTPHeaderFieldsKey": ["Accept": "*/*", "Range": "bytes=0-"]
-        ])
-        
-        // Create player item with asset
-        let playerItem = AVPlayerItem(asset: asset)
-        
-        // Configure player item
-        playerItem.preferredForwardBufferDuration = 2.0 // Limit buffer size
-        playerItem.preferredPeakBitRate = 2_000_000 // 2 Mbps limit
-        
-        // Create and configure player
-        let player = AVPlayer(playerItem: playerItem)
-        player.automaticallyWaitsToMinimizeStalling = true
-        player.isMuted = isMuted
-        
-        // Set up time observer
-        let timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { time in
-            onTimeUpdate?(time.seconds)
-        }
-        
-        // Store observer in coordinator
-        context.coordinator.timeObserver = timeObserver
+        // Use the shared playerState to setup the player
+        playerState.setupPlayer(url: url, autoPlay: autoPlay)
         
         // Set up player
-        controller.player = player
-        
-        if autoPlay {
-            player.play()
-        }
+        controller.player = playerState.player
         
         return controller
     }
     
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        controller.player?.isMuted = isMuted
+        // No need to update UIViewController as the playerState handles updates
     }
     
     static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
-        // Clean up time observer
-        if let timeObserver = coordinator.timeObserver {
-            controller.player?.removeTimeObserver(timeObserver)
-        }
-        
-        // Stop playback
-        controller.player?.pause()
-        controller.player = nil
+        // Clean up player state
+        coordinator.playerState.cleanup()
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(onMuteChanged: onMuteChanged, onTimeUpdate: onTimeUpdate)
+        Coordinator(onTimeUpdate: onTimeUpdate, playerState: playerState)
     }
     
     class Coordinator: NSObject {
-        let onMuteChanged: ((Bool) -> Void)?
         let onTimeUpdate: ((Double) -> Void)?
-        var timeObserver: Any?
+        let playerState: VideoPlayerState
         
-        init(onMuteChanged: ((Bool) -> Void)?, onTimeUpdate: ((Double) -> Void)?) {
-            self.onMuteChanged = onMuteChanged
+        init(onTimeUpdate: ((Double) -> Void)?, playerState: VideoPlayerState) {
             self.onTimeUpdate = onTimeUpdate
+            self.playerState = playerState
         }
     }
 }
@@ -580,6 +472,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 struct HLSDirectoryVideoPlayer: View {
     let baseURL: URL
     let aspectRatio: Float?
+    let autoPlay: Bool
+    let playerState: VideoPlayerState
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
     @State private var loading = true
@@ -589,7 +483,9 @@ struct HLSDirectoryVideoPlayer: View {
             if let playlistURL = playlistURL {
                 HLSVideoPlayerWithControls(
                     videoURL: playlistURL,
-                    aspectRatio: aspectRatio
+                    aspectRatio: aspectRatio,
+                    autoPlay: autoPlay,
+                    playerState: playerState
                 )
             } else if let error = error {
                 VStack {

@@ -11,6 +11,7 @@ import AVKit
 struct MediaBrowserView: View {
     let attachments: [MimeiFileType]
     let initialIndex: Int
+    let autoPlay: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
     @State private var showVideoPlayer = false
@@ -19,15 +20,17 @@ struct MediaBrowserView: View {
     @State private var imageStates: [Int: ImageState] = [:]
     @State private var showControls = true
     @State private var controlsTimer: Timer?
+    @StateObject private var videoPlayerState = VideoPlayerState()
 
     private var baseUrl: URL {
         // Try to get baseUrl from the first attachment's parent tweet, fallback to HproseInstance.baseUrl
         return HproseInstance.baseUrl
     }
 
-    init(attachments: [MimeiFileType], initialIndex: Int) {
+    init(attachments: [MimeiFileType], initialIndex: Int, autoPlay: Bool = true) {
         self.attachments = attachments
         self.initialIndex = initialIndex
+        self.autoPlay = autoPlay
         self._currentIndex = State(initialValue: initialIndex)
         print("MediaBrowserView init - attachments count: \(attachments.count), initialIndex: \(initialIndex)")
     }
@@ -40,20 +43,30 @@ struct MediaBrowserView: View {
                 ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
                     ZStack {
                         if (attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video"), let url = attachment.getUrl(baseUrl) {
-                            SimpleVideoPlayer(
-                                url: url,
-                                autoPlay: true,
-                                isMuted: false,
-                                aspectRatio: attachment.aspectRatio,
-                                contentType: attachment.type
-                            )
-                            .environmentObject(MuteState.shared)
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            VStack {
+                                SimpleVideoPlayer(
+                                    url: url,
+                                    autoPlay: autoPlay,
+                                    aspectRatio: attachment.aspectRatio,
+                                    contentType: attachment.type,
+                                    playerState: videoPlayerState
+                                )
+                                .environmentObject(MuteState.shared)
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                
+                                // Video controls positioned at the bottom
+                                VideoControls(
+                                    playerState: videoPlayerState,
+                                    showControls: true
+                                )
+                                .padding(.bottom, 20)
+                            }
                         } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
                             SimpleAudioPlayer(
                                 url: url,
-                                autoPlay: true
+                                autoPlay: autoPlay,
+                                playerState: videoPlayerState
                             )
                         } else if attachment.type.lowercased() == "image", let url = attachment.getUrl(baseUrl) {
                             ImageViewWithPlaceholder(
