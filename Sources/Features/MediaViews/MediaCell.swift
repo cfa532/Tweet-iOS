@@ -237,7 +237,9 @@ struct MediaCell: View {
                             url: url,
                             autoPlay: play, // play is false by default, true after tap
                             isVisible: true,
-                            contentType: attachment.type
+                            contentType: attachment.type,
+                            cellAspectRatio: 1.0,
+                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0)
                         )
                         .environmentObject(MuteState.shared)
                         .onTapGesture {

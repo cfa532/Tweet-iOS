@@ -24,22 +24,58 @@ struct SimpleVideoPlayer: View {
     var onMuteChanged: ((Bool) -> Void)? = nil
     let isVisible: Bool
     var contentType: String? = nil
+    var cellAspectRatio: CGFloat? = nil
+    var videoAspectRatio: CGFloat? = nil
     
     var body: some View {
-        if isHLSStream(url: url, contentType: contentType) {
-            HLSDirectoryVideoPlayer(
-                baseURL: url,
-                isVisible: isVisible
-            )
-        } else {
-            VideoPlayerView(
-                url: url,
-                autoPlay: autoPlay && isVisible,
-                isMuted: isMuted ?? muteState.isMuted,
-                onMuteChanged: onMuteChanged,
-                onTimeUpdate: onTimeUpdate,
-                isVisible: isVisible
-            )
+        GeometryReader { geometry in
+            if let cellAR = cellAspectRatio, let videoAR = videoAspectRatio {
+                let cellWidth = geometry.size.width
+                let cellHeight = cellWidth / cellAR
+                let needsVerticalPadding = videoAR < cellAR
+                let videoHeight = cellWidth / videoAR
+                let overflow = videoHeight - cellHeight
+                let pad = needsVerticalPadding && overflow > 0 ? overflow / 2 : 0
+                ZStack {
+                    if isHLSStream(url: url, contentType: contentType) {
+                        HLSDirectoryVideoPlayer(
+                            baseURL: url,
+                            isVisible: isVisible
+                        )
+                        .offset(y: -pad)
+                        .aspectRatio(videoAR, contentMode: .fit)
+                    } else {
+                        VideoPlayerView(
+                            url: url,
+                            autoPlay: autoPlay && isVisible,
+                            isMuted: isMuted ?? muteState.isMuted,
+                            onMuteChanged: onMuteChanged,
+                            onTimeUpdate: onTimeUpdate,
+                            isVisible: isVisible
+                        )
+                        .padding(.top, -pad)
+                        .aspectRatio(videoAR, contentMode: .fit)
+                    }
+                }
+            } else {
+                ZStack {
+                    if isHLSStream(url: url, contentType: contentType) {
+                        HLSDirectoryVideoPlayer(
+                            baseURL: url,
+                            isVisible: isVisible
+                        )
+                    } else {
+                        VideoPlayerView(
+                            url: url,
+                            autoPlay: autoPlay && isVisible,
+                            isMuted: isMuted ?? muteState.isMuted,
+                            onMuteChanged: onMuteChanged,
+                            onTimeUpdate: onTimeUpdate,
+                            isVisible: isVisible
+                        )
+                    }
+                }
+            }
         }
     }
     

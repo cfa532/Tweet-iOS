@@ -46,7 +46,9 @@ struct MediaBrowserView: View {
                                 autoPlay: true,
                                 isMuted: false,
                                 isVisible: isVisible && currentIndex == index,
-                                contentType: attachment.type
+                                contentType: attachment.type,
+                                cellAspectRatio: nil,
+                                videoAspectRatio: nil
                             )
                             .environmentObject(MuteState.shared)
                             .aspectRatio(contentMode: .fit)
