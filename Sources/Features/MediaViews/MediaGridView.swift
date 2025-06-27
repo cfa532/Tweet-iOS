@@ -19,12 +19,12 @@ struct MediaGridView: View {
         guard let ar = attachment.aspectRatio, ar > 0 else { return false }
         return ar < 1.0
     }
-
+    
     private func isLandscape(_ attachment: MimeiFileType) -> Bool {
         guard let ar = attachment.aspectRatio, ar > 0 else { return false }
         return ar > 1.0
     }
-
+    
     private func gridAspect() -> CGFloat {
         let count = attachments.count
         let allPortrait = attachments.allSatisfy { isPortrait($0) }
@@ -45,141 +45,79 @@ struct MediaGridView: View {
             return 1.0
         }
     }
-
+    
     var body: some View {
-        GeometryReader { geometry in
-            let gridWidth: CGFloat = 320
-            let gridHeight = gridWidth / gridAspect()
-
-            ZStack {
-                switch attachments.count {
-                case 1:
-                    MediaCell(
-                        parentTweet: parentTweet,
-                        attachmentIndex: 0
-                    )
-                    .frame(width: gridWidth, height: gridHeight)
-                    .aspectRatio(contentMode: .fill)
-                    .clipped()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        selectedIndex = 0
-                        showBrowser = true
-                    }
-                    
-                case 2:
-                    if isPortrait(attachments[0]) {
-                        HStack(spacing: 2) {
-                            ForEach(Array(attachments.enumerated()), id: \ .offset) { idx, att in
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: idx
-                                )
-                                .frame(width: gridWidth / 2 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
-                                }
-                            }
-                        }
-                    } else {
-                        VStack(spacing: 2) {
-                            ForEach(Array(attachments.enumerated()), id: \ .offset) { idx, att in
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: idx
-                                )
-                                .frame(width: gridWidth, height: gridHeight / 2 - 1)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
-                                }
-                            }
-                        }
-                    }
-                    
-                case 3:
-                    if isPortrait(attachments[0]) {
-                        HStack(spacing: 2) {
+        ZStack {
+            switch attachments.count {
+            case 1:
+                MediaCell(
+                    parentTweet: parentTweet,
+                    attachmentIndex: 0
+                )
+                .aspectRatio(contentMode: .fill)
+                .clipped()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedIndex = 0
+                    showBrowser = true
+                }
+                
+            case 2:
+                if isPortrait(attachments[0]) {
+                    HStack(spacing: 2) {
+                        ForEach(Array(attachments.enumerated()), id: \ .offset) { idx, att in
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: 0
+                                attachmentIndex: idx
                             )
-                            .frame(width: gridWidth / 2 - 1, height: gridHeight)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                selectedIndex = 0
+                                selectedIndex = idx
                                 showBrowser = true
-                            }
-                            
-                            VStack(spacing: 2) {
-                                ForEach(1..<3) { idx in
-                                    MediaCell(
-                                        parentTweet: parentTweet,
-                                        attachmentIndex: idx
-                                    )
-                                    .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                    .aspectRatio(contentMode: .fill)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        selectedIndex = idx
-                                        showBrowser = true
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        VStack(spacing: 2) {
-                            MediaCell(
-                                parentTweet: parentTweet,
-                                attachmentIndex: 0
-                            )
-                            .frame(width: gridWidth, height: gridHeight / 2 - 1)
-                            .aspectRatio(contentMode: .fill)
-                            .clipped()
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedIndex = 0
-                                showBrowser = true
-                            }
-                            
-                            HStack(spacing: 2) {
-                                ForEach(1..<3) { idx in
-                                    MediaCell(
-                                        parentTweet: parentTweet,
-                                        attachmentIndex: idx
-                                    )
-                                    .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                    .aspectRatio(contentMode: .fill)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        selectedIndex = idx
-                                        showBrowser = true
-                                    }
-                                }
                             }
                         }
                     }
-                    
-                default:
+                } else {
                     VStack(spacing: 2) {
-                        HStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
+                        ForEach(Array(attachments.enumerated()), id: \ .offset) { idx, att in
+                            MediaCell(
+                                parentTweet: parentTweet,
+                                attachmentIndex: idx
+                            )
+                            .aspectRatio(contentMode: .fill)
+                            .clipped()
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedIndex = idx
+                                showBrowser = true
+                            }
+                        }
+                    }
+                }
+                
+            case 3:
+                if isPortrait(attachments[0]) {
+                    HStack(spacing: 2) {
+                        MediaCell(
+                            parentTweet: parentTweet,
+                            attachmentIndex: 0
+                        )
+                        .aspectRatio(contentMode: .fill)
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedIndex = 0
+                            showBrowser = true
+                        }
+                        
+                        VStack(spacing: 2) {
+                            ForEach(1..<3) { idx in
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx
                                 )
-                                .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .contentShape(Rectangle())
@@ -189,30 +127,78 @@ struct MediaGridView: View {
                                 }
                             }
                         }
+                    }
+                } else {
+                    VStack(spacing: 2) {
+                        MediaCell(
+                            parentTweet: parentTweet,
+                            attachmentIndex: 0
+                        )
+                        .aspectRatio(contentMode: .fill)
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedIndex = 0
+                            showBrowser = true
+                        }
+                        
                         HStack(spacing: 2) {
-                            ForEach(2..<4) { idx in
-                                if idx < attachments.count {
-                                    ZStack {
-                                        MediaCell(
-                                            parentTweet: parentTweet,
-                                            attachmentIndex: idx
-                                        )
-                                        .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                        .aspectRatio(contentMode: .fill)
-                                        .clipped()
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            selectedIndex = idx
-                                            showBrowser = true
-                                        }
-                                        
-                                        if idx == 3 && attachments.count > 4 {
-                                            Color.black.opacity(0.4)
-                                            Text("+\(attachments.count - 4)")
-                                                .foregroundColor(.white)
-                                                .font(.title)
-                                                .bold()
-                                        }
+                            ForEach(1..<3) { idx in
+                                MediaCell(
+                                    parentTweet: parentTweet,
+                                    attachmentIndex: idx
+                                )
+                                .aspectRatio(contentMode: .fill)
+                                .clipped()
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedIndex = idx
+                                    showBrowser = true
+                                }
+                            }
+                        }
+                    }
+                }
+                
+            default:
+                VStack(spacing: 2) {
+                    HStack(spacing: 2) {
+                        ForEach(0..<2) { idx in
+                            MediaCell(
+                                parentTweet: parentTweet,
+                                attachmentIndex: idx
+                            )
+                            .aspectRatio(contentMode: .fill)
+                            .clipped()
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedIndex = idx
+                                showBrowser = true
+                            }
+                        }
+                    }
+                    HStack(spacing: 2) {
+                        ForEach(2..<4) { idx in
+                            if idx < attachments.count {
+                                ZStack {
+                                    MediaCell(
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: idx
+                                    )
+                                    .aspectRatio(contentMode: .fill)
+                                    .clipped()
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        selectedIndex = idx
+                                        showBrowser = true
+                                    }
+                                    
+                                    if idx == 3 && attachments.count > 4 {
+                                        Color.black.opacity(0.4)
+                                        Text("+\(attachments.count - 4)")
+                                            .foregroundColor(.white)
+                                            .font(.title)
+                                            .bold()
                                     }
                                 }
                             }
@@ -220,13 +206,10 @@ struct MediaGridView: View {
                     }
                 }
             }
-            .frame(width: gridWidth, height: gridHeight)
-            .clipped()
-            .onAppear { }
-            .onDisappear { }
-            .fullScreenCover(isPresented: $showBrowser) {
-                MediaBrowserView(attachments: attachments, initialIndex: selectedIndex)
-            }
+        }
+        .clipped()
+        .fullScreenCover(isPresented: $showBrowser) {
+            MediaBrowserView(attachments: attachments, initialIndex: selectedIndex)
         }
     }
 }
