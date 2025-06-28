@@ -718,10 +718,16 @@ final class HproseInstance: ObservableObject {
     }
         
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
-        _ = await appUser.resolveWritableUrl()
+        // Wait for writableUrl to be resolved
+        let resolvedUrl = await appUser.resolveWritableUrl()
+        guard resolvedUrl != nil else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve writable URL"])
+        }
+        
         guard let uploadService = appUser.uploadService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
         }
+        
         comment.author = nil
         let params: [String: Any] = [
             "aid": appId,

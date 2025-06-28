@@ -408,7 +408,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             
             print("[resolveWritableUrl] Final constructed urlString: \(urlString)")
             if let url = URL(string: urlString) {
-                Task { @MainActor in
+                // Set the writableUrl property synchronously to avoid race conditions
+                await MainActor.run {
                     self.writableUrl = url
                     print("✅ Resolved writableUrl to: \(url.absoluteString) from first hostId: \(firstHostId)")
                 }
