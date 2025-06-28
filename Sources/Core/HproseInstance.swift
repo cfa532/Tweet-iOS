@@ -7,15 +7,6 @@ import AVFoundation
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
 }
 
-// MARK: - Array Extension
-extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        return stride(from: 0, to: count, by: size).map {
-            Array(self[$0 ..< Swift.min($0 + size, count)])
-        }
-    }
-}
-
 // MARK: - HproseService
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
@@ -1861,5 +1852,15 @@ final class HproseInstance: ObservableObject {
             print("Network error getting host IP: \(error)")
         }
         return nil
+    }
+}
+
+
+// MARK: - Array Extension
+extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0 ..< Swift.min($0 + size, count)])
+        }
     }
 }
