@@ -49,6 +49,10 @@ struct MediaCell: View {
                     SimpleVideoPlayer(
                         url: url,
                         autoPlay: play, // play is false by default, true after tap
+                        onMuteChanged: { muted in
+                            MuteState.shared.isMuted = muted
+                            HproseInstance.shared.preferenceHelper?.setSpeakerMute(muted)
+                        },
                         isVisible: true,
                         contentType: attachment.type,
                         cellAspectRatio: CGFloat(aspectRatio),
@@ -85,6 +89,10 @@ struct MediaCell: View {
             }
         }
         .onAppear(perform: loadImage)
+        .onAppear {
+            // Refresh mute state from preferences when cell appears
+            MuteState.shared.refreshFromPreferences()
+        }
         .onChange(of: isVisible) { newValue in
             if newValue && image == nil {
                 loadImage()

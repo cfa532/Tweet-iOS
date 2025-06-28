@@ -12,14 +12,26 @@ import AVFoundation
 // Global mute state
 class MuteState: ObservableObject {
     static let shared = MuteState()
-    @Published var isMuted: Bool = false
+    @Published var isMuted: Bool = true // Default to muted
+    
+    private init() {
+        // Initialize from saved preference
+        refreshFromPreferences()
+    }
+    
+    func refreshFromPreferences() {
+        // Read the current preference and update the published property
+        let savedMuteState = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? true
+        if self.isMuted != savedMuteState {
+            self.isMuted = savedMuteState
+        }
+    }
 }
 
 struct SimpleVideoPlayer: View {
     let url: URL
     var autoPlay: Bool = true
     var onTimeUpdate: ((Double) -> Void)? = nil
-    var isMuted: Bool? = nil
     var onMuteChanged: ((Bool) -> Void)? = nil
     let isVisible: Bool
     var contentType: String? = nil
@@ -41,7 +53,9 @@ struct SimpleVideoPlayer: View {
                     if isHLSStream(url: url, contentType: contentType) {
                         HLSDirectoryVideoPlayer(
                             baseURL: url,
-                            isVisible: isVisible
+                            isVisible: isVisible,
+                            isMuted: muteState.isMuted,
+                            onMuteChanged: onMuteChanged
                         )
                         .offset(y: -pad)
                         .aspectRatio(videoAR, contentMode: .fit)
@@ -49,7 +63,7 @@ struct SimpleVideoPlayer: View {
                         VideoPlayerView(
                             url: url,
                             autoPlay: autoPlay && isVisible,
-                            isMuted: isMuted ?? muteState.isMuted,
+                            isMuted: muteState.isMuted,
                             onMuteChanged: onMuteChanged,
                             onTimeUpdate: onTimeUpdate,
                             isVisible: isVisible,
@@ -64,13 +78,15 @@ struct SimpleVideoPlayer: View {
                     if isHLSStream(url: url, contentType: contentType) {
                         HLSDirectoryVideoPlayer(
                             baseURL: url,
-                            isVisible: isVisible
+                            isVisible: isVisible,
+                            isMuted: muteState.isMuted,
+                            onMuteChanged: onMuteChanged
                         )
                     } else {
                         VideoPlayerView(
                             url: url,
                             autoPlay: autoPlay && isVisible,
-                            isMuted: isMuted ?? muteState.isMuted,
+                            isMuted: muteState.isMuted,
                             onMuteChanged: onMuteChanged,
                             onTimeUpdate: onTimeUpdate,
                             isVisible: isVisible,
@@ -218,6 +234,8 @@ struct SimpleVideoPlayer: View {
 struct HLSVideoPlayerWithControls: View {
     let videoURL: URL
     let isVisible: Bool
+    let isMuted: Bool
+    let onMuteChanged: ((Bool) -> Void)?
     
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -226,10 +244,14 @@ struct HLSVideoPlayerWithControls: View {
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
     @State private var showControls = true
+    @State private var playerMuted: Bool = false
     
-    init(videoURL: URL, isVisible: Bool) {
+    init(videoURL: URL, isVisible: Bool, isMuted: Bool, onMuteChanged: ((Bool) -> Void)?) {
         self.videoURL = videoURL
         self.isVisible = isVisible
+        self.isMuted = isMuted
+        self.onMuteChanged = onMuteChanged
+        self._playerMuted = State(initialValue: isMuted)
     }
     
     var body: some View {
@@ -244,11 +266,10 @@ struct HLSVideoPlayerWithControls: View {
                                     Spacer()
                                     HStack {
                                         Button(action: togglePlayPause) {
-                                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                                .font(.title)
                                                 .foregroundColor(.white)
-                                                .font(.title2)
                                         }
-                                        .padding()
                                         
                                         Spacer()
                                         
@@ -264,8 +285,7 @@ struct HLSVideoPlayerWithControls: View {
                                             .foregroundColor(.white)
                                             .font(.caption)
                                     }
-                                    .padding(.horizontal)
-                                    .padding(.bottom)
+                                    .padding()
                                 }
                                 .background(
                                     LinearGradient(
@@ -280,6 +300,12 @@ struct HLSVideoPlayerWithControls: View {
                     .onTapGesture {
                         withAnimation {
                             showControls.toggle()
+                        }
+                    }
+                    .onReceive(player.publisher(for: \.isMuted)) { muted in
+                        // This automatically updates when the user interacts with native controls
+                        if playerMuted != muted {
+                            playerMuted = muted
                         }
                     }
             } else if isLoading {
@@ -317,6 +343,18 @@ struct HLSVideoPlayerWithControls: View {
                 player?.play()
             }
         }
+        .onChange(of: isMuted) { newMuteState in
+            print("DEBUG: HLS player isMuted parameter changed to \(newMuteState)")
+            player?.isMuted = newMuteState
+            playerMuted = newMuteState
+        }
+        .onChange(of: playerMuted) { newMuteState in
+            // This is triggered when the user interacts with native controls
+            if newMuteState != isMuted {
+                print("DEBUG: HLS player mute state changed by user interaction to \(newMuteState)")
+                onMuteChanged?(newMuteState)
+            }
+        }
     }
     
     private func setupPlayer() {
@@ -342,6 +380,9 @@ struct HLSVideoPlayerWithControls: View {
         
         // Enable hardware acceleration
         avPlayer.automaticallyWaitsToMinimizeStalling = true
+        
+        // Set initial mute state
+        avPlayer.isMuted = isMuted
         
         // Add periodic time observer for progress updates
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
@@ -495,6 +536,9 @@ struct HLSVideoPlayerWithControls: View {
         // Enable hardware acceleration
         fallbackPlayer.automaticallyWaitsToMinimizeStalling = true
         
+        // Set initial mute state
+        fallbackPlayer.isMuted = isMuted
+        
         // Add periodic time observer for progress updates
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         fallbackPlayer.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { time in
@@ -557,6 +601,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         controller.videoGravity = .resizeAspect
         controller.entersFullScreenWhenPlaybackBegins = false
         controller.exitsFullScreenWhenPlaybackEnds = false
+        controller.delegate = context.coordinator
         
         // Create asset with proper configuration
         let asset = AVURLAsset(url: url, options: [
@@ -581,8 +626,10 @@ struct VideoPlayerView: UIViewControllerRepresentable {
             onTimeUpdate?(time.seconds)
         }
         
-        // Store observer in coordinator
+        // Store observer and player in coordinator
         context.coordinator.timeObserver = timeObserver
+        context.coordinator.player = player
+        context.coordinator.onMuteChanged = onMuteChanged
         
         // Set up player
         controller.player = player
@@ -595,7 +642,11 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     }
     
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        controller.player?.isMuted = isMuted
+        // Update mute state
+        if controller.player?.isMuted != isMuted {
+            controller.player?.isMuted = isMuted
+        }
+        
         if !isVisible {
             controller.player?.pause()
         } else if autoPlay {
@@ -604,6 +655,9 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     }
     
     static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
+        // Stop mute monitoring
+        coordinator.stopMuteMonitoring()
+        
         // Clean up time observer
         if let timeObserver = coordinator.timeObserver {
             controller.player?.removeTimeObserver(timeObserver)
@@ -618,14 +672,38 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         Coordinator(onMuteChanged: onMuteChanged, onTimeUpdate: onTimeUpdate)
     }
     
-    class Coordinator: NSObject {
-        let onMuteChanged: ((Bool) -> Void)?
+    class Coordinator: NSObject, AVPlayerViewControllerDelegate {
+        var onMuteChanged: ((Bool) -> Void)?
         let onTimeUpdate: ((Double) -> Void)?
         var timeObserver: Any?
+        var player: AVPlayer?
         
         init(onMuteChanged: ((Bool) -> Void)?, onTimeUpdate: ((Double) -> Void)?) {
             self.onMuteChanged = onMuteChanged
             self.onTimeUpdate = onTimeUpdate
+        }
+        
+        // Monitor mute state changes from native controls
+        func playerViewController(_ playerViewController: AVPlayerViewController, willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+            // Full screen presentation
+        }
+        
+        func playerViewController(_ playerViewController: AVPlayerViewController, willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
+            // Full screen dismissal
+        }
+        
+        // Start monitoring mute state changes
+        func startMuteMonitoring() {
+            // The mute state is now handled by the binding system in HLSVideoPlayerWithControls
+        }
+        
+        // Stop monitoring mute state changes
+        func stopMuteMonitoring() {
+            // No timer to invalidate anymore
+        }
+        
+        deinit {
+            stopMuteMonitoring()
         }
     }
 }
@@ -633,6 +711,8 @@ struct VideoPlayerView: UIViewControllerRepresentable {
 struct HLSDirectoryVideoPlayer: View {
     let baseURL: URL
     let isVisible: Bool
+    let isMuted: Bool
+    let onMuteChanged: ((Bool) -> Void)?
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
     @State private var loading = true
@@ -642,7 +722,9 @@ struct HLSDirectoryVideoPlayer: View {
             if let playlistURL = playlistURL {
                 HLSVideoPlayerWithControls(
                     videoURL: playlistURL,
-                    isVisible: isVisible
+                    isVisible: isVisible,
+                    isMuted: isMuted,
+                    onMuteChanged: onMuteChanged
                 )
             } else if let error = error {
                 VStack {

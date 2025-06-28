@@ -59,6 +59,7 @@ struct MediaGridView: View {
                         attachmentIndex: 0,
                         aspectRatio: 1.0
                     )
+                    .environmentObject(MuteState.shared)
                     .frame(width: gridWidth, height: gridHeight)
                     .aspectRatio(contentMode: .fill)
                     .clipped()
@@ -76,6 +77,7 @@ struct MediaGridView: View {
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx
                                 )
+                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
@@ -93,6 +95,7 @@ struct MediaGridView: View {
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx
                                 )
+                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
@@ -112,6 +115,7 @@ struct MediaGridView: View {
                                 parentTweet: parentTweet,
                                 attachmentIndex: 0
                             )
+                            .environmentObject(MuteState.shared)
                             .frame(width: gridWidth / 2 - 1, height: gridHeight)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
@@ -127,6 +131,7 @@ struct MediaGridView: View {
                                         parentTweet: parentTweet,
                                         attachmentIndex: idx
                                     )
+                                    .environmentObject(MuteState.shared)
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
@@ -144,6 +149,7 @@ struct MediaGridView: View {
                                 parentTweet: parentTweet,
                                 attachmentIndex: 0
                             )
+                            .environmentObject(MuteState.shared)
                             .frame(width: gridWidth, height: gridHeight / 2 - 1)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
@@ -159,6 +165,7 @@ struct MediaGridView: View {
                                         parentTweet: parentTweet,
                                         attachmentIndex: idx
                                     )
+                                    .environmentObject(MuteState.shared)
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                     .aspectRatio(contentMode: .fill)
                                     .clipped()
@@ -180,6 +187,7 @@ struct MediaGridView: View {
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx
                                 )
+                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
@@ -198,6 +206,7 @@ struct MediaGridView: View {
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx
                                         )
+                                        .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                         .aspectRatio(contentMode: .fill)
                                         .clipped()

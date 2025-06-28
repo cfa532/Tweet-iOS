@@ -25,6 +25,9 @@ class PreferenceHelper {
     }
     
     func getSpeakerMute() -> Bool {
+        if userDefaults.object(forKey: "speakerMuted") == nil {
+            return true // Default to muted if not set
+        }
         return userDefaults.bool(forKey: "speakerMuted")
     }
     

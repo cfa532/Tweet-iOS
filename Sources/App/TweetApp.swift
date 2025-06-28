@@ -14,6 +14,9 @@ class AppState: ObservableObject {
             try await HproseInstance.shared.initialize()
             isInitialized = true
             
+            // Refresh mute state from preferences after HproseInstance is ready
+            MuteState.shared.refreshFromPreferences()
+            
             // Cleanup caches after a delay
             Task.detached(priority: .background) {
                 // Wait 30 seconds after app initialization
