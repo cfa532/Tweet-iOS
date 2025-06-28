@@ -170,13 +170,19 @@ struct TweetDetailView: View {
                 CommentListNotification(
                     name: .newCommentAdded,
                     key: "comment",
-                    shouldAccept: { _ in true },
+                    shouldAccept: { comment in 
+                        // Only accept comments that belong to this tweet
+                        comment.originalTweetId == displayTweet.mid
+                    },
                     action: { comment in comments.insert(comment, at: 0) }
                 ),
                 CommentListNotification(
                     name: .commentDeleted,
                     key: "comment",
-                    shouldAccept: { _ in true },
+                    shouldAccept: { comment in 
+                        // Only accept comment deletions that belong to this tweet
+                        comment.originalTweetId == displayTweet.mid
+                    },
                     action: { comment in comments.removeAll { $0.mid == comment.mid } }
                 )
             ],
