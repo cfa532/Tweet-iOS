@@ -23,48 +23,46 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             
-            // Custom Tab Bar
-            if isNavigationVisible {
-                HStack(spacing: 0) {
-                    // Home Tab
-                    Button(action: {
-                        selectedTab = 0
-                    }) {
-                        VStack(spacing: 4) {
-                            Image(systemName: "house")
-                                .font(.system(size: 24))
-                            Text("Home")
-                                .font(.caption)
-                        }
-                        .foregroundColor(selectedTab == 0 ? .blue : .gray)
+            // Custom Tab Bar (always present, but fades out when navigation is hidden)
+            HStack(spacing: 0) {
+                // Home Tab
+                Button(action: {
+                    selectedTab = 0
+                }) {
+                    VStack(spacing: 4) {
+                        Image(systemName: "house")
+                            .font(.system(size: 24))
+                        Text("Home")
+                            .font(.caption)
                     }
-                    .frame(maxWidth: .infinity)
-                    
-                    // Compose Tab
-                    Button(action: {
-                        showComposeSheet = true
-                    }) {
-                        VStack(spacing: 4) {
-                            Image(systemName: "square.and.pencil")
-                                .font(.system(size: 24))
-                            Text("Compose")
-                                .font(.caption)
-                        }
-                        .foregroundColor(.gray)
-                    }
-                    .frame(maxWidth: .infinity)
+                    .foregroundColor(selectedTab == 0 ? .blue : .gray)
                 }
-                .padding(.vertical, 8)
-                .background(Color(.systemBackground))
-                .overlay(
-                    Rectangle()
-                        .frame(height: 0.5)
-                        .foregroundColor(Color(.separator)),
-                    alignment: .top
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
+                .frame(maxWidth: .infinity)
+                
+                // Compose Tab
+                Button(action: {
+                    showComposeSheet = true
+                }) {
+                    VStack(spacing: 4) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 24))
+                        Text("Compose")
+                            .font(.caption)
+                    }
+                    .foregroundColor(.gray)
+                }
+                .frame(maxWidth: .infinity)
             }
+            .padding(.vertical, 8)
+            .background(Color(.systemBackground))
+            .overlay(
+                Rectangle()
+                    .frame(height: 0.5)
+                    .foregroundColor(Color(.separator)),
+                alignment: .top
+            )
+            .opacity(isNavigationVisible ? 1.0 : 0.2)
+            .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
         }
         .sheet(isPresented: $showComposeSheet) {
             ComposeTweetView()
