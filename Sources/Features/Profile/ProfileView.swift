@@ -88,41 +88,7 @@ struct ProfileView: View {
     // MARK: - Body
     var body: some View {
         VStack(spacing: 0) {
-            // Collapsible header and stats
-            VStack(spacing: 0) {
-                ProfileHeaderSection(
-                    user: user,
-                    isCurrentUser: isAppUser,
-                    isFollowing: isFollowing,
-                    onEditTap: { showEditSheet = true },
-                    onFollowToggle: { isFollowing.toggle() },
-                    onAvatarTap: { showAvatarFullScreen = true }
-                )
-                ProfileStatsSection(
-                    user: user,
-                    onFollowersTap: {
-                        userListType = .FOLLOWER
-                        showUserList = true
-                    },
-                    onFollowingTap: {
-                        userListType = .FOLLOWING
-                        showUserList = true
-                    },
-                    onBookmarksTap: {
-                        tweetListType = .BOOKMARKS
-                        showTweetList = true
-                    },
-                    onFavoritesTap: {
-                        tweetListType = .FAVORITES
-                        showTweetList = true
-                    }
-                )
-            }
-            .opacity(isHeaderVisible ? 1 : 0)
-            .animation(.easeInOut(duration: 0.2), value: isHeaderVisible)
-            .padding(.top, 2)
-
-            // Only the tweet list is scrollable and refreshable
+            // Only the tweet list is scrollable and refreshable, now including the header and stats
             ProfileTweetsSection(
                 isLoading: isLoading,
                 pinnedTweets: pinnedTweets,
@@ -133,12 +99,39 @@ struct ProfileView: View {
                 onTweetTap: { tweet in selectedTweet = tweet },
                 onPinnedTweetsRefresh: refreshPinnedTweets,
                 onScroll: { offset in
-                    // Show header if at the top or scrolling up
-                    let shouldShowHeader = offset >= 0 || offset > previousScrollOffset
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isHeaderVisible = shouldShowHeader
-                    }
                     previousScrollOffset = offset
+                },
+                header: {
+                    VStack(spacing: 0) {
+                        ProfileHeaderSection(
+                            user: user,
+                            isCurrentUser: isAppUser,
+                            isFollowing: isFollowing,
+                            onEditTap: { showEditSheet = true },
+                            onFollowToggle: { isFollowing.toggle() },
+                            onAvatarTap: { showAvatarFullScreen = true }
+                        )
+                        ProfileStatsSection(
+                            user: user,
+                            onFollowersTap: {
+                                userListType = .FOLLOWER
+                                showUserList = true
+                            },
+                            onFollowingTap: {
+                                userListType = .FOLLOWING
+                                showUserList = true
+                            },
+                            onBookmarksTap: {
+                                tweetListType = .BOOKMARKS
+                                showTweetList = true
+                            },
+                            onFavoritesTap: {
+                                tweetListType = .FAVORITES
+                                showTweetList = true
+                            }
+                        )
+                    }
+                    .padding(.top, 2)
                 }
             )
             .id(user.mid)

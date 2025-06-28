@@ -40,6 +40,7 @@ struct TweetListView<RowView: View>: View {
     let tweetFetcher: @Sendable (UInt, UInt, Bool) async throws -> [Tweet?]
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
+    let header: (() -> AnyView)?
     let notifications: [TweetListNotification]
     let onScroll: ((CGFloat) -> Void)?
     private let pageSize: UInt = 10
@@ -67,6 +68,7 @@ struct TweetListView<RowView: View>: View {
         showTitle: Bool = true,
         notifications: [TweetListNotification]? = nil,
         onScroll: ((CGFloat) -> Void)? = nil,
+        header: (() -> AnyView)? = nil,
         rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
@@ -74,6 +76,7 @@ struct TweetListView<RowView: View>: View {
         self.tweetFetcher = tweetFetcher
         self.showTitle = showTitle
         self.onScroll = onScroll
+        self.header = header
         // Default: listen for newTweetCreated and insert at top
         self.notifications = notifications ?? [
             TweetListNotification(
@@ -111,6 +114,7 @@ struct TweetListView<RowView: View>: View {
                                     tweets = newValue.compactMap { $0 }
                                 }
                             ),
+                            header: header,
                             rowView: { tweet in
                                 rowView(tweet)
                             },
@@ -295,6 +299,7 @@ struct TweetListView<RowView: View>: View {
 @available(iOS 16.0, *)
 struct TweetListContentView<RowView: View>: View {
     @Binding var tweets: [Tweet?]
+    let header: (() -> AnyView)?
     let rowView: (Tweet) -> RowView
     @Binding var hasMoreTweets: Bool
     let isLoadingMore: Bool
@@ -305,6 +310,12 @@ struct TweetListContentView<RowView: View>: View {
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0)
+            
+            // Header content
+            if let header = header {
+                header()
+            }
+            
             ForEach(tweets.compactMap { $0 }, id: \.mid) { tweet in
                 rowView(tweet)
             }

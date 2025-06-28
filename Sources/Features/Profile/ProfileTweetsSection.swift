@@ -57,7 +57,7 @@ private struct TweetListScrollOffsetKey: PreferenceKey {
 }
 
 @available(iOS 16.0, *)
-struct ProfileTweetsSection: View {
+struct ProfileTweetsSection<Header: View>: View {
     let isLoading: Bool
     let pinnedTweets: [Tweet] // sorted, from state
     let pinnedTweetIds: Set<String> // from state
@@ -68,6 +68,7 @@ struct ProfileTweetsSection: View {
     let onPinnedTweetsRefresh: () async -> Void
     let onScroll: (CGFloat) -> Void
     @StateObject private var viewModel: ProfileTweetsViewModel
+    let header: () -> Header
     
     init(
         isLoading: Bool,
@@ -78,7 +79,8 @@ struct ProfileTweetsSection: View {
         onUserSelect: @escaping (User) -> Void,
         onTweetTap: @escaping (Tweet) -> Void,
         onPinnedTweetsRefresh: @escaping () async -> Void,
-        onScroll: @escaping (CGFloat) -> Void
+        onScroll: @escaping (CGFloat) -> Void,
+        @ViewBuilder header: @escaping () -> Header = { EmptyView() }
     ) {
         self.isLoading = isLoading
         self.pinnedTweets = pinnedTweets
@@ -89,6 +91,7 @@ struct ProfileTweetsSection: View {
         self.onTweetTap = onTweetTap
         self.onPinnedTweetsRefresh = onPinnedTweetsRefresh
         self.onScroll = onScroll
+        self.header = header
         self._viewModel = StateObject(wrappedValue: ProfileTweetsViewModel(
             hproseInstance: hproseInstance,
             user: user,
@@ -101,81 +104,65 @@ struct ProfileTweetsSection: View {
             ProgressView("Loading tweets...")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            VStack(spacing: 0) {
-                if !pinnedTweets.isEmpty {
-                    Text("Pinned")
-                        .font(.subheadline)
-                        .bold()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
-                        .background(Color(UIColor.systemBackground))
-                }
-                TweetListView<TweetItemView>(
-                    title: "",
-                    tweets: $viewModel.tweets,
-                    tweetFetcher: { page, size, isFromCache in
-                        if isFromCache {
-                            // Fetch from cache
-//                            let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: page, pageSize: size)
-//                            print("[DEBUG] Fetching cached tweets for user: \(user.mid)")
-//                            for tweet in cachedTweets {
-//                                if let t = tweet {
-//                                    print("[DEBUG] Cached tweet authorId: \(t.authorId), mid: \(t.mid)")
-//                                }
-//                            }
-//                            await MainActor.run {
-//                                viewModel.tweets.mergeTweets(cachedTweets.compactMap { tweet in
-//                                    if let t = tweet, t.authorId == user.mid {
-//                                        print("[DEBUG] Merging tweet mid: \(t.mid) for user: \(t.authorId)")
-//                                        return t
-//                                    } else {
-//                                        return nil
-//                                    }
-//                                })
-//                            }
-//                            return cachedTweets
-                            return []
-                        } else {
-                            // Fetch from server
-                            return try await viewModel.fetchTweets(page: page, pageSize: size)
-                        }
-                    },
-                    showTitle: false,
-                    notifications: [
-                        TweetListNotification(
-                            name: .newTweetCreated,
-                            key: "tweet",
-                            shouldAccept: { tweet in tweet.authorId == user.mid },
-                            action: { tweet in viewModel.handleNewTweet(tweet) }
-                        ),
-                        TweetListNotification(
-                            name: .tweetDeleted,
-                            key: "tweetId",
-                            shouldAccept: { _ in true },
-                            action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
-                        )
-                    ],
-                    rowView: { tweet in
-                        TweetItemView(
-                            tweet: tweet,
-                            isPinned: pinnedTweets.contains { $0.mid == tweet.mid },
-                            isInProfile: true,
-                            onAvatarTap: { user in
-                                onUserSelect(user)
-                            },
-                            onTap: { tweet in
-                                onTweetTap(tweet)
-                            },
-                            onRemove: { tweetId in
-                                if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {
-                                    viewModel.tweets.remove(at: idx)
-                                }
-                            }
-                        )
+            TweetListView<TweetItemView>(
+                title: "",
+                tweets: $viewModel.tweets,
+                tweetFetcher: { page, size, isFromCache in
+                    if isFromCache {
+                        return []
+                    } else {
+                        return try await viewModel.fetchTweets(page: page, pageSize: size)
                     }
-                )
-                .frame(maxHeight: .infinity)
-            }
+                },
+                showTitle: false,
+                notifications: [
+                    TweetListNotification(
+                        name: .newTweetCreated,
+                        key: "tweet",
+                        shouldAccept: { tweet in tweet.authorId == user.mid },
+                        action: { tweet in viewModel.handleNewTweet(tweet) }
+                    ),
+                    TweetListNotification(
+                        name: .tweetDeleted,
+                        key: "tweetId",
+                        shouldAccept: { _ in true },
+                        action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
+                    )
+                ],
+                header: {
+                    AnyView(
+                        VStack(spacing: 0) {
+                            header()
+                            if !pinnedTweets.isEmpty {
+                                Text("Pinned")
+                                    .font(.subheadline)
+                                    .bold()
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding()
+                                    .background(Color(UIColor.systemBackground))
+                            }
+                        }
+                    )
+                },
+                rowView: { tweet in
+                    TweetItemView(
+                        tweet: tweet,
+                        isPinned: pinnedTweets.contains { $0.mid == tweet.mid },
+                        isInProfile: true,
+                        onAvatarTap: { user in
+                            onUserSelect(user)
+                        },
+                        onTap: { tweet in
+                            onTweetTap(tweet)
+                        },
+                        onRemove: { tweetId in
+                            if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {
+                                viewModel.tweets.remove(at: idx)
+                            }
+                        }
+                    )
+                }
+            )
             .frame(maxHeight: .infinity)
             .refreshable {
                 await onPinnedTweetsRefresh()
