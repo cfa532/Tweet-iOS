@@ -31,7 +31,6 @@ struct SettingsView: View {
                 
                 Section(header: Text("App Settings")) {
                     Toggle("Dark Mode", isOn: $themeManager.isDarkMode)
-                    Toggle("Notifications", isOn: .constant(true))
                     
                     Button(action: {
                         cleanupCache()
@@ -52,7 +51,7 @@ struct SettingsView: View {
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("1.0.0")
+                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
                             .foregroundColor(.gray)
                     }
                 }
@@ -64,7 +63,7 @@ struct SettingsView: View {
             .alert("Cache Cleared", isPresented: $showCacheCleanedAlert) {
                 Button("OK") { }
             } message: {
-                Text("Image and tweet caches have been cleared successfully.")
+                Text("All image and tweet caches have been cleared successfully.")
             }
         }
     }
@@ -72,10 +71,12 @@ struct SettingsView: View {
     private func cleanupCache() {
         isCleaningCache = true
         Task.detached(priority: .background) {
-            // Clean up image cache
-            ImageCacheManager.shared.cleanupOldCache()
-            // Clear tweet cache
-            TweetCacheManager.shared.deleteExpiredTweets()
+            // Clear image cache completely
+            ImageCacheManager.shared.clearAllCache()
+            
+            // Clear tweet cache completely
+            TweetCacheManager.shared.clearAllCache()
+            
             await MainActor.run {
                 isCleaningCache = false
                 showCacheCleanedAlert = true

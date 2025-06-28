@@ -95,6 +95,21 @@ class ImageCacheManager {
         }
     }
     
+    func clearAllCache() {
+        // Clear memory cache
+        cache.removeAllObjects()
+        
+        // Clear all disk cache files
+        do {
+            let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [])
+            for fileURL in contents {
+                try? fileManager.removeItem(at: fileURL)
+            }
+        } catch {
+            print("Error clearing all cache: \(error)")
+        }
+    }
+    
     private func getCacheKey(for attachment: MimeiFileType, baseUrl: URL) -> String {
         if !attachment.mid.isEmpty {
             return attachment.mid

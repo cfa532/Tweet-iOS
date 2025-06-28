@@ -209,7 +209,7 @@ extension TweetCacheManager {
         }
     }
 
-    func clearAllTweets() {
+    func clearAllCache() {
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             if let allTweets = try? context.fetch(request) {

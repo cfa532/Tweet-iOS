@@ -64,7 +64,7 @@ struct HomeView: View {
             .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
                 Task {
                     await MainActor.run {
-                        TweetCacheManager.shared.clearAllTweets()
+                        TweetCacheManager.shared.clearAllCache()
                     }
                     try await HproseInstance.shared.initialize()
                 }
@@ -72,7 +72,7 @@ struct HomeView: View {
             .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
                 Task {
                     await MainActor.run {
-                        TweetCacheManager.shared.clearAllTweets()
+                        TweetCacheManager.shared.clearAllCache()
                     }
                     try await HproseInstance.shared.initialize()
                 }
