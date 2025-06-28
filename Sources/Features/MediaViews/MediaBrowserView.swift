@@ -44,10 +44,16 @@ struct MediaBrowserView: View {
                             SimpleVideoPlayer(
                                 url: url,
                                 autoPlay: true,
+                                onMuteChanged: { _ in
+                                    // In full-screen mode, don't update global mute state
+                                    // Full-screen videos should have independent audio control
+                                },
                                 isVisible: isVisible && currentIndex == index,
                                 contentType: attachment.type,
                                 cellAspectRatio: nil,
-                                videoAspectRatio: nil
+                                videoAspectRatio: nil,
+                                showNativeControls: true,
+                                forceUnmuted: true // Force unmuted in full-screen
                             )
                             .environmentObject(MuteState.shared)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)

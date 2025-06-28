@@ -38,6 +38,7 @@ struct SimpleVideoPlayer: View {
     var cellAspectRatio: CGFloat? = nil
     var videoAspectRatio: CGFloat? = nil
     var showNativeControls: Bool = true
+    var forceUnmuted: Bool = false // Force unmuted state (for full-screen mode)
     @EnvironmentObject var muteState: MuteState
 
     var body: some View {
@@ -54,7 +55,7 @@ struct SimpleVideoPlayer: View {
                         HLSDirectoryVideoPlayer(
                             baseURL: url,
                             isVisible: isVisible,
-                            isMuted: muteState.isMuted,
+                            isMuted: forceUnmuted ? false : muteState.isMuted,
                             onMuteChanged: onMuteChanged
                         )
                         .offset(y: -pad)
@@ -63,7 +64,7 @@ struct SimpleVideoPlayer: View {
                         VideoPlayerView(
                             url: url,
                             autoPlay: autoPlay && isVisible,
-                            isMuted: muteState.isMuted,
+                            isMuted: forceUnmuted ? false : muteState.isMuted,
                             onMuteChanged: onMuteChanged,
                             onTimeUpdate: onTimeUpdate,
                             isVisible: isVisible,
@@ -79,14 +80,14 @@ struct SimpleVideoPlayer: View {
                         HLSDirectoryVideoPlayer(
                             baseURL: url,
                             isVisible: isVisible,
-                            isMuted: muteState.isMuted,
+                            isMuted: forceUnmuted ? false : muteState.isMuted,
                             onMuteChanged: onMuteChanged
                         )
                     } else {
                         VideoPlayerView(
                             url: url,
                             autoPlay: autoPlay && isVisible,
-                            isMuted: muteState.isMuted,
+                            isMuted: forceUnmuted ? false : muteState.isMuted,
                             onMuteChanged: onMuteChanged,
                             onTimeUpdate: onTimeUpdate,
                             isVisible: isVisible,
