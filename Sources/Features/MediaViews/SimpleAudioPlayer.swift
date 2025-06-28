@@ -18,7 +18,7 @@ struct SimpleAudioPlayer: View {
             HStack(spacing: 2) {
                 ForEach(0..<30) { _ in
                     RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.blue.opacity(0.6))
+                        .fill(Color.themeAccent.opacity(0.6))
                         .frame(width: 3, height: CGFloat.random(in: 4...20))
                 }
             }
@@ -30,13 +30,13 @@ struct SimpleAudioPlayer: View {
                 ZStack(alignment: .leading) {
                     // Background track
                     Rectangle()
-                        .fill(Color.gray.opacity(0.3))
+                        .fill(Color.themeSecondaryText.opacity(0.3))
                         .frame(height: 4)
                         .cornerRadius(2)
                     
                     // Progress
                     Rectangle()
-                        .fill(Color.blue)
+                        .fill(Color.themeAccent)
                         .frame(width: geometry.size.width * CGFloat(currentTime / max(duration, 1)), height: 4)
                         .cornerRadius(2)
                 }
@@ -49,7 +49,7 @@ struct SimpleAudioPlayer: View {
                 // Current time
                 Text(formatTime(currentTime))
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.themeSecondaryText)
                 
                 Spacer()
                 
@@ -57,7 +57,7 @@ struct SimpleAudioPlayer: View {
                 Button(action: togglePlayback) {
                     Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 44))
-                        .foregroundColor(.blue)
+                        .foregroundColor(.themeAccent)
                 }
                 
                 Spacer()
@@ -65,19 +65,19 @@ struct SimpleAudioPlayer: View {
                 // Duration
                 Text(formatTime(duration))
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .foregroundColor(.themeSecondaryText)
                 
                 // Mute/Unmute button
                 Button(action: toggleMute) {
                     Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .foregroundColor(.gray)
+                        .foregroundColor(.themeSecondaryText)
                         .padding(.leading, 8)
                 }
             }
             .padding(.horizontal)
         }
         .padding(.vertical, 12)
-        .background(Color(.systemBackground))
+        .background(Color.themeCardBackground)
         .cornerRadius(12)
         .shadow(radius: 2)
         .onAppear {

@@ -63,36 +63,36 @@ struct ComposeTweetView: View {
                                        matching: .any(of: [.images, .videos])) {
                                 Image(systemName: "photo.on.rectangle")
                                     .font(.system(size: 20))
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.themeAccent)
                             }
                             .buttonStyle(.plain)
                             
                             Button(action: { /* TODO: Add poll */ }) {
                                 Image(systemName: "chart.bar")
                                     .font(.system(size: 20))
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.themeAccent)
                             }
                             .buttonStyle(.plain)
                             
                             Button(action: { /* TODO: Add location */ }) {
                                 Image(systemName: "location")
                                     .font(.system(size: 20))
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.themeAccent)
                             }
                             .buttonStyle(.plain)
                             
                             Spacer()
                             
                             Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.tweetContent.count))")
-                                .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .gray)
+                                .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .themeSecondaryText)
                         }
                         .padding(.horizontal)
                         .padding(.vertical, 8)
-                        .background(Color(.systemBackground))
+                        .background(Color.themeBackground)
                         .overlay(
                             Rectangle()
                                 .frame(height: 1)
-                                .foregroundColor(Color(.systemGray4)),
+                                .foregroundColor(Color.themeBorder),
                             alignment: .top
                         )
                     }

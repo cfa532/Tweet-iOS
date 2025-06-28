@@ -11,6 +11,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @EnvironmentObject private var themeManager: ThemeManager
     @State private var isCleaningCache = false
     @State private var showCacheCleanedAlert = false
     
@@ -29,7 +30,7 @@ struct SettingsView: View {
                 }
                 
                 Section(header: Text("App Settings")) {
-                    Toggle("Dark Mode", isOn: .constant(false))
+                    Toggle("Dark Mode", isOn: $themeManager.isDarkMode)
                     Toggle("Notifications", isOn: .constant(true))
                     
                     Button(action: {

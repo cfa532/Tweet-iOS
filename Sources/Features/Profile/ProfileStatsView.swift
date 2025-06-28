@@ -16,8 +16,10 @@ struct ProfileStatsView: View {
                 VStack {
                     Text("Fans")
                         .font(.caption)
+                        .foregroundColor(.themeSecondaryText)
                     Text("\(user.followersCount ?? 0)")
                         .font(.headline)
+                        .foregroundColor(.themeText)
                 }
             }
             Spacer()
@@ -27,16 +29,20 @@ struct ProfileStatsView: View {
                 VStack {
                     Text("Followings")
                         .font(.caption)
+                        .foregroundColor(.themeSecondaryText)
                     Text("\(user.followingCount ?? 0)")
                         .font(.headline)
+                        .foregroundColor(.themeText)
                 }
             }
             Spacer()
             VStack {
                 Text("Tweets")
                     .font(.caption)
+                    .foregroundColor(.themeSecondaryText)
                 Text("\(user.tweetCount ?? 0)")
                     .font(.headline)
+                    .foregroundColor(.themeText)
             }
             Spacer()
             Button {
@@ -44,8 +50,10 @@ struct ProfileStatsView: View {
             } label: {
                 VStack {
                     Image(systemName: "bookmark")
+                        .foregroundColor(.themeSecondaryText)
                     Text("\(user.bookmarksCount ?? 0)")
                         .font(.headline)
+                        .foregroundColor(.themeText)
                 }
             }
             Spacer()
@@ -54,13 +62,15 @@ struct ProfileStatsView: View {
             } label: {
                 VStack {
                     Image(systemName: "heart")
+                        .foregroundColor(.themeSecondaryText)
                     Text("\(user.favoritesCount ?? 0)")
                         .font(.headline)
+                        .foregroundColor(.themeText)
                 }
             }
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
-        .background(Color(.systemGray6))
+        .background(Color.themeSecondaryBackground)
     }
 } 

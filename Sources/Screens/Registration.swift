@@ -104,7 +104,7 @@ struct RegistrationView: View {
                             HStack {
                                 Text("Username *")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.themeSecondaryText)
                                 Spacer()
                             }
                             TextField("Username", text: $username)
@@ -120,7 +120,7 @@ struct RegistrationView: View {
                             HStack {
                                 Text("Password *")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.themeSecondaryText)
                                 Spacer()
                             }
                             SecureField("Password", text: $password)
@@ -137,7 +137,7 @@ struct RegistrationView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Confirm Password")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.themeSecondaryText)
                                 SecureField("Confirm Password", text: $confirmPassword)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
                                     .focused($focusedField, equals: .confirmPassword)
@@ -149,7 +149,7 @@ struct RegistrationView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Alias")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(.themeSecondaryText)
                             TextField("Alias", text: $alias)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .alias)
@@ -160,10 +160,10 @@ struct RegistrationView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Profile")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(.themeSecondaryText)
                             TextEditor(text: $profile)
                                 .frame(minHeight: 60, maxHeight: 120)
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.themeBorder.opacity(0.3)))
                                 .focused($focusedField, equals: .profile)
                                 .onTapGesture { focusedField = .profile }
                         }
@@ -171,7 +171,7 @@ struct RegistrationView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Host ID (optional)")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(.themeSecondaryText)
                             TextField("", text: $hostId)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .hostId)
@@ -187,7 +187,7 @@ struct RegistrationView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Cloud Drive Port")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(.themeSecondaryText)
                             TextField("Cloud Drive Port", text: $cloudDrivePort)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .keyboardType(.numberPad)
@@ -214,7 +214,7 @@ struct RegistrationView: View {
                         Text(hproseInstance.appUser.isGuest ? "Create Account" : "Save")
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.blue)
+                            .background(Color.themeAccent)
                             .foregroundColor(.white)
                             .cornerRadius(10)
                     }

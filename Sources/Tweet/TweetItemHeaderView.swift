@@ -8,9 +8,10 @@ struct TweetItemHeaderView: View {
             HStack(alignment: .top) {
                 Text(tweet.author?.name ?? "No one")
                     .font(.headline)
+                    .foregroundColor(.themeText)
                 Text("@\(tweet.author?.username ?? "")")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.themeSecondaryText)
                     .padding(.leading, -6)
             }
             Spacer()

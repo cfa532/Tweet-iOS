@@ -315,7 +315,7 @@ struct HLSVideoPlayerWithControls: View {
                         .scaleEffect(1.5)
                     Text("Loading HLS stream...")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.themeSecondaryText)
                 }
             } else if let errorMessage = errorMessage {
                 VStack {

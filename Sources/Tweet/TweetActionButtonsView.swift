@@ -153,7 +153,7 @@ struct TweetActionButtonsView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
-        .foregroundColor(.secondary)
+        .foregroundColor(.themeSecondaryText)
         .padding(.trailing, 4)
         .padding(.leading, 0)
         .sheet(isPresented: $showCommentCompose) {

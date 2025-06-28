@@ -38,18 +38,18 @@ struct UserRowView: View {
                             if showFullProfile {
                                 Text(profile)
                                     .font(.footnote)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.themeSecondaryText)
                                     .lineLimit(nil)
                                 Button("Show less") {
                                     showFullProfile = false
                                 }
                                 .font(.caption)
-                                .foregroundColor(.blue)
+                                .foregroundColor(.themeAccent)
                                 .buttonStyle(.plain)
                             } else {
                                 Text(profile)
                                     .font(.footnote)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.themeSecondaryText)
                                     .lineLimit(4)
                                     .truncationMode(.tail)
                                 if profile.count > 200 {
@@ -57,7 +57,7 @@ struct UserRowView: View {
                                         showFullProfile = true
                                     }
                                     .font(.caption)
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.themeAccent)
                                     .buttonStyle(.plain)
                                 }
                             }

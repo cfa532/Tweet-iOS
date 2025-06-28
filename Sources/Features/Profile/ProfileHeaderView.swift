@@ -25,8 +25,9 @@ struct ProfileHeaderView: View {
                     Text(user.name ?? "User Name")
                         .font(.title2)
                         .bold()
+                        .foregroundColor(.themeText)
                     Text("@\(user.username ?? "username")")
-                        .foregroundColor(.gray)
+                        .foregroundColor(.themeSecondaryText)
                         .font(.subheadline)
                 }
                 Spacer()
@@ -39,8 +40,9 @@ struct ProfileHeaderView: View {
                     .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.gray.opacity(0.5), lineWidth: 1)
+                            .stroke(Color.themeBorder, lineWidth: 1)
                     )
+                    .foregroundColor(.themeText)
                 } else {
                     Button(isFollowing ? "Unfollow" : "Follow") {
                         onFollowToggle()
@@ -49,15 +51,15 @@ struct ProfileHeaderView: View {
                     .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(isFollowing ? Color.red : Color.blue, lineWidth: 1)
+                            .stroke(isFollowing ? Color.red : Color.themeAccent, lineWidth: 1)
                     )
-                    .foregroundColor(isFollowing ? .red : .blue)
+                    .foregroundColor(isFollowing ? .red : .themeAccent)
                 }
             }
             if let profile = user.profile {
                 Text(profile)
                     .font(.body)
-                    .foregroundColor(.primary)
+                    .foregroundColor(.themeText)
             }
         }
         .padding(.horizontal)

@@ -38,19 +38,21 @@ struct CommentComposeView: View {
                         HStack {
                             Text(tweet.author?.name ?? "Unknown")
                                 .font(.headline)
+                                .foregroundColor(.themeText)
                             Text("@\(tweet.author?.username ?? "")")
                                 .font(.subheadline)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(.themeSecondaryText)
                         }
                         
                         if let content = tweet.content {
                             Text(content)
                                 .font(.body)
+                                .foregroundColor(.themeText)
                                 .lineLimit(3)
                         }
                     }
                     .padding()
-                    .background(Color(.secondarySystemBackground))
+                    .background(Color.themeSecondaryBackground)
                     .cornerRadius(8)
                     .padding(.horizontal)
                     .frame(maxHeight: 150)
@@ -95,22 +97,22 @@ struct CommentComposeView: View {
                                matching: .any(of: [.images, .videos])) {
                         Image(systemName: "photo.on.rectangle")
                             .font(.system(size: 20))
-                            .foregroundColor(.blue)
+                            .foregroundColor(.themeAccent)
                     }
                     .buttonStyle(.plain)
                     
                     Spacer()
                     
                     Text("\(max(0, Constants.MAX_TWEET_SIZE - commentText.count))")
-                        .foregroundColor(commentText.count > Constants.MAX_TWEET_SIZE ? .red : .gray)
+                        .foregroundColor(commentText.count > Constants.MAX_TWEET_SIZE ? .red : .themeSecondaryText)
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
-                .background(Color(.systemBackground))
+                .background(Color.themeBackground)
                 .overlay(
                     Rectangle()
                         .frame(height: 1)
-                        .foregroundColor(Color(.systemGray4)),
+                        .foregroundColor(Color.themeBorder),
                     alignment: .top
                 )
             }

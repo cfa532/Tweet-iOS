@@ -4,6 +4,7 @@ import SwiftUI
 @available(iOS 17.0, *)
 struct ContentView: View {
     @StateObject private var hproseInstance = HproseInstance.shared
+    @EnvironmentObject private var themeManager: ThemeManager
     @State private var selectedTab = 0
     @State private var showComposeSheet = false
     
@@ -34,6 +35,7 @@ struct ContentView: View {
             ComposeTweetView()
         }
         .environmentObject(hproseInstance)
+        .environmentObject(themeManager)
     }
 }
 
@@ -41,5 +43,6 @@ struct ContentView: View {
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
+            .environmentObject(ThemeManager.shared)
     }
 } 

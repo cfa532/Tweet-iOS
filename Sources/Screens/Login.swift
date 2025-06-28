@@ -30,6 +30,7 @@ struct LoginView: View {
                 Text("Welcome to dTweet")
                     .font(.title)
                     .fontWeight(.bold)
+                    .foregroundColor(.themeText)
                 
                 Group {
                     TextField("Username", text: $username)
@@ -76,7 +77,7 @@ struct LoginView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(Color.blue)
+                    .background(Color.themeAccent)
                     .foregroundColor(.white)
                     .cornerRadius(10)
                 }
@@ -85,7 +86,7 @@ struct LoginView: View {
                 Button("Don't have an account? Register") {
                     showRegistration = true
                 }
-                .foregroundColor(.blue)
+                .foregroundColor(.themeAccent)
                 .disabled(isLoading)
             }
             .padding()

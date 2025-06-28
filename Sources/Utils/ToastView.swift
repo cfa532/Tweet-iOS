@@ -18,7 +18,7 @@ struct ToastView: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
-        .background(Color(red: 0.22, green: 0.32, blue: 0.48, opacity: 0.95))
+        .background(backgroundColor)
         .cornerRadius(22)
         .shadow(color: Color.black.opacity(0.15), radius: 12, x: 0, y: 4)
         .overlay(
@@ -26,6 +26,14 @@ struct ToastView: View {
                 .stroke(borderColor, lineWidth: 1.5)
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+    
+    private var backgroundColor: Color {
+        switch type {
+        case .success: return Color.green.opacity(0.9)
+        case .error: return Color.red.opacity(0.9)
+        case .info: return Color.blue.opacity(0.9)
+        }
     }
     
     private var borderColor: Color {

@@ -17,6 +17,9 @@ class AppState: ObservableObject {
             // Refresh mute state from preferences after HproseInstance is ready
             MuteState.shared.refreshFromPreferences()
             
+            // Refresh theme state from preferences after HproseInstance is ready
+            ThemeManager.shared.refreshFromPreferences()
+            
             // Cleanup caches after a delay
             Task.detached(priority: .background) {
                 // Wait 30 seconds after app initialization
@@ -35,6 +38,7 @@ class AppState: ObservableObject {
 @main
 struct TweetApp: App {
     @StateObject private var appState = AppState()
+    @StateObject private var themeManager = ThemeManager.shared
     @State private var showGlobalAlert = false
     @State private var globalAlertMessage = ""
     
@@ -55,6 +59,7 @@ struct TweetApp: App {
                 } else if appState.isInitialized {
                     // Only show content view after initialization is complete
                     ContentView()
+                        .environmentObject(themeManager)
                 } else {
                     // Show error state if initialization failed
                     VStack {
