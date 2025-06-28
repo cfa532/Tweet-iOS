@@ -18,7 +18,6 @@ class MuteState: ObservableObject {
 struct SimpleVideoPlayer: View {
     let url: URL
     var autoPlay: Bool = true
-    @EnvironmentObject var muteState: MuteState
     var onTimeUpdate: ((Double) -> Void)? = nil
     var isMuted: Bool? = nil
     var onMuteChanged: ((Bool) -> Void)? = nil
@@ -27,7 +26,8 @@ struct SimpleVideoPlayer: View {
     var cellAspectRatio: CGFloat? = nil
     var videoAspectRatio: CGFloat? = nil
     var showNativeControls: Bool = true
-    
+    @EnvironmentObject var muteState: MuteState
+
     var body: some View {
         GeometryReader { geometry in
             if let cellAR = cellAspectRatio, let videoAR = videoAspectRatio {

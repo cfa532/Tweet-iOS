@@ -56,7 +56,8 @@ struct MediaGridView: View {
                 case 1:
                     MediaCell(
                         parentTweet: parentTweet,
-                        attachmentIndex: 0
+                        attachmentIndex: 0,
+                        aspectRatio: 1.0
                     )
                     .frame(width: gridWidth, height: gridHeight)
                     .aspectRatio(contentMode: .fill)

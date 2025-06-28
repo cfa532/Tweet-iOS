@@ -88,12 +88,13 @@ struct TweetDetailView: View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
-                let aspect = CGFloat(attachments.first?.aspectRatio ?? 1.0)
+                let aspect = attachments.first?.aspectRatio ?? 1.0
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
                         MediaCell(
                             parentTweet: displayTweet,
-                            attachmentIndex: index
+                            attachmentIndex: index,
+                            aspectRatio: aspect
                         )
                         .tag(index)
                         .onTapGesture { showBrowser = true }
@@ -101,7 +102,7 @@ struct TweetDetailView: View {
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
                 .frame(maxWidth: .infinity)
-                .frame(height: UIScreen.main.bounds.width / aspect)
+                .frame(height: UIScreen.main.bounds.width / CGFloat(aspect))
                 .background(Color.black)
             }
         }

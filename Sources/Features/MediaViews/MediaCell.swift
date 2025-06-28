@@ -12,6 +12,14 @@ import AVFoundation
 struct MediaCell: View {
     let parentTweet: Tweet
     let attachmentIndex: Int
+    let aspectRatio: Float
+    
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0) {
+        self.parentTweet = parentTweet
+        self.attachmentIndex = attachmentIndex
+        self.aspectRatio = aspectRatio
+    }
+    
     @State private var image: UIImage?
     @State private var isLoading = false
     @State private var showFullScreen = false
@@ -43,7 +51,7 @@ struct MediaCell: View {
                         autoPlay: play, // play is false by default, true after tap
                         isVisible: true,
                         contentType: attachment.type,
-                        cellAspectRatio: 1.0,
+                        cellAspectRatio: CGFloat(aspectRatio),
                         videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                         showNativeControls: true
                     )
@@ -110,11 +118,6 @@ struct MediaCell: View {
             // Open full-screen for other types
             showFullScreen = true
         }
-    }
-    
-    private func handleVideoTap() {
-        // For videos that are already loaded, toggle play/pause
-        play.toggle()
     }
     
     private func loadImage() {
