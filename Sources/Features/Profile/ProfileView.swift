@@ -120,6 +120,7 @@ struct ProfileView: View {
             }
             .opacity(isHeaderVisible ? 1 : 0)
             .animation(.easeInOut(duration: 0.2), value: isHeaderVisible)
+            .padding(.top, 2)
 
             // Only the tweet list is scrollable and refreshable
             ProfileTweetsSection(
@@ -143,7 +144,6 @@ struct ProfileView: View {
             .id(user.mid)
             .padding(.leading, -4)
         }
-        .padding(.top)
         .sheet(isPresented: $showEditSheet) {
             RegistrationView(onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
                 // TODO: Implement user update logic here

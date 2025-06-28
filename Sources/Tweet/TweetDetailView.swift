@@ -11,6 +11,7 @@ struct TweetDetailView: View {
     @State private var pinnedTweets: [[String: Any]] = []
     @State private var originalTweet: Tweet?
     @State private var selectedUser: User? = nil
+    @State private var selectedComment: Tweet? = nil
     @State private var refreshTimer: Timer?
     @State private var comments: [Tweet] = []
     @State private var showToast = false
@@ -46,6 +47,7 @@ struct TweetDetailView: View {
                 commentsListView
                     .padding(.leading, -4)
             }
+            .padding(.top, 2)
             .task {
                 setupInitialData()
             }
@@ -80,6 +82,14 @@ struct TweetDetailView: View {
         )) {
             if let selectedUser = selectedUser {
                 ProfileView(user: selectedUser, onLogout: nil)
+            }
+        }
+        .navigationDestination(isPresented: Binding(
+            get: { selectedComment != nil },
+            set: { if !$0 { selectedComment = nil } }
+        )) {
+            if let selectedComment = selectedComment {
+                TweetDetailView(tweet: selectedComment)
             }
         }
     }
@@ -192,9 +202,7 @@ struct TweetDetailView: View {
                     comment: comment,
                     onAvatarTap: { user in selectedUser = user },
                     onTap: { comment in
-                        // Handle comment tap - navigate to comment detail
-                        // For now, we'll just print since this view doesn't have navigation state
-                        print("Comment tapped: \(comment.mid)")
+                        selectedComment = comment
                     }
                 )
             }
