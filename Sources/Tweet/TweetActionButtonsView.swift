@@ -164,22 +164,19 @@ struct TweetActionButtonsView: View {
             }
         }
         .sheet(isPresented: $showShareSheet) {
-            ShareSheet(activityItems: [tweetShareText()])
+            ShareSheet(activityItems: [tweetShareText(tweet)])
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
     }
 
-    private func tweetShareText() -> String {
-        var text = ""
-        if let author = tweet.author {
-            text += "@\(author.username ?? author.name ?? "")\n"
+    private func tweetShareText(_ tweet: Tweet) -> String {
+        if var text = hproseInstance.preferenceHelper?.getAppUrls().first {
+            text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        if let content = tweet.content {
-            text += content + "\n"
-        }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "App url not available."
     }
 }
 
