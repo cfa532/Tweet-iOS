@@ -8,28 +8,44 @@ struct HomeView: View {
     @State private var selectedTab = 0
     @State private var isScrolling = false
     @State private var scrollOffset: CGFloat = 0
+    @State private var previousScrollOffset: CGFloat = 0
+    @State private var isNavigationVisible = true
     @State private var selectedUser: User? = nil
     @State private var selectedTweet: Tweet? = nil
+    
+    let onNavigationVisibilityChanged: ((Bool) -> Void)?
 
     @EnvironmentObject private var hproseInstance: HproseInstance
+    
+    init(onNavigationVisibilityChanged: ((Bool) -> Void)? = nil) {
+        self.onNavigationVisibilityChanged = onNavigationVisibilityChanged
+    }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                AppHeaderView()
-                    .padding(.vertical, 8)
-                // Tab bar (no avatars/settings here)
-                HStack(spacing: 0) {
-                    TabButton(title: "Followings", isSelected: selectedTab == 0) {
-                        withAnimation { selectedTab = 0 }
+                // Header section
+                VStack(spacing: 0) {
+                    AppHeaderView()
+                        .padding(.vertical, 8)
+                    // Tab bar
+                    HStack(spacing: 0) {
+                        TabButton(title: "Followings", isSelected: selectedTab == 0) {
+                            withAnimation { selectedTab = 0 }
+                        }
+                        TabButton(title: "Recommendation", isSelected: selectedTab == 1) {
+                            withAnimation { selectedTab = 1 }
+                        }
                     }
-                    TabButton(title: "Recommendation", isSelected: selectedTab == 1) {
-                        withAnimation { selectedTab = 1 }
-                    }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    .padding(.leading, -4)
                 }
-                .padding(.horizontal)
-                .padding(.top, 8)
-                .padding(.leading, -4)
+                .opacity(isNavigationVisible ? 1 : 0)
+                .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
+                .offset(y: isNavigationVisible ? 0 : -100)
+                .frame(height: isNavigationVisible ? nil : 0)
+                .clipped()
 
                 // Tab Content
                 TabView(selection: $selectedTab) {
@@ -38,16 +54,22 @@ struct HomeView: View {
                         onAvatarTap: { user in
                             selectedUser = user
                         },
-                        selectedTweet: $selectedTweet
+                        selectedTweet: $selectedTweet,
+                        onScroll: { offset in
+                            handleScroll(offset: offset)
+                        }
                     )
                     .tag(0)
 
-                    RecommendedTweetView()
+                    RecommendedTweetView(onScroll: { offset in
+                        handleScroll(offset: offset)
+                    })
                         .tag(1)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .padding(.leading, -4)
             }
+            .navigationBarHidden(true) // Hide the system navigation bar
             .navigationDestination(item: $selectedUser) { user in
                 ProfileView(user: user, onLogout: {
                     selectedTab = 0
@@ -78,6 +100,44 @@ struct HomeView: View {
                 }
             }
         }
+    }
+    
+    // MARK: - Scroll Handling
+    private func handleScroll(offset: CGFloat) {
+        // Calculate scroll direction and threshold
+        let scrollDelta = offset - previousScrollOffset
+        let scrollThreshold: CGFloat = 20 // Increased threshold for less sensitivity
+        
+        // Show navigation if:
+        // 1. At the top (offset >= 0)
+        // 2. Scrolling down significantly (negative delta < -threshold) when navigation is currently hidden
+        // Hide navigation if:
+        // 3. Scrolling down significantly (negative delta < -threshold) when navigation is currently visible
+        let shouldShowNavigation: Bool
+        
+        if offset >= 0 {
+            // Always show when at the top
+            shouldShowNavigation = true
+        } else if scrollDelta < -scrollThreshold {
+            // Scrolling down - hide navigation if it's currently visible
+            shouldShowNavigation = false
+        } else if scrollDelta > scrollThreshold && !isNavigationVisible {
+            // Scrolling up AND navigation is currently hidden - show it
+            shouldShowNavigation = true
+        } else {
+            // Keep current state for small movements or when scrolling up but navigation is already visible
+            shouldShowNavigation = isNavigationVisible
+        }
+        
+        if shouldShowNavigation != isNavigationVisible {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isNavigationVisible = shouldShowNavigation
+            }
+            // Notify parent about navigation visibility change
+            onNavigationVisibilityChanged?(shouldShowNavigation)
+        }
+        
+        previousScrollOffset = offset
     }
 }
 

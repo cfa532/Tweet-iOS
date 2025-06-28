@@ -7,28 +7,63 @@ struct ContentView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var selectedTab = 0
     @State private var showComposeSheet = false
+    @State private var isNavigationVisible = true
     
     var body: some View {
-        TabView(selection: $selectedTab) {
-            NavigationStack {
-                HomeView()
-            }
-            .tabItem {
-                Label("Home", systemImage: "house")
-            }
-            .tag(0)
-
-            // Dummy view for Compose tab
-            Color.clear
-                .tabItem {
-                    Label("Compose", systemImage: "square.and.pencil")
+        VStack(spacing: 0) {
+            // Main content area
+            ZStack {
+                if selectedTab == 0 {
+                    NavigationStack {
+                        HomeView(onNavigationVisibilityChanged: { isVisible in
+                            isNavigationVisible = isVisible
+                        })
+                    }
                 }
-                .tag(1)
-        }
-        .onChange(of: selectedTab) { newValue in
-            if newValue == 1 {
-                showComposeSheet = true
-                selectedTab = 0 // Switch back to Home tab
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            
+            // Custom Tab Bar
+            if isNavigationVisible {
+                HStack(spacing: 0) {
+                    // Home Tab
+                    Button(action: {
+                        selectedTab = 0
+                    }) {
+                        VStack(spacing: 4) {
+                            Image(systemName: "house")
+                                .font(.system(size: 24))
+                            Text("Home")
+                                .font(.caption)
+                        }
+                        .foregroundColor(selectedTab == 0 ? .blue : .gray)
+                    }
+                    .frame(maxWidth: .infinity)
+                    
+                    // Compose Tab
+                    Button(action: {
+                        showComposeSheet = true
+                    }) {
+                        VStack(spacing: 4) {
+                            Image(systemName: "square.and.pencil")
+                                .font(.system(size: 24))
+                            Text("Compose")
+                                .font(.caption)
+                        }
+                        .foregroundColor(.gray)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(.vertical, 8)
+                .background(Color(.systemBackground))
+                .overlay(
+                    Rectangle()
+                        .frame(height: 0.5)
+                        .foregroundColor(Color(.separator)),
+                    alignment: .top
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
             }
         }
         .sheet(isPresented: $showComposeSheet) {

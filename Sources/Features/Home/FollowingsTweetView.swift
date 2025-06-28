@@ -5,13 +5,15 @@ struct FollowingsTweetView: View {
     @Binding var isLoading: Bool
     let onAvatarTap: (User) -> Void
     @Binding var selectedTweet: Tweet?
+    let onScroll: ((CGFloat) -> Void)?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @StateObject private var viewModel: FollowingsTweetViewModel
 
-    init(isLoading: Binding<Bool>, onAvatarTap: @escaping (User) -> Void, selectedTweet: Binding<Tweet?>) {
+    init(isLoading: Binding<Bool>, onAvatarTap: @escaping (User) -> Void, selectedTweet: Binding<Tweet?>, onScroll: ((CGFloat) -> Void)? = nil) {
         self._isLoading = isLoading
         self.onAvatarTap = onAvatarTap
         self._selectedTweet = selectedTweet
+        self.onScroll = onScroll
         self._viewModel = StateObject(wrappedValue: FollowingsTweetViewModel(hproseInstance: HproseInstance.shared))
     }
 
@@ -49,6 +51,7 @@ struct FollowingsTweetView: View {
                         action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
                     )
                 ],
+                onScroll: onScroll,
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,

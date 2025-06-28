@@ -476,7 +476,7 @@ struct HLSVideoPlayerWithControls: View {
                 self.isLoading = false
                 timer.invalidate()
             case .unknown:
-                print("DEBUG: HLS player item status is unknown")
+//                print("DEBUG: HLS player item status is unknown")
                 break
             @unknown default:
                 break

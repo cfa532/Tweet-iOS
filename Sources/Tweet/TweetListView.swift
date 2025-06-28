@@ -1,5 +1,31 @@
 import SwiftUI
 
+// MARK: - Scroll Offset Preference Key
+private struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+// MARK: - Scroll Offset Reader
+private struct ScrollOffsetReader: View {
+    let onOffsetChange: (CGFloat) -> Void
+    
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .preference(
+                    key: ScrollOffsetPreferenceKey.self,
+                    value: geometry.frame(in: .named("scroll")).minY
+                )
+                .onPreferenceChange(ScrollOffsetPreferenceKey.self) { offset in
+                    onOffsetChange(offset)
+                }
+        }
+    }
+}
+
 struct TweetListNotification {
     let name: Notification.Name
     let key: String
@@ -15,6 +41,7 @@ struct TweetListView<RowView: View>: View {
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     let notifications: [TweetListNotification]
+    let onScroll: ((CGFloat) -> Void)?
     private let pageSize: UInt = 10
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -39,12 +66,14 @@ struct TweetListView<RowView: View>: View {
         tweetFetcher: @escaping @Sendable (UInt, UInt, Bool) async throws -> [Tweet?],
         showTitle: Bool = true,
         notifications: [TweetListNotification]? = nil,
+        onScroll: ((CGFloat) -> Void)? = nil,
         rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
         self._tweets = tweets
         self.tweetFetcher = tweetFetcher
         self.showTitle = showTitle
+        self.onScroll = onScroll
         // Default: listen for newTweetCreated and insert at top
         self.notifications = notifications ?? [
             TweetListNotification(
@@ -68,23 +97,32 @@ struct TweetListView<RowView: View>: View {
         ScrollViewReader { proxy in
             ZStack {
                 ScrollView {
-                    TweetListContentView(
-                        tweets: Binding(
-                            get: { tweets.map { Optional($0) } },
-                            set: { newValue in
-                                tweets = newValue.compactMap { $0 }
-                            }
-                        ),
-                        rowView: { tweet in
-                            rowView(tweet)
-                        },
-                        hasMoreTweets: $hasMoreTweets,
-                        isLoadingMore: isLoadingMore,
-                        isLoading: isLoading,
-                        initialLoadComplete: initialLoadComplete,
-                        loadMoreTweets: { loadMoreTweets() }
-                    )
+                    VStack(spacing: 0) {
+                        // Scroll offset reader at the top
+                        ScrollOffsetReader { offset in
+                            onScroll?(offset)
+                        }
+                        .frame(height: 0)
+                        
+                        TweetListContentView(
+                            tweets: Binding(
+                                get: { tweets.map { Optional($0) } },
+                                set: { newValue in
+                                    tweets = newValue.compactMap { $0 }
+                                }
+                            ),
+                            rowView: { tweet in
+                                rowView(tweet)
+                            },
+                            hasMoreTweets: $hasMoreTweets,
+                            isLoadingMore: isLoadingMore,
+                            isLoading: isLoading,
+                            initialLoadComplete: initialLoadComplete,
+                            loadMoreTweets: { loadMoreTweets() }
+                        )
+                    }
                 }
+                .coordinateSpace(name: "scroll")
                 if showToast {
                     VStack {
                         Spacer()
