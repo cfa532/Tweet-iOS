@@ -20,6 +20,8 @@ struct MediaBrowserView: View {
     @State private var imageStates: [Int: ImageState] = [:]
     @State private var showControls = true
     @State private var controlsTimer: Timer?
+    @State private var dragOffset = CGSize.zero
+    @State private var isDragging = false
 
     private var baseUrl: URL {
         // Try to get baseUrl from the first attachment's parent tweet, fallback to HproseInstance.baseUrl
@@ -80,27 +82,81 @@ struct MediaBrowserView: View {
             .tabViewStyle(.page)
             .indexViewStyle(.page(backgroundDisplayMode: .always))
             
-            VStack {
-                HStack {
-                    Button(action: { dismiss() }) {
-                        Image(systemName: "xmark")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .padding()
+            // Close button overlay
+            if showControls {
+                VStack {
+                    HStack {
+                        Button(action: { dismiss() }) {
+                            Image(systemName: "xmark")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.black.opacity(0.5))
+                                .clipShape(Circle())
+                        }
+                        Spacer()
                     }
                     Spacer()
                 }
-                Spacer()
+                .transition(.opacity)
             }
+        }
+        .offset(y: dragOffset.height)
+        .scaleEffect(1.0 - abs(dragOffset.height) / 1000.0)
+        .opacity(1.0 - abs(dragOffset.height) / 500.0)
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    if value.translation.height > 0 { // Only allow downward drag
+                        dragOffset = value.translation
+                        isDragging = true
+                        showControls = true
+                        resetControlsTimer()
+                    }
+                }
+                .onEnded { value in
+                    if value.translation.height > 100 || value.velocity.height > 500 {
+                        // Dismiss if dragged down far enough or with enough velocity
+                        dismiss()
+                    } else {
+                        // Reset position with animation
+                        withAnimation(.spring()) {
+                            dragOffset = .zero
+                        }
+                    }
+                    isDragging = false
+                }
+        )
+        .onTapGesture {
+            // Show controls on tap and reset timer
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showControls = true
+            }
+            resetControlsTimer()
         }
         .onAppear {
             isVisible = true
             UIApplication.shared.isIdleTimerDisabled = true
+            startControlsTimer()
         }
         .onDisappear {
             isVisible = false
             UIApplication.shared.isIdleTimerDisabled = false
+            controlsTimer?.invalidate()
         }
+    }
+    
+    private func startControlsTimer() {
+        controlsTimer?.invalidate()
+        controlsTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+            withAnimation(.easeInOut(duration: 0.3)) {
+                showControls = false
+            }
+        }
+    }
+    
+    private func resetControlsTimer() {
+        startControlsTimer()
     }
     
     private func loadImageIfNeeded(for attachment: MimeiFileType, at index: Int) {
