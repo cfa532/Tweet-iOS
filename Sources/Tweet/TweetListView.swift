@@ -185,47 +185,30 @@ struct TweetListView<RowView: View>: View {
                 await MainActor.run {
                     tweets.mergeTweets(tweetsInCache.compactMap { $0 })
                     totalValidTweets = tweets.count
-                    print("[TweetListView] After cache: \(totalValidTweets) tweets for user: \(hproseInstance.appUser.mid)")
+                    isLoading = false
+                    initialLoadComplete = true
                 }
 
-                // Step 2: Fetch from server
-                let tweetsInBackend = try await tweetFetcher(page, pageSize, false)
-                let hasValidTweet = tweetsInBackend.contains { $0 != nil }
-                await MainActor.run {
-                    tweets.mergeTweets(tweetsInBackend.compactMap { $0 })
-                    totalValidTweets = tweets.count
-                    print("[TweetListView] After backend: \(totalValidTweets) tweets for user: \(hproseInstance.appUser.mid)")
-                }
-
-                currentPage = page
-                if hasValidTweet {
-                    if totalValidTweets > 4 {
-                        keepLoading = false
-                        print("[TweetListView] Stopping initial load - enough tweets for user: \(hproseInstance.appUser.mid), hasMoreTweets: \(hasMoreTweets)")
-                    } else if tweetsInBackend.count < pageSize {
-                        keepLoading = false
-                        hasMoreTweets = false
-                        print("[TweetListView] Stopping initial load - not enough tweets for user: \(hproseInstance.appUser.mid), hasMoreTweets: \(hasMoreTweets)")
-                    } else {
-                        page += 1
+                // Step 2: Fetch from server (do NOT block UI)
+                Task {
+                    do {
+                        let tweetsInBackend = try await tweetFetcher(page, pageSize, false)
+                        await MainActor.run {
+                            tweets.mergeTweets(tweetsInBackend.compactMap { $0 })
+                        }
+                    } catch {
+                        print("[TweetListView] Error fetching from server: \(error)")
                     }
-                } else if tweetsInBackend.count < pageSize {
-                    keepLoading = false
-                    hasMoreTweets = false
-                    print("[TweetListView] Stopping initial load - backend returned empty for user: \(hproseInstance.appUser.mid), hasMoreTweets: \(hasMoreTweets)")
-                } else {
-                    // All tweets are nil and not at the end, auto-increment page and try again
-                    print("[TweetListView] All tweets nil for page \(page), auto-incrementing page")
-                    page += 1
                 }
+
+                // Stop after first page for instant UI; let loadMoreTweets handle more
+                keepLoading = false
             } catch {
                 print("[TweetListView] Error during initial load for user \(hproseInstance.appUser.mid): \(error)")
                 errorMessage = error.localizedDescription
                 break
             }
         }
-        isLoading = false
-        initialLoadComplete = true
         print("[TweetListView] Initial load complete - total tweets: \(tweets.count), hasMoreTweets: \(hasMoreTweets) for user: \(hproseInstance.appUser.mid)")
     }
 
@@ -257,33 +240,40 @@ struct TweetListView<RowView: View>: View {
                     tweets.mergeTweets(tweetsInCache.compactMap { $0 })
                 }
 
-                // Step 2: Fetch from backend
-                let tweetsInBackend = try await tweetFetcher(nextPage, pageSize, false)
-                let hasValidTweet = tweetsInBackend.contains { $0 != nil }
-                
-                if hasValidTweet {
-                    await MainActor.run {
-                        print("[TweetListView] Got \(tweetsInBackend.count) tweets from backend for user: \(hproseInstance.appUser.mid)")
-                        tweets.mergeTweets(tweetsInBackend.compactMap { $0 })
-                        currentPage = nextPage
-                        print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
+                // Step 2: Fetch from backend (do NOT block UI)
+                Task {
+                    do {
+                        let tweetsInBackend = try await tweetFetcher(nextPage, pageSize, false)
+                        let hasValidTweet = tweetsInBackend.contains { $0 != nil }
+                        
+                        await MainActor.run {
+                            print("[TweetListView] Got \(tweetsInBackend.count) tweets from backend for user: \(hproseInstance.appUser.mid)")
+                            tweets.mergeTweets(tweetsInBackend.compactMap { $0 })
+                            
+                            if hasValidTweet {
+                                currentPage = nextPage
+                                print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
+                            } else if tweetsInBackend.count < pageSize {
+                                hasMoreTweets = false
+                                print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
+                            } else {
+                                // All tweets are nil, auto-increment and try again
+                                print("[TweetListView] All tweets nil for page \(nextPage), auto-incrementing page")
+                                isLoadingMore = false
+                                loadMoreTweets(page: nextPage + 1)
+                                return
+                            }
+                        }
+                    } catch {
+                        print("[TweetListView] Error loading more tweets: \(error)")
+                        await MainActor.run { hasMoreTweets = false }
                     }
-                } else if tweetsInBackend.count < pageSize {
-                    hasMoreTweets = false
-                    print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
-                } else {
-                    // All tweets are nil, auto-increment and try again
-                    print("[TweetListView] All tweets nil for page \(nextPage), auto-incrementing page")
                     await MainActor.run { isLoadingMore = false }
-                    loadMoreTweets(page: nextPage + 1)
-                    return
                 }
             } catch {
                 print("[TweetListView] Error loading more tweets: \(error)")
-                hasMoreTweets = false
+                await MainActor.run { hasMoreTweets = false; isLoadingMore = false }
             }
-            
-            await MainActor.run { isLoadingMore = false }
         }
     }
 
