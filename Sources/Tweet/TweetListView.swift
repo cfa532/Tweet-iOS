@@ -174,8 +174,8 @@ struct TweetListView<RowView: View>: View {
         initialLoadComplete = false
         currentPage = 0
         tweets = []
-        var page: UInt = 0
-        var totalValidTweets = 0
+        let page: UInt = 0
+
         var keepLoading = true
         while keepLoading {
             do {
@@ -184,7 +184,7 @@ struct TweetListView<RowView: View>: View {
                 let tweetsInCache = try await tweetFetcher(page, pageSize, true)
                 await MainActor.run {
                     tweets.mergeTweets(tweetsInCache.compactMap { $0 })
-                    totalValidTweets = tweets.count
+
                     isLoading = false
                     initialLoadComplete = true
                 }
