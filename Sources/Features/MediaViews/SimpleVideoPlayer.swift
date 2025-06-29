@@ -479,9 +479,7 @@ struct HLSVideoPlayerWithControls: View {
                         .font(.caption)
                         .multilineTextAlignment(.center)
                         .padding()
-                    
-                    Button("Retry") {
-                        // Force reload the video
+                    Button("Reload") {
                         VideoPlayerCache.shared.forceReloadVideo(for: videoURL)
                         setupPlayer()
                     }
@@ -498,58 +496,27 @@ struct HLSVideoPlayerWithControls: View {
             withAnimation {
                 showControls.toggle()
             }
-            
-            // Start auto-hide timer when controls are shown
-            if showControls {
-                startControlsTimer()
-            } else {
-                stopControlsTimer()
-            }
-            
             // If player is paused and we tap, also resume playback
-            if let player = player, player.rate == 0 && isVisible {
-                print("DEBUG: Resuming playback on tap")
+            if let player = player, player.rate == 0 {
                 player.play()
                 isPlaying = true
             }
         }
-        .onAppear {
+        .onLongPressGesture {
+            // Manual reload on long press
+            VideoPlayerCache.shared.forceReloadVideo(for: videoURL)
             setupPlayer()
         }
-        .onChange(of: isVisible) { visible in
-            if !visible {
-                player?.pause()
-            } else {
-                // When becoming visible, always try to resume if we have a valid player
-                if let player = player, VideoPlayerCache.shared.isPlayerValid(for: videoURL) {
-                    // Resume playback if it was previously playing or if this is a new player
-                    if isPlaying || player.rate == 0 {
-                        print("DEBUG: Resuming playback for visible player")
-                        player.play()
-                        isPlaying = true
-                    }
-                } else {
-                    print("DEBUG: Player became invalid, recreating...")
-                    setupPlayer()
-                }
-            }
-        }
-        .onChange(of: isMuted) { newMuteState in
-            print("DEBUG: HLS player isMuted parameter changed to \(newMuteState)")
-            player?.isMuted = newMuteState
-            playerMuted = newMuteState
-        }
-        .onChange(of: playerMuted) { newMuteState in
-            // This is triggered when the user interacts with native controls
-            if newMuteState != isMuted {
-                print("DEBUG: HLS player mute state changed by user interaction to \(newMuteState)")
-                onMuteChanged?(newMuteState)
+        .onAppear {
+            if player == nil {
+                setupPlayer()
+            } else if isPlaying {
+                player?.play()
             }
         }
         .onDisappear {
-            // Don't destroy the player, just pause it
+            // Only pause, do not destroy or reload
             player?.pause()
-            stopControlsTimer()
         }
     }
     
@@ -1046,3 +1013,4 @@ struct HLSDirectoryVideoPlayer: View {
         return false
     }
 } 
+
