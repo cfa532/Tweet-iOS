@@ -85,7 +85,6 @@ struct SimpleAudioPlayer: View {
         }
         .onDisappear {
             player?.pause()
-            player = nil
         }
     }
     

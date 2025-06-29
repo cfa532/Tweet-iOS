@@ -2,7 +2,7 @@
 //  SimpleVideoPlayer.swift
 //  Tweet
 //
-//  A simpler video player implementation with HLS support
+//  A simpler video player implementation with HLS support only
 //
 
 import SwiftUI
@@ -24,144 +24,6 @@ class MuteState: ObservableObject {
         let savedMuteState = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? true
         if self.isMuted != savedMuteState {
             self.isMuted = savedMuteState
-        }
-    }
-}
-
-// Simple Video Player Cache - only cleans up when memory is high
-class VideoPlayerCache: ObservableObject {
-    static let shared = VideoPlayerCache()
-    
-    private var players: [String: AVPlayer] = [:]
-    private var playerTimestamps: [String: Date] = [:]
-    
-    private init() {
-        // Monitor memory warnings
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleMemoryWarning),
-            name: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil
-        )
-        
-        // Start periodic memory check
-        startPeriodicMemoryCheck()
-    }
-    
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-    
-    func getPlayer(for url: URL) -> AVPlayer? {
-        let key = url.absoluteString
-        if let player = players[key] {
-            // Validate that the player is still functional
-            if let playerItem = player.currentItem, playerItem.status == .readyToPlay {
-                // Update last access timestamp
-                playerTimestamps[key] = Date()
-                return player
-            } else {
-                print("DEBUG: Cached player is invalid, removing from cache")
-                removePlayer(for: url)
-                return nil
-            }
-        }
-        return nil
-    }
-    
-    func isPlayerValid(for url: URL) -> Bool {
-        let key = url.absoluteString
-        if let player = players[key] {
-            return player.currentItem?.status == .readyToPlay
-        }
-        return false
-    }
-    
-    func getCacheStats() -> (totalPlayers: Int, validPlayers: Int) {
-        let totalPlayers = players.count
-        let validPlayers = players.values.filter { player in
-            player.currentItem?.status == .readyToPlay
-        }.count
-        return (totalPlayers, validPlayers)
-    }
-    
-    func setPlayer(_ player: AVPlayer, for url: URL) {
-        let key = url.absoluteString
-        players[key] = player
-        playerTimestamps[key] = Date()
-        print("DEBUG: Cached player for URL: \(key), total cached players: \(players.count)")
-    }
-    
-    func removePlayer(for url: URL) {
-        let key = url.absoluteString
-        if let player = players[key] {
-            player.pause()
-            print("DEBUG: Removed player from cache for URL: \(key)")
-        }
-        players.removeValue(forKey: key)
-        playerTimestamps.removeValue(forKey: key)
-    }
-    
-    func clearOldPlayers(olderThan minutes: Int = 30) {
-        let cutoffTime = Date().addingTimeInterval(-TimeInterval(minutes * 60))
-        let keysToRemove = playerTimestamps.compactMap { key, timestamp in
-            timestamp < cutoffTime ? key : nil
-        }
-        
-        for key in keysToRemove {
-            removePlayer(for: URL(string: key) ?? URL(string: "invalid")!)
-        }
-        
-        print("VideoPlayerCache: Cleared \(keysToRemove.count) old video players")
-    }
-    
-    func getMemoryUsage() -> Double {
-        // Get current memory usage as percentage
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
-        
-        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                task_info(mach_task_self_,
-                         task_flavor_t(MACH_TASK_BASIC_INFO),
-                         $0,
-                         &count)
-            }
-        }
-        
-        if kerr == KERN_SUCCESS {
-            let memoryUsageMB = Double(info.resident_size) / 1024.0 / 1024.0
-            // Estimate memory threshold (this is approximate)
-            let estimatedThreshold = 1024.0 // 1GB as rough estimate
-            return (memoryUsageMB / estimatedThreshold) * 100.0
-        }
-        
-        return 0.0
-    }
-    
-    @objc private func handleMemoryWarning() {
-        print("VideoPlayerCache: Memory warning received, clearing old players")
-        clearOldPlayers(olderThan: 20) // Clear players older than 20 minutes (increased from 10)
-    }
-    
-    func forceReloadVideo(for url: URL) {
-        print("VideoPlayerCache: Force reloading video for URL: \(url.absoluteString)")
-        removePlayer(for: url)
-    }
-    
-    private func startPeriodicMemoryCheck() {
-        Timer.scheduledTimer(withTimeInterval: 120.0, repeats: true) { _ in // Increased from 60 seconds to 120 seconds
-            let memoryUsage = self.getMemoryUsage()
-            let stats = self.getCacheStats()
-            print("VideoPlayerCache: Current memory usage: \(String(format: "%.1f", memoryUsage))%, Total players: \(stats.totalPlayers), Valid players: \(stats.validPlayers)")
-            
-            if memoryUsage > 85.0 { // Increased from 80% to 85%
-                print("VideoPlayerCache: High memory usage detected (\(String(format: "%.1f", memoryUsage))%), clearing old players")
-                self.clearOldPlayers(olderThan: 25) // Increased from 15 to 25 minutes
-            } else if memoryUsage > 70.0 { // Increased from 60% to 70%
-                print("VideoPlayerCache: Moderate memory usage (\(String(format: "%.1f", memoryUsage))%), clearing very old players")
-                self.clearOldPlayers(olderThan: 60) // Increased from 45 to 60 minutes
-            }
         }
     }
 }
@@ -190,196 +52,29 @@ struct SimpleVideoPlayer: View {
                 let overflow = videoHeight - cellHeight
                 let pad = needsVerticalPadding && overflow > 0 ? overflow / 2 : 0
                 ZStack {
-                    if isHLSStream(url: url, contentType: contentType) {
-                        HLSDirectoryVideoPlayer(
-                            baseURL: url,
-                            isVisible: isVisible,
-                            isMuted: forceUnmuted ? false : muteState.isMuted,
-                            autoPlay: autoPlay,
-                            onMuteChanged: onMuteChanged,
-                            onVideoFinished: onVideoFinished
-                        )
-                        .offset(y: -pad)
-                        .aspectRatio(videoAR, contentMode: .fit)
-                    } else {
-                        VideoPlayerView(
-                            url: url,
-                            autoPlay: autoPlay && isVisible,
-                            isMuted: forceUnmuted ? false : muteState.isMuted,
-                            onMuteChanged: onMuteChanged,
-                            onTimeUpdate: onTimeUpdate,
-                            onVideoFinished: onVideoFinished,
-                            isVisible: isVisible,
-                            showNativeControls: showNativeControls
-                        )
-                        .padding(.top, -pad)
-                        .aspectRatio(videoAR, contentMode: .fit)
-                    }
+                    HLSDirectoryVideoPlayer(
+                        baseURL: url,
+                        isVisible: isVisible,
+                        isMuted: forceUnmuted ? false : muteState.isMuted,
+                        autoPlay: autoPlay,
+                        onMuteChanged: onMuteChanged,
+                        onVideoFinished: onVideoFinished
+                    )
+                    .offset(y: -pad)
+                    .aspectRatio(videoAR, contentMode: .fit)
                 }
             } else {
                 ZStack {
-                    if isHLSStream(url: url, contentType: contentType) {
-                        HLSDirectoryVideoPlayer(
-                            baseURL: url,
-                            isVisible: isVisible,
-                            isMuted: forceUnmuted ? false : muteState.isMuted,
-                            autoPlay: autoPlay,
-                            onMuteChanged: onMuteChanged,
-                            onVideoFinished: onVideoFinished
-                        )
-                    } else {
-                        VideoPlayerView(
-                            url: url,
-                            autoPlay: autoPlay && isVisible,
-                            isMuted: forceUnmuted ? false : muteState.isMuted,
-                            onMuteChanged: onMuteChanged,
-                            onTimeUpdate: onTimeUpdate,
-                            onVideoFinished: onVideoFinished,
-                            isVisible: isVisible,
-                            showNativeControls: showNativeControls
-                        )
-                    }
+                    HLSDirectoryVideoPlayer(
+                        baseURL: url,
+                        isVisible: isVisible,
+                        isMuted: forceUnmuted ? false : muteState.isMuted,
+                        autoPlay: autoPlay,
+                        onMuteChanged: onMuteChanged,
+                        onVideoFinished: onVideoFinished
+                    )
                 }
             }
-        }
-    }
-    
-    /// Check if the URL points to an HLS stream
-    private func isHLSStream(url: URL, contentType: String?) -> Bool {
-        print("DEBUG: Checking if URL is HLS stream: \(url.absoluteString), contentType: \(contentType ?? "nil")")
-        
-        // Primary detection: Check content type
-        if let contentType = contentType?.lowercased() {
-            if contentType == "hls_video" {
-                print("DEBUG: Detected HLS by content type: \(contentType)")
-                return true
-            }
-        }
-        
-        // IPFS URL detection: If URL contains /ipfs/ and content type is video, treat as HLS
-        if url.absoluteString.contains("/ipfs/") {
-            if let contentType = contentType?.lowercased(), contentType == "video" {
-                print("DEBUG: Detected HLS by IPFS URL with video content type")
-                return true
-            }
-        }
-        
-        // Fallback detection: Check for .m3u8 extension (for direct playlist URLs)
-        if url.pathExtension.lowercased() == "m3u8" {
-            print("DEBUG: Detected HLS by .m3u8 extension")
-            return true
-        }
-        
-        // Fallback detection: Check for HLS content type in URL
-        if url.absoluteString.contains("playlist.m3u8") || url.absoluteString.contains("master.m3u8") {
-            print("DEBUG: Detected HLS by playlist.m3u8 or master.m3u8 in URL")
-            return true
-        }
-        
-        // Fallback detection: Check for HLS-related query parameters
-        if let query = url.query, query.contains("hls") || query.contains("stream") {
-            print("DEBUG: Detected HLS by query parameters")
-            return true
-        }
-        
-        print("DEBUG: URL is not HLS stream")
-        return false
-    }
-    
-    /// Get the correct HLS playlist URL
-    private func getHLSPlaylistURL(from url: URL) -> URL {
-        print("DEBUG: Getting HLS playlist URL from: \(url.absoluteString)")
-        
-        // If URL already ends with .m3u8, return as is
-        if url.pathExtension.lowercased() == "m3u8" {
-            print("DEBUG: URL already ends with .m3u8, returning as is")
-            return url
-        }
-        
-        // If URL contains playlist.m3u8 or master.m3u8, return as is
-        if url.absoluteString.contains("playlist.m3u8") || url.absoluteString.contains("master.m3u8") {
-            print("DEBUG: URL contains playlist.m3u8 or master.m3u8, returning as is")
-            return url
-        }
-        
-        // For CID-based URLs (no file extension), try to detect multi-resolution HLS first
-        if url.pathExtension.isEmpty {
-            // Check if this is a multi-resolution HLS stream by trying master.m3u8 first
-            let masterPlaylistURL = url.appendingPathComponent("master.m3u8")
-            print("DEBUG: CID-based URL, trying master.m3u8 first: \(masterPlaylistURL.absoluteString)")
-            
-            // Note: We'll let AVPlayer handle the actual validation of the master playlist
-            // If master.m3u8 doesn't exist, AVPlayer will fail gracefully and we can fall back
-            return masterPlaylistURL
-        }
-        
-        // For other URLs, try to append master.m3u8 first (for multi-resolution)
-        let masterPlaylistURL = url.appendingPathComponent("master.m3u8")
-        print("DEBUG: Appending master.m3u8 to URL: \(masterPlaylistURL.absoluteString)")
-        return masterPlaylistURL
-    }
-    
-    /// Test if an HLS playlist URL is accessible and valid
-    private func testHLSPlaylist(url: URL) async -> Bool {
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            
-            if let httpResponse = response as? HTTPURLResponse {
-                print("DEBUG: HLS playlist HTTP response: \(httpResponse.statusCode)")
-                print("DEBUG: HLS playlist content type: \(httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "unknown")")
-                
-                // Check if we got a successful response
-                guard httpResponse.statusCode == 200 else {
-                    print("DEBUG: HLS playlist returned non-200 status: \(httpResponse.statusCode)")
-                    return false
-                }
-            }
-            
-            if let content = String(data: data, encoding: .utf8) {
-                print("DEBUG: HLS playlist content (first 1000 chars): \(String(content.prefix(1000)))")
-                
-                // Validate HLS playlist format
-                let lines = content.components(separatedBy: .newlines)
-                if lines.isEmpty {
-                    print("DEBUG: HLS playlist is empty")
-                    return false
-                }
-                
-                // Check for required HLS header
-                if !lines[0].trimmingCharacters(in: .whitespaces).hasPrefix("#EXTM3U") {
-                    print("DEBUG: HLS playlist missing #EXTM3U header")
-                    return false
-                }
-                
-                // Check if this is a master playlist (contains #EXT-X-STREAM-INF)
-                let isMasterPlaylist = lines.contains { $0.contains("#EXT-X-STREAM-INF") }
-                print("DEBUG: HLS playlist type: \(isMasterPlaylist ? "Master" : "Media")")
-                
-                // For master playlists, check for variant streams
-                if isMasterPlaylist {
-                    let variantLines = lines.filter { $0.contains("#EXT-X-STREAM-INF") }
-                    print("DEBUG: Master playlist contains \(variantLines.count) variant streams")
-                    
-                    if variantLines.isEmpty {
-                        print("DEBUG: Master playlist has no variant streams")
-                        return false
-                    }
-                } else {
-                    // For media playlists, check for segments
-                    let segmentLines = lines.filter { !$0.hasPrefix("#") && !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                    print("DEBUG: Media playlist contains \(segmentLines.count) segments")
-                    
-                    if segmentLines.isEmpty {
-                        print("DEBUG: Media playlist has no segments")
-                        return false
-                    }
-                }
-            }
-            
-            return true
-        } catch {
-            print("DEBUG: Failed to fetch HLS playlist: \(error)")
-            return false
         }
     }
 }
@@ -492,7 +187,6 @@ struct HLSVideoPlayerWithControls: View {
                         .multilineTextAlignment(.center)
                         .padding()
                     Button("Reload") {
-                        VideoPlayerCache.shared.forceReloadVideo(for: videoURL)
                         setupPlayer()
                     }
                     .padding()
@@ -516,7 +210,6 @@ struct HLSVideoPlayerWithControls: View {
         }
         .onLongPressGesture {
             // Manual reload on long press
-            VideoPlayerCache.shared.forceReloadVideo(for: videoURL)
             setupPlayer()
         }
         .onAppear {
@@ -533,42 +226,6 @@ struct HLSVideoPlayerWithControls: View {
     
     private func setupPlayer() {
         print("DEBUG: Setting up HLS player for URL: \(videoURL.absoluteString)")
-        
-        // Check if we already have a cached player
-        if let cachedPlayer = VideoPlayerCache.shared.getPlayer(for: videoURL) {
-            print("DEBUG: Using cached HLS player for URL: \(videoURL.absoluteString)")
-            
-            // Check if the cached player is still valid
-            if let playerItem = cachedPlayer.currentItem, playerItem.status == .readyToPlay {
-                self.player = cachedPlayer
-                self.isLoading = false
-                self.isPlaying = cachedPlayer.rate > 0
-                self.duration = playerItem.duration.seconds
-                
-                // Update mute state
-                cachedPlayer.isMuted = isMuted
-                
-                // Resume playback if visible and should be playing
-                if isVisible {
-                    if isPlaying {
-                        print("DEBUG: Resuming cached player that was playing")
-                        cachedPlayer.play()
-                    } else if cachedPlayer.rate == 0 {
-                        // If player is paused but should be playing, resume it
-                        print("DEBUG: Resuming paused cached player")
-                        cachedPlayer.play()
-                        isPlaying = true
-                    }
-                }
-                
-                // Monitor the cached player to ensure it stays valid
-                self.monitorPlayerStatus(cachedPlayer)
-                return
-            } else {
-                print("DEBUG: Cached player is invalid, removing from cache and creating new one")
-                VideoPlayerCache.shared.removePlayer(for: videoURL)
-            }
-        }
         
         isLoading = true
         errorMessage = nil
@@ -610,9 +267,6 @@ struct HLSVideoPlayerWithControls: View {
         
         // Set up the player
         self.player = avPlayer
-        
-        // Cache the player immediately
-        VideoPlayerCache.shared.setPlayer(avPlayer, for: videoURL)
         
         // Monitor player item status
         self.monitorPlayerStatus(avPlayer)
@@ -792,17 +446,6 @@ struct HLSVideoPlayerWithControls: View {
         isPlaying.toggle()
     }
     
-    private func forceResumePlayback() {
-        guard let player = player, VideoPlayerCache.shared.isPlayerValid(for: videoURL) else {
-            print("DEBUG: Cannot resume playback - player is invalid")
-            return
-        }
-        
-        print("DEBUG: Force resuming playback")
-        player.play()
-        isPlaying = true
-    }
-    
     private func seekTo(_ time: Double) {
         guard let player = player else { return }
         let cmTime = CMTime(seconds: time, preferredTimescale: 1)
@@ -828,154 +471,6 @@ struct HLSVideoPlayerWithControls: View {
     private func stopControlsTimer() {
         controlsTimer?.invalidate()
         controlsTimer = nil
-    }
-}
-
-struct VideoPlayerView: UIViewControllerRepresentable {
-    let url: URL
-    let autoPlay: Bool
-    let isMuted: Bool
-    let onMuteChanged: ((Bool) -> Void)?
-    let onTimeUpdate: ((Double) -> Void)?
-    let onVideoFinished: (() -> Void)?
-    let isVisible: Bool
-    let showNativeControls: Bool
-    
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.showsPlaybackControls = showNativeControls
-        controller.videoGravity = .resizeAspect
-        controller.entersFullScreenWhenPlaybackBegins = false
-        controller.exitsFullScreenWhenPlaybackEnds = false
-        controller.delegate = context.coordinator
-        
-        // Check if we already have a cached player
-        if let cachedPlayer = VideoPlayerCache.shared.getPlayer(for: url) {
-            print("DEBUG: Using cached video player for URL: \(url.absoluteString)")
-            controller.player = cachedPlayer
-            cachedPlayer.isMuted = isMuted
-            
-            if autoPlay && isVisible {
-                cachedPlayer.play()
-            }
-            
-            return controller
-        }
-        
-        // Create asset with proper configuration
-        let asset = AVURLAsset(url: url, options: [
-            "AVURLAssetOutOfBandMIMETypeKey": "video/mp4",
-            "AVURLAssetHTTPHeaderFieldsKey": ["Accept": "*/*", "Range": "bytes=0-"]
-        ])
-        
-        // Create player item with asset
-        let playerItem = AVPlayerItem(asset: asset)
-        
-        // Configure player item
-        playerItem.preferredForwardBufferDuration = 2.0 // Limit buffer size
-        playerItem.preferredPeakBitRate = 2_000_000 // 2 Mbps limit
-        
-        // Create and configure player
-        let player = AVPlayer(playerItem: playerItem)
-        player.automaticallyWaitsToMinimizeStalling = true
-        player.isMuted = isMuted
-        
-        // Set up time observer
-        let timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { time in
-            onTimeUpdate?(time.seconds)
-            
-            // Check if video has finished
-            if let duration = player.currentItem?.duration, duration.isValid && !duration.isIndefinite {
-                let currentTime = time.seconds
-                let totalDuration = duration.seconds
-                if totalDuration > 0 && currentTime >= totalDuration - 0.5 && !context.coordinator.hasNotifiedFinished {
-                    context.coordinator.hasNotifiedFinished = true
-                    onVideoFinished?()
-                }
-            }
-        }
-        
-        // Cache the player
-        VideoPlayerCache.shared.setPlayer(player, for: url)
-        
-        // Store observer and player in coordinator
-        context.coordinator.timeObserver = timeObserver
-        context.coordinator.player = player
-        context.coordinator.onMuteChanged = onMuteChanged
-        
-        // Set up player
-        controller.player = player
-        
-        if autoPlay {
-            player.play()
-        }
-        
-        return controller
-    }
-    
-    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        // Update mute state
-        if controller.player?.isMuted != isMuted {
-            controller.player?.isMuted = isMuted
-        }
-        
-        if !isVisible {
-            controller.player?.pause()
-        } else if autoPlay {
-            controller.player?.play()
-        }
-    }
-    
-    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
-        // Stop mute monitoring
-        coordinator.stopMuteMonitoring()
-        
-        // Just pause the player, don't destroy it
-        controller.player?.pause()
-        
-        // Don't set player to nil - keep it in cache
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onMuteChanged: onMuteChanged, onTimeUpdate: onTimeUpdate, onVideoFinished: onVideoFinished)
-    }
-    
-    class Coordinator: NSObject, AVPlayerViewControllerDelegate {
-        var onMuteChanged: ((Bool) -> Void)?
-        let onTimeUpdate: ((Double) -> Void)?
-        let onVideoFinished: (() -> Void)?
-        var timeObserver: Any?
-        var player: AVPlayer?
-        var hasNotifiedFinished = false
-        
-        init(onMuteChanged: ((Bool) -> Void)?, onTimeUpdate: ((Double) -> Void)?, onVideoFinished: (() -> Void)?) {
-            self.onMuteChanged = onMuteChanged
-            self.onTimeUpdate = onTimeUpdate
-            self.onVideoFinished = onVideoFinished
-        }
-        
-        // Monitor mute state changes from native controls
-        func playerViewController(_ playerViewController: AVPlayerViewController, willBeginFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
-            // Full screen presentation
-        }
-        
-        func playerViewController(_ playerViewController: AVPlayerViewController, willEndFullScreenPresentationWithAnimationCoordinator coordinator: UIViewControllerTransitionCoordinator) {
-            // Full screen dismissal
-        }
-        
-        // Start monitoring mute state changes
-        func startMuteMonitoring() {
-            // The mute state is now handled by the binding system in HLSVideoPlayerWithControls
-        }
-        
-        // Stop monitoring mute state changes
-        func stopMuteMonitoring() {
-            // No timer to invalidate anymore
-        }
-        
-        deinit {
-            stopMuteMonitoring()
-        }
     }
 }
 
