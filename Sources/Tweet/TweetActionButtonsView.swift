@@ -163,6 +163,12 @@ struct TweetActionButtonsView: View {
                 CommentComposeView(tweet: tweet, commentsVM: CommentsViewModel(hproseInstance: hproseInstance, parentTweet: tweet))
             }
         }
+        .onChange(of: showCommentCompose) { isPresented in
+            if isPresented {
+                // Trigger video stop when comment compose sheet is presented
+                VideoManager.triggerSheetPresentation()
+            }
+        }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [tweetShareText(tweet)])
         }

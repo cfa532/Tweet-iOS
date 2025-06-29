@@ -711,10 +711,26 @@ final class HproseInstance: ObservableObject {
         guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
-        guard let response = service.runMApp(entry, params, nil) as? String else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Invalid response"])
+        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Invalid response format"])
         }
-        return response
+        
+        // Handle the new JSON response format
+        guard let success = response["success"] as? Bool else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Invalid response format: missing success field"])
+        }
+        
+        if success {
+            // Success case: return the tweet ID
+            guard let deletedTweetId = response["tweetid"] as? String else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Success response missing tweet ID"])
+            }
+            return deletedTweetId
+        } else {
+            // Failure case: extract error message
+            let errorMessage = response["message"] as? String ?? "Unknown tweet deletion error"
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+        }
     }
         
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
@@ -771,7 +787,6 @@ final class HproseInstance: ObservableObject {
     }
 
     // both author and tweet author can delete this comment
-    // TODO
     func deleteComment(parentTweet: Tweet, commentId: String) async throws -> [String: Any]? {
         let entry = "delete_comment"
         let params = [
@@ -786,9 +801,33 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Invalid response"])
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Invalid response format"])
         }
-        return response
+        
+        // Handle the new JSON response format
+        guard let success = response["success"] as? Bool else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Invalid response format: missing success field"])
+        }
+        
+        if success {
+            // Success case: return the response with commentId and count
+            guard let deletedCommentId = response["commentId"] as? String else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Success response missing comment ID"])
+            }
+            
+            guard let count = response["count"] as? Int else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Success response missing comment count"])
+            }
+            
+            return [
+                "commentId": deletedCommentId,
+                "count": count
+            ]
+        } else {
+            // Failure case: extract error message
+            let errorMessage = response["message"] as? String ?? "Unknown comment deletion error"
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+        }
     }
     
     // MARK: - File Upload
@@ -1588,7 +1627,7 @@ final class HproseInstance: ObservableObject {
                 let itemPairs = itemData.chunked(into: 2)
                 for (pairIndex, pair) in itemPairs.enumerated() {
                     do {
-                        let pairAttachments = try await self.uploadItemPair(pair)
+                        let pairAttachments = try await self.uploadItemPair(pair)   // Upload attachments to IPFS
                         uploadedAttachments.append(contentsOf: pairAttachments)
                     } catch {
                         print("Error uploading pair \(pairIndex + 1): \(error)")
@@ -1619,12 +1658,18 @@ final class HproseInstance: ObservableObject {
                 
                 if let newComment = try await self.addComment(comment, to: tweet) {
                     await MainActor.run {
+                        print("[HproseInstance] Posting newCommentAdded notification")
+                        print("[HproseInstance] New comment mid: \(newComment.mid)")
+                        print("[HproseInstance] New ReTweetId: \(newComment.retweetId ?? "nil")")
+                        print("[HproseInstance] Parent tweet mid: \(tweet.mid)")
+                        
                         // Notify observers about both the updated tweet and new comment
                         NotificationCenter.default.post(
                             name: .newCommentAdded,
                             object: nil,
                             userInfo: ["comment": newComment]
                         )
+                        print("[HproseInstance] newCommentAdded notification posted successfully")
                     }
                 } else {
                     let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment returned nil"])

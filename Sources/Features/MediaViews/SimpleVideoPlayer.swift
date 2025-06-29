@@ -76,6 +76,18 @@ class VideoManager: ObservableObject {
         print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to scroll")
     }
     
+    // Stop all videos when a sheet is presented
+    func stopAllVideosForSheet() {
+        if let currentId = currentPlayingInstanceId {
+            print("DEBUG: [VIDEO MANAGER] Stopping all videos due to sheet presentation - current: \(currentId)")
+            NotificationCenter.default.post(name: .pauseVideo, object: currentId)
+            currentPlayingInstanceId = nil
+        }
+        // Clear queue when sheet is presented
+        videoQueue.removeAll()
+        print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to sheet presentation")
+    }
+    
     // Clean up queue and check for next visible video
     func cleanupQueueAndStartNext() {
         removeInvisibleFromQueue()
@@ -179,6 +191,12 @@ class VideoManager: ObservableObject {
         print("DEBUG: [VIDEO MANAGER] Scroll detected - stopping all videos")
         NotificationCenter.default.post(name: .scrollStarted, object: nil)
     }
+    
+    // Static method to trigger sheet presentation detection
+    static func triggerSheetPresentation() {
+        print("DEBUG: [VIDEO MANAGER] Sheet presentation detected - stopping all videos")
+        NotificationCenter.default.post(name: .sheetPresented, object: nil)
+    }
 }
 
 // Notification names for video management
@@ -186,6 +204,7 @@ extension Notification.Name {
     static let pauseVideo = Notification.Name("pauseVideo")
     static let scrollStarted = Notification.Name("scrollStarted")
     static let startVideo = Notification.Name("startVideo")
+    static let sheetPresented = Notification.Name("sheetPresented")
 }
 
 struct SimpleVideoPlayer: View {
@@ -674,6 +693,10 @@ struct ScrollDetector: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .scrollStarted)) { _ in
                 // Stop all videos when scroll is detected
                 videoManager.stopAllVideos()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .sheetPresented)) { _ in
+                // Stop all videos when sheet is presented
+                videoManager.stopAllVideosForSheet()
             }
     }
 }

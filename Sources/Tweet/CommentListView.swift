@@ -90,13 +90,30 @@ struct CommentListView<RowView: View>: View {
             }
             // Listen to all notifications
             .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notif in
-                if let comment = notif.userInfo?["comment"] as? Tweet,
-                   let notification = notifications.first(where: { $0.name == .newCommentAdded }),
-                   notification.shouldAccept(comment) {
-                    notification.action(comment)
+                print("[CommentListView] Received newCommentAdded notification")
+                print("[CommentListView] Notification userInfo: \(notif.userInfo ?? [:])")
+                
+                if let comment = notif.userInfo?["comment"] as? Tweet {
+                    print("[CommentListView] Extracted comment: \(comment.mid)")
+                    print("[CommentListView] Comment originalTweetId: \(comment.originalTweetId ?? "nil")")
+                    
+                    if let notification = notifications.first(where: { $0.name == .newCommentAdded }) {
+                        print("[CommentListView] Found matching notification")
+                        if notification.shouldAccept(comment) {
+                            print("[CommentListView] Comment accepted, executing action")
+                            notification.action(comment)
+                        } else {
+                            print("[CommentListView] Comment rejected by shouldAccept")
+                        }
+                    } else {
+                        print("[CommentListView] No matching notification found")
+                    }
+                } else {
+                    print("[CommentListView] Failed to extract comment from notification")
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .commentDeleted)) { notif in
+                print("[CommentListView] Received commentDeleted notification")
                 if let comment = notif.userInfo?["comment"] as? Tweet,
                    let notification = notifications.first(where: { $0.name == .commentDeleted }),
                    notification.shouldAccept(comment) {

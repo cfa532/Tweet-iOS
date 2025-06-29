@@ -259,7 +259,7 @@ struct CommentComposeView: View {
                         typeIdentifier: typeIdentifier,
                         data: data,
                         fileName: filename,
-                        noResample: false // Set to false for now
+                        noResample: false // Resample the vidoe.
                     ))
                 }
             } catch {

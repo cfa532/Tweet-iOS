@@ -53,6 +53,7 @@ struct TweetDetailView: View {
                 setupInitialData()
             }
         }
+        .detectScroll()
         .background(Color(.systemBackground))
         .navigationTitle("Tweet")
         .navigationBarTitleDisplayMode(.inline)
@@ -185,9 +186,17 @@ struct TweetDetailView: View {
                     key: "comment",
                     shouldAccept: { comment in
                         // Only accept comments that belong to this tweet
-                        comment.originalTweetId == displayTweet.mid
+                        let shouldAccept = comment.originalTweetId == displayTweet.mid
+                        print("[TweetDetailView] Comment \(comment.mid) shouldAccept check: \(shouldAccept)")
+                        print("[TweetDetailView] Comment originalTweetId: \(comment.originalTweetId ?? "nil")")
+                        print("[TweetDetailView] Display tweet mid: \(displayTweet.mid)")
+                        return shouldAccept
                     },
-                    action: { comment in comments.insert(comment, at: 0) }
+                    action: { comment in 
+                        print("[TweetDetailView] Adding comment \(comment.mid) to comments list")
+                        comments.insert(comment, at: 0)
+                        print("[TweetDetailView] Comments count after insert: \(comments.count)")
+                    }
                 ),
                 CommentListNotification(
                     name: .commentDeleted,
