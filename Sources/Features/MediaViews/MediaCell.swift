@@ -14,7 +14,7 @@ struct MediaCell: View {
     let attachmentIndex: Int
     let aspectRatio: Float
     
-    @Binding var play: Bool
+    @State private var play: Bool
     @State private var image: UIImage?
     @State private var isLoading = false
     @State private var showFullScreen = false
@@ -22,11 +22,11 @@ struct MediaCell: View {
     @State private var shouldLoadVideo: Bool
     @State private var onVideoFinished: (() -> Void)?
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Binding<Bool>, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
-        self._play = play
+        self._play = State(initialValue: play)
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
     }

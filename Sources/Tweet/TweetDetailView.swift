@@ -8,16 +8,16 @@ struct TweetDetailView: View {
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
     @State private var showLoginSheet = false
-    @State private var selectedUser: User?
-    @State private var selectedComment: Tweet?
+    @State private var pinnedTweets: [[String: Any]] = []
+    @State private var originalTweet: Tweet?
+    @State private var selectedUser: User? = nil
+    @State private var selectedComment: Tweet? = nil
+    @State private var refreshTimer: Timer?
     @State private var comments: [Tweet] = []
-    @State private var isVisible = true
     @State private var showToast = false
     @State private var toastMessage = ""
-    @State private var toastType: ToastView.ToastType = .success
-    @State private var refreshTimer: Timer?
-    @State private var originalTweet: Tweet?
-    @State private var pinnedTweets: [[String: Any]] = []
+    @State private var toastType: ToastView.ToastType = .info
+    @State private var isVisible = true
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
@@ -27,7 +27,7 @@ struct TweetDetailView: View {
     }
 
     private var displayTweet: Tweet {
-        if (tweet.content == nil || tweet.content?.isEmpty == true) && 
+        if (tweet.content == nil || tweet.content?.isEmpty == true) &&
            (tweet.attachments == nil || tweet.attachments?.isEmpty == true) {
             return originalTweet ?? tweet
         }
@@ -98,14 +98,22 @@ struct TweetDetailView: View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
-                MediaGridView(
-                    parentTweet: displayTweet,
-                    attachments: attachments,
-                    onItemTap: { index in
-                        selectedMediaIndex = index
-                        showBrowser = true
+                let aspect = attachments.first?.aspectRatio ?? 1.0
+                TabView(selection: $selectedMediaIndex) {
+                    ForEach(attachments.indices, id: \.self) { index in
+                        MediaCell(
+                            parentTweet: displayTweet,
+                            attachmentIndex: index,
+                            aspectRatio: aspect
+                        )
+                        .tag(index)
+                        .onTapGesture { showBrowser = true }
                     }
-                )
+                }
+                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
+                .frame(maxWidth: .infinity)
+                .frame(height: UIScreen.main.bounds.width / CGFloat(aspect))
+                .background(Color.black)
             }
         }
     }
@@ -172,7 +180,7 @@ struct TweetDetailView: View {
                 CommentListNotification(
                     name: .newCommentAdded,
                     key: "comment",
-                    shouldAccept: { comment in 
+                    shouldAccept: { comment in
                         // Only accept comments that belong to this tweet
                         comment.originalTweetId == displayTweet.mid
                     },
@@ -181,7 +189,7 @@ struct TweetDetailView: View {
                 CommentListNotification(
                     name: .commentDeleted,
                     key: "comment",
-                    shouldAccept: { comment in 
+                    shouldAccept: { comment in
                         // Only accept comment deletions that belong to this tweet
                         comment.originalTweetId == displayTweet.mid
                     },
@@ -255,4 +263,3 @@ struct TweetDetailView: View {
         }
     }
 }
-

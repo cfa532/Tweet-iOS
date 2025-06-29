@@ -55,10 +55,7 @@ struct CommentDetailView: View {
         .navigationTitle("Reply")
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
-            MediaBrowserView(
-                attachments: comment.attachments ?? [],
-                initialIndex: selectedMediaIndex
-            )
+            MediaBrowserView(attachments: comment.attachments ?? [], initialIndex: selectedMediaIndex)
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
@@ -88,14 +85,21 @@ struct CommentDetailView: View {
     private var mediaSection: some View {
         Group {
             if let attachments = comment.attachments, !attachments.isEmpty {
-                MediaGridView(
-                    parentTweet: comment,
-                    attachments: attachments,
-                    onItemTap: { index in
-                        selectedMediaIndex = index
-                        showBrowser = true
+                let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
+                TabView(selection: $selectedMediaIndex) {
+                    ForEach(attachments.indices, id: \.self) { index in
+                        MediaCell(
+                            parentTweet: comment,
+                            attachmentIndex: index
+                        )
+                        .tag(index)
+                        .onTapGesture { showBrowser = true }
                     }
-                )
+                }
+                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
+                .frame(maxWidth: .infinity)
+                .frame(height: UIScreen.main.bounds.width / aspect)
+                .background(Color.black)
             }
         }
     }
@@ -199,4 +203,3 @@ struct CommentDetailView: View {
         }
     }
 }
-
