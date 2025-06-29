@@ -73,6 +73,15 @@ class VideoManager: ObservableObject {
         }
         // Clear queue when scrolling
         videoQueue.removeAll()
+        print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to scroll")
+    }
+    
+    // Clean up queue and check for next visible video
+    func cleanupQueueAndStartNext() {
+        removeInvisibleFromQueue()
+        if currentPlayingInstanceId == nil && autoStartNext {
+            startNextVisibleVideo()
+        }
     }
     
     // Update video position for visibility calculation
@@ -110,6 +119,9 @@ class VideoManager: ObservableObject {
             visibleVideos.remove(instanceId)
             print("DEBUG: [VIDEO MANAGER] Video became actually invisible: \(instanceId)")
             
+            // Remove invisible videos from queue to prevent them from starting
+            removeInvisibleFromQueue()
+            
             // If the invisible video was playing, stop it and start next
             if currentPlayingInstanceId == instanceId {
                 print("DEBUG: [VIDEO MANAGER] Stopping actually invisible video: \(instanceId)")
@@ -131,8 +143,21 @@ class VideoManager: ObservableObject {
         }
     }
     
+    // Remove invisible videos from queue
+    func removeInvisibleFromQueue() {
+        let beforeCount = videoQueue.count
+        videoQueue.removeAll { !visibleVideos.contains($0) }
+        let afterCount = videoQueue.count
+        if beforeCount != afterCount {
+            print("DEBUG: [VIDEO MANAGER] Removed \(beforeCount - afterCount) invisible videos from queue")
+        }
+    }
+    
     // Start the next visible video in queue
     private func startNextVisibleVideo() {
+        // First, clean up any invisible videos from the queue
+        removeInvisibleFromQueue()
+        
         // Find the first visible video in the queue
         if let nextVideoId = videoQueue.first(where: { visibleVideos.contains($0) }) {
             print("DEBUG: [VIDEO MANAGER] Auto-starting next actually visible video: \(nextVideoId)")
