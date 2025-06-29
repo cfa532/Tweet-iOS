@@ -8,25 +8,37 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var showComposeSheet = false
     @State private var isNavigationVisible = true
+    @State private var navigationPath = NavigationPath()
     
     var body: some View {
         ZStack(alignment: .bottom) {
             // Main content area
             VStack(spacing: 0) {
                 if selectedTab == 0 {
-                    NavigationStack {
-                        HomeView(onNavigationVisibilityChanged: { isVisible in
-                            isNavigationVisible = isVisible
-                        })
+                    NavigationStack(path: $navigationPath) {
+                        HomeView(
+                            navigationPath: $navigationPath,
+                            onNavigationVisibilityChanged: { isVisible in
+                                isNavigationVisible = isVisible
+                            },
+                            onReturnToHome: {
+                                selectedTab = 0
+                            }
+                        )
                     }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             
-            // Custom Tab Bar (always present, fades out when navigation is hidden)
+            // Custom Tab Bar
             HStack(spacing: 0) {
                 Button(action: {
-                    selectedTab = 0
+                    if selectedTab != 0 {
+                        selectedTab = 0
+                    } else if !navigationPath.isEmpty {
+                        navigationPath.removeLast(navigationPath.count)
+                        selectedTab = 0
+                    }
                 }) {
                     VStack(spacing: 4) {
                         Image(systemName: "house")
@@ -34,7 +46,7 @@ struct ContentView: View {
                         Text("Home")
                             .font(.caption)
                     }
-                    .foregroundColor(selectedTab == 0 ? .blue : .gray)
+                    .foregroundColor(navigationPath.isEmpty && selectedTab == 0 ? .blue : .gray)
                 }
                 .frame(maxWidth: .infinity)
                 

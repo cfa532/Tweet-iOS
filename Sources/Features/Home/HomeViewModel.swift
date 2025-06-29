@@ -3,6 +3,10 @@ import SwiftUI
 
 @available(iOS 17.0, *)
 struct HomeView: View {
+    @Binding var navigationPath: NavigationPath
+    let onNavigationVisibilityChanged: ((Bool) -> Void)?
+    let onNavigateToProfile: (() -> Void)?
+    let onReturnToHome: (() -> Void)?
     @State private var isLoading = false
     @State private var isRefreshing = false
     @State private var selectedTab = 0
@@ -13,12 +17,18 @@ struct HomeView: View {
     @State private var selectedUser: User? = nil
     @State private var selectedTweet: Tweet? = nil
     
-    let onNavigationVisibilityChanged: ((Bool) -> Void)?
-
     @EnvironmentObject private var hproseInstance: HproseInstance
     
-    init(onNavigationVisibilityChanged: ((Bool) -> Void)? = nil) {
+    init(
+        navigationPath: Binding<NavigationPath>,
+        onNavigationVisibilityChanged: ((Bool) -> Void)? = nil,
+        onNavigateToProfile: (() -> Void)? = nil,
+        onReturnToHome: (() -> Void)? = nil
+    ) {
+        self._navigationPath = navigationPath
         self.onNavigationVisibilityChanged = onNavigationVisibilityChanged
+        self.onNavigateToProfile = onNavigateToProfile
+        self.onReturnToHome = onReturnToHome
     }
 
     var body: some View {
@@ -52,7 +62,8 @@ struct HomeView: View {
                     FollowingsTweetView(
                         isLoading: $isLoading,
                         onAvatarTap: { user in
-                            selectedUser = user
+                            navigationPath.append(user)
+                            onNavigateToProfile?()
                         },
                         selectedTweet: $selectedTweet,
                         onScroll: { offset in
@@ -70,9 +81,10 @@ struct HomeView: View {
                 .padding(.leading, -4)
             }
             .navigationBarHidden(true) // Hide the system navigation bar
-            .navigationDestination(item: $selectedUser) { user in
+            .navigationDestination(for: User.self) { user in
                 ProfileView(user: user, onLogout: {
-                    selectedTab = 0
+                    navigationPath.removeLast(navigationPath.count)
+                    onReturnToHome?()
                 })
             }
             .navigationDestination(isPresented: Binding(
@@ -171,6 +183,6 @@ struct TabButton: View {
 @available(iOS 17.0, *)
 struct HomeView_Previews: PreviewProvider {
     static var previews: some View {
-        HomeView()
+        HomeView(navigationPath: .constant(NavigationPath()))
     }
 } 
