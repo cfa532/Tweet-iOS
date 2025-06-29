@@ -261,6 +261,7 @@ struct HLSVideoPlayerWithControls: View {
             // Check if video has finished
             if duration > 0 && currentTime >= duration - 0.5 && !hasNotifiedFinished {
                 hasNotifiedFinished = true
+                print("DEBUG: Video finished in HLSVideoPlayerWithControls")
                 onVideoFinished?()
             }
         }

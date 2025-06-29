@@ -12,7 +12,7 @@ import AVFoundation
 struct MediaCell: View {
     let parentTweet: Tweet
     let attachmentIndex: Int
-    let aspectRatio: Float
+    let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
     
     @State private var play: Bool
     @State private var image: UIImage?
