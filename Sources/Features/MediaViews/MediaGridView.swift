@@ -12,9 +12,19 @@ struct MediaGridView: View {
     let parentTweet: Tweet
     let attachments: [MimeiFileType]
     let maxImages: Int = 4
-    @State private var selectedIndex: Int = 0
-    @State private var showBrowser = false
+    let onItemTap: ((Int) -> Void)?
+    @State private var shouldLoadVideo = false
+    @State private var videoLoadTimer: Timer?
+    @State private var currentVideoIndex: Int = -1
+    @State private var playStates: [Bool]
     
+    init(parentTweet: Tweet, attachments: [MimeiFileType], onItemTap: ((Int) -> Void)? = nil) {
+        self.parentTweet = parentTweet
+        self.attachments = attachments
+        self.onItemTap = onItemTap
+        self._playStates = State(initialValue: Array(repeating: false, count: attachments.count))
+    }
+
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
         guard let ar = attachment.aspectRatio, ar > 0 else { return false }
         return ar < 1.0
@@ -26,23 +36,82 @@ struct MediaGridView: View {
     }
 
     private func gridAspect() -> CGFloat {
-        let count = attachments.count
-        let allPortrait = attachments.allSatisfy { isPortrait($0) }
-        let allLandscape = attachments.allSatisfy { isLandscape($0) }
-        
-        switch count {
+        switch attachments.count {
         case 1:
             return CGFloat(attachments[0].aspectRatio ?? 1.0)
         case 2:
-            if allPortrait { return 4.0/3.0 }
-            if allLandscape { return 3.0/4.0 }
-            return 1.0
+            if isPortrait(attachments[0]) {
+                return CGFloat(attachments[0].aspectRatio ?? 1.0)
+            } else {
+                return CGFloat(attachments[0].aspectRatio ?? 1.0) / 2
+            }
         case 3:
-            if allPortrait { return 4.0/3.0 }
-            if allLandscape { return 3.0/4.0 }
-            return 1.0
+            if isPortrait(attachments[0]) {
+                return CGFloat(attachments[0].aspectRatio ?? 1.0)
+            } else {
+                return CGFloat(attachments[0].aspectRatio ?? 1.0) / 2
+            }
         default:
             return 1.0
+        }
+    }
+
+    private func shouldAutostart(for index: Int) -> Bool {
+        // Only autostart if the grid has been visible for 0.3 seconds
+        guard shouldLoadVideo else { return false }
+        
+        // Check if this is the first video and we should start playing
+        let isFirstVideo = index == findFirstVideoIndex()
+        let shouldStart = isFirstVideo && (attachments[index].type.lowercased() == "video" || attachments[index].type.lowercased() == "hls_video")
+        
+        return shouldStart
+    }
+
+    private func getVideoIndices() -> [Int] {
+        return attachments.enumerated().compactMap { index, attachment in
+            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                return index
+            }
+            return nil
+        }
+    }
+
+    private func findFirstVideoIndex() -> Int {
+        return getVideoIndices().first ?? -1
+    }
+
+    private func findNextVideoIndex() -> Int {
+        let videoIndices = getVideoIndices()
+        guard let currentIndex = videoIndices.firstIndex(of: currentVideoIndex) else {
+            return videoIndices.first ?? -1
+        }
+        
+        let nextIndex = currentIndex + 1
+        if nextIndex < videoIndices.count {
+            return videoIndices[nextIndex]
+        }
+        return -1 // No more videos to play
+    }
+
+    private func startVideoPlayback() {
+        let firstVideoIndex = findFirstVideoIndex()
+        
+        if currentVideoIndex == -1 && firstVideoIndex != -1 {
+            currentVideoIndex = firstVideoIndex
+        }
+    }
+
+    private func stopVideoPlayback() {
+        currentVideoIndex = -1
+    }
+
+    private func onVideoFinished() {
+        let nextIndex = findNextVideoIndex()
+        if nextIndex != -1 {
+            currentVideoIndex = nextIndex
+        } else {
+            // No more videos to play, stop playback
+            currentVideoIndex = -1
         }
     }
 
@@ -57,7 +126,10 @@ struct MediaGridView: View {
                     MediaCell(
                         parentTweet: parentTweet,
                         attachmentIndex: 0,
-                        aspectRatio: 1.0
+                        aspectRatio: 1.0,
+                        play: $playStates[0],
+                        shouldLoadVideo: shouldLoadVideo,
+                        onVideoFinished: onVideoFinished
                     )
                     .environmentObject(MuteState.shared)
                     .frame(width: gridWidth, height: gridHeight)
@@ -65,8 +137,7 @@ struct MediaGridView: View {
                     .clipped()
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        selectedIndex = 0
-                        showBrowser = true
+                        onItemTap?(0)
                     }
                     
                 case 2:
@@ -75,7 +146,10 @@ struct MediaGridView: View {
                             ForEach(Array(attachments.enumerated()), id: \ .offset) { idx, att in
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: idx
+                                    attachmentIndex: idx,
+                                    play: $playStates[idx],
+                                    shouldLoadVideo: shouldLoadVideo,
+                                    onVideoFinished: onVideoFinished
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight)
@@ -83,8 +157,7 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
+                                    onItemTap?(idx)
                                 }
                             }
                         }
@@ -93,7 +166,10 @@ struct MediaGridView: View {
                             ForEach(Array(attachments.enumerated()), id: \ .offset) { idx, att in
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: idx
+                                    attachmentIndex: idx,
+                                    play: $playStates[idx],
+                                    shouldLoadVideo: shouldLoadVideo,
+                                    onVideoFinished: onVideoFinished
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight / 2 - 1)
@@ -101,8 +177,7 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
+                                    onItemTap?(idx)
                                 }
                             }
                         }
@@ -113,7 +188,10 @@ struct MediaGridView: View {
                         HStack(spacing: 2) {
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: 0
+                                attachmentIndex: 0,
+                                play: $playStates[0],
+                                shouldLoadVideo: shouldLoadVideo,
+                                onVideoFinished: onVideoFinished
                             )
                             .environmentObject(MuteState.shared)
                             .frame(width: gridWidth / 2 - 1, height: gridHeight)
@@ -121,15 +199,17 @@ struct MediaGridView: View {
                             .clipped()
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                selectedIndex = 0
-                                showBrowser = true
+                                onItemTap?(0)
                             }
                             
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: idx
+                                        attachmentIndex: idx,
+                                        play: $playStates[idx],
+                                        shouldLoadVideo: shouldLoadVideo,
+                                        onVideoFinished: onVideoFinished
                                     )
                                     .environmentObject(MuteState.shared)
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
@@ -137,8 +217,7 @@ struct MediaGridView: View {
                                     .clipped()
                                     .contentShape(Rectangle())
                                     .onTapGesture {
-                                        selectedIndex = idx
-                                        showBrowser = true
+                                        onItemTap?(idx)
                                     }
                                 }
                             }
@@ -147,7 +226,10 @@ struct MediaGridView: View {
                         VStack(spacing: 2) {
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: 0
+                                attachmentIndex: 0,
+                                play: $playStates[0],
+                                shouldLoadVideo: shouldLoadVideo,
+                                onVideoFinished: onVideoFinished
                             )
                             .environmentObject(MuteState.shared)
                             .frame(width: gridWidth, height: gridHeight / 2 - 1)
@@ -155,15 +237,17 @@ struct MediaGridView: View {
                             .clipped()
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                selectedIndex = 0
-                                showBrowser = true
+                                onItemTap?(0)
                             }
                             
                             HStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: idx
+                                        attachmentIndex: idx,
+                                        play: $playStates[idx],
+                                        shouldLoadVideo: shouldLoadVideo,
+                                        onVideoFinished: onVideoFinished
                                     )
                                     .environmentObject(MuteState.shared)
                                     .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
@@ -171,8 +255,7 @@ struct MediaGridView: View {
                                     .clipped()
                                     .contentShape(Rectangle())
                                     .onTapGesture {
-                                        selectedIndex = idx
-                                        showBrowser = true
+                                        onItemTap?(idx)
                                     }
                                 }
                             }
@@ -185,7 +268,10 @@ struct MediaGridView: View {
                             ForEach(0..<2) { idx in
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: idx
+                                    attachmentIndex: idx,
+                                    play: $playStates[idx],
+                                    shouldLoadVideo: shouldLoadVideo,
+                                    onVideoFinished: onVideoFinished
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
@@ -193,8 +279,7 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    selectedIndex = idx
-                                    showBrowser = true
+                                    onItemTap?(idx)
                                 }
                             }
                         }
@@ -204,7 +289,10 @@ struct MediaGridView: View {
                                     ZStack {
                                         MediaCell(
                                             parentTweet: parentTweet,
-                                            attachmentIndex: idx
+                                            attachmentIndex: idx,
+                                            play: $playStates[idx],
+                                            shouldLoadVideo: shouldLoadVideo,
+                                            onVideoFinished: onVideoFinished
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
@@ -212,8 +300,7 @@ struct MediaGridView: View {
                                         .clipped()
                                         .contentShape(Rectangle())
                                         .onTapGesture {
-                                            selectedIndex = idx
-                                            showBrowser = true
+                                            onItemTap?(idx)
                                         }
                                         
                                         if idx == 3 && attachments.count > 4 {
@@ -232,10 +319,29 @@ struct MediaGridView: View {
             }
             .frame(width: gridWidth, height: gridHeight)
             .clipped()
-            .onAppear { }
-            .onDisappear { }
-            .fullScreenCover(isPresented: $showBrowser) {
-                MediaBrowserView(attachments: attachments, initialIndex: selectedIndex)
+            .onAppear {
+                // Start video loading timer if this grid contains videos
+                let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
+                playStates = Array(repeating: false, count: attachments.count)
+                
+                if hasVideos {
+                    videoLoadTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
+                        shouldLoadVideo = true
+                        startVideoPlayback()
+                        // Set playStates for the first video only
+                        let firstVideoIdx = findFirstVideoIndex()
+                        if firstVideoIdx != -1 {
+                            playStates = Array(repeating: false, count: attachments.count)
+                            playStates[firstVideoIdx] = true
+                        }
+                    }
+                }
+            }
+            .onDisappear {
+                videoLoadTimer?.invalidate()
+                videoLoadTimer = nil
+                shouldLoadVideo = false
+                stopVideoPlayback()
             }
         }
     }

@@ -171,6 +171,7 @@ struct SimpleVideoPlayer: View {
     var autoPlay: Bool = true
     var onTimeUpdate: ((Double) -> Void)? = nil
     var onMuteChanged: ((Bool) -> Void)? = nil
+    var onVideoFinished: (() -> Void)? = nil
     let isVisible: Bool
     var contentType: String? = nil
     var cellAspectRatio: CGFloat? = nil
@@ -194,7 +195,9 @@ struct SimpleVideoPlayer: View {
                             baseURL: url,
                             isVisible: isVisible,
                             isMuted: forceUnmuted ? false : muteState.isMuted,
-                            onMuteChanged: onMuteChanged
+                            autoPlay: autoPlay,
+                            onMuteChanged: onMuteChanged,
+                            onVideoFinished: onVideoFinished
                         )
                         .offset(y: -pad)
                         .aspectRatio(videoAR, contentMode: .fit)
@@ -205,6 +208,7 @@ struct SimpleVideoPlayer: View {
                             isMuted: forceUnmuted ? false : muteState.isMuted,
                             onMuteChanged: onMuteChanged,
                             onTimeUpdate: onTimeUpdate,
+                            onVideoFinished: onVideoFinished,
                             isVisible: isVisible,
                             showNativeControls: showNativeControls
                         )
@@ -219,7 +223,9 @@ struct SimpleVideoPlayer: View {
                             baseURL: url,
                             isVisible: isVisible,
                             isMuted: forceUnmuted ? false : muteState.isMuted,
-                            onMuteChanged: onMuteChanged
+                            autoPlay: autoPlay,
+                            onMuteChanged: onMuteChanged,
+                            onVideoFinished: onVideoFinished
                         )
                     } else {
                         VideoPlayerView(
@@ -228,6 +234,7 @@ struct SimpleVideoPlayer: View {
                             isMuted: forceUnmuted ? false : muteState.isMuted,
                             onMuteChanged: onMuteChanged,
                             onTimeUpdate: onTimeUpdate,
+                            onVideoFinished: onVideoFinished,
                             isVisible: isVisible,
                             showNativeControls: showNativeControls
                         )
@@ -382,7 +389,9 @@ struct HLSVideoPlayerWithControls: View {
     let videoURL: URL
     let isVisible: Bool
     let isMuted: Bool
+    let autoPlay: Bool
     let onMuteChanged: ((Bool) -> Void)?
+    let onVideoFinished: (() -> Void)?
     
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -393,12 +402,15 @@ struct HLSVideoPlayerWithControls: View {
     @State private var showControls = true
     @State private var playerMuted: Bool = false
     @State private var controlsTimer: Timer?
+    @State private var hasNotifiedFinished = false
     
-    init(videoURL: URL, isVisible: Bool, isMuted: Bool, onMuteChanged: ((Bool) -> Void)?) {
+    init(videoURL: URL, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?) {
         self.videoURL = videoURL
         self.isVisible = isVisible
         self.isMuted = isMuted
+        self.autoPlay = autoPlay
         self.onMuteChanged = onMuteChanged
+        self.onVideoFinished = onVideoFinished
         self._playerMuted = State(initialValue: isMuted)
     }
     
@@ -510,9 +522,8 @@ struct HLSVideoPlayerWithControls: View {
         .onAppear {
             if player == nil {
                 setupPlayer()
-            } else if isPlaying {
-                player?.play()
             }
+            // Do not resume or start playback here; let parent control via autoPlay
         }
         .onDisappear {
             // Only pause, do not destroy or reload
@@ -561,6 +572,7 @@ struct HLSVideoPlayerWithControls: View {
         
         isLoading = true
         errorMessage = nil
+        hasNotifiedFinished = false
         
         // Create asset with hardware acceleration support
         let asset = AVURLAsset(url: videoURL, options: [
@@ -588,6 +600,12 @@ struct HLSVideoPlayerWithControls: View {
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         avPlayer.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { time in
             currentTime = time.seconds
+            
+            // Check if video has finished
+            if duration > 0 && currentTime >= duration - 0.5 && !hasNotifiedFinished {
+                hasNotifiedFinished = true
+                onVideoFinished?()
+            }
         }
         
         // Set up the player
@@ -599,9 +617,13 @@ struct HLSVideoPlayerWithControls: View {
         // Monitor player item status
         self.monitorPlayerStatus(avPlayer)
         
-        // Auto-play the HLS stream
-        avPlayer.play()
-        self.isPlaying = true
+        // Only play if autoPlay is true
+        if autoPlay {
+            avPlayer.play()
+            self.isPlaying = true
+        } else {
+            self.isPlaying = false
+        }
     }
     
     private func monitorPlayerStatus(_ player: AVPlayer) {
@@ -815,6 +837,7 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     let isMuted: Bool
     let onMuteChanged: ((Bool) -> Void)?
     let onTimeUpdate: ((Double) -> Void)?
+    let onVideoFinished: (() -> Void)?
     let isVisible: Bool
     let showNativeControls: Bool
     
@@ -860,6 +883,16 @@ struct VideoPlayerView: UIViewControllerRepresentable {
         // Set up time observer
         let timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { time in
             onTimeUpdate?(time.seconds)
+            
+            // Check if video has finished
+            if let duration = player.currentItem?.duration, duration.isValid && !duration.isIndefinite {
+                let currentTime = time.seconds
+                let totalDuration = duration.seconds
+                if totalDuration > 0 && currentTime >= totalDuration - 0.5 && !context.coordinator.hasNotifiedFinished {
+                    context.coordinator.hasNotifiedFinished = true
+                    onVideoFinished?()
+                }
+            }
         }
         
         // Cache the player
@@ -904,18 +937,21 @@ struct VideoPlayerView: UIViewControllerRepresentable {
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator(onMuteChanged: onMuteChanged, onTimeUpdate: onTimeUpdate)
+        Coordinator(onMuteChanged: onMuteChanged, onTimeUpdate: onTimeUpdate, onVideoFinished: onVideoFinished)
     }
     
     class Coordinator: NSObject, AVPlayerViewControllerDelegate {
         var onMuteChanged: ((Bool) -> Void)?
         let onTimeUpdate: ((Double) -> Void)?
+        let onVideoFinished: (() -> Void)?
         var timeObserver: Any?
         var player: AVPlayer?
+        var hasNotifiedFinished = false
         
-        init(onMuteChanged: ((Bool) -> Void)?, onTimeUpdate: ((Double) -> Void)?) {
+        init(onMuteChanged: ((Bool) -> Void)?, onTimeUpdate: ((Double) -> Void)?, onVideoFinished: (() -> Void)?) {
             self.onMuteChanged = onMuteChanged
             self.onTimeUpdate = onTimeUpdate
+            self.onVideoFinished = onVideoFinished
         }
         
         // Monitor mute state changes from native controls
@@ -947,7 +983,9 @@ struct HLSDirectoryVideoPlayer: View {
     let baseURL: URL
     let isVisible: Bool
     let isMuted: Bool
+    let autoPlay: Bool
     let onMuteChanged: ((Bool) -> Void)?
+    let onVideoFinished: (() -> Void)?
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
     @State private var loading = true
@@ -960,7 +998,9 @@ struct HLSDirectoryVideoPlayer: View {
                     videoURL: playlistURL,
                     isVisible: isVisible,
                     isMuted: isMuted,
-                    onMuteChanged: onMuteChanged
+                    autoPlay: autoPlay,
+                    onMuteChanged: onMuteChanged,
+                    onVideoFinished: onVideoFinished
                 )
             } else if loading {
                 ProgressView("Loading video...")

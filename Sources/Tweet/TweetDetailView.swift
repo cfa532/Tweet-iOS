@@ -8,16 +8,16 @@ struct TweetDetailView: View {
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
     @State private var showLoginSheet = false
-    @State private var pinnedTweets: [[String: Any]] = []
-    @State private var originalTweet: Tweet?
-    @State private var selectedUser: User? = nil
-    @State private var selectedComment: Tweet? = nil
-    @State private var refreshTimer: Timer?
+    @State private var selectedUser: User?
+    @State private var selectedComment: Tweet?
     @State private var comments: [Tweet] = []
+    @State private var isVisible = true
     @State private var showToast = false
     @State private var toastMessage = ""
-    @State private var toastType: ToastView.ToastType = .info
-    @State private var isVisible = true
+    @State private var toastType: ToastView.ToastType = .success
+    @State private var refreshTimer: Timer?
+    @State private var originalTweet: Tweet?
+    @State private var pinnedTweets: [[String: Any]] = []
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
@@ -98,22 +98,14 @@ struct TweetDetailView: View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
-                let aspect = attachments.first?.aspectRatio ?? 1.0
-                TabView(selection: $selectedMediaIndex) {
-                    ForEach(attachments.indices, id: \.self) { index in
-                        MediaCell(
-                            parentTweet: displayTweet,
-                            attachmentIndex: index,
-                            aspectRatio: aspect
-                        )
-                        .tag(index)
-                        .onTapGesture { showBrowser = true }
+                MediaGridView(
+                    parentTweet: displayTweet,
+                    attachments: attachments,
+                    onItemTap: { index in
+                        selectedMediaIndex = index
+                        showBrowser = true
                     }
-                }
-                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
-                .frame(maxWidth: .infinity)
-                .frame(height: UIScreen.main.bounds.width / CGFloat(aspect))
-                .background(Color.black)
+                )
             }
         }
     }

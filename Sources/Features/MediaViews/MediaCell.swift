@@ -14,19 +14,22 @@ struct MediaCell: View {
     let attachmentIndex: Int
     let aspectRatio: Float
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0) {
-        self.parentTweet = parentTweet
-        self.attachmentIndex = attachmentIndex
-        self.aspectRatio = aspectRatio
-    }
-    
+    @Binding var play: Bool
     @State private var image: UIImage?
     @State private var isLoading = false
     @State private var showFullScreen = false
-    @State private var play = false
     @State private var isVisible = false
-    @State private var shouldLoadVideo = false
-    @State private var videoLoadTimer: Timer?
+    @State private var shouldLoadVideo: Bool
+    @State private var onVideoFinished: (() -> Void)?
+    
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Binding<Bool>, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil) {
+        self.parentTweet = parentTweet
+        self.attachmentIndex = attachmentIndex
+        self.aspectRatio = aspectRatio
+        self._play = play
+        self.shouldLoadVideo = shouldLoadVideo
+        self.onVideoFinished = onVideoFinished
+    }
     
     private let imageCache = ImageCacheManager.shared
     
@@ -49,12 +52,13 @@ struct MediaCell: View {
                 case "video", "hls_video":
                     SimpleVideoPlayer(
                         url: url,
-                        autoPlay: play && shouldLoadVideo, // Only auto-play if video is loaded
+                        autoPlay: play && shouldLoadVideo,
                         onMuteChanged: { muted in
                             MuteState.shared.isMuted = muted
                             HproseInstance.shared.preferenceHelper?.setSpeakerMute(muted)
                         },
-                        isVisible: isVisible && shouldLoadVideo, // Only visible if video is loaded
+                        onVideoFinished: onVideoFinished,
+                        isVisible: isVisible && shouldLoadVideo,
                         contentType: attachment.type,
                         cellAspectRatio: CGFloat(aspectRatio),
                         videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
@@ -94,18 +98,13 @@ struct MediaCell: View {
             // Refresh mute state from preferences when cell appears
             MuteState.shared.refreshFromPreferences()
             
-            // Start video loading timer if this is a video
+            // Set visibility for videos
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 isVisible = true
-                videoLoadTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
-                    shouldLoadVideo = true
-                }
             }
         }
         .onDisappear {
             isVisible = false
-            videoLoadTimer?.invalidate()
-            videoLoadTimer = nil
         }
         .onChange(of: isVisible) { newValue in
             if newValue && image == nil {
@@ -131,7 +130,7 @@ struct MediaCell: View {
             } else {
                 // Force load video immediately on tap
                 shouldLoadVideo = true
-                play = true
+                play.toggle()
             }
         case "audio":
             // Toggle audio playback
