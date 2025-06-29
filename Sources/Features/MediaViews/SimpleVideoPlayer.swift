@@ -302,14 +302,6 @@ struct HLSVideoPlayerWithControls: View {
                     print("DEBUG: Error domain: \(error.domain), code: \(error.code)")
                     print("DEBUG: Error user info: \(error.userInfo)")
                     
-                    // Try fallback to single-resolution playlist if master.m3u8 fails
-                    if error.domain == "NSURLErrorDomain" && error.code == -1008 {
-                        print("DEBUG: Master playlist failed, trying single-resolution fallback")
-                        self.trySingleResolutionFallback()
-                        timer.invalidate()
-                        return
-                    }
-                    
                     // Provide specific error messages based on error codes
                     switch (error.domain, error.code) {
                     case ("CoreMediaErrorDomain", -12642):
@@ -361,79 +353,6 @@ struct HLSVideoPlayerWithControls: View {
                 break
             }
         }
-    }
-    
-    private func trySingleResolutionFallback() {
-        print("DEBUG: Trying single-resolution fallback")
-        
-        // Get the base URL without master.m3u8
-        let baseURL = videoURL.deletingLastPathComponent()
-        let fallbackURL = baseURL.appendingPathComponent("playlist.m3u8")
-        
-        print("DEBUG: Fallback URL: \(fallbackURL.absoluteString)")
-        
-        // Test if this URL is accessible
-        Task {
-            do {
-                let (_, response) = try await URLSession.shared.data(from: fallbackURL)
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                    await MainActor.run {
-                        self.setupFallbackPlayer(with: fallbackURL)
-                    }
-                    return
-                }
-            } catch {
-                print("DEBUG: Fallback URL failed: \(error)")
-            }
-            
-            // If fallback fails, show error
-            await MainActor.run {
-                self.errorMessage = "Unable to load video stream"
-                self.isLoading = false
-            }
-        }
-    }
-    
-    private func setupFallbackPlayer(with url: URL) {
-        print("DEBUG: Setting up fallback player with URL: \(url.absoluteString)")
-        
-        // Create asset with hardware acceleration support
-        let asset = AVURLAsset(url: url, options: [
-            "AVURLAssetOutOfBandMIMETypeKey": "application/x-mpegURL",
-            "AVURLAssetHTTPHeaderFieldsKey": ["Accept": "*/*"]
-        ])
-        
-        // Create player item with asset
-        let playerItem = AVPlayerItem(asset: asset)
-        
-        // Configure player item for better performance
-        playerItem.preferredForwardBufferDuration = 10.0
-        playerItem.preferredPeakBitRate = 0 // Let system decide
-        
-        // Create AVPlayer with the player item
-        let fallbackPlayer = AVPlayer(playerItem: playerItem)
-        
-        // Enable hardware acceleration
-        fallbackPlayer.automaticallyWaitsToMinimizeStalling = true
-        
-        // Set initial mute state
-        fallbackPlayer.isMuted = isMuted
-        
-        // Add periodic time observer for progress updates
-        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        fallbackPlayer.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { time in
-            currentTime = time.seconds
-        }
-        
-        // Set up the fallback player
-        self.player = fallbackPlayer
-        
-        // Monitor the fallback player
-        self.monitorPlayerStatus(fallbackPlayer)
-        
-        // Auto-play the fallback stream
-        fallbackPlayer.play()
-        self.isPlaying = true
     }
     
     private func togglePlayPause() {
