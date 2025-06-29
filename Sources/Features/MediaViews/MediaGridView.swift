@@ -13,16 +13,21 @@ struct MediaGridView: View {
     let attachments: [MimeiFileType]
     let maxImages: Int = 4
     let onItemTap: ((Int) -> Void)?
-    @State private var shouldLoadVideo = false
+    @State private var shouldLoadVideo = true
     @State private var videoLoadTimer: Timer?
     @State private var currentVideoIndex: Int = -1
-    @State private var playStates: [Bool]
     
     init(parentTweet: Tweet, attachments: [MimeiFileType], onItemTap: ((Int) -> Void)? = nil) {
         self.parentTweet = parentTweet
         self.attachments = attachments
         self.onItemTap = onItemTap
-        self._playStates = State(initialValue: Array(repeating: false, count: attachments.count))
+        
+        // Find the first video attachment and set it as the current video
+        let firstVideoIndex = attachments.enumerated().first { _, attachment in
+            attachment.type.lowercased().contains("video")
+        }?.offset ?? -1
+        
+        self._currentVideoIndex = State(initialValue: firstVideoIndex)
     }
 
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
@@ -115,6 +120,20 @@ struct MediaGridView: View {
         }
     }
 
+    // Create a binding for a specific index
+    private func playBinding(for index: Int) -> Binding<Bool> {
+        Binding(
+            get: { currentVideoIndex == index },
+            set: { isPlaying in
+                if isPlaying {
+                    currentVideoIndex = index
+                } else {
+                    currentVideoIndex = -1
+                }
+            }
+        )
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let gridWidth: CGFloat = 320
@@ -127,7 +146,7 @@ struct MediaGridView: View {
                         parentTweet: parentTweet,
                         attachmentIndex: 0,
                         aspectRatio: 1.0,
-                        play: $playStates[0],
+                        play: playBinding(for: 0),
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished
                     )
@@ -147,7 +166,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    play: $playStates[idx],
+                                    play: playBinding(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -167,7 +186,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    play: $playStates[idx],
+                                    play: playBinding(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -189,7 +208,7 @@ struct MediaGridView: View {
                             MediaCell(
                                 parentTweet: parentTweet,
                                 attachmentIndex: 0,
-                                play: $playStates[0],
+                                play: playBinding(for: 0),
                                 shouldLoadVideo: shouldLoadVideo,
                                 onVideoFinished: onVideoFinished
                             )
@@ -207,7 +226,7 @@ struct MediaGridView: View {
                                     MediaCell(
                                         parentTweet: parentTweet,
                                         attachmentIndex: idx,
-                                        play: $playStates[idx],
+                                        play: playBinding(for: idx),
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished
                                     )
@@ -227,7 +246,7 @@ struct MediaGridView: View {
                             MediaCell(
                                 parentTweet: parentTweet,
                                 attachmentIndex: 0,
-                                play: $playStates[0],
+                                play: playBinding(for: 0),
                                 shouldLoadVideo: shouldLoadVideo,
                                 onVideoFinished: onVideoFinished
                             )
@@ -245,7 +264,7 @@ struct MediaGridView: View {
                                     MediaCell(
                                         parentTweet: parentTweet,
                                         attachmentIndex: idx,
-                                        play: $playStates[idx],
+                                        play: playBinding(for: idx),
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished
                                     )
@@ -269,7 +288,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    play: $playStates[idx],
+                                    play: playBinding(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -290,7 +309,7 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
-                                            play: $playStates[idx],
+                                            play: playBinding(for: idx),
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished
                                         )
@@ -322,18 +341,11 @@ struct MediaGridView: View {
             .onAppear {
                 // Start video loading timer if this grid contains videos
                 let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
-                playStates = Array(repeating: false, count: attachments.count)
                 
                 if hasVideos {
                     videoLoadTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
                         shouldLoadVideo = true
                         startVideoPlayback()
-                        // Set playStates for the first video only
-                        let firstVideoIdx = findFirstVideoIndex()
-                        if firstVideoIdx != -1 {
-                            playStates = Array(repeating: false, count: attachments.count)
-                            playStates[firstVideoIdx] = true
-                        }
                     }
                 }
             }
