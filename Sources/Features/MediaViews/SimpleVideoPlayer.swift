@@ -28,6 +28,141 @@ class MuteState: ObservableObject {
     }
 }
 
+// Global video manager to handle scroll-based video stopping
+class VideoManager: ObservableObject {
+    static let shared = VideoManager()
+    @Published var currentPlayingInstanceId: String? = nil
+    private var videoQueue: [String] = [] // Queue of videos waiting to play
+    private var autoStartNext: Bool = true // Whether to auto-start next video
+    private var visibleVideos: Set<String> = [] // Track which videos are visible
+    private var videoPositions: [String: CGRect] = [:] // Track video positions on screen
+    
+    private init() {}
+    
+    func startPlaying(instanceId: String) {
+        // Pause any currently playing video
+        if let currentId = currentPlayingInstanceId, currentId != instanceId {
+            print("DEBUG: [VIDEO MANAGER] Pausing previous video instance: \(currentId)")
+            NotificationCenter.default.post(name: .pauseVideo, object: currentId)
+        }
+        
+        currentPlayingInstanceId = instanceId
+        print("DEBUG: [VIDEO MANAGER] Now playing video instance: \(instanceId)")
+        
+        // Remove from queue if it was there
+        videoQueue.removeAll { $0 == instanceId }
+    }
+    
+    func stopPlaying(instanceId: String) {
+        if currentPlayingInstanceId == instanceId {
+            currentPlayingInstanceId = nil
+            print("DEBUG: [VIDEO MANAGER] Stopped playing video instance: \(instanceId)")
+            
+            // Auto-start next visible video if enabled
+            if autoStartNext {
+                startNextVisibleVideo()
+            }
+        }
+    }
+    
+    func stopAllVideos() {
+        if let currentId = currentPlayingInstanceId {
+            print("DEBUG: [VIDEO MANAGER] Stopping all videos due to scroll - current: \(currentId)")
+            NotificationCenter.default.post(name: .pauseVideo, object: currentId)
+            currentPlayingInstanceId = nil
+        }
+        // Clear queue when scrolling
+        videoQueue.removeAll()
+    }
+    
+    // Update video position for visibility calculation
+    func updateVideoPosition(instanceId: String, frame: CGRect) {
+        videoPositions[instanceId] = frame
+        print("DEBUG: [VIDEO MANAGER] Updated position for \(instanceId): \(frame)")
+    }
+    
+    // Check if video is actually visible on screen
+    func isVideoActuallyVisible(instanceId: String, screenBounds: CGRect) -> Bool {
+        guard let videoFrame = videoPositions[instanceId] else {
+            print("DEBUG: [VIDEO MANAGER] No position data for \(instanceId)")
+            return false
+        }
+        
+        // Calculate how much of the video is visible on screen
+        let intersection = videoFrame.intersection(screenBounds)
+        let visibilityRatio = intersection.width * intersection.height / (videoFrame.width * videoFrame.height)
+        
+        // Consider video visible if more than 50% is on screen
+        let isVisible = visibilityRatio > 0.5 && intersection.width > 0 && intersection.height > 0
+        
+        print("DEBUG: [VIDEO MANAGER] Visibility check for \(instanceId): \(isVisible) (ratio: \(visibilityRatio), frame: \(videoFrame), screen: \(screenBounds), intersection: \(intersection))")
+        return isVisible
+    }
+    
+    // Track video visibility based on actual screen position
+    func setVideoVisible(_ instanceId: String, isVisible: Bool, screenBounds: CGRect = UIScreen.main.bounds) {
+        let actuallyVisible = isVideoActuallyVisible(instanceId: instanceId, screenBounds: screenBounds)
+        
+        if actuallyVisible {
+            visibleVideos.insert(instanceId)
+            print("DEBUG: [VIDEO MANAGER] Video became actually visible: \(instanceId)")
+        } else {
+            visibleVideos.remove(instanceId)
+            print("DEBUG: [VIDEO MANAGER] Video became actually invisible: \(instanceId)")
+            
+            // If the invisible video was playing, stop it and start next
+            if currentPlayingInstanceId == instanceId {
+                print("DEBUG: [VIDEO MANAGER] Stopping actually invisible video: \(instanceId)")
+                NotificationCenter.default.post(name: .pauseVideo, object: instanceId)
+                currentPlayingInstanceId = nil
+                
+                if autoStartNext {
+                    startNextVisibleVideo()
+                }
+            }
+        }
+    }
+    
+    // Add video to queue for auto-play (only if visible)
+    func addToQueue(instanceId: String) {
+        if !videoQueue.contains(instanceId) && currentPlayingInstanceId != instanceId && visibleVideos.contains(instanceId) {
+            videoQueue.append(instanceId)
+            print("DEBUG: [VIDEO MANAGER] Added actually visible video to queue: \(instanceId), queue size: \(videoQueue.count)")
+        }
+    }
+    
+    // Start the next visible video in queue
+    private func startNextVisibleVideo() {
+        // Find the first visible video in the queue
+        if let nextVideoId = videoQueue.first(where: { visibleVideos.contains($0) }) {
+            print("DEBUG: [VIDEO MANAGER] Auto-starting next actually visible video: \(nextVideoId)")
+            NotificationCenter.default.post(name: .startVideo, object: nextVideoId)
+            videoQueue.removeAll { $0 == nextVideoId }
+        } else {
+            print("DEBUG: [VIDEO MANAGER] No actually visible videos in queue to start")
+        }
+    }
+    
+    // Enable/disable auto-start next video
+    func setAutoStartNext(_ enabled: Bool) {
+        autoStartNext = enabled
+        print("DEBUG: [VIDEO MANAGER] Auto-start next video: \(enabled)")
+    }
+    
+    // Static method to trigger scroll detection from anywhere
+    static func triggerScroll() {
+        print("DEBUG: [VIDEO MANAGER] Scroll detected - stopping all videos")
+        NotificationCenter.default.post(name: .scrollStarted, object: nil)
+    }
+}
+
+// Notification names for video management
+extension Notification.Name {
+    static let pauseVideo = Notification.Name("pauseVideo")
+    static let scrollStarted = Notification.Name("scrollStarted")
+    static let startVideo = Notification.Name("startVideo")
+}
+
 struct SimpleVideoPlayer: View {
     let url: URL
     var autoPlay: Bool = true
@@ -98,6 +233,8 @@ struct HLSVideoPlayerWithControls: View {
     @State private var playerMuted: Bool = false
     @State private var controlsTimer: Timer?
     @State private var hasNotifiedFinished = false
+    @State private var playerInstanceId = UUID().uuidString.prefix(8) // Unique ID for this player instance
+    @StateObject private var videoManager = VideoManager.shared
     
     init(videoURL: URL, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?) {
         self.videoURL = videoURL
@@ -107,120 +244,176 @@ struct HLSVideoPlayerWithControls: View {
         self.onMuteChanged = onMuteChanged
         self.onVideoFinished = onVideoFinished
         self._playerMuted = State(initialValue: isMuted)
+        print("DEBUG: [INSTANCE] Creating new HLSVideoPlayerWithControls instance: \(UUID().uuidString.prefix(8)) for URL: \(videoURL.absoluteString)")
     }
     
     var body: some View {
-        ZStack {
-            if let player = player {
-                VideoPlayer(player: player)
-                    .overlay(
-                        // Custom controls overlay
-                        Group {
-                            if showControls {
-                                VStack {
-                                    Spacer()
-                                    HStack {
-                                        Button(action: togglePlayPause) {
-                                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                                .font(.title)
-                                                .foregroundColor(.white)
-                                                .background(Circle().fill(Color.black.opacity(0.5)))
-                                        }
-                                        
+        GeometryReader { geometry in
+            ZStack {
+                if let player = player {
+                    VideoPlayer(player: player)
+                        .overlay(
+                            // Custom controls overlay
+                            Group {
+                                if showControls {
+                                    VStack {
                                         Spacer()
-                                        
-                                        Text(formatTime(currentTime))
-                                            .foregroundColor(.white)
-                                            .font(.caption)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 4)
-                                            .background(Color.black.opacity(0.5))
-                                            .cornerRadius(4)
-                                        
-                                        Text("/")
-                                            .foregroundColor(.white)
-                                            .font(.caption)
-                                        
-                                        Text(formatTime(duration))
-                                            .foregroundColor(.white)
-                                            .font(.caption)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 4)
-                                            .background(Color.black.opacity(0.5))
-                                            .cornerRadius(4)
+                                        HStack {
+                                            Button(action: togglePlayPause) {
+                                                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                                    .font(.title)
+                                                    .foregroundColor(.white)
+                                                    .background(Circle().fill(Color.black.opacity(0.5)))
+                                            }
+                                            
+                                            Spacer()
+                                            
+                                            Text(formatTime(currentTime))
+                                                .foregroundColor(.white)
+                                                .font(.caption)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(Color.black.opacity(0.5))
+                                                .cornerRadius(4)
+                                            
+                                            Text("/")
+                                                .foregroundColor(.white)
+                                                .font(.caption)
+                                            
+                                            Text(formatTime(duration))
+                                                .foregroundColor(.white)
+                                                .font(.caption)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(Color.black.opacity(0.5))
+                                                .cornerRadius(4)
+                                        }
+                                        .padding()
                                     }
-                                    .padding()
-                                }
-                                .background(
-                                    LinearGradient(
-                                        gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]),
-                                        startPoint: .bottom,
-                                        endPoint: .top
+                                    .background(
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]),
+                                            startPoint: .bottom,
+                                            endPoint: .top
+                                        )
                                     )
-                                )
+                                }
+                            }
+                        )
+                        .onReceive(player.publisher(for: \.isMuted)) { muted in
+                            // This automatically updates when the user interacts with native controls
+                            if playerMuted != muted {
+                                playerMuted = muted
                             }
                         }
-                    )
-                    .onReceive(player.publisher(for: \.isMuted)) { muted in
-                        // This automatically updates when the user interacts with native controls
-                        if playerMuted != muted {
-                            playerMuted = muted
+                } else if isLoading {
+                    VStack {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("Loading HLS stream...")
+                            .font(.caption)
+                            .foregroundColor(.themeSecondaryText)
+                    }
+                } else if let errorMessage = errorMessage {
+                    VStack {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.largeTitle)
+                            .foregroundColor(.red)
+                        Text("HLS Playback Error")
+                            .font(.headline)
+                        Text(errorMessage)
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                            .padding()
+                        Button("Reload") {
+                            setupPlayer()
                         }
-                    }
-            } else if isLoading {
-                VStack {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    Text("Loading HLS stream...")
-                        .font(.caption)
-                        .foregroundColor(.themeSecondaryText)
-                }
-            } else if let errorMessage = errorMessage {
-                VStack {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundColor(.red)
-                    Text("HLS Playback Error")
-                        .font(.headline)
-                    Text(errorMessage)
-                        .font(.caption)
-                        .multilineTextAlignment(.center)
                         .padding()
-                    Button("Reload") {
-                        setupPlayer()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
                     }
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
                 }
             }
-        }
-        .contentShape(Rectangle()) // Make entire area tappable
-        .onTapGesture {
-            // Toggle controls visibility
-            withAnimation {
-                showControls.toggle()
+            .contentShape(Rectangle()) // Make entire area tappable
+            .onTapGesture {
+                // Toggle controls visibility
+                withAnimation {
+                    showControls.toggle()
+                }
+                // If player is paused and we tap, also resume playback
+                if let player = player, player.rate == 0 {
+                    player.play()
+                    isPlaying = true
+                }
             }
-            // If player is paused and we tap, also resume playback
-            if let player = player, player.rate == 0 {
-                player.play()
-                isPlaying = true
-            }
-        }
-        .onLongPressGesture {
-            // Manual reload on long press
-            setupPlayer()
-        }
-        .onAppear {
-            if player == nil {
+            .onLongPressGesture {
+                // Manual reload on long press
                 setupPlayer()
             }
-            // Do not resume or start playback here; let parent control via autoPlay
-        }
-        .onDisappear {
-            // Only pause, do not destroy or reload
-            player?.pause()
+            .onAppear {
+                print("DEBUG: [INSTANCE \(playerInstanceId)] HLSVideoPlayerWithControls onAppear - isVisible: \(isVisible)")
+                
+                // Update video position and check actual visibility
+                let frame = geometry.frame(in: .global)
+                videoManager.updateVideoPosition(instanceId: String(playerInstanceId), frame: frame)
+                videoManager.setVideoVisible(String(playerInstanceId), isVisible: isVisible)
+                
+                // Listen for pause notifications from video manager
+                NotificationCenter.default.addObserver(
+                    forName: .pauseVideo,
+                    object: nil,
+                    queue: .main
+                ) { notification in
+                    if let pauseInstanceId = notification.object as? String, pauseInstanceId == self.playerInstanceId {
+                        print("DEBUG: [INSTANCE \(self.playerInstanceId)] Received pause notification from video manager")
+                        self.player?.pause()
+                        self.isPlaying = false
+                    }
+                }
+                
+                // Listen for start notifications from video manager
+                NotificationCenter.default.addObserver(
+                    forName: .startVideo,
+                    object: nil,
+                    queue: .main
+                ) { notification in
+                    if let startInstanceId = notification.object as? String, startInstanceId == self.playerInstanceId {
+                        print("DEBUG: [INSTANCE \(self.playerInstanceId)] Received start notification from video manager")
+                        if let player = self.player, !self.isPlaying {
+                            player.play()
+                            self.isPlaying = true
+                        }
+                    }
+                }
+                
+                if player == nil {
+                    setupPlayer()
+                }
+                // Do not resume or start playback here; let parent control via autoPlay
+            }
+            .onDisappear {
+                print("DEBUG: [INSTANCE \(playerInstanceId)] HLSVideoPlayerWithControls onDisappear - isVisible: \(isVisible)")
+                
+                // Notify video manager about visibility change
+                videoManager.setVideoVisible(String(playerInstanceId), isVisible: false)
+                
+                // Only pause, do not destroy or reload
+                player?.pause()
+                videoManager.stopPlaying(instanceId: String(playerInstanceId))
+                cleanupObservers()
+            }
+            .onChange(of: isVisible) { newVisibility in
+                print("DEBUG: [INSTANCE \(playerInstanceId)] Visibility changed to: \(newVisibility)")
+                let frame = geometry.frame(in: .global)
+                videoManager.updateVideoPosition(instanceId: String(playerInstanceId), frame: frame)
+                videoManager.setVideoVisible(String(playerInstanceId), isVisible: newVisibility)
+            }
+            .onChange(of: geometry.frame(in: .global)) { newFrame in
+                // Update position when frame changes (e.g., during scroll)
+                videoManager.updateVideoPosition(instanceId: String(playerInstanceId), frame: newFrame)
+                videoManager.setVideoVisible(String(playerInstanceId), isVisible: isVisible)
+            }
         }
     }
     
@@ -261,8 +454,27 @@ struct HLSVideoPlayerWithControls: View {
             // Check if video has finished
             if duration > 0 && currentTime >= duration - 0.5 && !hasNotifiedFinished {
                 hasNotifiedFinished = true
-                print("DEBUG: Video finished in HLSVideoPlayerWithControls")
+                self.videoManager.stopPlaying(instanceId: String(self.playerInstanceId))
+                print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video finished in HLSVideoPlayerWithControls")
                 onVideoFinished?()
+            }
+        }
+        
+        // Add notification observer for video finished
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { _ in
+            if !self.hasNotifiedFinished {
+                self.hasNotifiedFinished = true
+                self.isPlaying = false
+                self.videoManager.stopPlaying(instanceId: String(self.playerInstanceId))
+                print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video finished via AVPlayerItemDidPlayToEndTime notification")
+                print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video URL: \(self.videoURL.absoluteString)")
+                print("DEBUG: [INSTANCE \(self.playerInstanceId)] Final duration: \(self.duration) seconds")
+                print("DEBUG: [INSTANCE \(self.playerInstanceId)] Final current time: \(self.currentTime) seconds")
+                self.onVideoFinished?()
             }
         }
         
@@ -274,8 +486,23 @@ struct HLSVideoPlayerWithControls: View {
         
         // Only play if autoPlay is true
         if autoPlay {
-            avPlayer.play()
-            self.isPlaying = true
+            // Check if no video is currently playing
+            if videoManager.currentPlayingInstanceId == nil {
+                // No video playing, start this one if visible
+                if isVisible {
+                    videoManager.startPlaying(instanceId: String(playerInstanceId))
+                    avPlayer.play()
+                    self.isPlaying = true
+                } else {
+                    // Not visible, add to queue for later
+                    videoManager.addToQueue(instanceId: String(playerInstanceId))
+                    self.isPlaying = false
+                }
+            } else {
+                // Another video is playing, add this one to queue if visible
+                videoManager.addToQueue(instanceId: String(playerInstanceId))
+                self.isPlaying = false
+            }
         } else {
             self.isPlaying = false
         }
@@ -292,9 +519,20 @@ struct HLSVideoPlayerWithControls: View {
             
             switch playerItem.status {
             case .readyToPlay:
-                print("DEBUG: HLS player item is ready to play")
+                print("DEBUG: [INSTANCE \(self.playerInstanceId)] HLS player item is ready to play")
                 self.isLoading = false
                 self.duration = playerItem.duration.seconds
+                
+                // If this video should auto-play and no video is currently playing, start it
+                if self.autoPlay && self.videoManager.currentPlayingInstanceId == nil {
+                    self.videoManager.startPlaying(instanceId: String(self.playerInstanceId))
+                    player.play()
+                    self.isPlaying = true
+                } else if self.autoPlay {
+                    // Add to queue if another video is playing
+                    self.videoManager.addToQueue(instanceId: String(self.playerInstanceId))
+                }
+                
                 timer.invalidate()
             case .failed:
                 print("DEBUG: HLS player item failed: \(playerItem.error?.localizedDescription ?? "Unknown error")")
@@ -360,7 +598,9 @@ struct HLSVideoPlayerWithControls: View {
         
         if isPlaying {
             player.pause()
+            videoManager.stopPlaying(instanceId: String(playerInstanceId))
         } else {
+            videoManager.startPlaying(instanceId: String(playerInstanceId))
             player.play()
         }
         isPlaying.toggle()
@@ -391,6 +631,32 @@ struct HLSVideoPlayerWithControls: View {
     private func stopControlsTimer() {
         controlsTimer?.invalidate()
         controlsTimer = nil
+    }
+    
+    private func cleanupObservers() {
+        // Remove all observers
+        NotificationCenter.default.removeObserver(self)
+    }
+}
+
+// Scroll detector for stopping videos during scroll
+struct ScrollDetector: ViewModifier {
+    @StateObject private var videoManager = VideoManager.shared
+    @State private var lastScrollTime = Date()
+    
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .scrollStarted)) { _ in
+                // Stop all videos when scroll is detected
+                videoManager.stopAllVideos()
+            }
+    }
+}
+
+// Extension to easily add scroll detection to any view
+extension View {
+    func detectScroll() -> some View {
+        self.modifier(ScrollDetector())
     }
 }
 
