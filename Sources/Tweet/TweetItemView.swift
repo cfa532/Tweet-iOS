@@ -8,6 +8,7 @@ struct TweetItemView: View {
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
     var onTap: ((Tweet) -> Void)? = nil
+    var hideActions: Bool = false
     @State private var showDetail = false
     @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
     @State private var originalTweet: Tweet?
@@ -58,31 +59,21 @@ struct TweetItemView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            onTap?(detailTweet)
+                            onTap?(tweet)
                         }
-
+                        
                         TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
                             .padding(.top, -12)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                onTap?(detailTweet)
+                                onTap?(tweet)
                             }
-
+                        
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
                     }
                 } else {
                     // Show retweet with content and embedded original tweet
-                    if let user = tweet.author {
-                        Button(action: {
-                            if !isInProfile {
-                                onAvatarTap?(user)
-                            }
-                        }) {
-                            Avatar(user: user)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                    }
                     VStack(alignment: .leading) {
                         HStack {
                             TweetItemHeaderView(tweet: tweet)
@@ -91,29 +82,30 @@ struct TweetItemView: View {
                         .padding(.top, -8)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            onTap?(detailTweet)
+                            onTap?(tweet)
                         }
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                             .padding(.top, -12)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                onTap?(detailTweet)
+                                onTap?(tweet)
                             }
                         
-                        // Embedded original tweet
-                        VStack(alignment: .leading, spacing: 8) {
-                            TweetItemView(
-                                tweet: originalTweet, 
-                                isPinned: isPinned,
-                                onTap: onTap
-                            )
-                        }
-                        .padding()
-                        .background(Color(.secondarySystemBackground))
-                        .cornerRadius(8)
+                        // Embedded original tweet with darker background, no left border, and aligned avatar
+                        TweetItemView(
+                            tweet: originalTweet,
+                            isPinned: isPinned,
+                            onTap: { t in onTap?(t) },
+                            hideActions: true
+                        )
+                        .background(Color(.systemGray4))
+                        .cornerRadius(6)
+                        .padding(.leading, -16)
                         
-                        TweetActionButtonsView(tweet: tweet)
-                            .padding(.top, 8)
+                        if !hideActions {
+                            TweetActionButtonsView(tweet: tweet)
+                                .padding(.top, 8)
+                        }
                     }
                 }
             } else {
@@ -136,17 +128,19 @@ struct TweetItemView: View {
                     .padding(.top, -8)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        onTap?(detailTweet)
+                        onTap?(tweet)
                     }
                     TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                         .padding(.top, -12)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            onTap?(detailTweet)
+                            onTap?(tweet)
                         }
                     
-                    TweetActionButtonsView(tweet: tweet)
-                        .padding(.top, 8)
+                    if !hideActions {
+                        TweetActionButtonsView(tweet: tweet)
+                            .padding(.top, 8)
+                    }
                 }
             }
         }

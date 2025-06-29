@@ -138,11 +138,26 @@ struct TweetDetailView: View {
     private var tweetContent: some View {
         Group {
             if let content = displayTweet.content, !content.isEmpty {
-                Text(content)
-                    .font(.title3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(content)
+                        .font(.title3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                    // If this is a retweet with content, show quoted tweet without actions
+                    if let originalTweetId = displayTweet.originalTweetId, let originalAuthorId = displayTweet.originalAuthorId {
+                        if let orig = originalTweet {
+                            TweetItemView(
+                                tweet: orig,
+                                hideActions: true
+                            )
+                            .background(Color(.systemGray4))
+                            .cornerRadius(6)
+                            .padding(.horizontal)
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
             }
         }
     }
