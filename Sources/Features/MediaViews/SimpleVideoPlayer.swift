@@ -717,6 +717,7 @@ struct HLSDirectoryVideoPlayer: View {
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
     @State private var loading = true
+    @State private var didRetry = false // Track if we've retried once
 
     var body: some View {
         Group {
@@ -727,26 +728,28 @@ struct HLSDirectoryVideoPlayer: View {
                     isMuted: isMuted,
                     onMuteChanged: onMuteChanged
                 )
-            } else if let error = error {
-                VStack {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundColor(.red)
-                    Text(error)
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                }
-            } else {
+            } else if loading {
                 ProgressView("Loading video...")
+            } else {
+                // If loading failed after retry, show empty placeholder
+                Color.clear
             }
         }
         .task {
-            if playlistURL == nil && error == nil && loading {
+            if playlistURL == nil && loading {
                 loading = false
                 if let url = await getHLSPlaylistURL(baseURL: baseURL) {
                     playlistURL = url
+                } else if !didRetry {
+                    // Retry once after a short delay
+                    didRetry = true
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                    loading = true
                 } else {
-                    error = "No valid HLS playlist found (playlist.m3u8 or master.m3u8) in directory."
+                    // Both attempts failed, show empty placeholder
+                    playlistURL = nil
+                    error = nil
+                    loading = false
                 }
             }
         }

@@ -100,7 +100,6 @@ struct HomeView: View {
                 }
             }
             .onDisappear {
-                // Restore navigation header and bottom bar when leaving HomeView
                 withAnimation(.easeInOut(duration: 0.3)) {
                     isNavigationVisible = true
                 }
