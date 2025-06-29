@@ -99,6 +99,13 @@ struct HomeView: View {
                     try await HproseInstance.shared.initialize()
                 }
             }
+            .onDisappear {
+                // Restore navigation header and bottom bar when leaving HomeView
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isNavigationVisible = true
+                }
+                onNavigationVisibilityChanged?(true)
+            }
         }
     }
     
