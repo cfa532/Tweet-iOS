@@ -18,6 +18,7 @@ struct TweetDetailView: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     @State private var isVisible = true
+    @State private var imageAspectRatios: [Int: CGFloat] = [:] // index: aspectRatio
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
@@ -98,13 +99,13 @@ struct TweetDetailView: View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
-                let aspect = attachments.first?.aspectRatio ?? 1.0
+                let aspect = aspectRatio(for: attachments[selectedMediaIndex], at: selectedMediaIndex)
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
                         MediaCell(
                             parentTweet: displayTweet,
                             attachmentIndex: index,
-                            aspectRatio: aspect
+                            aspectRatio: Float(aspectRatio(for: attachments[index], at: index))
                         )
                         .tag(index)
                         .onTapGesture { showBrowser = true }
@@ -112,7 +113,7 @@ struct TweetDetailView: View {
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
                 .frame(maxWidth: .infinity)
-                .frame(height: UIScreen.main.bounds.width / CGFloat(aspect))
+                .frame(height: UIScreen.main.bounds.width / aspect)
                 .background(Color.black)
             }
         }
@@ -259,6 +260,47 @@ struct TweetDetailView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             withAnimation {
                 showToast = false
+            }
+        }
+    }
+
+    private func aspectRatio(for attachment: MimeiFileType, at index: Int) -> CGFloat {
+        let type = attachment.type.lowercased()
+        if type == "video" || type == "hls_video" {
+            return CGFloat(attachment.aspectRatio ?? (4.0/3.0))
+        } else if type == "image" {
+            if let ratio = imageAspectRatios[index] {
+                return ratio
+            } else {
+                // Try to get cached image first
+                let baseUrl = displayTweet.author?.baseUrl ?? HproseInstance.baseUrl
+                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                    let ratio = cachedImage.size.width / cachedImage.size.height
+                    DispatchQueue.main.async {
+                        imageAspectRatios[index] = ratio
+                    }
+                    return ratio
+                } else if let url = attachment.getUrl(baseUrl) {
+                    // If not cached, load from network
+                    loadImageAspectRatio(from: url, for: index)
+                }
+                return 4.0/3.0 // placeholder until loaded
+            }
+        } else {
+            return 4.0/3.0
+        }
+    }
+
+    private func loadImageAspectRatio(from url: URL, for index: Int) {
+        // Only load if not already loaded
+        guard imageAspectRatios[index] == nil else { return }
+        DispatchQueue.global().async {
+            if let data = try? Data(contentsOf: url),
+               let image = UIImage(data: data) {
+                let ratio = image.size.width / image.size.height
+                DispatchQueue.main.async {
+                    imageAspectRatios[index] = ratio
+                }
             }
         }
     }
