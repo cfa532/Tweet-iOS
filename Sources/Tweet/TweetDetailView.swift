@@ -105,7 +105,9 @@ struct TweetDetailView: View {
                         MediaCell(
                             parentTweet: displayTweet,
                             attachmentIndex: index,
-                            aspectRatio: Float(aspectRatio(for: attachments[index], at: index))
+                            aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
+                            play: index == selectedMediaIndex,
+                            shouldLoadVideo:  index == selectedMediaIndex
                         )
                         .tag(index)
                         .onTapGesture { showBrowser = true }
