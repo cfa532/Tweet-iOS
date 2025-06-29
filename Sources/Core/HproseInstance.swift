@@ -778,7 +778,66 @@ final class HproseInstance: ObservableObject {
                 comment.author = appUser
                 tweet.commentCount = count
             }
-            return comment
+            
+            // Check if retweetid is present and create a new tweet
+            if let retweetId = response["retweetid"] as? String, !retweetId.isEmpty {
+                print("[HproseInstance] Retweet ID received: \(retweetId)")
+                
+                // Create a new tweet with the comment's content and original tweet ID
+                let newTweet = Tweet(
+                    mid: retweetId,
+                    authorId: appUser.mid,
+                    content: comment.content,
+                    timestamp: comment.timestamp,
+                    originalTweetId: tweet.mid,
+                    originalAuthorId: tweet.authorId,
+                    attachments: comment.attachments
+                )
+                
+                // Set the author
+                newTweet.author = appUser
+                
+                // Post notification for the new tweet on main thread
+                await MainActor.run {
+                    print("[HproseInstance] Posting newTweetCreated notification for retweet")
+                    NotificationCenter.default.post(
+                        name: .newTweetCreated,
+                        object: nil,
+                        userInfo: ["tweet": newTweet]
+                    )
+                }
+                
+                // Also post the comment notification on main thread
+                await MainActor.run {
+                    print("[HproseInstance] Posting newCommentAdded notification")
+                    print("[HproseInstance] New comment mid: \(comment.mid)")
+                    print("[HproseInstance] New retweet ID: \(retweetId)")
+                    print("[HproseInstance] Parent tweet mid: \(tweet.mid)")
+                    
+                    NotificationCenter.default.post(
+                        name: .newCommentAdded,
+                        object: nil,
+                        userInfo: ["comment": comment]
+                    )
+                }
+                
+                return comment
+            } else {
+                // No retweetid, just post comment notification on main thread
+                await MainActor.run {
+                    print("[HproseInstance] No retweet ID, posting only newCommentAdded notification")
+                    print("[HproseInstance] New comment mid: \(comment.mid)")
+                    print("[HproseInstance] Parent tweet mid: \(tweet.mid)")
+                    
+                    NotificationCenter.default.post(
+                        name: .newCommentAdded,
+                        object: nil,
+                        userInfo: ["comment": comment]
+                    )
+                }
+                
+                return comment
+            }
         } else {
             // Failure case: extract error message
             let errorMessage = response["message"] as? String ?? "Unknown comment upload error"
@@ -1658,18 +1717,12 @@ final class HproseInstance: ObservableObject {
                 
                 if let newComment = try await self.addComment(comment, to: tweet) {
                     await MainActor.run {
-                        print("[HproseInstance] Posting newCommentAdded notification")
+                        print("[HproseInstance] Comment upload completed successfully")
                         print("[HproseInstance] New comment mid: \(newComment.mid)")
-                        print("[HproseInstance] New ReTweetId: \(newComment.retweetId ?? "nil")")
                         print("[HproseInstance] Parent tweet mid: \(tweet.mid)")
                         
-                        // Notify observers about both the updated tweet and new comment
-                        NotificationCenter.default.post(
-                            name: .newCommentAdded,
-                            object: nil,
-                            userInfo: ["comment": newComment]
-                        )
-                        print("[HproseInstance] newCommentAdded notification posted successfully")
+                        // The addComment method now handles both comment and retweet notifications
+                        // No need to post notifications here as they're handled in addComment
                     }
                 } else {
                     let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment returned nil"])
