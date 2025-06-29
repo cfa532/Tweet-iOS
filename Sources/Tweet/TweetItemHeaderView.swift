@@ -121,7 +121,8 @@ struct TweetMenu: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .foregroundColor(.secondary)
-                    .padding(12)
+                    .padding(.trailing, 4)
+                    .padding(.vertical, 12)
                     .contentShape(Rectangle())
             }
             if showToast {

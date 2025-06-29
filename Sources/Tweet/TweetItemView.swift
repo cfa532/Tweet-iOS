@@ -9,6 +9,7 @@ struct TweetItemView: View {
     var onAvatarTap: ((User) -> Void)? = nil
     var onTap: ((Tweet) -> Void)? = nil
     var hideActions: Bool = false
+    var backgroundColor: Color = Color(.systemBackground)
     @State private var showDetail = false
     @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
     @State private var originalTweet: Tweet?
@@ -96,9 +97,9 @@ struct TweetItemView: View {
                             tweet: originalTweet,
                             isPinned: isPinned,
                             onTap: { t in onTap?(t) },
-                            hideActions: true
+                            hideActions: true,
+                            backgroundColor: Color(.systemGray4).opacity(0.7)
                         )
-                        .background(Color(.systemGray4))
                         .cornerRadius(6)
                         .padding(.leading, -16)
                         
@@ -145,7 +146,10 @@ struct TweetItemView: View {
             }
         }
         .padding()
-        .background(Color(.systemBackground))
+        .background(backgroundColor)
+        .if(backgroundColor != Color(.systemBackground)) { view in
+            view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
+        }
         .task {
             isVisible = true
             tweet.isVisible = true
