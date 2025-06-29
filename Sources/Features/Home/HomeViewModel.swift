@@ -118,6 +118,8 @@ struct HomeView: View {
                 onNavigationVisibilityChanged?(true)
             }
         }
+        
+        // Start initial refresh timer (3 seconds)
     }
     
     // MARK: - Scroll Handling
