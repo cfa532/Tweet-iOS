@@ -9,6 +9,11 @@ struct ComposeTweetView: View {
     @State private var shouldFocus = false
     @State private var showMediaPicker = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+    
+    // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
+    private var identifiableItems: [IdentifiablePhotosPickerItem] {
+        viewModel.selectedItems.map { IdentifiablePhotosPickerItem(item: $0) }
+    }
 
     init() {
         // Initialize viewModel with HproseInstance
@@ -33,12 +38,14 @@ struct ComposeTweetView: View {
                         if !viewModel.selectedItems.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 8) {
-                                    ForEach(Array(viewModel.selectedItems.enumerated()), id: \.offset) { index, item in
-                                        ThumbnailView(item: item)
+                                    ForEach(identifiableItems) { identifiableItem in
+                                        ThumbnailView(item: identifiableItem.item)
                                             .frame(width: 100, height: 100)
                                             .overlay(
                                                 Button(action: {
-                                                    viewModel.selectedItems.remove(at: index)
+                                                    if let index = viewModel.selectedItems.firstIndex(where: { $0.itemIdentifier == identifiableItem.item.itemIdentifier }) {
+                                                        viewModel.selectedItems.remove(at: index)
+                                                    }
                                                 }) {
                                                     Image(systemName: "xmark.circle.fill")
                                                         .foregroundColor(.white)

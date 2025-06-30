@@ -13,6 +13,11 @@ struct CommentComposeView: View {
     @State private var isSubmitting = false
     @FocusState private var isEditorFocused: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
+    
+    // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
+    private var identifiableItems: [IdentifiablePhotosPickerItem] {
+        selectedItems.map { IdentifiablePhotosPickerItem(item: $0) }
+    }
 
     var body: some View {
         NavigationView {
@@ -75,12 +80,14 @@ struct CommentComposeView: View {
                         if !selectedItems.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 8) {
-                                    ForEach(Array(selectedItems.enumerated()), id: \.offset) { index, item in
-                                        ThumbnailView(item: item)
+                                    ForEach(identifiableItems) { identifiableItem in
+                                        ThumbnailView(item: identifiableItem.item)
                                             .frame(width: 100, height: 100)
                                             .overlay(
                                                 Button(action: {
-                                                    selectedItems.remove(at: index)
+                                                    if let index = selectedItems.firstIndex(where: { $0.itemIdentifier == identifiableItem.item.itemIdentifier }) {
+                                                        selectedItems.remove(at: index)
+                                                    }
                                                 }) {
                                                     Image(systemName: "xmark.circle.fill")
                                                         .foregroundColor(.white)
