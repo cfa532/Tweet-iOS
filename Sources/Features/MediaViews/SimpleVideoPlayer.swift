@@ -157,12 +157,7 @@ class VideoManager: ObservableObject {
     
     // Remove invisible videos from queue
     func removeInvisibleFromQueue() {
-        let beforeCount = videoQueue.count
         videoQueue.removeAll { !visibleVideos.contains($0) }
-        let afterCount = videoQueue.count
-        // if beforeCount != afterCount {
-        //     print("DEBUG: [VIDEO MANAGER] Removed \(beforeCount - afterCount) invisible videos from queue")
-        // }
     }
     
     // Start the next visible video in queue
@@ -220,6 +215,8 @@ struct SimpleVideoPlayer: View {
     var showNativeControls: Bool = true
     var forceUnmuted: Bool = false // Force unmuted state (for full-screen mode)
     var onVideoTap: (() -> Void)? = nil // Callback when video is tapped
+    var showCustomControls: Bool = true // Whether to show custom video controls
+    var forcePlay: Bool = false // Force play regardless of video manager (for full-screen)
     @EnvironmentObject var muteState: MuteState
 
     var body: some View {
@@ -239,7 +236,9 @@ struct SimpleVideoPlayer: View {
                         autoPlay: autoPlay,
                         onMuteChanged: onMuteChanged,
                         onVideoFinished: onVideoFinished,
-                        onVideoTap: onVideoTap
+                        onVideoTap: onVideoTap,
+                        showCustomControls: showCustomControls,
+                        forcePlay: forcePlay
                     )
                     .offset(y: -pad)    // align the video vertically in the middle
                     .aspectRatio(videoAR, contentMode: .fill)
@@ -253,7 +252,9 @@ struct SimpleVideoPlayer: View {
                         autoPlay: autoPlay,
                         onMuteChanged: onMuteChanged,
                         onVideoFinished: onVideoFinished,
-                        onVideoTap: onVideoTap
+                        onVideoTap: onVideoTap,
+                        showCustomControls: showCustomControls,
+                        forcePlay: forcePlay
                     )
                 }
             }
@@ -270,6 +271,8 @@ struct HLSVideoPlayerWithControls: View {
     let onMuteChanged: ((Bool) -> Void)?
     let onVideoFinished: (() -> Void)?
     let onVideoTap: (() -> Void)?
+    let showCustomControls: Bool
+    let forcePlay: Bool
     
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -284,7 +287,7 @@ struct HLSVideoPlayerWithControls: View {
     @State private var playerInstanceId = UUID().uuidString.prefix(8) // Unique ID for this player instance
     @StateObject private var videoManager = VideoManager.shared
     
-    init(videoURL: URL, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?) {
+    init(videoURL: URL, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool) {
         self.videoURL = videoURL
         self.isVisible = isVisible
         self.isMuted = isMuted
@@ -292,6 +295,8 @@ struct HLSVideoPlayerWithControls: View {
         self.onMuteChanged = onMuteChanged
         self.onVideoFinished = onVideoFinished
         self.onVideoTap = onVideoTap
+        self.showCustomControls = showCustomControls
+        self.forcePlay = forcePlay
         self._playerMuted = State(initialValue: isMuted)
         print("DEBUG: [INSTANCE] Creating new HLSVideoPlayerWithControls instance: \(UUID().uuidString.prefix(8)) for URL: \(videoURL.absoluteString)")
     }
@@ -302,9 +307,9 @@ struct HLSVideoPlayerWithControls: View {
                 if let player = player {
                     VideoPlayer(player: player)
                         .overlay(
-                            // Custom controls overlay
+                            // Custom controls overlay - only show if showCustomControls is true
                             Group {
-                                if showControls {
+                                if showControls && showCustomControls {
                                     VStack {
                                         Spacer()
                                         HStack {
@@ -386,16 +391,27 @@ struct HLSVideoPlayerWithControls: View {
             }
             .contentShape(Rectangle()) // Make entire area tappable
             .onTapGesture {
-                // Toggle controls visibility
-                withAnimation {
-                    showControls.toggle()
+                // Only toggle controls if custom controls are enabled
+                if showCustomControls {
+                    withAnimation {
+                        showControls.toggle()
+                    }
+                    
+                    // Start timer to auto-hide controls after 3 seconds
+                    if showControls {
+                        startControlsTimer()
+                    } else {
+                        stopControlsTimer()
+                    }
                 }
+                
                 // If player is paused and we tap, also resume playback
                 if let player = player, player.rate == 0 {
                     player.play()
                     isPlaying = true
                 }
-                // Call the onVideoTap callback if provided
+                
+                // Always call the onVideoTap callback if provided
                 onVideoTap?()
             }
             .onLongPressGesture {
@@ -441,10 +457,19 @@ struct HLSVideoPlayerWithControls: View {
                 if player == nil {
                     setupPlayer()
                 }
+                
+                // Start controls timer when video loads if custom controls are enabled
+                if showCustomControls && showControls {
+                    startControlsTimer()
+                }
+                
                 // Do not resume or start playback here; let parent control via autoPlay
             }
             .onDisappear {
                 print("DEBUG: [INSTANCE \(playerInstanceId)] HLSVideoPlayerWithControls onDisappear - isVisible: \(isVisible)")
+                
+                // Stop controls timer
+                stopControlsTimer()
                 
                 // Notify video manager about visibility change
                 videoManager.setVideoVisible(String(playerInstanceId), isVisible: false)
@@ -537,22 +562,19 @@ struct HLSVideoPlayerWithControls: View {
         
         // Only play if autoPlay is true
         if autoPlay {
-            // Check if no video is currently playing
-            if videoManager.currentPlayingInstanceId == nil {
-                // No video playing, start this one if visible
-                if isVisible {
-                    videoManager.startPlaying(instanceId: String(playerInstanceId))
-                    avPlayer.play()
-                    self.isPlaying = true
-                } else {
-                    // Not visible, add to queue for later
-                    videoManager.addToQueue(instanceId: String(playerInstanceId))
-                    self.isPlaying = false
-                }
+            if self.forcePlay {
+                // Force play mode (for full-screen) - stop all other videos and start this one
+                self.videoManager.stopAllVideosForSheet()
+                self.videoManager.startPlaying(instanceId: String(self.playerInstanceId))
+                avPlayer.play()
+                self.isPlaying = true
+            } else if self.videoManager.currentPlayingInstanceId == nil {
+                self.videoManager.startPlaying(instanceId: String(self.playerInstanceId))
+                avPlayer.play()
+                self.isPlaying = true
             } else {
-                // Another video is playing, add this one to queue if visible
-                videoManager.addToQueue(instanceId: String(playerInstanceId))
-                self.isPlaying = false
+                // Add to queue if another video is playing
+                self.videoManager.addToQueue(instanceId: String(self.playerInstanceId))
             }
         } else {
             self.isPlaying = false
@@ -575,13 +597,21 @@ struct HLSVideoPlayerWithControls: View {
                 self.duration = playerItem.duration.seconds
                 
                 // If this video should auto-play and no video is currently playing, start it
-                if self.autoPlay && self.videoManager.currentPlayingInstanceId == nil {
-                    self.videoManager.startPlaying(instanceId: String(self.playerInstanceId))
-                    player.play()
-                    self.isPlaying = true
-                } else if self.autoPlay {
-                    // Add to queue if another video is playing
-                    self.videoManager.addToQueue(instanceId: String(self.playerInstanceId))
+                if self.autoPlay {
+                    if self.forcePlay {
+                        // Force play mode (for full-screen) - stop all other videos and start this one
+                        self.videoManager.stopAllVideosForSheet()
+                        self.videoManager.startPlaying(instanceId: String(self.playerInstanceId))
+                        player.play()
+                        self.isPlaying = true
+                    } else if self.videoManager.currentPlayingInstanceId == nil {
+                        self.videoManager.startPlaying(instanceId: String(self.playerInstanceId))
+                        player.play()
+                        self.isPlaying = true
+                    } else {
+                        // Add to queue if another video is playing
+                        self.videoManager.addToQueue(instanceId: String(self.playerInstanceId))
+                    }
                 }
                 
                 timer.invalidate()
@@ -723,6 +753,8 @@ struct HLSDirectoryVideoPlayer: View {
     let onMuteChanged: ((Bool) -> Void)?
     let onVideoFinished: (() -> Void)?
     let onVideoTap: (() -> Void)?
+    let showCustomControls: Bool
+    let forcePlay: Bool
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
     @State private var loading = true
@@ -738,7 +770,9 @@ struct HLSDirectoryVideoPlayer: View {
                     autoPlay: autoPlay,
                     onMuteChanged: onMuteChanged,
                     onVideoFinished: onVideoFinished,
-                    onVideoTap: onVideoTap
+                    onVideoTap: onVideoTap,
+                    showCustomControls: showCustomControls,
+                    forcePlay: forcePlay
                 )
             } else if loading {
                 ProgressView("Loading video...")

@@ -41,46 +41,13 @@ struct MediaBrowserView: View {
             
             TabView(selection: $currentIndex) {
                 ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
-                    ZStack {
-                        if (attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video"), let url = attachment.getUrl(baseUrl) {
-                            SimpleVideoPlayer(
-                                url: url,
-                                autoPlay: true,
-                                onMuteChanged: { _ in
-                                    // In full-screen mode, don't update global mute state
-                                    // Full-screen videos should have independent audio control
-                                },
-                                isVisible: isVisible && currentIndex == index,
-                                contentType: attachment.type,
-                                cellAspectRatio: nil,
-                                videoAspectRatio: nil,
-                                showNativeControls: true,
-                                forceUnmuted: true, // Force unmuted in full-screen
-                                onVideoTap: {
-                                    // Show close button when video is tapped
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showControls = true
-                                    }
-                                    resetControlsTimer()
-                                }
-                            )
-                            .environmentObject(MuteState.shared)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
-                            SimpleAudioPlayer(
-                                url: url,
-                                autoPlay: isVisible && currentIndex == index
-                            )
-                        } else if attachment.type.lowercased() == "image", let url = attachment.getUrl(baseUrl) {
-                            ImageViewWithPlaceholder(
-                                attachment: attachment,
-                                baseUrl: baseUrl,
-                                url: url,
-                                imageState: imageStates[index] ?? .loading
-                            )
-                            .onAppear {
-                                loadImageIfNeeded(for: attachment, at: index)
-                            }
+                    Group {
+                        if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                            videoView(for: attachment, url: url, index: index)
+                        } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                            audioView(for: attachment, url: url, index: index)
+                        } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                            imageView(for: attachment, url: url, index: index)
                         }
                     }
                     .tag(index)
@@ -118,7 +85,7 @@ struct MediaBrowserView: View {
                         dragOffset = value.translation
                         isDragging = true
                         showControls = true
-                        resetControlsTimer()
+                        // Don't reset timer during drag - let it stay visible
                     }
                 }
                 .onEnded { value in
@@ -130,20 +97,18 @@ struct MediaBrowserView: View {
                         withAnimation(.spring()) {
                             dragOffset = .zero
                         }
+                        // Reset timer after drag ends
+                        resetControlsTimer()
                     }
                     isDragging = false
                 }
         )
         .onTapGesture {
-            // Only handle tap for non-video content to avoid conflicts with video player tap gestures
-            let currentAttachment = attachments[currentIndex]
-            if currentAttachment.type.lowercased() != "video" && currentAttachment.type.lowercased() != "hls_video" {
-                // Show controls on tap and reset timer for non-video content
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showControls = true
-                }
-                resetControlsTimer()
+            // Show close button for ALL content types on tap
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showControls = true
             }
+            resetControlsTimer()
         }
         .onAppear {
             isVisible = true
@@ -159,7 +124,8 @@ struct MediaBrowserView: View {
     
     private func startControlsTimer() {
         controlsTimer?.invalidate()
-        controlsTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+        controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+            // Hide close button for ALL content types after 3 seconds
             withAnimation(.easeInOut(duration: 0.3)) {
                 showControls = false
             }
@@ -167,6 +133,7 @@ struct MediaBrowserView: View {
     }
     
     private func resetControlsTimer() {
+        // Reset timer for ALL content types (including videos)
         startControlsTimer()
     }
     
@@ -191,6 +158,70 @@ struct MediaBrowserView: View {
                     imageStates[index] = .error
                 }
             }
+        }
+    }
+    
+    // MARK: - Helper Methods
+    private func isVideoAttachment(_ attachment: MimeiFileType) -> Bool {
+        let type = attachment.type.lowercased()
+        return type == "video" || type == "hls_video"
+    }
+    
+    private func isAudioAttachment(_ attachment: MimeiFileType) -> Bool {
+        return attachment.type.lowercased() == "audio"
+    }
+    
+    private func isImageAttachment(_ attachment: MimeiFileType) -> Bool {
+        return attachment.type.lowercased() == "image"
+    }
+    
+    @ViewBuilder
+    private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
+        SimpleVideoPlayer(
+            url: url,
+            autoPlay: true, // Always auto-play in full-screen
+            onMuteChanged: { _ in
+                // In full-screen mode, don't update global mute state
+                // Full-screen videos should have independent audio control
+            },
+            isVisible: true, // Always visible in full-screen
+            contentType: attachment.type,
+            cellAspectRatio: nil,
+            videoAspectRatio: nil,
+            showNativeControls: true,
+            forceUnmuted: true, // Force unmuted in full-screen
+            onVideoTap: {
+                // Show close button when video is tapped
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showControls = true
+                }
+                resetControlsTimer() // Reset close button timer
+            },
+            showCustomControls: true, // Enable custom controls in full-screen
+            forcePlay: true // Force play and stop all other videos
+        )
+        .environmentObject(MuteState.shared)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    @ViewBuilder
+    private func audioView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
+        SimpleAudioPlayer(
+            url: url,
+            autoPlay: isVisible && currentIndex == index
+        )
+    }
+    
+    @ViewBuilder
+    private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
+        ImageViewWithPlaceholder(
+            attachment: attachment,
+            baseUrl: baseUrl,
+            url: url,
+            imageState: imageStates[index] ?? .loading
+        )
+        .onAppear {
+            loadImageIfNeeded(for: attachment, at: index)
         }
     }
 }
