@@ -18,12 +18,21 @@ struct TweetItemView: View {
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     var onRemove: ((String) -> Void)? = nil
+    @State private var showBrowser = false
+    @State private var selectedMediaIndex = 0
 
     private func mediaGrid(for tweet: Tweet) -> some View {
         Group {
             if let attachments = tweet.attachments, !attachments.isEmpty {
-                MediaGridView(parentTweet: tweet, attachments: attachments)
-                    .padding(.top, 8)
+                MediaGridView(
+                    parentTweet: tweet,
+                    attachments: attachments,
+                    onItemTap: { idx in
+                        selectedMediaIndex = idx
+                        showBrowser = true
+                    }
+                )
+                .padding(.top, 8)
             }
         }
     }
@@ -85,7 +94,10 @@ struct TweetItemView: View {
                         .onTapGesture {
                             onTap?(tweet)
                         }
-                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, onItemTap: { idx in
+                            selectedMediaIndex = idx
+                            showBrowser = true
+                        })
                             .padding(.top, -12)
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -131,13 +143,15 @@ struct TweetItemView: View {
                     .onTapGesture {
                         onTap?(tweet)
                     }
-                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, onItemTap: { idx in
+                        selectedMediaIndex = idx
+                        showBrowser = true
+                    })
                         .padding(.top, -12)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             onTap?(tweet)
                         }
-                    
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)
@@ -149,6 +163,14 @@ struct TweetItemView: View {
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
+        }
+        .fullScreenCover(isPresented: $showBrowser) {
+            if let attachments = tweet.attachments {
+                MediaBrowserView(
+                    attachments: attachments,
+                    initialIndex: selectedMediaIndex
+                )
+            }
         }
         .task {
             isVisible = true

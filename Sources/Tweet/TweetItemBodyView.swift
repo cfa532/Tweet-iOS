@@ -17,6 +17,7 @@ struct TweetItemBodyView: View {
     @ObservedObject var tweet: Tweet
     var enableTap: Bool = false
     var isVisible: Bool = true
+    var onItemTap: ((Int) -> Void)? = nil
     @State private var isExpanded = false
     @State private var showLoginSheet = false
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -47,7 +48,7 @@ struct TweetItemBodyView: View {
             }
             if let attachments = tweet.attachments, !attachments.isEmpty {
                 let aspect = MediaGridViewModel.aspectRatio(for: attachments)
-                MediaGridView(parentTweet: tweet, attachments: attachments)
+                MediaGridView(parentTweet: tweet, attachments: attachments, onItemTap: onItemTap)
                     .aspectRatio(aspect, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .clipped()
