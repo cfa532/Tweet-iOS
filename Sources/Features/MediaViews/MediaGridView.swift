@@ -564,13 +564,62 @@ struct MediaGridViewModel {
                 return 2.0      // One portrait, one landscape: horizontal, aspect 2:1
             }
         case 3:
-            if (attachments[0].aspectRatio ?? 1) < 1 {
-                return CGFloat(attachments[0].aspectRatio ?? 1.0)
-            } else {
-                return CGFloat(attachments[0].aspectRatio ?? 1.0) / 2
-            }
+            return calculateOptimalAspectRatioForThreeItems(attachments)
         default:
             return 1.0
         }
+    }
+    
+    /// Calculates optimal aspect ratio for 3 items based on their characteristics
+    private static func calculateOptimalAspectRatioForThreeItems(_ attachments: [MimeiFileType]) -> CGFloat {
+        let ar0 = attachments[0].aspectRatio ?? 1
+        let ar1 = attachments[1].aspectRatio ?? 1
+        let ar2 = attachments[2].aspectRatio ?? 1
+        
+        // Count portrait and landscape images
+        let portraitCount = [ar0, ar1, ar2].filter { $0 < 1 }.count
+        let landscapeCount = [ar0, ar1, ar2].filter { $0 > 1 }.count
+        
+        // Calculate average aspect ratio
+        let avgAspectRatio = (ar0 + ar1 + ar2) / 3
+        
+        // Calculate variance to understand how diverse the aspect ratios are
+        let variance = pow(ar0 - avgAspectRatio, 2) + pow(ar1 - avgAspectRatio, 2) + pow(ar2 - avgAspectRatio, 2)
+        let standardDeviation = sqrt(variance / 3)
+        
+        // Decision algorithm:
+        // 1. If all images are portrait (aspect ratio < 1), use 4:6 (0.67) for better vertical stacking
+        if portraitCount == 3 {
+            return 4.0/6.0 // 0.67 - Portrait layout
+        }
+        
+        // 2. If all images are landscape (aspect ratio > 1), use 4:6 (0.67) for vertical stacking
+        if landscapeCount == 3 {
+            return 4.0/6.0 // 0.67 - Portrait layout for better landscape image display
+        }
+        
+        // 3. If there's a mix of orientations, analyze the distribution
+        if portraitCount == 2 && landscapeCount == 1 {
+            // Two portraits, one landscape - prefer portrait layout
+            return 4.0/6.0 // 0.67
+        }
+        
+        if portraitCount == 1 && landscapeCount == 2 {
+            // One portrait, two landscapes - prefer square layout for better balance
+            return 1.0 // Square layout
+        }
+        
+        // 4. If aspect ratios are very diverse (high standard deviation), use square layout
+        if standardDeviation > 0.5 {
+            return 1.0 // Square layout for diverse content
+        }
+        
+        // 5. If average aspect ratio is close to square, use square layout
+        if abs(avgAspectRatio - 1.0) < 0.2 {
+            return 1.0 // Square layout
+        }
+        
+        // 6. Default to portrait layout for better visual balance
+        return 4.0/6.0 // 0.67 - Portrait layout
     }
 }
