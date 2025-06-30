@@ -67,11 +67,13 @@ struct MediaCell: View {
                         showNativeControls: true
                     )
                     .environmentObject(MuteState.shared)
-                    .onTapGesture {
-                        handleTap()
+                    .if(!disableInternalFullScreen) { view in
+                        view.onTapGesture {
+                            handleTap()
+                        }
                     }
-                    .onTapGesture(count: 2) {
-                        if !disableInternalFullScreen {
+                    .if(!disableInternalFullScreen) { view in
+                        view.onTapGesture(count: 2) {
                             showFullScreen = true
                         }
                     }
@@ -86,6 +88,11 @@ struct MediaCell: View {
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .clipped()
+                            .if(!disableInternalFullScreen) { view in
+                                view.onTapGesture {
+                                    handleTap()
+                                }
+                            }
                     } else if isLoading {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle())
@@ -118,12 +125,14 @@ struct MediaCell: View {
                 loadImage()
             }
         }
-        .fullScreenCover(isPresented: $showFullScreen) {
-            if !disableInternalFullScreen, let attachments = parentTweet.attachments {
-                MediaBrowserView(
-                    attachments: attachments,
-                    initialIndex: attachmentIndex
-                )
+        .if(!disableInternalFullScreen) { view in
+            view.fullScreenCover(isPresented: $showFullScreen) {
+                if let attachments = parentTweet.attachments {
+                    MediaBrowserView(
+                        attachments: attachments,
+                        initialIndex: attachmentIndex
+                    )
+                }
             }
         }
     }

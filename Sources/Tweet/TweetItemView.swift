@@ -95,6 +95,7 @@ struct TweetItemView: View {
                             onTap?(tweet)
                         }
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, onItemTap: { idx in
+                            print("DEBUG: TweetItemView received tap on index: \(idx)")
                             selectedMediaIndex = idx
                             showBrowser = true
                         })
@@ -144,6 +145,7 @@ struct TweetItemView: View {
                         onTap?(tweet)
                     }
                     TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, onItemTap: { idx in
+                        print("DEBUG: TweetItemView received tap on index: \(idx)")
                         selectedMediaIndex = idx
                         showBrowser = true
                     })
@@ -170,6 +172,11 @@ struct TweetItemView: View {
                     attachments: attachments,
                     initialIndex: selectedMediaIndex
                 )
+            }
+        }
+        .onChange(of: showBrowser) { newValue in
+            if newValue, let attachments = tweet.attachments {
+                print("DEBUG: TweetItemView opening MediaBrowserView with initialIndex: \(selectedMediaIndex)")
             }
         }
         .task {

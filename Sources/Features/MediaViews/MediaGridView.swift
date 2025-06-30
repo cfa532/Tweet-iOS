@@ -107,466 +107,7 @@ struct MediaGridView: View {
             let gridHeight = gridWidth / MediaGridViewModel.aspectRatio(for: attachments)
 
             ZStack {
-                switch attachments.count {
-                case 1:
-                    MediaCell(
-                        parentTweet: parentTweet,
-                        attachmentIndex: 0,
-                        aspectRatio: 1.0,
-                        play: currentVideoIndex == 0,
-                        shouldLoadVideo: shouldLoadVideo,
-                        onVideoFinished: onVideoFinished,
-                        disableInternalFullScreen: true
-                    )
-                    .environmentObject(MuteState.shared)
-                    .frame(width: gridWidth, height: gridHeight)
-                    .aspectRatio(contentMode: .fill)
-                    .clipped()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        onItemTap?(0)
-                    }
-                    .onTapGesture(count: 2) {
-                        if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
-                            selectedFullScreenIndex = 0
-                            showFullScreen = true
-                        }
-                    }
-                    .border(Color.red, width: 1)
-                    
-                case 2:
-                    let ar0 = attachments[0].aspectRatio ?? 1
-                    let ar1 = attachments[1].aspectRatio ?? 1
-                    let isPortrait0 = ar0 < 1
-                    let isPortrait1 = ar1 < 1
-                    let isLandscape0 = ar0 > 1
-                    let isLandscape1 = ar1 > 1
-                    if isPortrait0 && isPortrait1 {
-                        // Both portrait: horizontal, aspect 3:2
-                        HStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    disableInternalFullScreen: true
-                                )
-                                .environmentObject(MuteState.shared)
-                                .frame(width: gridWidth/2 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(idx) }
-                                .onTapGesture(count: 2) {
-                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
-                                        selectedFullScreenIndex = idx
-                                        showFullScreen = true
-                                    }
-                                }
-                            }
-                        }
-                    } else if isLandscape0 && isLandscape1 {
-                        // Both landscape: vertical, aspect 4:5
-                        VStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    disableInternalFullScreen: true
-                                )
-                                .environmentObject(MuteState.shared)
-                                .frame(width: gridWidth, height: gridHeight/2 - 1)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(idx) }
-                                .onTapGesture(count: 2) {
-                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
-                                        selectedFullScreenIndex = idx
-                                        showFullScreen = true
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // One portrait, one landscape: horizontal, aspect 1:1, portrait 1/3, landscape 2/3
-                        HStack(spacing: 2) {
-                            if isPortrait0 {
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: 0,
-                                    play: currentVideoIndex == 0,
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    disableInternalFullScreen: true
-                                )
-                                .environmentObject(MuteState.shared)
-                                .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(0) }
-                                .onTapGesture(count: 2) {
-                                    if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
-                                        selectedFullScreenIndex = 0
-                                        showFullScreen = true
-                                    }
-                                }
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: 1,
-                                    play: currentVideoIndex == 1,
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    disableInternalFullScreen: true
-                                )
-                                .environmentObject(MuteState.shared)
-                                .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(1) }
-                                .onTapGesture(count: 2) {
-                                    if attachments[1].type.lowercased() == "video" || attachments[1].type.lowercased() == "hls_video" {
-                                        selectedFullScreenIndex = 1
-                                        showFullScreen = true
-                                    }
-                                }
-                            } else {
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: 0,
-                                    play: currentVideoIndex == 0,
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    disableInternalFullScreen: true
-                                )
-                                .environmentObject(MuteState.shared)
-                                .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(0) }
-                                .onTapGesture(count: 2) {
-                                    if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
-                                        selectedFullScreenIndex = 0
-                                        showFullScreen = true
-                                    }
-                                }
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: 1,
-                                    play: currentVideoIndex == 1,
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    disableInternalFullScreen: true
-                                )
-                                .environmentObject(MuteState.shared)
-                                .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(1) }
-                                .onTapGesture(count: 2) {
-                                    if attachments[1].type.lowercased() == "video" || attachments[1].type.lowercased() == "hls_video" {
-                                        selectedFullScreenIndex = 1
-                                        showFullScreen = true
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                case 3:
-                    let ar0 = attachments[0].aspectRatio ?? 1
-                    let ar1 = attachments[1].aspectRatio ?? 1
-                    let ar2 = attachments[2].aspectRatio ?? 1
-                    let allPortrait = ar0 < 1 && ar1 < 1 && ar2 < 1
-                    let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1
-                    if allPortrait {
-                        // All portrait: horizontal stack
-                        HStack(spacing: 2) {
-                            ForEach(0..<3) { idx in
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    disableInternalFullScreen: true
-                                )
-                                .environmentObject(MuteState.shared)
-                                .aspectRatio(3.0/2.0, contentMode: .fill)
-                                .frame(width: gridWidth/3 - 1, height: gridHeight)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(idx) }
-                                .onTapGesture(count: 2) {
-                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
-                                        selectedFullScreenIndex = idx
-                                        showFullScreen = true
-                                    }
-                                }
-                            }
-                        }
-                    } else if allLandscape {
-                        // All landscape: vertical stack
-                        VStack(spacing: 2) {
-                            ForEach(0..<3) { idx in
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    disableInternalFullScreen: true
-                                )
-                                .environmentObject(MuteState.shared)
-                                .aspectRatio(4.0/5.0, contentMode: .fill)
-                                .frame(width: gridWidth, height: gridHeight/3 - 1)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(idx) }
-                                .onTapGesture(count: 2) {
-                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
-                                        selectedFullScreenIndex = idx
-                                        showFullScreen = true
-                                    }
-                                }
-                            }
-                        }
-                    } else if ar0 < 1 {
-                        // First is portrait: left column tall, right column two stacked
-                        HStack(spacing: 2) {
-                            MediaCell(
-                                parentTweet: parentTweet,
-                                attachmentIndex: 0,
-                                play: currentVideoIndex == 0,
-                                shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                                disableInternalFullScreen: true
-                            )
-                            .environmentObject(MuteState.shared)
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: gridWidth/2 - 1, height: gridHeight)
-                            .clipped()
-                            .contentShape(Rectangle())
-                            .onTapGesture { onItemTap?(0) }
-                            .onTapGesture(count: 2) {
-                                if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
-                                    selectedFullScreenIndex = 0
-                                    showFullScreen = true
-                                }
-                            }
-                            VStack(spacing: 2) {
-                                ForEach(1..<3) { idx in
-                                    MediaCell(
-                                        parentTweet: parentTweet,
-                                        attachmentIndex: idx,
-                                        play: currentVideoIndex == idx,
-                                        shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                                        disableInternalFullScreen: true
-                                    )
-                                    .environmentObject(MuteState.shared)
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { onItemTap?(idx) }
-                                    .onTapGesture(count: 2) {
-                                        if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
-                                            selectedFullScreenIndex = idx
-                                            showFullScreen = true
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // First is landscape: top row wide, bottom row two images
-                        VStack(spacing: 2) {
-                            MediaCell(
-                                parentTweet: parentTweet,
-                                attachmentIndex: 0,
-                                play: currentVideoIndex == 0,
-                                shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                                disableInternalFullScreen: true
-                            )
-                            .environmentObject(MuteState.shared)
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: gridWidth, height: gridHeight/2 - 1)
-                            .clipped()
-                            .contentShape(Rectangle())
-                            .onTapGesture { onItemTap?(0) }
-                            .onTapGesture(count: 2) {
-                                if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
-                                    selectedFullScreenIndex = 0
-                                    showFullScreen = true
-                                }
-                            }
-                            HStack(spacing: 2) {
-                                ForEach(1..<3) { idx in
-                                    MediaCell(
-                                        parentTweet: parentTweet,
-                                        attachmentIndex: idx,
-                                        play: currentVideoIndex == idx,
-                                        shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                                        disableInternalFullScreen: true
-                                    )
-                                    .environmentObject(MuteState.shared)
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { onItemTap?(idx) }
-                                    .onTapGesture(count: 2) {
-                                        if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
-                                            selectedFullScreenIndex = idx
-                                            showFullScreen = true
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                case 4:
-                    let ar0 = attachments[0].aspectRatio ?? 1
-                    let ar1 = attachments[1].aspectRatio ?? 1
-                    let ar2 = attachments[2].aspectRatio ?? 1
-                    let ar3 = attachments[3].aspectRatio ?? 1
-                    let allPortrait = ar0 < 1 && ar1 < 1 && ar2 < 1 && ar3 < 1
-                    let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1 && ar3 > 1
-                    let cellAspect: CGFloat = allPortrait ? 3.0/2.0 : (allLandscape ? 4.0/5.0 : 1.0)
-                    VStack(spacing: 2) {
-                        HStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    disableInternalFullScreen: true
-                                )
-                                .environmentObject(MuteState.shared)
-                                .aspectRatio(cellAspect, contentMode: .fill)
-                                .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(idx) }
-                                .onTapGesture(count: 2) {
-                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
-                                        selectedFullScreenIndex = idx
-                                        showFullScreen = true
-                                    }
-                                }
-                            }
-                        }
-                        HStack(spacing: 2) {
-                            ForEach(2..<4) { idx in
-                                if idx < attachments.count {
-                                    MediaCell(
-                                        parentTweet: parentTweet,
-                                        attachmentIndex: idx,
-                                        play: currentVideoIndex == idx,
-                                        shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                                        disableInternalFullScreen: true
-                                    )
-                                    .environmentObject(MuteState.shared)
-                                    .aspectRatio(cellAspect, contentMode: .fill)
-                                    .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { onItemTap?(idx) }
-                                    .onTapGesture(count: 2) {
-                                        if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
-                                            selectedFullScreenIndex = idx
-                                            showFullScreen = true
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                default:
-                    VStack(spacing: 2) {
-                        HStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    disableInternalFullScreen: true
-                                )
-                                .environmentObject(MuteState.shared)
-                                .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    onItemTap?(idx)
-                                }
-                                .onTapGesture(count: 2) {
-                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
-                                        selectedFullScreenIndex = idx
-                                        showFullScreen = true
-                                    }
-                                }
-                            }
-                        }
-                        HStack(spacing: 2) {
-                            ForEach(2..<4) { idx in
-                                if idx < attachments.count {
-                                    ZStack {
-                                        MediaCell(
-                                            parentTweet: parentTweet,
-                                            attachmentIndex: idx,
-                                            play: currentVideoIndex == idx,
-                                            shouldLoadVideo: shouldLoadVideo,
-                                            onVideoFinished: onVideoFinished,
-                                            disableInternalFullScreen: true
-                                        )
-                                        .environmentObject(MuteState.shared)
-                                        .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                        .aspectRatio(contentMode: .fill)
-                                        .clipped()
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            onItemTap?(idx)
-                                        }
-                                        .onTapGesture(count: 2) {
-                                            if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
-                                                selectedFullScreenIndex = idx
-                                                showFullScreen = true
-                                            }
-                                        }
-                                        
-                                        if idx == 3 && attachments.count > 4 {
-                                            Color.black.opacity(0.4)
-                                            Text("+\(attachments.count - 4)")
-                                                .foregroundColor(.white)
-                                                .font(.title)
-                                                .bold()
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                contentView(gridWidth: gridWidth, gridHeight: gridHeight)
             }
             .frame(width: gridWidth, height: gridHeight)
             .clipped()
@@ -592,6 +133,511 @@ struct MediaGridView: View {
                 videoLoadTimer = nil
                 shouldLoadVideo = false
                 stopVideoPlayback()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func contentView(gridWidth: CGFloat, gridHeight: CGFloat) -> some View {
+        switch attachments.count {
+        case 1:
+            singleAttachmentView(gridWidth: gridWidth, gridHeight: gridHeight)
+        case 2:
+            twoAttachmentsView(gridWidth: gridWidth, gridHeight: gridHeight)
+        case 3:
+            threeAttachmentsView(gridWidth: gridWidth, gridHeight: gridHeight)
+        case 4:
+            fourAttachmentsView(gridWidth: gridWidth, gridHeight: gridHeight)
+        default:
+            defaultAttachmentsView(gridWidth: gridWidth, gridHeight: gridHeight)
+        }
+    }
+
+    @ViewBuilder
+    private func singleAttachmentView(gridWidth: CGFloat, gridHeight: CGFloat) -> some View {
+        ZStack {
+            MediaCell(
+                parentTweet: parentTweet,
+                attachmentIndex: 0,
+                aspectRatio: 1.0,
+                play: currentVideoIndex == 0,
+                shouldLoadVideo: shouldLoadVideo,
+                onVideoFinished: onVideoFinished,
+                disableInternalFullScreen: true
+            )
+            .environmentObject(MuteState.shared)
+            .frame(width: gridWidth, height: gridHeight)
+            .aspectRatio(contentMode: .fill)
+            .clipped()
+            
+            // Overlay for tap gestures
+            Rectangle()
+                .fill(Color.clear)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    print("DEBUG: MediaGridView single tap on index: 0")
+                    onItemTap?(0)
+                }
+                .onTapGesture(count: 2) {
+                    if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
+                        print("DEBUG: MediaGridView double tap on video index: 0")
+                        selectedFullScreenIndex = 0
+                        showFullScreen = true
+                    }
+                }
+        }
+        .border(Color.red, width: 1)
+    }
+
+    @ViewBuilder
+    private func twoAttachmentsView(gridWidth: CGFloat, gridHeight: CGFloat) -> some View {
+        let ar0 = attachments[0].aspectRatio ?? 1
+        let ar1 = attachments[1].aspectRatio ?? 1
+        let isPortrait0 = ar0 < 1
+        let isPortrait1 = ar1 < 1
+        let isLandscape0 = ar0 > 1
+        let isLandscape1 = ar1 > 1
+        if isPortrait0 && isPortrait1 {
+            // Both portrait: horizontal, aspect 3:2
+            HStack(spacing: 2) {
+                ForEach(0..<2) { idx in
+                    ZStack {
+                        MediaCell(
+                            parentTweet: parentTweet,
+                            attachmentIndex: idx,
+                            play: currentVideoIndex == idx,
+                            shouldLoadVideo: shouldLoadVideo,
+                            onVideoFinished: onVideoFinished,
+                            disableInternalFullScreen: true
+                        )
+                        .environmentObject(MuteState.shared)
+                        .frame(width: gridWidth/2 - 1, height: gridHeight)
+                        .aspectRatio(contentMode: .fill)
+                        .clipped()
+                        
+                        // Overlay for tap gestures
+                        Rectangle()
+                            .fill(Color.clear)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onItemTap?(idx) }
+                            .onTapGesture(count: 2) {
+                                if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                    selectedFullScreenIndex = idx
+                                    showFullScreen = true
+                                }
+                            }
+                    }
+                }
+            }
+        } else if isLandscape0 && isLandscape1 {
+            // Both landscape: vertical, aspect 4:5
+            VStack(spacing: 2) {
+                ForEach(0..<2) { idx in
+                    ZStack {
+                        MediaCell(
+                            parentTweet: parentTweet,
+                            attachmentIndex: idx,
+                            play: currentVideoIndex == idx,
+                            shouldLoadVideo: shouldLoadVideo,
+                            onVideoFinished: onVideoFinished,
+                            disableInternalFullScreen: true
+                        )
+                        .environmentObject(MuteState.shared)
+                        .frame(width: gridWidth, height: gridHeight/2 - 1)
+                        .aspectRatio(contentMode: .fill)
+                        .clipped()
+                        
+                        // Overlay for tap gestures
+                        Rectangle()
+                            .fill(Color.clear)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onItemTap?(idx) }
+                            .onTapGesture(count: 2) {
+                                if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                    selectedFullScreenIndex = idx
+                                    showFullScreen = true
+                                }
+                            }
+                    }
+                }
+            }
+        } else {
+            // One portrait, one landscape: horizontal, aspect 1:1, portrait 1/3, landscape 2/3
+            HStack(spacing: 2) {
+                if isPortrait0 {
+                    MediaCell(
+                        parentTweet: parentTweet,
+                        attachmentIndex: 0,
+                        play: currentVideoIndex == 0,
+                        shouldLoadVideo: shouldLoadVideo,
+                        onVideoFinished: onVideoFinished,
+                        disableInternalFullScreen: true
+                    )
+                    .environmentObject(MuteState.shared)
+                    .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
+                    .aspectRatio(contentMode: .fill)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture { onItemTap?(0) }
+                    .onTapGesture(count: 2) {
+                        if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
+                            selectedFullScreenIndex = 0
+                            showFullScreen = true
+                        }
+                    }
+                    MediaCell(
+                        parentTweet: parentTweet,
+                        attachmentIndex: 1,
+                        play: currentVideoIndex == 1,
+                        shouldLoadVideo: shouldLoadVideo,
+                        onVideoFinished: onVideoFinished,
+                        disableInternalFullScreen: true
+                    )
+                    .environmentObject(MuteState.shared)
+                    .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
+                    .aspectRatio(contentMode: .fill)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture { onItemTap?(1) }
+                    .onTapGesture(count: 2) {
+                        if attachments[1].type.lowercased() == "video" || attachments[1].type.lowercased() == "hls_video" {
+                            selectedFullScreenIndex = 1
+                            showFullScreen = true
+                        }
+                    }
+                } else {
+                    MediaCell(
+                        parentTweet: parentTweet,
+                        attachmentIndex: 0,
+                        play: currentVideoIndex == 0,
+                        shouldLoadVideo: shouldLoadVideo,
+                        onVideoFinished: onVideoFinished,
+                        disableInternalFullScreen: true
+                    )
+                    .environmentObject(MuteState.shared)
+                    .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
+                    .aspectRatio(contentMode: .fill)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture { onItemTap?(0) }
+                    .onTapGesture(count: 2) {
+                        if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
+                            selectedFullScreenIndex = 0
+                            showFullScreen = true
+                        }
+                    }
+                    MediaCell(
+                        parentTweet: parentTweet,
+                        attachmentIndex: 1,
+                        play: currentVideoIndex == 1,
+                        shouldLoadVideo: shouldLoadVideo,
+                        onVideoFinished: onVideoFinished,
+                        disableInternalFullScreen: true
+                    )
+                    .environmentObject(MuteState.shared)
+                    .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
+                    .aspectRatio(contentMode: .fill)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture { onItemTap?(1) }
+                    .onTapGesture(count: 2) {
+                        if attachments[1].type.lowercased() == "video" || attachments[1].type.lowercased() == "hls_video" {
+                            selectedFullScreenIndex = 1
+                            showFullScreen = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func threeAttachmentsView(gridWidth: CGFloat, gridHeight: CGFloat) -> some View {
+        let ar0 = attachments[0].aspectRatio ?? 1
+        let ar1 = attachments[1].aspectRatio ?? 1
+        let ar2 = attachments[2].aspectRatio ?? 1
+        let allPortrait = ar0 < 1 && ar1 < 1 && ar2 < 1
+        let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1
+        if allPortrait {
+            // All portrait: horizontal stack
+            HStack(spacing: 2) {
+                ForEach(0..<3) { idx in
+                    MediaCell(
+                        parentTweet: parentTweet,
+                        attachmentIndex: idx,
+                        play: currentVideoIndex == idx,
+                        shouldLoadVideo: shouldLoadVideo,
+                        onVideoFinished: onVideoFinished,
+                        disableInternalFullScreen: true
+                    )
+                    .environmentObject(MuteState.shared)
+                    .aspectRatio(3.0/2.0, contentMode: .fill)
+                    .frame(width: gridWidth/3 - 1, height: gridHeight)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture { onItemTap?(idx) }
+                    .onTapGesture(count: 2) {
+                        if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                            selectedFullScreenIndex = idx
+                            showFullScreen = true
+                        }
+                    }
+                }
+            }
+        } else if allLandscape {
+            // All landscape: vertical stack
+            VStack(spacing: 2) {
+                ForEach(0..<3) { idx in
+                    MediaCell(
+                        parentTweet: parentTweet,
+                        attachmentIndex: idx,
+                        play: currentVideoIndex == idx,
+                        shouldLoadVideo: shouldLoadVideo,
+                        onVideoFinished: onVideoFinished,
+                        disableInternalFullScreen: true
+                    )
+                    .environmentObject(MuteState.shared)
+                    .aspectRatio(4.0/5.0, contentMode: .fill)
+                    .frame(width: gridWidth, height: gridHeight/3 - 1)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture { onItemTap?(idx) }
+                    .onTapGesture(count: 2) {
+                        if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                            selectedFullScreenIndex = idx
+                            showFullScreen = true
+                        }
+                    }
+                }
+            }
+        } else if ar0 < 1 {
+            // First is portrait: left column tall, right column two stacked
+            HStack(spacing: 2) {
+                MediaCell(
+                    parentTweet: parentTweet,
+                    attachmentIndex: 0,
+                    play: currentVideoIndex == 0,
+                    shouldLoadVideo: shouldLoadVideo,
+                    onVideoFinished: onVideoFinished,
+                    disableInternalFullScreen: true
+                )
+                .environmentObject(MuteState.shared)
+                .aspectRatio(contentMode: .fill)
+                .frame(width: gridWidth/2 - 1, height: gridHeight)
+                .clipped()
+                .contentShape(Rectangle())
+                .onTapGesture { onItemTap?(0) }
+                .onTapGesture(count: 2) {
+                    if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
+                        selectedFullScreenIndex = 0
+                        showFullScreen = true
+                    }
+                }
+                VStack(spacing: 2) {
+                    ForEach(1..<3) { idx in
+                        MediaCell(
+                            parentTweet: parentTweet,
+                            attachmentIndex: idx,
+                            play: currentVideoIndex == idx,
+                            shouldLoadVideo: shouldLoadVideo,
+                            onVideoFinished: onVideoFinished,
+                            disableInternalFullScreen: true
+                        )
+                        .environmentObject(MuteState.shared)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .onTapGesture { onItemTap?(idx) }
+                        .onTapGesture(count: 2) {
+                            if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                selectedFullScreenIndex = idx
+                                showFullScreen = true
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // First is landscape: top row wide, bottom row two images
+            VStack(spacing: 2) {
+                MediaCell(
+                    parentTweet: parentTweet,
+                    attachmentIndex: 0,
+                    play: currentVideoIndex == 0,
+                    shouldLoadVideo: shouldLoadVideo,
+                    onVideoFinished: onVideoFinished,
+                    disableInternalFullScreen: true
+                )
+                .environmentObject(MuteState.shared)
+                .aspectRatio(contentMode: .fill)
+                .frame(width: gridWidth, height: gridHeight/2 - 1)
+                .clipped()
+                .contentShape(Rectangle())
+                .onTapGesture { onItemTap?(0) }
+                .onTapGesture(count: 2) {
+                    if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
+                        selectedFullScreenIndex = 0
+                        showFullScreen = true
+                    }
+                }
+                HStack(spacing: 2) {
+                    ForEach(1..<3) { idx in
+                        MediaCell(
+                            parentTweet: parentTweet,
+                            attachmentIndex: idx,
+                            play: currentVideoIndex == idx,
+                            shouldLoadVideo: shouldLoadVideo,
+                            onVideoFinished: onVideoFinished,
+                            disableInternalFullScreen: true
+                        )
+                        .environmentObject(MuteState.shared)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .onTapGesture { onItemTap?(idx) }
+                        .onTapGesture(count: 2) {
+                            if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                selectedFullScreenIndex = idx
+                                showFullScreen = true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func fourAttachmentsView(gridWidth: CGFloat, gridHeight: CGFloat) -> some View {
+        let ar0 = attachments[0].aspectRatio ?? 1
+        let ar1 = attachments[1].aspectRatio ?? 1
+        let ar2 = attachments[2].aspectRatio ?? 1
+        let ar3 = attachments[3].aspectRatio ?? 1
+        let allPortrait = ar0 < 1 && ar1 < 1 && ar2 < 1 && ar3 < 1
+        let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1 && ar3 > 1
+        let cellAspect: CGFloat = allPortrait ? 3.0/2.0 : (allLandscape ? 4.0/5.0 : 1.0)
+        VStack(spacing: 2) {
+            HStack(spacing: 2) {
+                ForEach(0..<2) { idx in
+                    MediaCell(
+                        parentTweet: parentTweet,
+                        attachmentIndex: idx,
+                        play: currentVideoIndex == idx,
+                        shouldLoadVideo: shouldLoadVideo,
+                        onVideoFinished: onVideoFinished,
+                        disableInternalFullScreen: true
+                    )
+                    .environmentObject(MuteState.shared)
+                    .aspectRatio(cellAspect, contentMode: .fill)
+                    .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture { onItemTap?(idx) }
+                    .onTapGesture(count: 2) {
+                        if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                            selectedFullScreenIndex = idx
+                            showFullScreen = true
+                        }
+                    }
+                }
+            }
+            HStack(spacing: 2) {
+                ForEach(2..<4) { idx in
+                    if idx < attachments.count {
+                        MediaCell(
+                            parentTweet: parentTweet,
+                            attachmentIndex: idx,
+                            play: currentVideoIndex == idx,
+                            shouldLoadVideo: shouldLoadVideo,
+                            onVideoFinished: onVideoFinished,
+                            disableInternalFullScreen: true
+                        )
+                        .environmentObject(MuteState.shared)
+                        .aspectRatio(cellAspect, contentMode: .fill)
+                        .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .onTapGesture { onItemTap?(idx) }
+                        .onTapGesture(count: 2) {
+                            if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                selectedFullScreenIndex = idx
+                                showFullScreen = true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func defaultAttachmentsView(gridWidth: CGFloat, gridHeight: CGFloat) -> some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 2) {
+                ForEach(0..<2) { idx in
+                    MediaCell(
+                        parentTweet: parentTweet,
+                        attachmentIndex: idx,
+                        play: currentVideoIndex == idx,
+                        shouldLoadVideo: shouldLoadVideo,
+                        onVideoFinished: onVideoFinished,
+                        disableInternalFullScreen: true
+                    )
+                    .environmentObject(MuteState.shared)
+                    .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
+                    .aspectRatio(contentMode: .fill)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onItemTap?(idx)
+                    }
+                    .onTapGesture(count: 2) {
+                        if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                            selectedFullScreenIndex = idx
+                            showFullScreen = true
+                        }
+                    }
+                }
+            }
+            HStack(spacing: 2) {
+                ForEach(2..<4) { idx in
+                    if idx < attachments.count {
+                        ZStack {
+                            MediaCell(
+                                parentTweet: parentTweet,
+                                attachmentIndex: idx,
+                                play: currentVideoIndex == idx,
+                                shouldLoadVideo: shouldLoadVideo,
+                                onVideoFinished: onVideoFinished,
+                                disableInternalFullScreen: true
+                            )
+                            .environmentObject(MuteState.shared)
+                            .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
+                            .aspectRatio(contentMode: .fill)
+                            .clipped()
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                onItemTap?(idx)
+                            }
+                            .onTapGesture(count: 2) {
+                                if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                    selectedFullScreenIndex = idx
+                                    showFullScreen = true
+                                }
+                            }
+                            
+                            if idx == 3 && attachments.count > 4 {
+                                Color.black.opacity(0.4)
+                                Text("+\(attachments.count - 4)")
+                                    .foregroundColor(.white)
+                                    .font(.title)
+                                    .bold()
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -750,3 +796,4 @@ struct MediaGridViewModel {
         return 4.0/6.0 // 0.67 - Portrait layout
     }
 }
+
