@@ -13,6 +13,7 @@ struct MediaCell: View {
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
+    let disableInternalFullScreen: Bool // Disable internal full-screen when used in MediaGridView
     
     @State private var play: Bool
     @State private var image: UIImage?
@@ -22,13 +23,14 @@ struct MediaCell: View {
     @State private var shouldLoadVideo: Bool
     @State private var onVideoFinished: (() -> Void)?
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, disableInternalFullScreen: Bool = false) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
         self._play = State(initialValue: play)
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
+        self.disableInternalFullScreen = disableInternalFullScreen
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -65,8 +67,13 @@ struct MediaCell: View {
                         showNativeControls: true
                     )
                     .environmentObject(MuteState.shared)
+                    .onTapGesture {
+                        handleTap()
+                    }
                     .onTapGesture(count: 2) {
-                        showFullScreen = true
+                        if !disableInternalFullScreen {
+                            showFullScreen = true
+                        }
                     }
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
@@ -112,7 +119,7 @@ struct MediaCell: View {
             }
         }
         .fullScreenCover(isPresented: $showFullScreen) {
-            if let attachments = parentTweet.attachments {
+            if !disableInternalFullScreen, let attachments = parentTweet.attachments {
                 MediaBrowserView(
                     attachments: attachments,
                     initialIndex: attachmentIndex
@@ -124,23 +131,31 @@ struct MediaCell: View {
     private func handleTap() {
         switch attachment.type.lowercased() {
         case "video", "hls_video":
-            if shouldLoadVideo {
-                // Video is already loaded, toggle playback
-                play.toggle()
-            } else {
-                // Force load video immediately on tap
-                shouldLoadVideo = true
-                play.toggle()
-            }
+            handleVideoTap()
         case "audio":
             // Toggle audio playback
             play.toggle()
         case "image":
             // Open full-screen for images
-            showFullScreen = true
+            if !disableInternalFullScreen {
+                showFullScreen = true
+            }
         default:
             // Open full-screen for other types
-            showFullScreen = true
+            if !disableInternalFullScreen {
+                showFullScreen = true
+            }
+        }
+    }
+    
+    private func handleVideoTap() {
+        if shouldLoadVideo {
+            // Video is already loaded, toggle playback
+            play.toggle()
+        } else {
+            // Force load video immediately on tap
+            shouldLoadVideo = true
+            play.toggle()
         }
     }
     

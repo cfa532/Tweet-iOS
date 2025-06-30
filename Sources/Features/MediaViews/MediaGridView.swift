@@ -113,7 +113,8 @@ struct MediaGridView: View {
                         aspectRatio: 1.0,
                         play: currentVideoIndex == 0,
                         shouldLoadVideo: shouldLoadVideo,
-                        onVideoFinished: onVideoFinished
+                        onVideoFinished: onVideoFinished,
+                        disableInternalFullScreen: true
                     )
                     .environmentObject(MuteState.shared)
                     .frame(width: gridWidth, height: gridHeight)
@@ -141,7 +142,8 @@ struct MediaGridView: View {
                                     attachmentIndex: idx,
                                     play: currentVideoIndex == idx,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished
+                                    onVideoFinished: onVideoFinished,
+                                    disableInternalFullScreen: true
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
@@ -160,7 +162,8 @@ struct MediaGridView: View {
                                     attachmentIndex: idx,
                                     play: currentVideoIndex == idx,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished
+                                    onVideoFinished: onVideoFinished,
+                                    disableInternalFullScreen: true
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
@@ -179,7 +182,8 @@ struct MediaGridView: View {
                                     attachmentIndex: 0,
                                     play: currentVideoIndex == 0,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished
+                                    onVideoFinished: onVideoFinished,
+                                    disableInternalFullScreen: true
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
@@ -192,7 +196,8 @@ struct MediaGridView: View {
                                     attachmentIndex: 1,
                                     play: currentVideoIndex == 1,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished
+                                    onVideoFinished: onVideoFinished,
+                                    disableInternalFullScreen: true
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
@@ -206,7 +211,8 @@ struct MediaGridView: View {
                                     attachmentIndex: 0,
                                     play: currentVideoIndex == 0,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished
+                                    onVideoFinished: onVideoFinished,
+                                    disableInternalFullScreen: true
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
@@ -219,7 +225,8 @@ struct MediaGridView: View {
                                     attachmentIndex: 1,
                                     play: currentVideoIndex == 1,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished
+                                    onVideoFinished: onVideoFinished,
+                                    disableInternalFullScreen: true
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
@@ -246,7 +253,8 @@ struct MediaGridView: View {
                                     attachmentIndex: idx,
                                     play: currentVideoIndex == idx,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished
+                                    onVideoFinished: onVideoFinished,
+                                    disableInternalFullScreen: true
                                 )
                                 .environmentObject(MuteState.shared)
                                 .aspectRatio(3.0/2.0, contentMode: .fill)
@@ -265,7 +273,8 @@ struct MediaGridView: View {
                                     attachmentIndex: idx,
                                     play: currentVideoIndex == idx,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished
+                                    onVideoFinished: onVideoFinished,
+                                    disableInternalFullScreen: true
                                 )
                                 .environmentObject(MuteState.shared)
                                 .aspectRatio(4.0/5.0, contentMode: .fill)
@@ -283,7 +292,8 @@ struct MediaGridView: View {
                                 attachmentIndex: 0,
                                 play: currentVideoIndex == 0,
                                 shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished
+                                onVideoFinished: onVideoFinished,
+                                disableInternalFullScreen: true
                             )
                             .environmentObject(MuteState.shared)
                             .aspectRatio(contentMode: .fill)
@@ -298,7 +308,8 @@ struct MediaGridView: View {
                                         attachmentIndex: idx,
                                         play: currentVideoIndex == idx,
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished
+                                        onVideoFinished: onVideoFinished,
+                                        disableInternalFullScreen: true
                                     )
                                     .environmentObject(MuteState.shared)
                                     .aspectRatio(contentMode: .fill)
@@ -317,7 +328,8 @@ struct MediaGridView: View {
                                 attachmentIndex: 0,
                                 play: currentVideoIndex == 0,
                                 shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished
+                                onVideoFinished: onVideoFinished,
+                                disableInternalFullScreen: true
                             )
                             .environmentObject(MuteState.shared)
                             .aspectRatio(contentMode: .fill)
@@ -332,7 +344,8 @@ struct MediaGridView: View {
                                         attachmentIndex: idx,
                                         play: currentVideoIndex == idx,
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished
+                                        onVideoFinished: onVideoFinished,
+                                        disableInternalFullScreen: true
                                     )
                                     .environmentObject(MuteState.shared)
                                     .aspectRatio(contentMode: .fill)
@@ -361,7 +374,8 @@ struct MediaGridView: View {
                                     attachmentIndex: idx,
                                     play: currentVideoIndex == idx,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished
+                                    onVideoFinished: onVideoFinished,
+                                    disableInternalFullScreen: true
                                 )
                                 .environmentObject(MuteState.shared)
                                 .aspectRatio(cellAspect, contentMode: .fill)
@@ -379,7 +393,8 @@ struct MediaGridView: View {
                                         attachmentIndex: idx,
                                         play: currentVideoIndex == idx,
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished
+                                        onVideoFinished: onVideoFinished,
+                                        disableInternalFullScreen: true
                                     )
                                     .environmentObject(MuteState.shared)
                                     .aspectRatio(cellAspect, contentMode: .fill)
@@ -401,7 +416,8 @@ struct MediaGridView: View {
                                     attachmentIndex: idx,
                                     play: currentVideoIndex == idx,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished
+                                    onVideoFinished: onVideoFinished,
+                                    disableInternalFullScreen: true
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
@@ -422,7 +438,8 @@ struct MediaGridView: View {
                                             attachmentIndex: idx,
                                             play: currentVideoIndex == idx,
                                             shouldLoadVideo: shouldLoadVideo,
-                                            onVideoFinished: onVideoFinished
+                                            onVideoFinished: onVideoFinished,
+                                            disableInternalFullScreen: true
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)

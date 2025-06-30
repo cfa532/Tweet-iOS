@@ -59,11 +59,25 @@ struct MediaBrowserView: View {
                             )
                             .environmentObject(MuteState.shared)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .onTapGesture {
+                                // Show controls on tap and reset timer
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showControls = true
+                                }
+                                resetControlsTimer()
+                            }
                         } else if attachment.type.lowercased() == "audio", let url = attachment.getUrl(baseUrl) {
                             SimpleAudioPlayer(
                                 url: url,
                                 autoPlay: isVisible && currentIndex == index
                             )
+                            .onTapGesture {
+                                // Show controls on tap and reset timer
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showControls = true
+                                }
+                                resetControlsTimer()
+                            }
                         } else if attachment.type.lowercased() == "image", let url = attachment.getUrl(baseUrl) {
                             ImageViewWithPlaceholder(
                                 attachment: attachment,
@@ -73,6 +87,13 @@ struct MediaBrowserView: View {
                             )
                             .onAppear {
                                 loadImageIfNeeded(for: attachment, at: index)
+                            }
+                            .onTapGesture {
+                                // Show controls on tap and reset timer
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showControls = true
+                                }
+                                resetControlsTimer()
                             }
                         }
                     }
