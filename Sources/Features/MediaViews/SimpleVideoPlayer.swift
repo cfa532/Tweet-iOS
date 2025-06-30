@@ -239,7 +239,7 @@ struct SimpleVideoPlayer: View {
                         onMuteChanged: onMuteChanged,
                         onVideoFinished: onVideoFinished
                     )
-                    .offset(y: -pad)
+                    .offset(y: -pad)    // align the video vertically in the middle
                     .aspectRatio(videoAR, contentMode: .fit)
                 }
             } else {
