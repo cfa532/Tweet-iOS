@@ -391,6 +391,18 @@ struct HLSVideoPlayerWithControls: View {
             }
             .contentShape(Rectangle()) // Make entire area tappable
             .onTapGesture {
+                // Check if video is at the end and restart if needed
+                if duration > 0 && currentTime >= duration - 0.5 {
+                    resetVideoState()
+                    // Start playing again
+                    if let player = player {
+                        videoManager.startPlaying(instanceId: String(playerInstanceId))
+                        player.play()
+                        isPlaying = true
+                    }
+                    return
+                }
+                
                 // Only toggle controls if custom controls are enabled
                 if showCustomControls {
                     withAnimation {
@@ -532,7 +544,8 @@ struct HLSVideoPlayerWithControls: View {
                 hasNotifiedFinished = true
                 self.videoManager.stopPlaying(instanceId: String(self.playerInstanceId))
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video finished in HLSVideoPlayerWithControls")
-                onVideoFinished?()
+                self.resetVideoState()
+                self.onVideoFinished?()
             }
         }
         
@@ -544,12 +557,12 @@ struct HLSVideoPlayerWithControls: View {
         ) { _ in
             if !self.hasNotifiedFinished {
                 self.hasNotifiedFinished = true
-                self.isPlaying = false
                 self.videoManager.stopPlaying(instanceId: String(self.playerInstanceId))
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video finished via AVPlayerItemDidPlayToEndTime notification")
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video URL: \(self.videoURL.absoluteString)")
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Final duration: \(self.duration) seconds")
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Final current time: \(self.currentTime) seconds")
+                self.resetVideoState()
                 self.onVideoFinished?()
             }
         }
@@ -677,6 +690,12 @@ struct HLSVideoPlayerWithControls: View {
     private func togglePlayPause() {
         guard let player = player else { return }
         
+        // Check if video is at the end and reset if needed
+        if duration > 0 && currentTime >= duration - 0.5 {
+            resetVideoState()
+            return
+        }
+        
         if isPlaying {
             player.pause()
             videoManager.stopPlaying(instanceId: String(playerInstanceId))
@@ -712,6 +731,24 @@ struct HLSVideoPlayerWithControls: View {
     private func stopControlsTimer() {
         controlsTimer?.invalidate()
         controlsTimer = nil
+    }
+    
+    private func resetVideoState() {
+        // Reset all video state when video finishes
+        isPlaying = false
+        currentTime = 0
+        hasNotifiedFinished = false
+        showControls = true // Show controls when video finishes
+        
+        // Reset player to beginning
+        if let player = player {
+            player.seek(to: CMTime.zero)
+        }
+        
+        // Start controls timer to auto-hide controls
+        if showCustomControls {
+            startControlsTimer()
+        }
     }
     
     private func cleanupObservers() {
