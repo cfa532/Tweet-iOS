@@ -123,7 +123,8 @@ struct MediaGridView: View {
                     .onTapGesture {
                         onItemTap?(0)
                     }
-                    .border(Color.red, width: 1)
+                    // identify MediaCell border
+                   // .border(Color.red, width: 1)
                     
                 case 2:
                     let ar0 = attachments[0].aspectRatio ?? 1

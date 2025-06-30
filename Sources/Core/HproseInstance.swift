@@ -250,7 +250,7 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweets_by_user"
     ) async throws -> [Tweet?] {
-        guard let service = hproseService else {
+        guard let service = user.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         let params = [

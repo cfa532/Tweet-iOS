@@ -22,6 +22,25 @@ class FollowingsTweetViewModel: ObservableObject {
     
     func fetchTweets(page: UInt, pageSize: UInt) async -> [Tweet?] {
         // fetch tweets from server
+        // Load tweets of alphaId if appUser is a guest user
+        if hproseInstance.appUser.isGuest {
+            do {
+                print("[HproseInstance] Loading tweets for guest user from alphaId")
+                if let adminUser = try await hproseInstance.fetchUser(AppConfig.alphaId) {
+                    let serverTweets = try await hproseInstance.fetchUserTweet(user: adminUser, pageNumber: 0, pageSize: 20)
+                    print("[HproseInstance] Loaded \(serverTweets.compactMap { $0 }.count) tweets for guest user")
+                    await MainActor.run {
+                        tweets.mergeTweets(serverTweets.compactMap{ $0 })
+                    }
+                    return serverTweets
+                }
+            } catch {
+                print("[HproseInstance] Error loading tweets for guest user: \(error)")
+                // Don't throw here, allow the app to continue even if tweet loading fails
+            }
+            return []
+        }
+        
         do {
             let serverTweets = try await hproseInstance.fetchTweetFeed(
                 user: hproseInstance.appUser,
@@ -36,7 +55,7 @@ class FollowingsTweetViewModel: ObservableObject {
                     user: hproseInstance.appUser,
                     pageNumber: page,
                     pageSize: pageSize,
-                    entry: "update_following_tweets"
+                    entry: "update_following_tweets"    // check for new tweets have not been synced.
                 )
                 await MainActor.run {
                     tweets.mergeTweets(newTweets.compactMap{ $0 })
