@@ -442,9 +442,10 @@ struct HLSVideoPlayerWithControls: View {
                 // Notify video manager about visibility change
                 videoManager.setVideoVisible(String(playerInstanceId), isVisible: false)
                 
-                // Only pause, do not destroy or reload
+                // Pause player but don't destroy it completely
                 player?.pause()
                 videoManager.stopPlaying(instanceId: String(playerInstanceId))
+                
                 cleanupObservers()
             }
             .onChange(of: isVisible) { newVisibility in
@@ -497,9 +498,12 @@ struct HLSVideoPlayerWithControls: View {
             
             // Check if video has finished
             if duration > 0 && currentTime >= duration - 0.5 && !hasNotifiedFinished {
-                hasNotifiedFinished = true
                 self.videoManager.stopPlaying(instanceId: String(self.playerInstanceId))
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video finished in HLSVideoPlayerWithControls")
+                
+                // Handle completion properly
+                self.handleVideoCompletion()
+                
                 onVideoFinished?()
             }
         }
@@ -511,14 +515,16 @@ struct HLSVideoPlayerWithControls: View {
             queue: .main
         ) { _ in
             if !self.hasNotifiedFinished {
-                self.hasNotifiedFinished = true
-                self.isPlaying = false
                 self.videoManager.stopPlaying(instanceId: String(self.playerInstanceId))
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video finished via AVPlayerItemDidPlayToEndTime notification")
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video URL: \(self.videoURL.absoluteString)")
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Final duration: \(self.duration) seconds")
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Final current time: \(self.currentTime) seconds")
-                self.onVideoFinished?()
+                
+                // Handle completion properly
+                self.handleVideoCompletion()
+                
+                onVideoFinished?()
             }
         }
         
@@ -643,11 +649,17 @@ struct HLSVideoPlayerWithControls: View {
         if isPlaying {
             player.pause()
             videoManager.stopPlaying(instanceId: String(playerInstanceId))
+            isPlaying = false
         } else {
+            // If video has finished and user wants to replay, reset finished state
+            if hasNotifiedFinished {
+                hasNotifiedFinished = false
+            }
+            
             videoManager.startPlaying(instanceId: String(playerInstanceId))
             player.play()
+            isPlaying = true
         }
-        isPlaying.toggle()
     }
     
     private func seekTo(_ time: Double) {
@@ -680,6 +692,45 @@ struct HLSVideoPlayerWithControls: View {
     private func cleanupObservers() {
         // Remove all observers
         NotificationCenter.default.removeObserver(self)
+    }
+    
+    private func resetVideoState() {
+        // Reset video state to allow replay
+        hasNotifiedFinished = false
+        currentTime = 0
+        
+        // Seek to beginning for replay without starting playback
+        if let player = player {
+            let startTime = CMTime(seconds: 0, preferredTimescale: 1)
+            player.seek(to: startTime) { finished in
+                if finished {
+                    print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video seeked to beginning successfully")
+                }
+            }
+        }
+        
+        print("DEBUG: [INSTANCE \(playerInstanceId)] Video state reset for replay")
+    }
+    
+    private func handleVideoCompletion() {
+        // Mark video as finished
+        hasNotifiedFinished = true
+        isPlaying = false
+        
+        // Reset progress to 0% without restarting
+        currentTime = 0
+        
+        // Seek to beginning but keep paused
+        if let player = player {
+            let startTime = CMTime(seconds: 0, preferredTimescale: 1)
+            player.seek(to: startTime) { finished in
+                if finished {
+                    print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video completed and reset to beginning")
+                }
+            }
+        }
+        
+        print("DEBUG: [INSTANCE \(playerInstanceId)] Video completion handled - ready for replay")
     }
 }
 

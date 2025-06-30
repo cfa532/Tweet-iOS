@@ -16,6 +16,8 @@ struct MediaGridView: View {
     @State private var shouldLoadVideo = true
     @State private var videoLoadTimer: Timer?
     @State private var currentVideoIndex: Int = -1
+    @State private var showFullScreen = false
+    @State private var selectedFullScreenIndex = 0
     
     init(parentTweet: Tweet, attachments: [MimeiFileType], onItemTap: ((Int) -> Void)? = nil) {
         self.parentTweet = parentTweet
@@ -124,6 +126,12 @@ struct MediaGridView: View {
                     .onTapGesture {
                         onItemTap?(0)
                     }
+                    .onTapGesture(count: 2) {
+                        if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
+                            selectedFullScreenIndex = 0
+                            showFullScreen = true
+                        }
+                    }
                     .border(Color.red, width: 1)
                     
                 case 2:
@@ -151,6 +159,12 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(idx) }
+                                .onTapGesture(count: 2) {
+                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                        selectedFullScreenIndex = idx
+                                        showFullScreen = true
+                                    }
+                                }
                             }
                         }
                     } else if isLandscape0 && isLandscape1 {
@@ -171,6 +185,12 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(idx) }
+                                .onTapGesture(count: 2) {
+                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                        selectedFullScreenIndex = idx
+                                        showFullScreen = true
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -191,6 +211,12 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(0) }
+                                .onTapGesture(count: 2) {
+                                    if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
+                                        selectedFullScreenIndex = 0
+                                        showFullScreen = true
+                                    }
+                                }
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 1,
@@ -205,6 +231,12 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(1) }
+                                .onTapGesture(count: 2) {
+                                    if attachments[1].type.lowercased() == "video" || attachments[1].type.lowercased() == "hls_video" {
+                                        selectedFullScreenIndex = 1
+                                        showFullScreen = true
+                                    }
+                                }
                             } else {
                                 MediaCell(
                                     parentTweet: parentTweet,
@@ -220,6 +252,12 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(0) }
+                                .onTapGesture(count: 2) {
+                                    if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
+                                        selectedFullScreenIndex = 0
+                                        showFullScreen = true
+                                    }
+                                }
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 1,
@@ -234,6 +272,12 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(1) }
+                                .onTapGesture(count: 2) {
+                                    if attachments[1].type.lowercased() == "video" || attachments[1].type.lowercased() == "hls_video" {
+                                        selectedFullScreenIndex = 1
+                                        showFullScreen = true
+                                    }
+                                }
                             }
                         }
                     }
@@ -262,6 +306,12 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(idx) }
+                                .onTapGesture(count: 2) {
+                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                        selectedFullScreenIndex = idx
+                                        showFullScreen = true
+                                    }
+                                }
                             }
                         }
                     } else if allLandscape {
@@ -282,6 +332,12 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(idx) }
+                                .onTapGesture(count: 2) {
+                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                        selectedFullScreenIndex = idx
+                                        showFullScreen = true
+                                    }
+                                }
                             }
                         }
                     } else if ar0 < 1 {
@@ -301,6 +357,12 @@ struct MediaGridView: View {
                             .clipped()
                             .contentShape(Rectangle())
                             .onTapGesture { onItemTap?(0) }
+                            .onTapGesture(count: 2) {
+                                if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
+                                    selectedFullScreenIndex = 0
+                                    showFullScreen = true
+                                }
+                            }
                             VStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
@@ -317,6 +379,12 @@ struct MediaGridView: View {
                                     .clipped()
                                     .contentShape(Rectangle())
                                     .onTapGesture { onItemTap?(idx) }
+                                    .onTapGesture(count: 2) {
+                                        if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                            selectedFullScreenIndex = idx
+                                            showFullScreen = true
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -337,6 +405,12 @@ struct MediaGridView: View {
                             .clipped()
                             .contentShape(Rectangle())
                             .onTapGesture { onItemTap?(0) }
+                            .onTapGesture(count: 2) {
+                                if attachments[0].type.lowercased() == "video" || attachments[0].type.lowercased() == "hls_video" {
+                                    selectedFullScreenIndex = 0
+                                    showFullScreen = true
+                                }
+                            }
                             HStack(spacing: 2) {
                                 ForEach(1..<3) { idx in
                                     MediaCell(
@@ -353,6 +427,12 @@ struct MediaGridView: View {
                                     .clipped()
                                     .contentShape(Rectangle())
                                     .onTapGesture { onItemTap?(idx) }
+                                    .onTapGesture(count: 2) {
+                                        if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                            selectedFullScreenIndex = idx
+                                            showFullScreen = true
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -383,6 +463,12 @@ struct MediaGridView: View {
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(idx) }
+                                .onTapGesture(count: 2) {
+                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                        selectedFullScreenIndex = idx
+                                        showFullScreen = true
+                                    }
+                                }
                             }
                         }
                         HStack(spacing: 2) {
@@ -402,6 +488,12 @@ struct MediaGridView: View {
                                     .clipped()
                                     .contentShape(Rectangle())
                                     .onTapGesture { onItemTap?(idx) }
+                                    .onTapGesture(count: 2) {
+                                        if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                            selectedFullScreenIndex = idx
+                                            showFullScreen = true
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -427,6 +519,12 @@ struct MediaGridView: View {
                                 .onTapGesture {
                                     onItemTap?(idx)
                                 }
+                                .onTapGesture(count: 2) {
+                                    if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                        selectedFullScreenIndex = idx
+                                        showFullScreen = true
+                                    }
+                                }
                             }
                         }
                         HStack(spacing: 2) {
@@ -449,6 +547,12 @@ struct MediaGridView: View {
                                         .onTapGesture {
                                             onItemTap?(idx)
                                         }
+                                        .onTapGesture(count: 2) {
+                                            if attachments[idx].type.lowercased() == "video" || attachments[idx].type.lowercased() == "hls_video" {
+                                                selectedFullScreenIndex = idx
+                                                showFullScreen = true
+                                            }
+                                        }
                                         
                                         if idx == 3 && attachments.count > 4 {
                                             Color.black.opacity(0.4)
@@ -466,6 +570,12 @@ struct MediaGridView: View {
             }
             .frame(width: gridWidth, height: gridHeight)
             .clipped()
+            .fullScreenCover(isPresented: $showFullScreen) {
+                MediaBrowserView(
+                    attachments: attachments,
+                    initialIndex: selectedFullScreenIndex
+                )
+            }
             .onAppear {
                 // Start video loading timer if this grid contains videos
                 let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
