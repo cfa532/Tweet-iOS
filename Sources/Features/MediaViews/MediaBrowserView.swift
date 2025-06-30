@@ -210,6 +210,7 @@ struct MediaBrowserView: View {
             url: url,
             autoPlay: isVisible && currentIndex == index
         )
+        .environmentObject(MuteState.shared)
     }
     
     @ViewBuilder

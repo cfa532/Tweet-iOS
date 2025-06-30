@@ -53,10 +53,6 @@ struct MediaCell: View {
                     SimpleVideoPlayer(
                         url: url,
                         autoPlay: play && shouldLoadVideo,
-                        onMuteChanged: { muted in
-                            MuteState.shared.isMuted = muted
-                            HproseInstance.shared.preferenceHelper?.setSpeakerMute(muted)
-                        },
                         onVideoFinished: onVideoFinished,
                         isVisible: isVisible && shouldLoadVideo,
                         contentType: attachment.type,
@@ -71,6 +67,7 @@ struct MediaCell: View {
                     }
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
+                        .environmentObject(MuteState.shared)
                         .onTapGesture {
                             handleTap()
                         }

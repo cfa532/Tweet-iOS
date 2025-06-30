@@ -26,6 +26,22 @@ class MuteState: ObservableObject {
             self.isMuted = savedMuteState
         }
     }
+    
+    func toggleMute() {
+        isMuted.toggle()
+        // Save to preferences immediately when mute state changes
+        HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
+        print("DEBUG: [MUTE STATE] Mute state changed to: \(isMuted)")
+    }
+    
+    func setMuted(_ muted: Bool) {
+        if self.isMuted != muted {
+            self.isMuted = muted
+            // Save to preferences immediately when mute state changes
+            HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
+            print("DEBUG: [MUTE STATE] Mute state set to: \(isMuted)")
+        }
+    }
 }
 
 // Global video manager to handle scroll-based video stopping
@@ -266,7 +282,8 @@ struct SimpleVideoPlayer: View {
                         onVideoFinished: onVideoFinished,
                         onVideoTap: onVideoTap,
                         showCustomControls: showCustomControls,
-                        forcePlay: forcePlay
+                        forcePlay: forcePlay,
+                        forceUnmuted: forceUnmuted
                     )
                     .offset(y: -pad)    // align the video vertically in the middle
                     .aspectRatio(videoAR, contentMode: .fill)
@@ -282,7 +299,8 @@ struct SimpleVideoPlayer: View {
                         onVideoFinished: onVideoFinished,
                         onVideoTap: onVideoTap,
                         showCustomControls: showCustomControls,
-                        forcePlay: forcePlay
+                        forcePlay: forcePlay,
+                        forceUnmuted: forceUnmuted
                     )
                 }
             }
@@ -301,6 +319,7 @@ struct HLSVideoPlayerWithControls: View {
     let onVideoTap: (() -> Void)?
     let showCustomControls: Bool
     let forcePlay: Bool
+    let forceUnmuted: Bool
     
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -315,8 +334,9 @@ struct HLSVideoPlayerWithControls: View {
     @State private var hasFinished = false // Track if video has finished to prevent re-queuing
     @State private var playerInstanceId = UUID().uuidString.prefix(8) // Unique ID for this player instance
     @StateObject private var videoManager = VideoManager.shared
+    @StateObject private var muteState = MuteState.shared
     
-    init(videoURL: URL, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool) {
+    init(videoURL: URL, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool) {
         self.videoURL = videoURL
         self.isVisible = isVisible
         self.isMuted = isMuted
@@ -326,6 +346,7 @@ struct HLSVideoPlayerWithControls: View {
         self.onVideoTap = onVideoTap
         self.showCustomControls = showCustomControls
         self.forcePlay = forcePlay
+        self.forceUnmuted = forceUnmuted
         self._playerMuted = State(initialValue: isMuted)
         print("DEBUG: [INSTANCE] Creating new HLSVideoPlayerWithControls instance: \(UUID().uuidString.prefix(8)) for URL: \(videoURL.absoluteString)")
     }
@@ -345,6 +366,18 @@ struct HLSVideoPlayerWithControls: View {
                                             Button(action: togglePlayPause) {
                                                 Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                                                     .font(.title)
+                                                    .foregroundColor(.white)
+                                                    .background(Circle().fill(Color.black.opacity(0.5)))
+                                            }
+                                            
+                                            Spacer()
+                                            
+                                            // Mute/Unmute button
+                                            Button(action: {
+                                                muteState.toggleMute()
+                                            }) {
+                                                Image(systemName: muteState.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                                    .font(.title2)
                                                     .foregroundColor(.white)
                                                     .background(Circle().fill(Color.black.opacity(0.5)))
                                             }
@@ -387,6 +420,11 @@ struct HLSVideoPlayerWithControls: View {
                             // This automatically updates when the user interacts with native controls
                             if playerMuted != muted {
                                 playerMuted = muted
+                                // Sync with global mute state when user interacts with native controls
+                                if !forceUnmuted && muteState.isMuted != muted {
+                                    print("DEBUG: [INSTANCE \(playerInstanceId)] Native controls changed mute to: \(muted), updating global state")
+                                    muteState.setMuted(muted)
+                                }
                             }
                         }
                 } else if isLoading {
@@ -558,6 +596,19 @@ struct HLSVideoPlayerWithControls: View {
                     videoManager.setVideoVisible(String(playerInstanceId), isVisible: isVisible)
                 }
             }
+            .onChange(of: muteState.isMuted) { newMuteState in
+                // Update player mute state when global mute state changes
+                if let player = player {
+                    // Only update if not in forceUnmuted mode
+                    if !forceUnmuted {
+                        player.isMuted = newMuteState
+                        playerMuted = player.isMuted
+                        print("DEBUG: [INSTANCE \(playerInstanceId)] Global mute state changed to: \(newMuteState), player muted: \(player.isMuted)")
+                    } else {
+                        print("DEBUG: [INSTANCE \(playerInstanceId)] Ignoring global mute state change (forceUnmuted mode)")
+                    }
+                }
+            }
         }
     }
     
@@ -588,7 +639,8 @@ struct HLSVideoPlayerWithControls: View {
         avPlayer.automaticallyWaitsToMinimizeStalling = true
         
         // Set initial mute state
-        avPlayer.isMuted = isMuted
+        avPlayer.isMuted = forceUnmuted ? false : muteState.isMuted
+        print("DEBUG: [INSTANCE \(playerInstanceId)] Setting initial mute state: \(avPlayer.isMuted) (forceUnmuted: \(forceUnmuted), globalMuted: \(muteState.isMuted))")
         
         // Add periodic time observer for progress updates
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
@@ -802,6 +854,8 @@ struct HLSVideoPlayerWithControls: View {
         // Reset player to beginning
         if let player = player {
             player.seek(to: CMTime.zero)
+            // Preserve the mute state when resetting
+            player.isMuted = forceUnmuted ? false : muteState.isMuted
         }
         
         // Start controls timer to auto-hide controls
@@ -851,6 +905,7 @@ struct HLSDirectoryVideoPlayer: View {
     let onVideoTap: (() -> Void)?
     let showCustomControls: Bool
     let forcePlay: Bool
+    let forceUnmuted: Bool
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
     @State private var loading = true
@@ -868,7 +923,8 @@ struct HLSDirectoryVideoPlayer: View {
                     onVideoFinished: onVideoFinished,
                     onVideoTap: onVideoTap,
                     showCustomControls: showCustomControls,
-                    forcePlay: forcePlay
+                    forcePlay: forcePlay,
+                    forceUnmuted: forceUnmuted
                 )
             } else if loading {
                 ProgressView("Loading video...")

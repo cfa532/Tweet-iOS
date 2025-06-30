@@ -9,7 +9,7 @@ struct SimpleAudioPlayer: View {
     @State private var isPlaying: Bool = false
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
-    @State private var isMuted: Bool = PreferenceHelper().getSpeakerMute()
+    @StateObject private var muteState = MuteState.shared
     private let preferenceHelper = PreferenceHelper()
     
     var body: some View {
@@ -69,7 +69,7 @@ struct SimpleAudioPlayer: View {
                 
                 // Mute/Unmute button
                 Button(action: toggleMute) {
-                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    Image(systemName: muteState.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                         .foregroundColor(.themeSecondaryText)
                         .padding(.leading, 8)
                 }
@@ -86,12 +86,18 @@ struct SimpleAudioPlayer: View {
         .onDisappear {
             player?.pause()
         }
+        .onChange(of: muteState.isMuted) { newMuteState in
+            // Update player mute state when global mute state changes
+            player?.isMuted = newMuteState
+            print("DEBUG: [AUDIO PLAYER] Global mute state changed to: \(newMuteState)")
+        }
     }
     
     private func setupPlayer() {
         let playerItem = AVPlayerItem(url: url)
         player = AVPlayer(playerItem: playerItem)
-        player?.isMuted = isMuted
+        player?.isMuted = muteState.isMuted
+        print("DEBUG: [AUDIO PLAYER] Setting initial mute state: \(muteState.isMuted)")
         
         // Get duration using the new load(.duration) method
         Task {
@@ -129,9 +135,9 @@ struct SimpleAudioPlayer: View {
     }
     
     private func toggleMute() {
-        isMuted.toggle()
-        player?.isMuted = isMuted
-        preferenceHelper.setSpeakerMute(isMuted)
+        print("DEBUG: [AUDIO PLAYER] Toggling mute state from: \(muteState.isMuted)")
+        muteState.toggleMute()
+        print("DEBUG: [AUDIO PLAYER] Mute state toggled to: \(muteState.isMuted)")
     }
     
     private func formatTime(_ time: Double) -> String {
