@@ -145,11 +145,12 @@ struct TweetDetailView: View {
                         .padding(.horizontal)
                         .padding(.vertical, 8)
                     // If this is a retweet with content, show quoted tweet without actions
-                    if let originalTweetId = displayTweet.originalTweetId, let originalAuthorId = displayTweet.originalAuthorId {
+                    if let _ = displayTweet.originalTweetId, let _ = displayTweet.originalAuthorId {
                         if let orig = originalTweet {
                             TweetItemView(
                                 tweet: orig,
-                                hideActions: true
+                                hideActions: true,
+                                backgroundColor: Color(.systemGray4).opacity(0.7)
                             )
                             .background(Color(.systemGray4))
                             .cornerRadius(6)
