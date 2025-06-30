@@ -36,10 +36,9 @@ struct ComposeTweetView: View {
                                     ForEach(Array(viewModel.selectedItems.enumerated()), id: \.offset) { index, item in
                                         ThumbnailView(item: item)
                                             .frame(width: 100, height: 100)
-                                            .clipShape(RoundedRectangle(cornerRadius: 8))
                                             .overlay(
                                                 Button(action: {
-                                                    viewModel.selectedItems.removeAll { $0.itemIdentifier == item.itemIdentifier }
+                                                    viewModel.selectedItems.remove(at: index)
                                                 }) {
                                                     Image(systemName: "xmark.circle.fill")
                                                         .foregroundColor(.white)

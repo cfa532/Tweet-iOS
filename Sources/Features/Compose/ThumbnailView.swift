@@ -18,7 +18,8 @@ struct ThumbnailView: View {
                 ZStack {
                     Image(uiImage: thumbnail)
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
+                        .scaledToFill()
+                        .clipped()
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .overlay(
                             RoundedRectangle(cornerRadius: 8)
@@ -325,31 +326,20 @@ struct ThumbnailView: View {
                 let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
                 let originalImage = UIImage(cgImage: cgImage)
                 
-                // Create a thumbnail that maintains aspect ratio
+                // Center-crop thumbnail to fill
                 let targetSize = CGSize(width: 200, height: 200)
                 let format = UIGraphicsImageRendererFormat()
                 format.scale = 1.0
-                
                 let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
                 let thumbnail = renderer.image { context in
-                    // Calculate aspect ratio preserving size
                     let imageSize = originalImage.size
-                    let scale = min(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
+                    let scale = max(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
                     let scaledSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
-                    
-                    // Center the image
                     let x = (targetSize.width - scaledSize.width) / 2
                     let y = (targetSize.height - scaledSize.height) / 2
                     let rect = CGRect(origin: CGPoint(x: x, y: y), size: scaledSize)
-                    
-                    // Fill background with black
-                    UIColor.black.setFill()
-                    context.cgContext.fill(CGRect(origin: .zero, size: targetSize))
-                    
-                    // Draw the video frame
                     originalImage.draw(in: rect)
                 }
-                
                 return thumbnail
             } catch {
                 // Continue to next time position if this one fails
@@ -373,41 +363,24 @@ struct ThumbnailView: View {
         
         print("DEBUG: Original image size: \(image.size)")
         
-        // Try the complex thumbnail generation first
         // Fix image orientation if needed
         let fixedImage = image.fixOrientation()
         print("DEBUG: Fixed image size: \(fixedImage.size)")
         
-        // Create a thumbnail version of the image that maintains aspect ratio
+        // Center-crop thumbnail to fill
         let targetSize = CGSize(width: 200, height: 200)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
-        
         let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
         let thumbnail = renderer.image { context in
-            // Calculate aspect ratio preserving size
             let imageSize = fixedImage.size
-            let scale = min(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
+            let scale = max(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
             let scaledSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
-            
-            print("DEBUG: Scale: \(scale), Scaled size: \(scaledSize)")
-            
-            // Center the image
             let x = (targetSize.width - scaledSize.width) / 2
             let y = (targetSize.height - scaledSize.height) / 2
             let rect = CGRect(origin: CGPoint(x: x, y: y), size: scaledSize)
-            
-            print("DEBUG: Drawing rect: \(rect)")
-            
-            // Fill background with light gray
-            UIColor.systemGray6.setFill()
-            context.cgContext.fill(CGRect(origin: .zero, size: targetSize))
-            
-            // Draw the image with proper interpolation
-            context.cgContext.interpolationQuality = .high
-            fixedImage.draw(in: rect, blendMode: .normal, alpha: 1.0)
+            fixedImage.draw(in: rect)
         }
-        
         print("DEBUG: Thumbnail generated successfully")
         return thumbnail
     }

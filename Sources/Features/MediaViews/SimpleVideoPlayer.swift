@@ -42,12 +42,12 @@ class VideoManager: ObservableObject {
     func startPlaying(instanceId: String) {
         // Pause any currently playing video
         if let currentId = currentPlayingInstanceId, currentId != instanceId {
-            print("DEBUG: [VIDEO MANAGER] Pausing previous video instance: \(currentId)")
+            // print("DEBUG: [VIDEO MANAGER] Pausing previous video instance: \(currentId)")
             NotificationCenter.default.post(name: .pauseVideo, object: currentId)
         }
         
         currentPlayingInstanceId = instanceId
-        print("DEBUG: [VIDEO MANAGER] Now playing video instance: \(instanceId)")
+        // print("DEBUG: [VIDEO MANAGER] Now playing video instance: \(instanceId)")
         
         // Remove from queue if it was there
         videoQueue.removeAll { $0 == instanceId }
@@ -56,7 +56,7 @@ class VideoManager: ObservableObject {
     func stopPlaying(instanceId: String) {
         if currentPlayingInstanceId == instanceId {
             currentPlayingInstanceId = nil
-            print("DEBUG: [VIDEO MANAGER] Stopped playing video instance: \(instanceId)")
+            // print("DEBUG: [VIDEO MANAGER] Stopped playing video instance: \(instanceId)")
             
             // Auto-start next visible video if enabled
             if autoStartNext {
@@ -67,25 +67,25 @@ class VideoManager: ObservableObject {
     
     func stopAllVideos() {
         if let currentId = currentPlayingInstanceId {
-            print("DEBUG: [VIDEO MANAGER] Stopping all videos due to scroll - current: \(currentId)")
+            // print("DEBUG: [VIDEO MANAGER] Stopping all videos due to scroll - current: \(currentId)")
             NotificationCenter.default.post(name: .pauseVideo, object: currentId)
             currentPlayingInstanceId = nil
         }
         // Clear queue when scrolling
         videoQueue.removeAll()
-        print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to scroll")
+        // print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to scroll")
     }
     
     // Stop all videos when a sheet is presented
     func stopAllVideosForSheet() {
         if let currentId = currentPlayingInstanceId {
-            print("DEBUG: [VIDEO MANAGER] Stopping all videos due to sheet presentation - current: \(currentId)")
+            // print("DEBUG: [VIDEO MANAGER] Stopping all videos due to sheet presentation - current: \(currentId)")
             NotificationCenter.default.post(name: .pauseVideo, object: currentId)
             currentPlayingInstanceId = nil
         }
         // Clear queue when sheet is presented
         videoQueue.removeAll()
-        print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to sheet presentation")
+        // print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to sheet presentation")
     }
     
     // Clean up queue and check for next visible video
@@ -99,13 +99,13 @@ class VideoManager: ObservableObject {
     // Update video position for visibility calculation
     func updateVideoPosition(instanceId: String, frame: CGRect) {
         videoPositions[instanceId] = frame
-        print("DEBUG: [VIDEO MANAGER] Updated position for \(instanceId): \(frame)")
+        // print("DEBUG: [VIDEO MANAGER] Updated position for \(instanceId): \(frame)")
     }
     
     // Check if video is actually visible on screen
     func isVideoActuallyVisible(instanceId: String, screenBounds: CGRect) -> Bool {
         guard let videoFrame = videoPositions[instanceId] else {
-            print("DEBUG: [VIDEO MANAGER] No position data for \(instanceId)")
+            // print("DEBUG: [VIDEO MANAGER] No position data for \(instanceId)")
             return false
         }
         
@@ -116,7 +116,7 @@ class VideoManager: ObservableObject {
         // Consider video visible if more than 50% is on screen
         let isVisible = visibilityRatio > 0.5 && intersection.width > 0 && intersection.height > 0
         
-        print("DEBUG: [VIDEO MANAGER] Visibility check for \(instanceId): \(isVisible) (ratio: \(visibilityRatio), frame: \(videoFrame), screen: \(screenBounds), intersection: \(intersection))")
+        // print("DEBUG: [VIDEO MANAGER] Visibility check for \(instanceId): \(isVisible) (ratio: \(visibilityRatio), frame: \(videoFrame), screen: \(screenBounds), intersection: \(intersection))")
         return isVisible
     }
     
@@ -126,17 +126,17 @@ class VideoManager: ObservableObject {
         
         if actuallyVisible {
             visibleVideos.insert(instanceId)
-            print("DEBUG: [VIDEO MANAGER] Video became actually visible: \(instanceId)")
+            // print("DEBUG: [VIDEO MANAGER] Video became actually visible: \(instanceId)")
         } else {
             visibleVideos.remove(instanceId)
-            print("DEBUG: [VIDEO MANAGER] Video became actually invisible: \(instanceId)")
+            // print("DEBUG: [VIDEO MANAGER] Video became actually invisible: \(instanceId)")
             
             // Remove invisible videos from queue to prevent them from starting
             removeInvisibleFromQueue()
             
             // If the invisible video was playing, stop it and start next
             if currentPlayingInstanceId == instanceId {
-                print("DEBUG: [VIDEO MANAGER] Stopping actually invisible video: \(instanceId)")
+                // print("DEBUG: [VIDEO MANAGER] Stopping actually invisible video: \(instanceId)")
                 NotificationCenter.default.post(name: .pauseVideo, object: instanceId)
                 currentPlayingInstanceId = nil
                 
@@ -151,7 +151,7 @@ class VideoManager: ObservableObject {
     func addToQueue(instanceId: String) {
         if !videoQueue.contains(instanceId) && currentPlayingInstanceId != instanceId && visibleVideos.contains(instanceId) {
             videoQueue.append(instanceId)
-            print("DEBUG: [VIDEO MANAGER] Added actually visible video to queue: \(instanceId), queue size: \(videoQueue.count)")
+            // print("DEBUG: [VIDEO MANAGER] Added actually visible video to queue: \(instanceId), queue size: \(videoQueue.count)")
         }
     }
     
@@ -160,9 +160,9 @@ class VideoManager: ObservableObject {
         let beforeCount = videoQueue.count
         videoQueue.removeAll { !visibleVideos.contains($0) }
         let afterCount = videoQueue.count
-        if beforeCount != afterCount {
-            print("DEBUG: [VIDEO MANAGER] Removed \(beforeCount - afterCount) invisible videos from queue")
-        }
+        // if beforeCount != afterCount {
+        //     print("DEBUG: [VIDEO MANAGER] Removed \(beforeCount - afterCount) invisible videos from queue")
+        // }
     }
     
     // Start the next visible video in queue
@@ -172,29 +172,29 @@ class VideoManager: ObservableObject {
         
         // Find the first visible video in the queue
         if let nextVideoId = videoQueue.first(where: { visibleVideos.contains($0) }) {
-            print("DEBUG: [VIDEO MANAGER] Auto-starting next actually visible video: \(nextVideoId)")
+            // print("DEBUG: [VIDEO MANAGER] Auto-starting next actually visible video: \(nextVideoId)")
             NotificationCenter.default.post(name: .startVideo, object: nextVideoId)
             videoQueue.removeAll { $0 == nextVideoId }
         } else {
-            print("DEBUG: [VIDEO MANAGER] No actually visible videos in queue to start")
+            // print("DEBUG: [VIDEO MANAGER] No actually visible videos in queue to start")
         }
     }
     
     // Enable/disable auto-start next video
     func setAutoStartNext(_ enabled: Bool) {
         autoStartNext = enabled
-        print("DEBUG: [VIDEO MANAGER] Auto-start next video: \(enabled)")
+        // print("DEBUG: [VIDEO MANAGER] Auto-start next video: \(enabled)")
     }
     
     // Static method to trigger scroll detection from anywhere
     static func triggerScroll() {
-        print("DEBUG: [VIDEO MANAGER] Scroll detected - stopping all videos")
+        // print("DEBUG: [VIDEO MANAGER] Scroll detected - stopping all videos")
         NotificationCenter.default.post(name: .scrollStarted, object: nil)
     }
     
     // Static method to trigger sheet presentation detection
     static func triggerSheetPresentation() {
-        print("DEBUG: [VIDEO MANAGER] Sheet presentation detected - stopping all videos")
+        // print("DEBUG: [VIDEO MANAGER] Sheet presentation detected - stopping all videos")
         NotificationCenter.default.post(name: .sheetPresented, object: nil)
     }
 }
