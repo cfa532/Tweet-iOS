@@ -78,10 +78,9 @@ struct CommentComposeView: View {
                                     ForEach(Array(selectedItems.enumerated()), id: \.offset) { index, item in
                                         ThumbnailView(item: item)
                                             .frame(width: 100, height: 100)
-                                            .clipShape(RoundedRectangle(cornerRadius: 8))
                                             .overlay(
                                                 Button(action: {
-                                                    selectedItems.removeAll { $0.itemIdentifier == item.itemIdentifier }
+                                                    selectedItems.remove(at: index)
                                                 }) {
                                                     Image(systemName: "xmark.circle.fill")
                                                         .foregroundColor(.white)
