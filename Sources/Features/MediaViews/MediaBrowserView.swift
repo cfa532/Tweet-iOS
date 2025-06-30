@@ -55,7 +55,14 @@ struct MediaBrowserView: View {
                                 cellAspectRatio: nil,
                                 videoAspectRatio: nil,
                                 showNativeControls: true,
-                                forceUnmuted: true // Force unmuted in full-screen
+                                forceUnmuted: true, // Force unmuted in full-screen
+                                onVideoTap: {
+                                    // Show close button when video is tapped
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showControls = true
+                                    }
+                                    resetControlsTimer()
+                                }
                             )
                             .environmentObject(MuteState.shared)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -128,11 +135,15 @@ struct MediaBrowserView: View {
                 }
         )
         .onTapGesture {
-            // Show controls on tap and reset timer
-            withAnimation(.easeInOut(duration: 0.2)) {
-                showControls = true
+            // Only handle tap for non-video content to avoid conflicts with video player tap gestures
+            let currentAttachment = attachments[currentIndex]
+            if currentAttachment.type.lowercased() != "video" && currentAttachment.type.lowercased() != "hls_video" {
+                // Show controls on tap and reset timer for non-video content
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showControls = true
+                }
+                resetControlsTimer()
             }
-            resetControlsTimer()
         }
         .onAppear {
             isVisible = true

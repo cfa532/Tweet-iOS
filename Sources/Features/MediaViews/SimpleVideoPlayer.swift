@@ -219,6 +219,7 @@ struct SimpleVideoPlayer: View {
     var videoAspectRatio: CGFloat? = nil
     var showNativeControls: Bool = true
     var forceUnmuted: Bool = false // Force unmuted state (for full-screen mode)
+    var onVideoTap: (() -> Void)? = nil // Callback when video is tapped
     @EnvironmentObject var muteState: MuteState
 
     var body: some View {
@@ -237,7 +238,8 @@ struct SimpleVideoPlayer: View {
                         isMuted: forceUnmuted ? false : muteState.isMuted,
                         autoPlay: autoPlay,
                         onMuteChanged: onMuteChanged,
-                        onVideoFinished: onVideoFinished
+                        onVideoFinished: onVideoFinished,
+                        onVideoTap: onVideoTap
                     )
                     .offset(y: -pad)    // align the video vertically in the middle
                     .aspectRatio(videoAR, contentMode: .fill)
@@ -250,7 +252,8 @@ struct SimpleVideoPlayer: View {
                         isMuted: forceUnmuted ? false : muteState.isMuted,
                         autoPlay: autoPlay,
                         onMuteChanged: onMuteChanged,
-                        onVideoFinished: onVideoFinished
+                        onVideoFinished: onVideoFinished,
+                        onVideoTap: onVideoTap
                     )
                 }
             }
@@ -266,6 +269,7 @@ struct HLSVideoPlayerWithControls: View {
     let autoPlay: Bool
     let onMuteChanged: ((Bool) -> Void)?
     let onVideoFinished: (() -> Void)?
+    let onVideoTap: (() -> Void)?
     
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -280,13 +284,14 @@ struct HLSVideoPlayerWithControls: View {
     @State private var playerInstanceId = UUID().uuidString.prefix(8) // Unique ID for this player instance
     @StateObject private var videoManager = VideoManager.shared
     
-    init(videoURL: URL, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?) {
+    init(videoURL: URL, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?) {
         self.videoURL = videoURL
         self.isVisible = isVisible
         self.isMuted = isMuted
         self.autoPlay = autoPlay
         self.onMuteChanged = onMuteChanged
         self.onVideoFinished = onVideoFinished
+        self.onVideoTap = onVideoTap
         self._playerMuted = State(initialValue: isMuted)
         print("DEBUG: [INSTANCE] Creating new HLSVideoPlayerWithControls instance: \(UUID().uuidString.prefix(8)) for URL: \(videoURL.absoluteString)")
     }
@@ -390,6 +395,8 @@ struct HLSVideoPlayerWithControls: View {
                     player.play()
                     isPlaying = true
                 }
+                // Call the onVideoTap callback if provided
+                onVideoTap?()
             }
             .onLongPressGesture {
                 // Manual reload on long press
@@ -715,6 +722,7 @@ struct HLSDirectoryVideoPlayer: View {
     let autoPlay: Bool
     let onMuteChanged: ((Bool) -> Void)?
     let onVideoFinished: (() -> Void)?
+    let onVideoTap: (() -> Void)?
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
     @State private var loading = true
@@ -729,7 +737,8 @@ struct HLSDirectoryVideoPlayer: View {
                     isMuted: isMuted,
                     autoPlay: autoPlay,
                     onMuteChanged: onMuteChanged,
-                    onVideoFinished: onVideoFinished
+                    onVideoFinished: onVideoFinished,
+                    onVideoTap: onVideoTap
                 )
             } else if loading {
                 ProgressView("Loading video...")
