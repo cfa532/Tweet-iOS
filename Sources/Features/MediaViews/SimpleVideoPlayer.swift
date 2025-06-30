@@ -130,6 +130,12 @@ class VideoManager: ObservableObject {
         if shouldBeVisible {
             visibleVideos.insert(instanceId)
             // print("DEBUG: [VIDEO MANAGER] Video became visible: \(instanceId) (isVisible: \(isVisible), actuallyVisible: \(actuallyVisible))")
+            
+            // If no video is currently playing, try to start this one
+            if currentPlayingInstanceId == nil && autoStartNext {
+                // print("DEBUG: [VIDEO MANAGER] No video playing, starting newly visible video: \(instanceId)")
+                NotificationCenter.default.post(name: .startVideo, object: instanceId)
+            }
         } else {
             visibleVideos.remove(instanceId)
             // print("DEBUG: [VIDEO MANAGER] Video became invisible: \(instanceId) (isVisible: \(isVisible), actuallyVisible: \(actuallyVisible))")
@@ -202,6 +208,12 @@ class VideoManager: ObservableObject {
         NotificationCenter.default.post(name: .scrollStarted, object: nil)
     }
     
+    // Static method to trigger scroll ended detection
+    static func triggerScrollEnded() {
+        // print("DEBUG: [VIDEO MANAGER] Scroll ended - checking for visible videos")
+        NotificationCenter.default.post(name: .scrollEnded, object: nil)
+    }
+    
     // Static method to trigger sheet presentation detection
     static func triggerSheetPresentation() {
         // print("DEBUG: [VIDEO MANAGER] Sheet presentation detected - stopping all videos")
@@ -215,6 +227,7 @@ extension Notification.Name {
     static let scrollStarted = Notification.Name("scrollStarted")
     static let startVideo = Notification.Name("startVideo")
     static let sheetPresented = Notification.Name("sheetPresented")
+    static let scrollEnded = Notification.Name("scrollEnded")
 }
 
 struct SimpleVideoPlayer: View {
@@ -483,6 +496,20 @@ struct HLSVideoPlayerWithControls: View {
                             player.play()
                             self.isPlaying = true
                         }
+                    }
+                }
+                
+                // Listen for scroll ended notifications to check visibility
+                NotificationCenter.default.addObserver(
+                    forName: .scrollEnded,
+                    object: nil,
+                    queue: .main
+                ) { _ in
+                    // Force check visibility when scroll ends
+                    let frame = geometry.frame(in: .global)
+                    self.videoManager.updateVideoPosition(instanceId: String(self.playerInstanceId), frame: frame)
+                    if !self.hasFinished {
+                        self.videoManager.setVideoVisible(String(self.playerInstanceId), isVisible: self.isVisible)
                     }
                 }
                 
