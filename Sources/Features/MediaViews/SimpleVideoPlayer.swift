@@ -113,30 +113,33 @@ class VideoManager: ObservableObject {
         let intersection = videoFrame.intersection(screenBounds)
         let visibilityRatio = intersection.width * intersection.height / (videoFrame.width * videoFrame.height)
         
-        // Consider video visible if more than 50% is on screen
-        let isVisible = visibilityRatio > 0.5 && intersection.width > 0 && intersection.height > 0
+        // Consider video visible if more than 30% is on screen (reduced from 50% for better detection)
+        let isVisible = visibilityRatio > 0.3 && intersection.width > 0 && intersection.height > 0
         
         // print("DEBUG: [VIDEO MANAGER] Visibility check for \(instanceId): \(isVisible) (ratio: \(visibilityRatio), frame: \(videoFrame), screen: \(screenBounds), intersection: \(intersection))")
         return isVisible
     }
     
-    // Track video visibility based on actual screen position
+    // Track video visibility based on both isVisible parameter and actual screen position
     func setVideoVisible(_ instanceId: String, isVisible: Bool, screenBounds: CGRect = UIScreen.main.bounds) {
         let actuallyVisible = isVideoActuallyVisible(instanceId: instanceId, screenBounds: screenBounds)
         
-        if actuallyVisible {
+        // Video is considered visible if BOTH the isVisible parameter is true AND it's actually on screen
+        let shouldBeVisible = isVisible && actuallyVisible
+        
+        if shouldBeVisible {
             visibleVideos.insert(instanceId)
-            // print("DEBUG: [VIDEO MANAGER] Video became actually visible: \(instanceId)")
+            // print("DEBUG: [VIDEO MANAGER] Video became visible: \(instanceId) (isVisible: \(isVisible), actuallyVisible: \(actuallyVisible))")
         } else {
             visibleVideos.remove(instanceId)
-            // print("DEBUG: [VIDEO MANAGER] Video became actually invisible: \(instanceId)")
+            // print("DEBUG: [VIDEO MANAGER] Video became invisible: \(instanceId) (isVisible: \(isVisible), actuallyVisible: \(actuallyVisible))")
             
             // Remove invisible videos from queue to prevent them from starting
             removeInvisibleFromQueue()
             
             // If the invisible video was playing, stop it and start next
             if currentPlayingInstanceId == instanceId {
-                // print("DEBUG: [VIDEO MANAGER] Stopping actually invisible video: \(instanceId)")
+                // print("DEBUG: [VIDEO MANAGER] Stopping invisible video: \(instanceId)")
                 NotificationCenter.default.post(name: .pauseVideo, object: instanceId)
                 currentPlayingInstanceId = nil
                 
@@ -167,11 +170,23 @@ class VideoManager: ObservableObject {
         
         // Find the first visible video in the queue
         if let nextVideoId = videoQueue.first(where: { visibleVideos.contains($0) }) {
-            // print("DEBUG: [VIDEO MANAGER] Auto-starting next actually visible video: \(nextVideoId)")
+            // print("DEBUG: [VIDEO MANAGER] Auto-starting next visible video: \(nextVideoId)")
             NotificationCenter.default.post(name: .startVideo, object: nextVideoId)
             videoQueue.removeAll { $0 == nextVideoId }
         } else {
-            // print("DEBUG: [VIDEO MANAGER] No actually visible videos in queue to start")
+            // print("DEBUG: [VIDEO MANAGER] No visible videos in queue to start")
+        }
+    }
+    
+    // Force check all visible videos and start one if none is playing
+    func checkAndStartVisibleVideo() {
+        // Clean up any invisible videos from the queue
+        removeInvisibleFromQueue()
+        
+        // If no video is currently playing, try to start a visible one
+        if currentPlayingInstanceId == nil && autoStartNext {
+            // print("DEBUG: [VIDEO MANAGER] No video playing, checking for visible videos to start")
+            startNextVisibleVideo()
         }
     }
     
@@ -284,6 +299,7 @@ struct HLSVideoPlayerWithControls: View {
     @State private var playerMuted: Bool = false
     @State private var controlsTimer: Timer?
     @State private var hasNotifiedFinished = false
+    @State private var hasFinished = false // Track if video has finished to prevent re-queuing
     @State private var playerInstanceId = UUID().uuidString.prefix(8) // Unique ID for this player instance
     @StateObject private var videoManager = VideoManager.shared
     
@@ -436,7 +452,11 @@ struct HLSVideoPlayerWithControls: View {
                 // Update video position and check actual visibility
                 let frame = geometry.frame(in: .global)
                 videoManager.updateVideoPosition(instanceId: String(playerInstanceId), frame: frame)
-                videoManager.setVideoVisible(String(playerInstanceId), isVisible: isVisible)
+                
+                // Only update visibility if video hasn't finished to prevent re-queuing
+                if !hasFinished {
+                    videoManager.setVideoVisible(String(playerInstanceId), isVisible: isVisible)
+                }
                 
                 // Listen for pause notifications from video manager
                 NotificationCenter.default.addObserver(
@@ -495,12 +515,21 @@ struct HLSVideoPlayerWithControls: View {
                 print("DEBUG: [INSTANCE \(playerInstanceId)] Visibility changed to: \(newVisibility)")
                 let frame = geometry.frame(in: .global)
                 videoManager.updateVideoPosition(instanceId: String(playerInstanceId), frame: frame)
-                videoManager.setVideoVisible(String(playerInstanceId), isVisible: newVisibility)
+                
+                // Only update visibility if video hasn't finished to prevent re-queuing
+                if !hasFinished {
+                    videoManager.setVideoVisible(String(playerInstanceId), isVisible: newVisibility)
+                }
             }
             .onChange(of: geometry.frame(in: .global)) { newFrame in
                 // Update position when frame changes (e.g., during scroll)
                 videoManager.updateVideoPosition(instanceId: String(playerInstanceId), frame: newFrame)
-                videoManager.setVideoVisible(String(playerInstanceId), isVisible: isVisible)
+                
+                // Only update visibility if video hasn't finished to prevent re-queuing
+                if !hasFinished {
+                    // Recalculate visibility based on new frame position
+                    videoManager.setVideoVisible(String(playerInstanceId), isVisible: isVisible)
+                }
             }
         }
     }
@@ -542,6 +571,7 @@ struct HLSVideoPlayerWithControls: View {
             // Check if video has finished
             if duration > 0 && currentTime >= duration - 0.5 && !hasNotifiedFinished {
                 hasNotifiedFinished = true
+                hasFinished = true // Mark video as finished
                 self.videoManager.stopPlaying(instanceId: String(self.playerInstanceId))
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video finished in HLSVideoPlayerWithControls")
                 self.resetVideoState()
@@ -557,6 +587,7 @@ struct HLSVideoPlayerWithControls: View {
         ) { _ in
             if !self.hasNotifiedFinished {
                 self.hasNotifiedFinished = true
+                self.hasFinished = true // Mark video as finished
                 self.videoManager.stopPlaying(instanceId: String(self.playerInstanceId))
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video finished via AVPlayerItemDidPlayToEndTime notification")
                 print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video URL: \(self.videoURL.absoluteString)")
@@ -738,6 +769,7 @@ struct HLSVideoPlayerWithControls: View {
         isPlaying = false
         currentTime = 0
         hasNotifiedFinished = false
+        hasFinished = false // Reset finished flag when video is restarted
         showControls = true // Show controls when video finishes
         
         // Reset player to beginning
