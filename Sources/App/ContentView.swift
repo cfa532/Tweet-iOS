@@ -29,6 +29,9 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: isNavigationVisible ? 60 : 0)
+            }
             
             // Custom Tab Bar
             HStack(spacing: 0) {
@@ -64,7 +67,11 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
             }
             .padding(.vertical, 8)
-            .background(isNavigationVisible ? Color(.systemBackground) : Color.clear)
+            .background(
+                isNavigationVisible ? 
+                Color(.systemBackground).opacity(1.0) : 
+                Color.clear
+            )
             .overlay(
                 Rectangle()
                     .frame(height: 0.5)
@@ -72,6 +79,7 @@ struct ContentView: View {
                 alignment: .top
             )
             .opacity(isNavigationVisible ? 1.0 : 0.2)
+            .allowsHitTesting(true)
             .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
         }
         .sheet(isPresented: $showComposeSheet) {
