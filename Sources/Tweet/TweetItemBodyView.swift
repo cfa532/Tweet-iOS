@@ -21,37 +21,6 @@ struct TweetItemBodyView: View {
     @State private var showLoginSheet = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
-    // Helper for grid aspect ratio
-    func gridAspect(for attachments: [MimeiFileType]) -> CGFloat {
-        let count = attachments.count
-        let allPortrait = attachments.allSatisfy { ($0.aspectRatio ?? 1) < 1 }
-        let allLandscape = attachments.allSatisfy { ($0.aspectRatio ?? 1) > 1 }
-        switch count {
-        case 1:
-            if let ar = attachments[0].aspectRatio, ar > 0 {
-                if ar < 1 {
-                    return 1 // Portrait aspect ratio
-                } else {
-                    return CGFloat(ar) // Use actual aspect ratio for landscape
-                }
-            } else {
-                return 1.0 // Square when no aspect ratio is available
-            }
-        case 2:
-            if allPortrait { return 4.0/3.0 }
-            else if allLandscape { return 3.0/4.0 }
-            else { return 1.0 }
-        case 3:
-            if allPortrait { return 4.0/3.0 }
-            else if allLandscape { return 3.0/4.0 }
-            else { return 1.0 }
-        case 4:
-            return 1.0
-        default:
-            return 1.0
-        }
-    }
-    
     private func handleGuestAction() {
         if hproseInstance.appUser.isGuest {
             showLoginSheet = true
@@ -67,7 +36,6 @@ struct TweetItemBodyView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .lineLimit(isExpanded ? nil : 10)
                         .if(enableTap) { $0.contentShape(Rectangle()) }
-                    
                     if content.count > 500 && !isExpanded {
                         Button(action: { isExpanded = true }) {
                             Text("Show more")
@@ -77,10 +45,10 @@ struct TweetItemBodyView: View {
                     }
                 }
             }
-            
             if let attachments = tweet.attachments, !attachments.isEmpty {
+                let aspect = MediaGridViewModel.aspectRatio(for: attachments)
                 MediaGridView(parentTweet: tweet, attachments: attachments)
-                    .aspectRatio(gridAspect(for: attachments), contentMode: .fit)
+                    .aspectRatio(aspect, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .clipped()
                     .cornerRadius(8)

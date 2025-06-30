@@ -240,7 +240,7 @@ struct SimpleVideoPlayer: View {
                         onVideoFinished: onVideoFinished
                     )
                     .offset(y: -pad)    // align the video vertically in the middle
-                    .aspectRatio(videoAR, contentMode: .fit)
+                    .aspectRatio(videoAR, contentMode: .fill)
                 }
             } else {
                 ZStack {
