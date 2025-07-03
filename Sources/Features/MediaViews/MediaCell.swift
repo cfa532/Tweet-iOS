@@ -52,6 +52,7 @@ struct MediaCell: View {
                 case "video", "hls_video":
                     SimpleVideoPlayer(
                         url: url,
+                        mid: attachment.mid,
                         autoPlay: play && shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
                         isVisible: isVisible && shouldLoadVideo,

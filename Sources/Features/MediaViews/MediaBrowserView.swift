@@ -179,6 +179,7 @@ struct MediaBrowserView: View {
     private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
         SimpleVideoPlayer(
             url: url,
+            mid: attachment.mid,
             autoPlay: true, // Always auto-play in full-screen
             onMuteChanged: { _ in
                 // In full-screen mode, don't update global mute state

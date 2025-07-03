@@ -15,6 +15,8 @@
 		1A1A1A1A1A1A1A1A1A1A1A2A /* PollCreationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A2B /* PollCreationView.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A2C /* LocationPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A2D /* LocationPickerView.swift */; };
 		1C8EC478C6D1F6DB861107CF /* Pods_Tweet.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 83423F5E23BD65E924B7AD86 /* Pods_Tweet.framework */; };
+		460680D52E16100500D9D15A /* VideoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680D42E16100500D9D15A /* VideoManager.swift */; };
+		460680E82E16264C00D9D15A /* VideoCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680E72E16264C00D9D15A /* VideoCacheManager.swift */; };
 		4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D72DD5CA640051A92D /* HproseInstance.swift */; };
 		4608E2DA2DD5CD920051A92D /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D92DD5CD920051A92D /* User.swift */; };
 		4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4629FB182DFFEA3100588941 /* MetricKitManager.swift */; };
@@ -70,9 +72,8 @@
 		46E8A7D32DE9D0E700A30FBA /* CommentItemView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E8A7D22DE9D0DF00A30FBA /* CommentItemView.swift */; };
 		46E8A7D52DE9F15100A30FBA /* CommentsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */; };
 		46F3BFCC2DFB06F500059F18 /* SimpleVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */; };
-				46F3BFCE2DFB3F1100059F18 /* SimpleAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */; };
-		460680D52E16100500D9D15A /* VideoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680D42E16100500D9D15A /* VideoManager.swift */; };
-		/* End PBXBuildFile section */
+		46F3BFCE2DFB3F1100059F18 /* SimpleAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */; };
+/* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		1A1A1A1A1A1A1A1A1A1A1A01 /* Tweet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tweet.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -83,6 +84,8 @@
 		1A1A1A1A1A1A1A1A1A1A1A29 /* ComposeTweetViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ComposeTweetViewModel.swift; path = Sources/Features/Compose/ComposeTweetViewModel.swift; sourceTree = SOURCE_ROOT; };
 		1A1A1A1A1A1A1A1A1A1A1A2B /* PollCreationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PollCreationView.swift; path = Sources/Features/Compose/PollCreationView.swift; sourceTree = SOURCE_ROOT; };
 		1A1A1A1A1A1A1A1A1A1A1A2D /* LocationPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LocationPickerView.swift; path = Sources/Features/Compose/LocationPickerView.swift; sourceTree = SOURCE_ROOT; };
+		460680D42E16100500D9D15A /* VideoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoManager.swift; sourceTree = "<group>"; };
+		460680E72E16264C00D9D15A /* VideoCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCacheManager.swift; sourceTree = "<group>"; };
 		4608E2D72DD5CA640051A92D /* HproseInstance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseInstance.swift; sourceTree = "<group>"; };
 		4608E2D92DD5CD920051A92D /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		4629FB182DFFEA3100588941 /* MetricKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitManager.swift; sourceTree = "<group>"; };
@@ -142,7 +145,6 @@
 		46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsViewModel.swift; sourceTree = "<group>"; };
 		46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleVideoPlayer.swift; sourceTree = "<group>"; };
 		46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleAudioPlayer.swift; sourceTree = "<group>"; };
-		460680D42E16100500D9D15A /* VideoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoManager.swift; sourceTree = "<group>"; };
 		83423F5E23BD65E924B7AD86 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		D424303A66FF70A9FBF5540E /* Pods-Tweet.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.release.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.release.xcconfig"; sourceTree = "<group>"; };
 		FFC29454DC8954BB0F934F77 /* Pods-Tweet.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.debug.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.debug.xcconfig"; sourceTree = "<group>"; };
@@ -300,6 +302,7 @@
 		4629FB172DFFE9FB00588941 /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				460680E72E16264C00D9D15A /* VideoCacheManager.swift */,
 				46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */,
 				46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */,
 				469A99492DEB163F00954049 /* ToastView.swift */,
@@ -538,6 +541,7 @@
 				46E5B3672DE2DD2900AEF31F /* TweetListView.swift in Sources */,
 				46E5B33A2DDA315700AEF31F /* RecommendedTweetView.swift in Sources */,
 				46E5B33B2DDA315700AEF31F /* TweetItemView.swift in Sources */,
+				460680E82E16264C00D9D15A /* VideoCacheManager.swift in Sources */,
 				46E5B33C2DDA315700AEF31F /* FollowingsTweetView.swift in Sources */,
 				46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */,
 				46E8A7D32DE9D0E700A30FBA /* CommentItemView.swift in Sources */,

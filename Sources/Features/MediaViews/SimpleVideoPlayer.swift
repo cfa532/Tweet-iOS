@@ -48,6 +48,7 @@ class MuteState: ObservableObject {
 
 struct SimpleVideoPlayer: View {
     let url: URL
+    let mid: String // Add mid field for caching
     var autoPlay: Bool = true
     var onTimeUpdate: ((Double) -> Void)? = nil
     var onMuteChanged: ((Bool) -> Void)? = nil
@@ -75,6 +76,7 @@ struct SimpleVideoPlayer: View {
                 ZStack {
                     HLSDirectoryVideoPlayer(
                         baseURL: url,
+                        mid: mid,
                         isVisible: isVisible,
                         isMuted: forceUnmuted ? false : muteState.isMuted,
                         autoPlay: autoPlay,
@@ -92,6 +94,7 @@ struct SimpleVideoPlayer: View {
                 ZStack {
                     HLSDirectoryVideoPlayer(
                         baseURL: url,
+                        mid: mid,
                         isVisible: isVisible,
                         isMuted: forceUnmuted ? false : muteState.isMuted,
                         autoPlay: autoPlay,
@@ -111,6 +114,7 @@ struct SimpleVideoPlayer: View {
 /// HLSVideoPlayer with custom controls
 struct HLSVideoPlayerWithControls: View {
     let videoURL: URL
+    let mid: String // Add mid field for caching
     let isVisible: Bool
     let isMuted: Bool
     let autoPlay: Bool
@@ -135,9 +139,11 @@ struct HLSVideoPlayerWithControls: View {
     @State private var playerInstanceId = UUID().uuidString.prefix(8) // Unique ID for this player instance
     @StateObject private var videoManager = VideoManager.shared
     @StateObject private var muteState = MuteState.shared
+    @StateObject private var videoCache = VideoCacheManager.shared
     
-    init(videoURL: URL, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool) {
+    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool) {
         self.videoURL = videoURL
+        self.mid = mid
         self.isVisible = isVisible
         self.isMuted = isMuted
         self.autoPlay = autoPlay
@@ -148,7 +154,7 @@ struct HLSVideoPlayerWithControls: View {
         self.forcePlay = forcePlay
         self.forceUnmuted = forceUnmuted
         self._playerMuted = State(initialValue: isMuted)
-        print("DEBUG: [INSTANCE] Creating new HLSVideoPlayerWithControls instance: \(UUID().uuidString.prefix(8)) for URL: \(videoURL.absoluteString)")
+        print("DEBUG: [INSTANCE] Creating new HLSVideoPlayerWithControls instance: \(UUID().uuidString.prefix(8)) for URL: \(videoURL.absoluteString), mid: \(mid)")
     }
     
     var body: some View {
@@ -371,8 +377,8 @@ struct HLSVideoPlayerWithControls: View {
                 // Notify video manager about visibility change
                 videoManager.setVideoVisible(String(playerInstanceId), isVisible: false)
                 
-                // Only pause, do not destroy or reload
-                player?.pause()
+                // Pause video using cache, do not destroy
+                videoCache.pauseVideoPlayer(for: mid)
                 videoManager.stopPlaying(instanceId: String(playerInstanceId))
                 cleanupObservers()
             }
@@ -398,26 +404,48 @@ struct HLSVideoPlayerWithControls: View {
             }
             .onChange(of: muteState.isMuted) { newMuteState in
                 // Update player mute state when global mute state changes
-                if let player = player {
-                    // Only update if not in forceUnmuted mode
-                    if !forceUnmuted {
-                        player.isMuted = newMuteState
-                        playerMuted = player.isMuted
-                        print("DEBUG: [INSTANCE \(playerInstanceId)] Global mute state changed to: \(newMuteState), player muted: \(player.isMuted)")
-                    } else {
-                        print("DEBUG: [INSTANCE \(playerInstanceId)] Ignoring global mute state change (forceUnmuted mode)")
-                    }
+                // Only update if not in forceUnmuted mode
+                if !forceUnmuted {
+                    videoCache.setMuteState(for: mid, isMuted: newMuteState)
+                    playerMuted = newMuteState
+                    print("DEBUG: [INSTANCE \(playerInstanceId)] Global mute state changed to: \(newMuteState) for mid: \(mid)")
+                } else {
+                    print("DEBUG: [INSTANCE \(playerInstanceId)] Ignoring global mute state change (forceUnmuted mode)")
                 }
             }
         }
     }
     
     private func setupPlayer() {
-        print("DEBUG: Setting up HLS player for URL: \(videoURL.absoluteString)")
+        print("DEBUG: [INSTANCE \(playerInstanceId)] Setting up HLS player for URL: \(videoURL.absoluteString), mid: \(mid)")
         
         isLoading = true
         errorMessage = nil
         hasNotifiedFinished = false
+        
+        // Try to get cached player first
+        if let cachedPlayer = videoCache.getVideoPlayer(for: mid, url: videoURL) {
+            print("DEBUG: [INSTANCE \(playerInstanceId)] Using cached player for mid: \(mid)")
+            self.player = cachedPlayer
+            
+            // Set initial mute state
+            cachedPlayer.isMuted = forceUnmuted ? false : muteState.isMuted
+            print("DEBUG: [INSTANCE \(playerInstanceId)] Setting initial mute state: \(cachedPlayer.isMuted) (forceUnmuted: \(forceUnmuted), globalMuted: \(muteState.isMuted))")
+            
+            // Set up observers for the cached player
+            setupPlayerObservers(cachedPlayer)
+            
+            // Monitor player item status
+            self.monitorPlayerStatus(cachedPlayer)
+            
+            // Handle auto-play logic
+            handleAutoPlay(cachedPlayer)
+            
+            return
+        }
+        
+        // Fallback: Create new player if cache failed
+        print("DEBUG: [INSTANCE \(playerInstanceId)] Cache miss, creating new player for mid: \(mid)")
         
         // Create asset with hardware acceleration support
         let asset = AVURLAsset(url: videoURL, options: [
@@ -442,9 +470,23 @@ struct HLSVideoPlayerWithControls: View {
         avPlayer.isMuted = forceUnmuted ? false : muteState.isMuted
         print("DEBUG: [INSTANCE \(playerInstanceId)] Setting initial mute state: \(avPlayer.isMuted) (forceUnmuted: \(forceUnmuted), globalMuted: \(muteState.isMuted))")
         
+        // Set up the player
+        self.player = avPlayer
+        
+        // Set up observers for the new player
+        setupPlayerObservers(avPlayer)
+        
+        // Monitor player item status
+        self.monitorPlayerStatus(avPlayer)
+        
+        // Handle auto-play logic
+        handleAutoPlay(avPlayer)
+    }
+    
+    private func setupPlayerObservers(_ player: AVPlayer) {
         // Add periodic time observer for progress updates
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        avPlayer.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { time in
+        player.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { time in
             currentTime = time.seconds
             
             // Check if video has finished
@@ -459,41 +501,39 @@ struct HLSVideoPlayerWithControls: View {
         }
         
         // Add notification observer for video finished
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: playerItem,
-            queue: .main
-        ) { _ in
-            if !self.hasNotifiedFinished {
-                self.hasNotifiedFinished = true
-                self.hasFinished = true // Mark video as finished
-                self.videoManager.stopPlaying(instanceId: String(self.playerInstanceId))
-                print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video finished via AVPlayerItemDidPlayToEndTime notification")
-                print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video URL: \(self.videoURL.absoluteString)")
-                print("DEBUG: [INSTANCE \(self.playerInstanceId)] Final duration: \(self.duration) seconds")
-                print("DEBUG: [INSTANCE \(self.playerInstanceId)] Final current time: \(self.currentTime) seconds")
-                self.resetVideoState()
-                self.onVideoFinished?()
+        if let playerItem = player.currentItem {
+            NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: playerItem,
+                queue: .main
+            ) { _ in
+                if !self.hasNotifiedFinished {
+                    self.hasNotifiedFinished = true
+                    self.hasFinished = true // Mark video as finished
+                    self.videoManager.stopPlaying(instanceId: String(self.playerInstanceId))
+                    print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video finished via AVPlayerItemDidPlayToEndTime notification")
+                    print("DEBUG: [INSTANCE \(self.playerInstanceId)] Video URL: \(self.videoURL.absoluteString)")
+                    print("DEBUG: [INSTANCE \(self.playerInstanceId)] Final duration: \(self.duration) seconds")
+                    print("DEBUG: [INSTANCE \(self.playerInstanceId)] Final current time: \(self.currentTime) seconds")
+                    self.resetVideoState()
+                    self.onVideoFinished?()
+                }
             }
         }
-        
-        // Set up the player
-        self.player = avPlayer
-        
-        // Monitor player item status
-        self.monitorPlayerStatus(avPlayer)
-        
+    }
+    
+    private func handleAutoPlay(_ player: AVPlayer) {
         // Only play if autoPlay is true
         if autoPlay {
             if self.forcePlay {
                 // Force play mode (for full-screen) - stop all other videos and start this one
                 self.videoManager.stopAllVideosForSheet()
                 self.videoManager.startPlaying(instanceId: String(self.playerInstanceId))
-                avPlayer.play()
+                player.play()
                 self.isPlaying = true
             } else if self.videoManager.currentPlayingInstanceId == nil {
                 self.videoManager.startPlaying(instanceId: String(self.playerInstanceId))
-                avPlayer.play()
+                player.play()
                 self.isPlaying = true
             } else {
                 // Add to queue if another video is playing
@@ -651,9 +691,11 @@ struct HLSVideoPlayerWithControls: View {
         hasFinished = false // Reset finished flag when video is restarted
         showControls = true // Show controls when video finishes
         
-        // Reset player to beginning
+        // Reset player to beginning using cache
+        videoCache.resetVideoPlayer(for: mid)
+        
+        // Update local player reference if needed
         if let player = player {
-            player.seek(to: CMTime.zero)
             // Preserve the mute state when resetting
             player.isMuted = forceUnmuted ? false : muteState.isMuted
         }
@@ -697,6 +739,7 @@ extension View {
 
 struct HLSDirectoryVideoPlayer: View {
     let baseURL: URL
+    let mid: String // Add mid field for caching
     let isVisible: Bool
     let isMuted: Bool
     let autoPlay: Bool
@@ -716,6 +759,7 @@ struct HLSDirectoryVideoPlayer: View {
             if let playlistURL = playlistURL {
                 HLSVideoPlayerWithControls(
                     videoURL: playlistURL,
+                    mid: mid,
                     isVisible: isVisible,
                     isMuted: isMuted,
                     autoPlay: autoPlay,
