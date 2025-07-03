@@ -63,7 +63,7 @@ struct TweetApp: App {
                 } else {
                     // Show error state if initialization failed
                     VStack {
-                        Text("Failed to initialize app")
+                        Text(LocalizedStringKey("Failed to initialize app"))
                         if let error = appState.error {
                             Text(error.localizedDescription)
                                 .foregroundColor(.red)
@@ -77,7 +77,7 @@ struct TweetApp: App {
                 }
             }
             .alert(isPresented: $showGlobalAlert) {
-                Alert(title: Text("Error"), message: Text(globalAlertMessage), dismissButton: .default(Text("OK")))
+                Alert(title: Text(LocalizedStringKey("Error")), message: Text(globalAlertMessage), dismissButton: .default(Text(LocalizedStringKey("OK"))))
             }
             .onReceive(NotificationCenter.default.publisher(for: .backgroundUploadFailed)) { notification in
                 if let msg = notification.userInfo?["error"] as? String {

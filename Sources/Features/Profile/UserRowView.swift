@@ -29,7 +29,7 @@ struct UserRowView: View {
                     HStack {
                         Text(user.name ?? "User Name")
                             .font(.system(size: 14, weight: .semibold))
-                        Text("@\(user.username ?? "Noone")")
+                        Text("@\(user.username ?? NSLocalizedString("Noone", comment: "Default username"))")
                             .font(.system(size: 12))
                             .foregroundColor(.gray)
                     }

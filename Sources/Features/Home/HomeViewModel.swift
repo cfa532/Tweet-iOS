@@ -40,10 +40,10 @@ struct HomeView: View {
                         .padding(.vertical, 8)
                     // Tab bar
                     HStack(spacing: 0) {
-                        TabButton(title: "Followings", isSelected: selectedTab == 0) {
+                        TabButton(title: LocalizedStringKey("Followings"), isSelected: selectedTab == 0) {
                             withAnimation { selectedTab = 0 }
                         }
-                        TabButton(title: "Recommendation", isSelected: selectedTab == 1) {
+                        TabButton(title: LocalizedStringKey("Recommendation"), isSelected: selectedTab == 1) {
                             withAnimation { selectedTab = 1 }
                         }
                     }
@@ -162,7 +162,7 @@ struct HomeView: View {
 }
 
 struct TabButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let isSelected: Bool
     let action: () -> Void
 

@@ -9,7 +9,7 @@ struct TweetItemHeaderView: View {
                 Text(tweet.author?.name ?? "No one")
                     .font(.headline)
                     .foregroundColor(.themeText)
-                Text("@\(tweet.author?.username ?? "")")
+                Text("@\(tweet.author?.username ?? NSLocalizedString("username", comment: "Default username"))")
                     .font(.subheadline)
                     .foregroundColor(.themeSecondaryText)
                     .padding(.leading, -6)

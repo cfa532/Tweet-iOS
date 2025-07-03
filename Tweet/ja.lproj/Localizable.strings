@@ -8,6 +8,8 @@
 // MARK: - Tab Bar
 "Home" = "ホーム";
 "Compose" = "投稿";
+"Followings" = "フォロー中";
+"Recommendation" = "おすすめ";
 
 // MARK: - Login Screen
 "Welcome to dTweet" = "dTweetへようこそ";
@@ -31,6 +33,40 @@
 "Register" = "登録";
 "Cancel" = "キャンセル";
 
+// MARK: - Settings Screen
+"Account" = "アカウント";
+"App Settings" = "アプリ設定";
+"Clear Media Cache" = "メディアキャッシュをクリア";
+"About" = "アプリについて";
+"Version" = "バージョン";
+"All image and tweet caches have been cleared successfully." = "すべての画像とツイートキャッシュが正常にクリアされました。";
+"Cache Cleared" = "キャッシュがクリアされました";
+
+// MARK: - Profile Screen
+"Fans" = "フォロワー";
+"Followings" = "フォロー中";
+"Tweets" = "ツイート";
+"Bookmarks" = "ブックマーク";
+"Favorites" = "お気に入り";
+"Pinned" = "ピン留め";
+"username" = "ユーザー名";
+"Noone" = "なし";
+
+// MARK: - Tweet Actions
+"Show more" = "もっと見る";
+"Forwarded by %@" = "%@がリツイート";
+"Quote Tweet" = "ツイートを引用";
+
+// MARK: - Media
+"Swipe to view" = "スワイプして表示";
+"Failed to load image" = "画像の読み込みに失敗";
+"HLS Playback Error" = "HLS再生エラー";
+"Recommended tweets coming soon" = "おすすめツイートは近日公開";
+
+// MARK: - Compose
+"Question" = "質問";
+"Options" = "選択肢";
+
 // MARK: - Error Messages
 "Username & password are required." = "ユーザー名とパスワードが必要です。";
 "Registration failed." = "登録に失敗しました。";
@@ -47,6 +83,8 @@
 "Failed to create output directory: %@" = "出力ディレクトリの作成に失敗：%@";
 "No video track found in the file" = "ファイルにビデオトラックが見つかりません";
 "Failed to get video info: %@" = "ビデオ情報の取得に失敗：%@";
+"Failed to initialize app" = "アプリの初期化に失敗しました";
+"Error" = "エラー";
 
 // MARK: - Common Actions
 "Delete" = "削除";

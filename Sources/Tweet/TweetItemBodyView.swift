@@ -39,7 +39,7 @@ struct TweetItemBodyView: View {
                         .if(enableTap) { $0.contentShape(Rectangle()) }
                     if content.count > 500 && !isExpanded {
                         Button(action: { isExpanded = true }) {
-                            Text("Show more")
+                            Text(LocalizedStringKey("Show more"))
                                 .font(.subheadline)
                                 .foregroundColor(.blue)
                         }

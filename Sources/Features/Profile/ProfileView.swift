@@ -205,7 +205,7 @@ struct ProfileView: View {
         }
         .navigationDestination(isPresented: $showTweetList) {
             VStack(spacing: 0) {
-                Text(tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites")
+                Text(tweetListType == .BOOKMARKS ? LocalizedStringKey("Bookmarks") : LocalizedStringKey("Favorites"))
                     .font(.headline)
                     .bold()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -242,7 +242,7 @@ struct ProfileView: View {
         // Add local state for bookmarks/favorites if not already present
         let tweetsBinding = tweetListType == .BOOKMARKS ? $bookmarks : $favorites
         TweetListView<TweetItemView>(
-            title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",
+            title: tweetListType == .BOOKMARKS ? NSLocalizedString("Bookmarks", comment: "Bookmarks list") : NSLocalizedString("Favorites", comment: "Favorites list"),
             tweets: tweetsBinding,
             tweetFetcher: { page, size, isFromCache in
                 // Don't merge here, let TweetListView handle it

@@ -8,11 +8,11 @@ struct PollCreationView: View {
     var body: some View {
         NavigationView {
             Form {
-                Section(header: Text("Question")) {
+                Section(header: Text(LocalizedStringKey("Question"))) {
                     TextField("Ask a question...", text: $question)
                 }
                 
-                Section(header: Text("Options")) {
+                Section(header: Text(LocalizedStringKey("Options"))) {
                     ForEach(options.indices, id: \.self) { index in
                         TextField("Option \(index + 1)", text: $options[index])
                     }

@@ -30,7 +30,7 @@ struct CommentComposeView: View {
                                 HStack(spacing: 8) {
                                     Image(systemName: isQuoting ? "checkmark.square.fill" : "square")
                                         .foregroundColor(isQuoting ? .blue : .secondary)
-                                    Text("Quote Tweet")
+                                    Text(LocalizedStringKey("Quote Tweet"))
                                         .font(.subheadline)
                                         .foregroundColor(.primary)
                                 }
@@ -48,7 +48,7 @@ struct CommentComposeView: View {
                                     Text(tweet.author?.name ?? "Unknown")
                                         .font(.headline)
                                         .foregroundColor(.themeText)
-                                    Text("@\(tweet.author?.username ?? "")")
+                                    Text("@\(tweet.author?.username ?? NSLocalizedString("username", comment: "Default username"))")
                                         .font(.subheadline)
                                         .foregroundColor(.themeSecondaryText)
                                 }

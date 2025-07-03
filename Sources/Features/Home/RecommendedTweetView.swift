@@ -8,7 +8,7 @@ struct RecommendedTweetView: View {
     }
     
     var body: some View {
-        Text("Recommended tweets coming soon")
+        Text(LocalizedStringKey("Recommended tweets coming soon"))
             .foregroundColor(.themeSecondaryText)
     }
 }

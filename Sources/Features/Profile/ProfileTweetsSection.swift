@@ -134,7 +134,7 @@ struct ProfileTweetsSection<Header: View>: View {
                         VStack(spacing: 0) {
                             header()
                             if !pinnedTweets.isEmpty {
-                                Text("Pinned")
+                                Text(LocalizedStringKey("Pinned"))
                                     .font(.subheadline)
                                     .bold()
                                     .frame(maxWidth: .infinity, alignment: .leading)

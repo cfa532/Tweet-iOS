@@ -58,7 +58,7 @@ struct TweetItemView: View {
                             Image(systemName: "arrow.2.squarepath")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text("Forwarded by \(tweet.author?.name ?? tweet.author?.username ?? "")")
+                            Text(String(format: NSLocalizedString("Forwarded by %@", comment: "Tweet forwarded by user"), tweet.author?.name ?? tweet.author?.username ?? ""))
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }

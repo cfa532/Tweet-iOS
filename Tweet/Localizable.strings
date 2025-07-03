@@ -8,6 +8,8 @@
 // MARK: - Tab Bar
 "Home" = "Home";
 "Compose" = "Compose";
+"Followings" = "Followings";
+"Recommendation" = "Recommendation";
 
 // MARK: - Login Screen
 "Welcome to dTweet" = "Welcome to dTweet";
@@ -31,6 +33,40 @@
 "Register" = "Register";
 "Cancel" = "Cancel";
 
+// MARK: - Settings Screen
+"Account" = "Account";
+"App Settings" = "App Settings";
+"Clear Media Cache" = "Clear Media Cache";
+"About" = "About";
+"Version" = "Version";
+"All image and tweet caches have been cleared successfully." = "All image and tweet caches have been cleared successfully.";
+"Cache Cleared" = "Cache Cleared";
+
+// MARK: - Profile Screen
+"Fans" = "Fans";
+"Followings" = "Followings";
+"Tweets" = "Tweets";
+"Bookmarks" = "Bookmarks";
+"Favorites" = "Favorites";
+"Pinned" = "Pinned";
+"username" = "username";
+"Noone" = "Noone";
+
+// MARK: - Tweet Actions
+"Show more" = "Show more";
+"Forwarded by %@" = "Forwarded by %@";
+"Quote Tweet" = "Quote Tweet";
+
+// MARK: - Media
+"Swipe to view" = "Swipe to view";
+"Failed to load image" = "Failed to load image";
+"HLS Playback Error" = "HLS Playback Error";
+"Recommended tweets coming soon" = "Recommended tweets coming soon";
+
+// MARK: - Compose
+"Question" = "Question";
+"Options" = "Options";
+
 // MARK: - Error Messages
 "Username & password are required." = "Username & password are required.";
 "Registration failed." = "Registration failed.";
@@ -47,6 +83,16 @@
 "Failed to create output directory: %@" = "Failed to create output directory: %@";
 "No video track found in the file" = "No video track found in the file";
 "Failed to get video info: %@" = "Failed to get video info: %@";
+"Failed to initialize app" = "Failed to initialize app";
+"Error" = "Error";
+
+// MARK: - Common Actions
+"Delete" = "Delete";
+"Edit" = "Edit";
+"Save" = "Save";
+"Done" = "Done";
+"Next" = "Next";
+"Back" = "Back";
 
 // MARK: - Common Actions
 "Delete" = "Delete";
@@ -84,17 +130,14 @@
 
 // MARK: - Settings
 "Settings" = "Settings";
-"Account" = "Account";
 "Privacy" = "Privacy";
 "Notifications" = "Notifications";
 "Appearance" = "Appearance";
 "Language" = "Language";
-"About" = "About";
 "Help" = "Help";
 "Log Out" = "Log Out";
 
 // MARK: - Profile
-"Profile" = "Profile";
 "Tweets" = "Tweets";
 "Following" = "Following";
 "Followers" = "Followers";

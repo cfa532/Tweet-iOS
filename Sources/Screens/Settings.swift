@@ -18,7 +18,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             List {
-                Section(header: Text("Account")) {
+                Section(header: Text(LocalizedStringKey("Account"))) {
                     if !hproseInstance.appUser.isGuest {
                         Button("Logout") {
                             hproseInstance.logout()
@@ -29,14 +29,14 @@ struct SettingsView: View {
                     }
                 }
                 
-                Section(header: Text("App Settings")) {
+                Section(header: Text(LocalizedStringKey("App Settings"))) {
                     Toggle("Dark Mode", isOn: $themeManager.isDarkMode)
                     
                     Button(action: {
                         cleanupCache()
                     }) {
                         HStack {
-                            Text("Clear Media Cache")
+                            Text(LocalizedStringKey("Clear Media Cache"))
                             Spacer()
                             if isCleaningCache {
                                 ProgressView()
@@ -47,9 +47,9 @@ struct SettingsView: View {
                     .disabled(isCleaningCache)
                 }
                 
-                Section(header: Text("About")) {
+                Section(header: Text(LocalizedStringKey("About"))) {
                     HStack {
-                        Text("Version")
+                        Text(LocalizedStringKey("Version"))
                         Spacer()
                         Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
                             .foregroundColor(.gray)
@@ -60,10 +60,10 @@ struct SettingsView: View {
             .navigationBarItems(trailing: Button("Done") {
                 dismiss()
             })
-            .alert("Cache Cleared", isPresented: $showCacheCleanedAlert) {
-                Button("OK") { }
+            .alert(LocalizedStringKey("Cache Cleared"), isPresented: $showCacheCleanedAlert) {
+                Button(LocalizedStringKey("OK")) { }
             } message: {
-                Text("All image and tweet caches have been cleared successfully.")
+                Text(LocalizedStringKey("All image and tweet caches have been cleared successfully."))
             }
         }
     }

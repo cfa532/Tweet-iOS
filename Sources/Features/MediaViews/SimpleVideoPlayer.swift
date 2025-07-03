@@ -287,7 +287,7 @@ struct HLSVideoPlayerWithControls: View {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.largeTitle)
                             .foregroundColor(.red)
-                        Text("HLS Playback Error")
+                        Text(LocalizedStringKey("HLS Playback Error"))
                             .font(.headline)
                         Text(errorMessage)
                             .font(.caption)

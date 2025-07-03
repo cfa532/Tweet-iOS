@@ -14,7 +14,7 @@ struct ProfileStatsView: View {
                 onFollowersTap()
             } label: {
                 VStack {
-                    Text("Fans")
+                    Text(LocalizedStringKey("Fans"))
                         .font(.caption)
                         .foregroundColor(.themeSecondaryText)
                     Text("\(user.followersCount ?? 0)")
@@ -27,7 +27,7 @@ struct ProfileStatsView: View {
                 onFollowingTap()
             } label: {
                 VStack {
-                    Text("Followings")
+                    Text(LocalizedStringKey("Followings"))
                         .font(.caption)
                         .foregroundColor(.themeSecondaryText)
                     Text("\(user.followingCount ?? 0)")
@@ -37,7 +37,7 @@ struct ProfileStatsView: View {
             }
             Spacer()
             VStack {
-                Text("Tweets")
+                Text(LocalizedStringKey("Tweets"))
                     .font(.caption)
                     .foregroundColor(.themeSecondaryText)
                 Text("\(user.tweetCount ?? 0)")

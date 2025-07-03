@@ -232,7 +232,7 @@ struct MediaBrowserView: View {
                     Image(systemName: "play.circle")
                         .font(.system(size: 60))
                         .foregroundColor(.white)
-                    Text("Swipe to view")
+                    Text(LocalizedStringKey("Swipe to view"))
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.8))
                         .padding(.top, 8)
@@ -311,7 +311,7 @@ struct ImageViewWithPlaceholder: View {
                     Image(systemName: "photo")
                         .font(.system(size: 50))
                         .foregroundColor(.gray)
-                    Text("Failed to load image")
+                    Text(LocalizedStringKey("Failed to load image"))
                         .foregroundColor(.gray)
                         .font(.caption)
                 }

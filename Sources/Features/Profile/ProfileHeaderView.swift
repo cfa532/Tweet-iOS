@@ -26,7 +26,7 @@ struct ProfileHeaderView: View {
                         .font(.title2)
                         .bold()
                         .foregroundColor(.themeText)
-                    Text("@\(user.username ?? "username")")
+                    Text("@\(user.username ?? NSLocalizedString("username", comment: "Default username"))")
                         .foregroundColor(.themeSecondaryText)
                         .font(.subheadline)
                 }

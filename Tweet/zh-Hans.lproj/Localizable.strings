@@ -8,6 +8,8 @@
 // MARK: - Tab Bar
 "Home" = "首页";
 "Compose" = "发布";
+"Followings" = "关注";
+"Recommendation" = "推荐";
 
 // MARK: - Login Screen
 "Welcome to dTweet" = "欢迎使用 dTweet";
@@ -31,6 +33,40 @@
 "Register" = "注册";
 "Cancel" = "取消";
 
+// MARK: - Settings Screen
+"Account" = "账户";
+"App Settings" = "应用设置";
+"Clear Media Cache" = "清除媒体缓存";
+"About" = "关于";
+"Version" = "版本";
+"All image and tweet caches have been cleared successfully." = "所有图片和推文缓存已成功清除。";
+"Cache Cleared" = "缓存已清除";
+
+// MARK: - Profile Screen
+"Fans" = "粉丝";
+"Followings" = "关注";
+"Tweets" = "推文";
+"Bookmarks" = "书签";
+"Favorites" = "收藏";
+"Pinned" = "置顶";
+"username" = "用户名";
+"Noone" = "无";
+
+// MARK: - Tweet Actions
+"Show more" = "显示更多";
+"Forwarded by %@" = "由 %@ 转发";
+"Quote Tweet" = "引用推文";
+
+// MARK: - Media
+"Swipe to view" = "滑动查看";
+"Failed to load image" = "图片加载失败";
+"HLS Playback Error" = "HLS播放错误";
+"Recommended tweets coming soon" = "推荐推文即将推出";
+
+// MARK: - Compose
+"Question" = "问题";
+"Options" = "选项";
+
 // MARK: - Error Messages
 "Username & password are required." = "用户名和密码是必需的。";
 "Registration failed." = "注册失败。";
@@ -47,6 +83,8 @@
 "Failed to create output directory: %@" = "创建输出目录失败：%@";
 "No video track found in the file" = "文件中未找到视频轨道";
 "Failed to get video info: %@" = "获取视频信息失败：%@";
+"Failed to initialize app" = "应用初始化失败";
+"Error" = "错误";
 
 // MARK: - Common Actions
 "Delete" = "删除";
