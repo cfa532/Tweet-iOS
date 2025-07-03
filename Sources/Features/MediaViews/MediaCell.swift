@@ -187,7 +187,8 @@ struct MediaCell: View {
     }
     
     private func logVideoPlayerDecision() {
-        let hasCachedPlayer = VideoCacheManager.shared.hasVideoPlayer(for: attachment.mid)
+        let videoKey = generateVideoKey(tweetMid: parentTweet.mid, videoMid: attachment.mid)
+        let hasCachedPlayer = VideoCacheManager.shared.hasVideoPlayer(for: videoKey)
         if shouldLoadVideo {
             print("DEBUG: [MEDIA CELL] Creating video player for \(attachment.mid) - shouldLoadVideo: \(shouldLoadVideo), hasCachedPlayer: \(hasCachedPlayer)")
         } else {

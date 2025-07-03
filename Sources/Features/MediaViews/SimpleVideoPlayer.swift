@@ -46,6 +46,8 @@ class MuteState: ObservableObject {
 
 
 
+
+
 struct SimpleVideoPlayer: View {
     let url: URL
     let mid: String // Add mid field for caching
@@ -389,7 +391,7 @@ struct HLSVideoPlayerWithControls: View {
                 videoManager.setVideoVisible(videoKey, isVisible: false)
                 
                 // Pause video using cache, do not destroy instance
-                videoCache.pauseVideoPlayer(for: mid)
+                videoCache.pauseVideoPlayer(for: videoKey)
                 videoManager.stopPlaying(instanceId: videoKey)
                 
                 // Do NOT call cleanupObservers() - keep the instance alive
@@ -408,9 +410,9 @@ struct HLSVideoPlayerWithControls: View {
                 // Update player mute state when global mute state changes
                 // Only update if not in forceUnmuted mode
                 if !forceUnmuted {
-                    videoCache.setMuteState(for: mid, isMuted: newMuteState)
+                    videoCache.setMuteState(for: videoKey, isMuted: newMuteState)
                     playerMuted = newMuteState
-                    print("DEBUG: [VIDEO \(videoKey)] Global mute state changed to: \(newMuteState) for mid: \(mid)")
+                    print("DEBUG: [VIDEO \(videoKey)] Global mute state changed to: \(newMuteState) for video key: \(videoKey)")
                 } else {
                     print("DEBUG: [VIDEO \(videoKey)] Ignoring global mute state change (forceUnmuted mode)")
                 }
@@ -426,8 +428,8 @@ struct HLSVideoPlayerWithControls: View {
         hasNotifiedFinished = false
         
         // Try to get cached player first
-        if let cachedPlayer = videoCache.getVideoPlayer(for: mid, url: videoURL) {
-            print("DEBUG: [VIDEO \(videoKey)] Got cached player for mid: \(mid)")
+        if let cachedPlayer = videoCache.getVideoPlayer(for: videoKey, url: videoURL) {
+            print("DEBUG: [VIDEO \(videoKey)] Got cached player for video key: \(videoKey)")
             self.player = cachedPlayer
             
             // Set initial mute state
@@ -443,7 +445,7 @@ struct HLSVideoPlayerWithControls: View {
             // Handle auto-play logic
             handleAutoPlay(cachedPlayer)
         } else {
-            print("DEBUG: [VIDEO \(videoKey)] Failed to get or create player for mid: \(mid)")
+            print("DEBUG: [VIDEO \(videoKey)] Failed to get or create player for video key: \(videoKey)")
             errorMessage = "Failed to create video player"
             isLoading = false
         }
@@ -658,7 +660,7 @@ struct HLSVideoPlayerWithControls: View {
         showControls = true // Show controls when video finishes
         
         // Reset player to beginning using cache
-        videoCache.resetVideoPlayer(for: mid)
+        videoCache.resetVideoPlayer(for: videoKey)
         
         // Update local player reference if needed
         if let player = player {

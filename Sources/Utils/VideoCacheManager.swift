@@ -33,23 +33,23 @@ class VideoCacheManager: ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
     
-    /// Get or create a video player for the given mid
-    func getVideoPlayer(for mid: String, url: URL) -> AVPlayer? {
+    /// Get or create a video player for the given video key (hash)
+    func getVideoPlayer(for videoKey: String, url: URL) -> AVPlayer? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        // Check if we already have a cached player for this mid
-        if let cachedPlayer = videoCache[mid] {
-            print("DEBUG: [VIDEO CACHE] Found cached player for mid: \(mid)")
+        // Check if we already have a cached player for this video key
+        if let cachedPlayer = videoCache[videoKey] {
+            print("DEBUG: [VIDEO CACHE] Found cached player for video key: \(videoKey)")
             cachedPlayer.lastAccessed = Date()
             return cachedPlayer.player
         }
         
         // Create new player and cache it
-        print("DEBUG: [VIDEO CACHE] Creating new player for mid: \(mid)")
+        print("DEBUG: [VIDEO CACHE] Creating new player for video key: \(videoKey)")
         let player = createVideoPlayer(for: url)
-        let cachedPlayer = CachedVideoPlayer(player: player, mid: mid, url: url)
-        videoCache[mid] = cachedPlayer
+        let cachedPlayer = CachedVideoPlayer(player: player, videoKey: videoKey, url: url)
+        videoCache[videoKey] = cachedPlayer
         
         // Clean up cache if it's too large
         cleanupCacheIfNeeded()
@@ -82,56 +82,56 @@ class VideoCacheManager: ObservableObject {
     }
     
     /// Reset a video player to the beginning without recreating it
-    func resetVideoPlayer(for mid: String) {
+    func resetVideoPlayer(for videoKey: String) {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        if let cachedPlayer = videoCache[mid] {
-            print("DEBUG: [VIDEO CACHE] Resetting player for mid: \(mid)")
+        if let cachedPlayer = videoCache[videoKey] {
+            print("DEBUG: [VIDEO CACHE] Resetting player for video key: \(videoKey)")
             cachedPlayer.player.seek(to: CMTime.zero)
             cachedPlayer.lastAccessed = Date()
         }
     }
     
     /// Pause a video player without removing it from cache
-    func pauseVideoPlayer(for mid: String) {
+    func pauseVideoPlayer(for videoKey: String) {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        if let cachedPlayer = videoCache[mid] {
-            print("DEBUG: [VIDEO CACHE] Pausing player for mid: \(mid)")
+        if let cachedPlayer = videoCache[videoKey] {
+            print("DEBUG: [VIDEO CACHE] Pausing player for video key: \(videoKey)")
             cachedPlayer.player.pause()
             cachedPlayer.lastAccessed = Date()
         }
     }
     
     /// Set mute state for a video player
-    func setMuteState(for mid: String, isMuted: Bool) {
+    func setMuteState(for videoKey: String, isMuted: Bool) {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        if let cachedPlayer = videoCache[mid] {
-            print("DEBUG: [VIDEO CACHE] Setting mute state for mid: \(mid) to: \(isMuted)")
+        if let cachedPlayer = videoCache[videoKey] {
+            print("DEBUG: [VIDEO CACHE] Setting mute state for video key: \(videoKey) to: \(isMuted)")
             cachedPlayer.player.isMuted = isMuted
             cachedPlayer.lastAccessed = Date()
         }
     }
     
     /// Check if a video player exists in cache
-    func hasVideoPlayer(for mid: String) -> Bool {
+    func hasVideoPlayer(for videoKey: String) -> Bool {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        return videoCache[mid] != nil
+        return videoCache[videoKey] != nil
     }
     
     /// Remove a specific video from cache (only when explicitly needed)
-    func removeVideoPlayer(for mid: String) {
+    func removeVideoPlayer(for videoKey: String) {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        if let cachedPlayer = videoCache.removeValue(forKey: mid) {
-            print("DEBUG: [VIDEO CACHE] Removed player for mid: \(mid)")
+        if let cachedPlayer = videoCache.removeValue(forKey: videoKey) {
+            print("DEBUG: [VIDEO CACHE] Removed player for video key: \(videoKey)")
             cachedPlayer.player.pause()
             // Player will be deallocated when no references remain
         }
@@ -196,13 +196,13 @@ class VideoCacheManager: ObservableObject {
 /// Cached video player wrapper
 class CachedVideoPlayer {
     let player: AVPlayer
-    let mid: String
+    let videoKey: String
     let url: URL
     var lastAccessed: Date
     
-    init(player: AVPlayer, mid: String, url: URL) {
+    init(player: AVPlayer, videoKey: String, url: URL) {
         self.player = player
-        self.mid = mid
+        self.videoKey = videoKey
         self.url = url
         self.lastAccessed = Date()
     }
