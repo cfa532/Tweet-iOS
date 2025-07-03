@@ -55,7 +55,7 @@ struct CommentDetailView: View {
         .navigationTitle("Reply")
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
-            MediaBrowserView(attachments: comment.attachments ?? [], initialIndex: selectedMediaIndex)
+            MediaBrowserView(tweet: comment, initialIndex: selectedMediaIndex)
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()

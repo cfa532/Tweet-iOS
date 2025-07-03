@@ -59,7 +59,7 @@ struct TweetDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
-                attachments: displayTweet.attachments ?? [],
+                tweet: displayTweet,
                 initialIndex: selectedMediaIndex
             )
         }

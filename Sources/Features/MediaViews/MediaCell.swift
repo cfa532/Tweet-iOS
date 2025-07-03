@@ -50,21 +50,39 @@ struct MediaCell: View {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
-                    SimpleVideoPlayer(
-                        url: url,
-                        mid: attachment.mid,
-                        autoPlay: play && shouldLoadVideo,
-                        onVideoFinished: onVideoFinished,
-                        isVisible: isVisible && shouldLoadVideo,
-                        contentType: attachment.type,
-                        cellAspectRatio: CGFloat(aspectRatio),
-                        videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                        showNativeControls: true,
-                        showCustomControls: false
-                    )
-                    .environmentObject(MuteState.shared)
-                    .onTapGesture(count: 2) {
-                        showFullScreen = true
+                    // Only create video player if we should load video
+                    if shouldLoadVideo {
+                        SimpleVideoPlayer(
+                            url: url,
+                            mid: attachment.mid,
+                            videoKey: generateVideoKey(tweetMid: parentTweet.mid, videoMid: attachment.mid),
+                            autoPlay: play,
+                            onVideoFinished: onVideoFinished,
+                            isVisible: isVisible,
+                            contentType: attachment.type,
+                            cellAspectRatio: CGFloat(aspectRatio),
+                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                            showNativeControls: true,
+                            showCustomControls: false
+                        )
+                        .environmentObject(MuteState.shared)
+                        .onTapGesture(count: 2) {
+                            showFullScreen = true
+                        }
+                    } else {
+                        // Show placeholder for videos that haven't been loaded yet
+                        Color.black
+                            .aspectRatio(contentMode: .fill)
+                            .overlay(
+                                Image(systemName: "play.circle")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.white)
+                            )
+                            .onTapGesture {
+                                // Force load video on tap
+                                shouldLoadVideo = true
+                                play = true
+                            }
                     }
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
@@ -100,6 +118,8 @@ struct MediaCell: View {
             // Set visibility for videos
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 isVisible = true
+                // Log video player decision when cell appears
+                logVideoPlayerDecision()
             }
         }
         .onDisappear {
@@ -111,12 +131,10 @@ struct MediaCell: View {
             }
         }
         .fullScreenCover(isPresented: $showFullScreen) {
-            if let attachments = parentTweet.attachments {
-                MediaBrowserView(
-                    attachments: attachments,
-                    initialIndex: attachmentIndex
-                )
-            }
+            MediaBrowserView(
+                tweet: parentTweet,
+                initialIndex: attachmentIndex
+            )
         }
     }
     
@@ -166,6 +184,22 @@ struct MediaCell: View {
                 }
             }
         }
+    }
+    
+    private func logVideoPlayerDecision() {
+        let hasCachedPlayer = VideoCacheManager.shared.hasVideoPlayer(for: attachment.mid)
+        if shouldLoadVideo {
+            print("DEBUG: [MEDIA CELL] Creating video player for \(attachment.mid) - shouldLoadVideo: \(shouldLoadVideo), hasCachedPlayer: \(hasCachedPlayer)")
+        } else {
+            print("DEBUG: [MEDIA CELL] Showing placeholder for \(attachment.mid) - shouldLoadVideo: \(shouldLoadVideo), hasCachedPlayer: \(hasCachedPlayer)")
+        }
+    }
+    
+    // Generate a hash key from tweet mid and video mid for better performance
+    private func generateVideoKey(tweetMid: String, videoMid: String) -> String {
+        let combined = "\(tweetMid)_\(videoMid)"
+        let hash = combined.hashValue
+        return String(format: "%x", abs(hash)) // Convert to hex string, use abs to avoid negative
     }
 }
 

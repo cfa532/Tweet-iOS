@@ -165,12 +165,10 @@ struct TweetItemView: View {
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
         }
         .fullScreenCover(isPresented: $showBrowser) {
-            if let attachments = tweet.attachments {
-                MediaBrowserView(
-                    attachments: attachments,
-                    initialIndex: selectedMediaIndex
-                )
-            }
+            MediaBrowserView(
+                tweet: tweet,
+                initialIndex: selectedMediaIndex
+            )
         }
         .task {
             isVisible = true

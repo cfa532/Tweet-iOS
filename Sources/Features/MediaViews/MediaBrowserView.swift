@@ -9,7 +9,7 @@ import SwiftUI
 import AVKit
 
 struct MediaBrowserView: View {
-    let attachments: [MimeiFileType]
+    let tweet: Tweet
     let initialIndex: Int
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
@@ -23,16 +23,19 @@ struct MediaBrowserView: View {
     @State private var dragOffset = CGSize.zero
     @State private var isDragging = false
 
-    private var baseUrl: URL {
-        // Try to get baseUrl from the first attachment's parent tweet, fallback to HproseInstance.baseUrl
-        return HproseInstance.baseUrl
+    private var attachments: [MimeiFileType] {
+        return tweet.attachments ?? []
     }
 
-    init(attachments: [MimeiFileType], initialIndex: Int) {
-        self.attachments = attachments
+    private var baseUrl: URL {
+        return tweet.author?.baseUrl ?? HproseInstance.baseUrl
+    }
+
+    init(tweet: Tweet, initialIndex: Int) {
+        self.tweet = tweet
         self.initialIndex = initialIndex
         self._currentIndex = State(initialValue: initialIndex)
-        print("MediaBrowserView init - attachments count: \(attachments.count), initialIndex: \(initialIndex)")
+        print("MediaBrowserView init - attachments count: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
     }
 
     var body: some View {
@@ -43,7 +46,13 @@ struct MediaBrowserView: View {
                 ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
                     Group {
                         if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                            videoView(for: attachment, url: url, index: index)
+                            // Only create video player for currently visible attachment
+                            if index == currentIndex {
+                                videoView(for: attachment, url: url, index: index)
+                            } else {
+                                // Show placeholder for non-visible videos
+                                videoPlaceholderView(for: attachment, url: url, index: index)
+                            }
                         } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
                             audioView(for: attachment, url: url, index: index)
                         } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
@@ -175,11 +184,19 @@ struct MediaBrowserView: View {
         return attachment.type.lowercased() == "image"
     }
     
+    // Generate a hash key from tweet mid and video mid for better performance
+    private func generateVideoKey(tweetMid: String, videoMid: String) -> String {
+        let combined = "\(tweetMid)_\(videoMid)"
+        let hash = combined.hashValue
+        return String(format: "%x", abs(hash)) // Convert to hex string, use abs to avoid negative
+    }
+    
     @ViewBuilder
     private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
         SimpleVideoPlayer(
             url: url,
             mid: attachment.mid,
+            videoKey: generateVideoKey(tweetMid: tweet.mid, videoMid: attachment.mid),
             autoPlay: true, // Always auto-play in full-screen
             onMuteChanged: { _ in
                 // In full-screen mode, don't update global mute state
@@ -203,6 +220,25 @@ struct MediaBrowserView: View {
         )
         .environmentObject(MuteState.shared)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    @ViewBuilder
+    private func videoPlaceholderView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
+        // Show a placeholder for videos that are not currently visible
+        Color.black
+            .aspectRatio(contentMode: .fit)
+            .overlay(
+                VStack {
+                    Image(systemName: "play.circle")
+                        .font(.system(size: 60))
+                        .foregroundColor(.white)
+                    Text("Swipe to view")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.8))
+                        .padding(.top, 8)
+                }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     @ViewBuilder

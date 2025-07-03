@@ -15,20 +15,38 @@ class VideoManager: ObservableObject {
     @Published var currentPlayingInstanceId: String? = nil
     private var videoQueue: [String] = [] // Queue of videos waiting to play
     private var autoStartNext: Bool = true // Whether to auto-start next video
-    private var visibleVideos: Set<String> = [] // Track which videos are visible
-    private var videoPositions: [String: CGRect] = [:] // Track video positions on screen
+    private var visibleVideos: Set<String> = [] // Track which videos are visible (by mid)
+    private var lastStartTime: [String: Date] = [:] // Track last start time for each video mid to prevent rapid cycling
+    private let startThrottleInterval: TimeInterval = 1.0 // Minimum time between start attempts for same video
     
     private init() {}
     
     func startPlaying(instanceId: String) {
+        // instanceId is now the video key (hash of tweet_mid + video_mid)
+        let videoKey = instanceId
+        
+        // Check if we're trying to start the same video too quickly
+        if let lastStart = lastStartTime[videoKey],
+           Date().timeIntervalSince(lastStart) < startThrottleInterval {
+            print("DEBUG: [VIDEO MANAGER] Throttling start for video \(videoKey) - too soon since last start")
+            return
+        }
+        
+        // Check if this video is already playing
+        if currentPlayingInstanceId == instanceId {
+            print("DEBUG: [VIDEO MANAGER] Video \(videoKey) is already playing, ignoring start request")
+            return
+        }
+        
         // Pause any currently playing video
         if let currentId = currentPlayingInstanceId, currentId != instanceId {
-            // print("DEBUG: [VIDEO MANAGER] Pausing previous video instance: \(currentId)")
+            print("DEBUG: [VIDEO MANAGER] Pausing previous video: \(currentId)")
             NotificationCenter.default.post(name: .pauseVideo, object: currentId)
         }
         
         currentPlayingInstanceId = instanceId
-        // print("DEBUG: [VIDEO MANAGER] Now playing video instance: \(instanceId)")
+        lastStartTime[videoKey] = Date()
+        print("DEBUG: [VIDEO MANAGER] Now playing video: \(videoKey)")
         
         // Remove from queue if it was there
         videoQueue.removeAll { $0 == instanceId }
@@ -77,61 +95,56 @@ class VideoManager: ObservableObject {
         }
     }
     
-    // Update video position for visibility calculation
-    func updateVideoPosition(instanceId: String, frame: CGRect) {
-        videoPositions[instanceId] = frame
-        // print("DEBUG: [VIDEO MANAGER] Updated position for \(instanceId): \(frame)")
+    // Get video position for debugging (if needed)
+    func getVideoPosition(for instanceId: String) -> CGRect? {
+        return nil // No longer tracking positions
     }
     
-    // Check if video is actually visible on screen
-    func isVideoActuallyVisible(instanceId: String, screenBounds: CGRect) -> Bool {
-        guard let videoFrame = videoPositions[instanceId] else {
-            // print("DEBUG: [VIDEO MANAGER] No position data for \(instanceId)")
-            return false
-        }
+    // Simple visibility tracking based on onAppear/onDisappear
+    // Now handles multiple instances of the same video properly
+    func setVideoVisible(_ instanceId: String, isVisible: Bool) {
+        // instanceId is the video key (hash of tweet_mid + video_mid)
+        let videoKey = instanceId
         
-        // Calculate how much of the video is visible on screen
-        let intersection = videoFrame.intersection(screenBounds)
-        let visibilityRatio = intersection.width * intersection.height / (videoFrame.width * videoFrame.height)
-        
-        // Consider video visible if more than 30% is on screen (reduced from 50% for better detection)
-        let isVisible = visibilityRatio > 0.3 && intersection.width > 0 && intersection.height > 0
-        
-        // print("DEBUG: [VIDEO MANAGER] Visibility check for \(instanceId): \(isVisible) (ratio: \(visibilityRatio), frame: \(videoFrame), screen: \(screenBounds), intersection: \(intersection))")
-        return isVisible
-    }
-    
-    // Track video visibility based on both isVisible parameter and actual screen position
-    func setVideoVisible(_ instanceId: String, isVisible: Bool, screenBounds: CGRect = UIScreen.main.bounds) {
-        let actuallyVisible = isVideoActuallyVisible(instanceId: instanceId, screenBounds: screenBounds)
-        
-        // Video is considered visible if BOTH the isVisible parameter is true AND it's actually on screen
-        let shouldBeVisible = isVisible && actuallyVisible
-        
-        if shouldBeVisible {
-            visibleVideos.insert(instanceId)
-            // print("DEBUG: [VIDEO MANAGER] Video became visible: \(instanceId) (isVisible: \(isVisible), actuallyVisible: \(actuallyVisible))")
+        if isVisible {
+            let wasVisible = visibleVideos.contains(videoKey)
+            visibleVideos.insert(videoKey)
             
-            // If no video is currently playing, try to start this one
-            if currentPlayingInstanceId == nil && autoStartNext {
-                // print("DEBUG: [VIDEO MANAGER] No video playing, starting newly visible video: \(instanceId)")
-                NotificationCenter.default.post(name: .startVideo, object: instanceId)
+            if !wasVisible {
+                print("DEBUG: [VIDEO MANAGER] Video became visible: \(videoKey)")
+                
+                // If no video is currently playing, try to start this one
+                if currentPlayingInstanceId == nil && autoStartNext {
+                    print("DEBUG: [VIDEO MANAGER] No video playing, starting newly visible video: \(videoKey)")
+                    NotificationCenter.default.post(name: .startVideo, object: videoKey)
+                } else if currentPlayingInstanceId == videoKey {
+                    print("DEBUG: [VIDEO MANAGER] Video \(videoKey) is already playing, no need to start again")
+                } else if currentPlayingInstanceId != nil {
+                    print("DEBUG: [VIDEO MANAGER] Another video (\(currentPlayingInstanceId!)) is already playing, adding \(videoKey) to queue")
+                    addToQueue(instanceId: videoKey)
+                }
             }
         } else {
-            visibleVideos.remove(instanceId)
-            // print("DEBUG: [VIDEO MANAGER] Video became invisible: \(instanceId) (isVisible: \(isVisible), actuallyVisible: \(actuallyVisible))")
+            let wasVisible = visibleVideos.contains(videoKey)
+            visibleVideos.remove(videoKey)
             
-            // Remove invisible videos from queue to prevent them from starting
-            removeInvisibleFromQueue()
-            
-            // If the invisible video was playing, stop it and start next
-            if currentPlayingInstanceId == instanceId {
-                // print("DEBUG: [VIDEO MANAGER] Stopping invisible video: \(instanceId)")
-                NotificationCenter.default.post(name: .pauseVideo, object: instanceId)
-                currentPlayingInstanceId = nil
+            if wasVisible {
+                print("DEBUG: [VIDEO MANAGER] Video became invisible: \(videoKey)")
                 
-                if autoStartNext {
-                    startNextVisibleVideo()
+                // Remove invisible videos from queue to prevent them from starting
+                removeInvisibleFromQueue()
+                
+                // If the invisible video was playing, stop it and start next
+                if currentPlayingInstanceId == videoKey {
+                    print("DEBUG: [VIDEO MANAGER] Stopping invisible video: \(videoKey)")
+                    NotificationCenter.default.post(name: .pauseVideo, object: videoKey)
+                    currentPlayingInstanceId = nil
+                    
+                    if autoStartNext {
+                        startNextVisibleVideo()
+                    }
+                } else {
+                    print("DEBUG: [VIDEO MANAGER] Video \(videoKey) became invisible but was not playing")
                 }
             }
         }
@@ -139,9 +152,11 @@ class VideoManager: ObservableObject {
     
     // Add video to queue for auto-play (only if visible)
     func addToQueue(instanceId: String) {
-        if !videoQueue.contains(instanceId) && currentPlayingInstanceId != instanceId && visibleVideos.contains(instanceId) {
-            videoQueue.append(instanceId)
-            // print("DEBUG: [VIDEO MANAGER] Added actually visible video to queue: \(instanceId), queue size: \(videoQueue.count)")
+        // instanceId is the video key (hash of tweet_mid + video_mid)
+        let videoKey = instanceId
+        if !videoQueue.contains(videoKey) && currentPlayingInstanceId != videoKey && visibleVideos.contains(videoKey) {
+            videoQueue.append(videoKey)
+            // print("DEBUG: [VIDEO MANAGER] Added visible video to queue: \(videoKey), queue size: \(videoQueue.count)")
         }
     }
     
@@ -157,6 +172,13 @@ class VideoManager: ObservableObject {
         
         // Find the first visible video in the queue
         if let nextVideoId = videoQueue.first(where: { visibleVideos.contains($0) }) {
+            // Check if this video is already playing
+            if currentPlayingInstanceId == nextVideoId {
+                print("DEBUG: [VIDEO MANAGER] Video \(nextVideoId) is already playing, skipping start")
+                videoQueue.removeAll { $0 == nextVideoId }
+                return
+            }
+            
             // print("DEBUG: [VIDEO MANAGER] Auto-starting next visible video: \(nextVideoId)")
             NotificationCenter.default.post(name: .startVideo, object: nextVideoId)
             videoQueue.removeAll { $0 == nextVideoId }
