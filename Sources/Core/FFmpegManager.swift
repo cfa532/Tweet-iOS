@@ -202,15 +202,15 @@ enum FFmpegError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .conversionFailed(let code):
-            return "FFmpeg conversion failed with code: \(code)"
+            return String(format: NSLocalizedString("FFmpeg conversion failed with code: %d", comment: "FFmpeg conversion error"), code)
         case .directoryCreationFailed(let error):
-            return "Failed to create output directory: \(error.localizedDescription)"
+            return String(format: NSLocalizedString("Failed to create output directory: %@", comment: "Directory creation error"), error.localizedDescription)
         case .noVideoTrack:
-            return "No video track found in the file"
+            return NSLocalizedString("No video track found in the file", comment: "No video track error")
         case .videoInfoFailed(let error):
-            return "Failed to get video info: \(error.localizedDescription)"
+            return String(format: NSLocalizedString("Failed to get video info: %@", comment: "Video info error"), error.localizedDescription)
         case .thumbnailGenerationFailed:
-            return "Failed to generate thumbnail"
+            return NSLocalizedString("Failed to generate thumbnail", comment: "Thumbnail generation error")
         }
     }
 } 

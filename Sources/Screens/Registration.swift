@@ -85,10 +85,10 @@ struct RegistrationView: View {
                                                     hproseInstance.appUser.avatar = uploaded.mid
                                                 }
                                             } else {
-                                                avatarUploadError = "Failed to upload avatar."
+                                                avatarUploadError = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
                                             }
                                         } else {
-                                            avatarUploadError = "Failed to load image data."
+                                            avatarUploadError = NSLocalizedString("Failed to load image data.", comment: "Image data loading error")
                                         }
                                     } catch {
                                         avatarUploadError = error.localizedDescription
@@ -102,12 +102,12 @@ struct RegistrationView: View {
                     Group {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text("Username *")
-                                    .font(.caption)
-                                    .foregroundColor(.themeSecondaryText)
+                                                            Text(LocalizedStringKey("Username *"))
+                                .font(.caption)
+                                .foregroundColor(.themeSecondaryText)
                                 Spacer()
                             }
-                            TextField("Username", text: $username)
+                            TextField(LocalizedStringKey("Username"), text: $username)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .autocapitalization(.none)
                                 .disabled(!hproseInstance.appUser.isGuest) // Username cannot be changed
@@ -118,12 +118,12 @@ struct RegistrationView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text("Password *")
-                                    .font(.caption)
-                                    .foregroundColor(.themeSecondaryText)
+                                                            Text(LocalizedStringKey("Password *"))
+                                .font(.caption)
+                                .foregroundColor(.themeSecondaryText)
                                 Spacer()
                             }
-                            SecureField("Password", text: $password)
+                            SecureField(LocalizedStringKey("Password"), text: $password)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .password)
                                 .contentShape(Rectangle())
@@ -135,10 +135,10 @@ struct RegistrationView: View {
 
                         if hproseInstance.appUser.isGuest || !password.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Confirm Password")
+                                Text(LocalizedStringKey("Confirm Password"))
                                     .font(.caption)
                                     .foregroundColor(.themeSecondaryText)
-                                SecureField("Confirm Password", text: $confirmPassword)
+                                SecureField(LocalizedStringKey("Confirm Password"), text: $confirmPassword)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
                                     .focused($focusedField, equals: .confirmPassword)
                                     .contentShape(Rectangle())
@@ -147,10 +147,10 @@ struct RegistrationView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Alias")
+                            Text(LocalizedStringKey("Alias"))
                                 .font(.caption)
                                 .foregroundColor(.themeSecondaryText)
-                            TextField("Alias", text: $alias)
+                            TextField(LocalizedStringKey("Alias"), text: $alias)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .alias)
                                 .contentShape(Rectangle())
@@ -158,7 +158,7 @@ struct RegistrationView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Profile")
+                            Text(LocalizedStringKey("Profile"))
                                 .font(.caption)
                                 .foregroundColor(.themeSecondaryText)
                             TextEditor(text: $profile)
@@ -169,7 +169,7 @@ struct RegistrationView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Host ID (optional)")
+                            Text(LocalizedStringKey("Host ID (optional)"))
                                 .font(.caption)
                                 .foregroundColor(.themeSecondaryText)
                             TextField("", text: $hostId)
@@ -185,10 +185,10 @@ struct RegistrationView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Cloud Drive Port")
+                            Text(LocalizedStringKey("Cloud Drive Port"))
                                 .font(.caption)
                                 .foregroundColor(.themeSecondaryText)
-                            TextField("Cloud Drive Port", text: $cloudDrivePort)
+                            TextField(LocalizedStringKey("Cloud Drive Port"), text: $cloudDrivePort)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .keyboardType(.numberPad)
                                 .focused($focusedField, equals: .cloudDrivePort)

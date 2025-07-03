@@ -1,0 +1,152 @@
+/* 
+  Localizable.strings (Chinese Simplified)
+  Tweet
+  
+  Created for localization support.
+*/
+
+// MARK: - Tab Bar
+"Home" = "首页";
+"Compose" = "发布";
+
+// MARK: - Login Screen
+"Welcome to dTweet" = "欢迎使用 dTweet";
+"Username" = "用户名";
+"Password" = "密码";
+"Login" = "登录";
+"Don't have an account? Register" = "没有账户？注册";
+"Close" = "关闭";
+"Login Successful. Wait for a few minutes before login." = "登录成功。请等待几分钟后再登录。";
+"Welcome back!" = "欢迎回来！";
+"OK" = "确定";
+
+// MARK: - Registration Screen
+"Username *" = "用户名 *";
+"Password *" = "密码 *";
+"Confirm Password" = "确认密码";
+"Alias" = "昵称";
+"Profile" = "个人简介";
+"Host ID (optional)" = "主机 ID（可选）";
+"Cloud Drive Port" = "云盘端口";
+"Register" = "注册";
+"Cancel" = "取消";
+
+// MARK: - Error Messages
+"Username & password are required." = "用户名和密码是必需的。";
+"Registration failed." = "注册失败。";
+"Cannot find user by %@" = "无法通过 %@ 找到用户";
+"Cannot find userId by %@" = "无法通过 %@ 找到用户ID";
+"Failed to upload avatar." = "头像上传失败。";
+"Failed to load image data." = "图片数据加载失败。";
+"Tweet cannot be empty." = "推文不能为空。";
+"Failed to upload tweet. Please try again." = "推文上传失败，请重试。";
+"Loading HLS stream..." = "正在加载 HLS 流...";
+"Failed to load media data" = "媒体数据加载失败";
+"Failed to generate thumbnail" = "缩略图生成失败";
+"FFmpeg conversion failed with code: %d" = "FFmpeg 转换失败，错误代码：%d";
+"Failed to create output directory: %@" = "创建输出目录失败：%@";
+"No video track found in the file" = "文件中未找到视频轨道";
+"Failed to get video info: %@" = "获取视频信息失败：%@";
+
+// MARK: - Common Actions
+"Delete" = "删除";
+"Edit" = "编辑";
+"Save" = "保存";
+"Done" = "完成";
+"Next" = "下一步";
+"Back" = "返回";
+"Retry" = "重试";
+"Share" = "分享";
+"Copy" = "复制";
+"Report" = "举报";
+"Block" = "屏蔽";
+"Mute" = "静音";
+"Follow" = "关注";
+"Unfollow" = "取消关注";
+"Like" = "点赞";
+"Unlike" = "取消点赞";
+"Reply" = "回复";
+"Retweet" = "转发";
+"Bookmark" = "书签";
+"Remove Bookmark" = "移除书签";
+
+// MARK: - Media
+"Photo" = "照片";
+"Video" = "视频";
+"Audio" = "音频";
+"File" = "文件";
+"Camera" = "相机";
+"Photo Library" = "照片库";
+"Choose Photo" = "选择照片";
+"Take Photo" = "拍照";
+"Record Video" = "录制视频";
+
+// MARK: - Settings
+"Settings" = "设置";
+"Account" = "账户";
+"Privacy" = "隐私";
+"Notifications" = "通知";
+"Appearance" = "外观";
+"Language" = "语言";
+"About" = "关于";
+"Help" = "帮助";
+"Log Out" = "退出登录";
+
+// MARK: - Profile
+"Profile" = "个人资料";
+"Tweets" = "推文";
+"Following" = "正在关注";
+"Followers" = "关注者";
+"Edit Profile" = "编辑资料";
+"Change Photo" = "更换照片";
+
+// MARK: - Time
+"now" = "现在";
+"just now" = "刚刚";
+"%@s" = "%@秒";
+"%@m" = "%@分钟";
+"%@h" = "%@小时";
+"%@d" = "%@天";
+"%@w" = "%@周";
+"%@y" = "%@年";
+
+// MARK: - Numbers
+"%@K" = "%@千";
+"%@M" = "%@百万";
+"%@B" = "%@十亿";
+
+// MARK: - Placeholders
+"What's happening?" = "发生了什么？";
+"Add a comment..." = "添加评论...";
+"Search" = "搜索";
+"Search Twitter" = "搜索 Twitter";
+
+// MARK: - Alerts
+"Are you sure?" = "您确定吗？";
+"This action cannot be undone." = "此操作无法撤销。";
+"Delete Tweet" = "删除推文";
+"Delete Comment" = "删除评论";
+"Block User" = "屏蔽用户";
+"Mute User" = "静音用户";
+"Report User" = "举报用户";
+
+// MARK: - Success Messages
+"Tweet posted successfully!" = "推文发布成功！";
+"Comment posted successfully!" = "评论发布成功！";
+"Profile updated successfully!" = "个人资料更新成功！";
+"Settings saved successfully!" = "设置保存成功！";
+
+// MARK: - Network
+"No internet connection" = "无网络连接";
+"Connection failed" = "连接失败";
+"Please check your internet connection and try again" = "请检查您的网络连接并重试";
+"Server error" = "服务器错误";
+"Please try again later" = "请稍后重试";
+
+// MARK: - Permissions
+"Camera Access" = "相机访问";
+"Photo Library Access" = "照片库访问";
+"Microphone Access" = "麦克风访问";
+"Location Access" = "位置访问";
+"Please enable %@ in Settings to use this feature." = "请在设置中启用 %@ 以使用此功能。";
+"Go to Settings" = "前往设置"; 

@@ -278,7 +278,7 @@ struct HLSVideoPlayerWithControls: View {
                     VStack {
                         ProgressView()
                             .scaleEffect(1.5)
-                        Text("Loading HLS stream...")
+                        Text(LocalizedStringKey("Loading HLS stream..."))
                             .font(.caption)
                             .foregroundColor(.themeSecondaryText)
                     }

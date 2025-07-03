@@ -1,0 +1,153 @@
+/* 
+  Localizable.strings
+  Tweet
+  
+  Created for localization support.
+*/
+
+// MARK: - Tab Bar
+"Home" = "Home";
+"Compose" = "Compose";
+
+// MARK: - Login Screen
+"Welcome to dTweet" = "Welcome to dTweet";
+"Username" = "Username";
+"Password" = "Password";
+"Login" = "Login";
+"Don't have an account? Register" = "Don't have an account? Register";
+"Close" = "Close";
+"Login Successful. Wait for a few minutes before login." = "Login Successful. Wait for a few minutes before login.";
+"Welcome back!" = "Welcome back!";
+"OK" = "OK";
+
+// MARK: - Registration Screen
+"Username *" = "Username *";
+"Password *" = "Password *";
+"Confirm Password" = "Confirm Password";
+"Alias" = "Alias";
+"Profile" = "Profile";
+"Host ID (optional)" = "Host ID (optional)";
+"Cloud Drive Port" = "Cloud Drive Port";
+"Register" = "Register";
+"Cancel" = "Cancel";
+
+// MARK: - Error Messages
+"Username & password are required." = "Username & password are required.";
+"Registration failed." = "Registration failed.";
+"Cannot find user by %@" = "Cannot find user by %@";
+"Cannot find userId by %@" = "Cannot find userId by %@";
+"Failed to upload avatar." = "Failed to upload avatar.";
+"Failed to load image data." = "Failed to load image data.";
+"Tweet cannot be empty." = "Tweet cannot be empty.";
+"Failed to upload tweet. Please try again." = "Failed to upload tweet. Please try again.";
+"Loading HLS stream..." = "Loading HLS stream...";
+"Failed to load media data" = "Failed to load media data";
+"Failed to generate thumbnail" = "Failed to generate thumbnail";
+"FFmpeg conversion failed with code: %d" = "FFmpeg conversion failed with code: %d";
+"Failed to create output directory: %@" = "Failed to create output directory: %@";
+"No video track found in the file" = "No video track found in the file";
+"Failed to get video info: %@" = "Failed to get video info: %@";
+
+// MARK: - Common Actions
+"Delete" = "Delete";
+"Edit" = "Edit";
+"Save" = "Save";
+"Cancel" = "Cancel";
+"Done" = "Done";
+"Next" = "Next";
+"Back" = "Back";
+"Retry" = "Retry";
+"Share" = "Share";
+"Copy" = "Copy";
+"Report" = "Report";
+"Block" = "Block";
+"Mute" = "Mute";
+"Follow" = "Follow";
+"Unfollow" = "Unfollow";
+"Like" = "Like";
+"Unlike" = "Unlike";
+"Reply" = "Reply";
+"Retweet" = "Retweet";
+"Bookmark" = "Bookmark";
+"Remove Bookmark" = "Remove Bookmark";
+
+// MARK: - Media
+"Photo" = "Photo";
+"Video" = "Video";
+"Audio" = "Audio";
+"File" = "File";
+"Camera" = "Camera";
+"Photo Library" = "Photo Library";
+"Choose Photo" = "Choose Photo";
+"Take Photo" = "Take Photo";
+"Record Video" = "Record Video";
+
+// MARK: - Settings
+"Settings" = "Settings";
+"Account" = "Account";
+"Privacy" = "Privacy";
+"Notifications" = "Notifications";
+"Appearance" = "Appearance";
+"Language" = "Language";
+"About" = "About";
+"Help" = "Help";
+"Log Out" = "Log Out";
+
+// MARK: - Profile
+"Profile" = "Profile";
+"Tweets" = "Tweets";
+"Following" = "Following";
+"Followers" = "Followers";
+"Edit Profile" = "Edit Profile";
+"Change Photo" = "Change Photo";
+
+// MARK: - Time
+"now" = "now";
+"just now" = "just now";
+"%@s" = "%@s";
+"%@m" = "%@m";
+"%@h" = "%@h";
+"%@d" = "%@d";
+"%@w" = "%@w";
+"%@y" = "%@y";
+
+// MARK: - Numbers
+"%@K" = "%@K";
+"%@M" = "%@M";
+"%@B" = "%@B";
+
+// MARK: - Placeholders
+"What's happening?" = "What's happening?";
+"Add a comment..." = "Add a comment...";
+"Search" = "Search";
+"Search Twitter" = "Search Twitter";
+
+// MARK: - Alerts
+"Are you sure?" = "Are you sure?";
+"This action cannot be undone." = "This action cannot be undone.";
+"Delete Tweet" = "Delete Tweet";
+"Delete Comment" = "Delete Comment";
+"Block User" = "Block User";
+"Mute User" = "Mute User";
+"Report User" = "Report User";
+
+// MARK: - Success Messages
+"Tweet posted successfully!" = "Tweet posted successfully!";
+"Comment posted successfully!" = "Comment posted successfully!";
+"Profile updated successfully!" = "Profile updated successfully!";
+"Settings saved successfully!" = "Settings saved successfully!";
+
+// MARK: - Network
+"No internet connection" = "No internet connection";
+"Connection failed" = "Connection failed";
+"Please check your internet connection and try again" = "Please check your internet connection and try again";
+"Server error" = "Server error";
+"Please try again later" = "Please try again later";
+
+// MARK: - Permissions
+"Camera Access" = "Camera Access";
+"Photo Library Access" = "Photo Library Access";
+"Microphone Access" = "Microphone Access";
+"Location Access" = "Location Access";
+"Please enable %@ in Settings to use this feature." = "Please enable %@ in Settings to use this feature.";
+"Go to Settings" = "Go to Settings"; 

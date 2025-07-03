@@ -11,9 +11,9 @@ enum TweetError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .emptyTweet:
-            return "Tweet cannot be empty."
+            return NSLocalizedString("Tweet cannot be empty.", comment: "Empty tweet error")
         case .uploadFailed:
-            return "Failed to upload tweet. Please try again."
+            return NSLocalizedString("Failed to upload tweet. Please try again.", comment: "Upload failed error")
         }
     }
 }

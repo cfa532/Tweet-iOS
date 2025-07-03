@@ -27,13 +27,13 @@ struct LoginView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
-                Text("Welcome to dTweet")
+                Text(LocalizedStringKey("Welcome to dTweet"))
                     .font(.title)
                     .fontWeight(.bold)
                     .foregroundColor(.themeText)
                 
                 Group {
-                    TextField("Username", text: $username)
+                    TextField(LocalizedStringKey("Username"), text: $username)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .autocapitalization(.none)
                         .disabled(isLoading)
@@ -43,7 +43,7 @@ struct LoginView: View {
                             focusedField = .password
                         }
                     
-                    SecureField("Password", text: $password)
+                    SecureField(LocalizedStringKey("Password"), text: $password)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .disabled(isLoading)
                         .focused($focusedField, equals: .password)
@@ -72,7 +72,7 @@ struct LoginView: View {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         } else {
-                            Text("Login")
+                            Text(LocalizedStringKey("Login"))
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -83,14 +83,14 @@ struct LoginView: View {
                 }
                 .disabled(isLoading || username.isEmpty || password.isEmpty)
                 
-                Button("Don't have an account? Register") {
+                Button(LocalizedStringKey("Don't have an account? Register")) {
                     showRegistration = true
                 }
                 .foregroundColor(.themeAccent)
                 .disabled(isLoading)
             }
             .padding()
-            .navigationBarItems(trailing: Button("Close") {
+            .navigationBarItems(trailing: Button(LocalizedStringKey("Close")) {
                 dismiss()
             })
             .sheet(isPresented: $showRegistration) {
@@ -109,7 +109,7 @@ struct LoginView: View {
                                 showSuccess = true
                                 showRegistration = false
                             } else {
-                                errorMessage = "Registration failed."
+                                errorMessage = NSLocalizedString("Registration failed.", comment: "Registration error message")
                             }
                         } catch {
                             errorMessage = error.localizedDescription
@@ -117,12 +117,12 @@ struct LoginView: View {
                     }
                 }
             }
-            .alert("Login Successful. Wait for a few minutes before login.", isPresented: $showSuccess) {
-                Button("OK") {
+            .alert(LocalizedStringKey("Login Successful. Wait for a few minutes before login."), isPresented: $showSuccess) {
+                Button(LocalizedStringKey("OK")) {
 //                    dismiss()
                 }
             } message: {
-                Text("Welcome back!")
+                Text(LocalizedStringKey("Welcome back!"))
             }
         }
     }
@@ -133,7 +133,7 @@ struct LoginView: View {
         
         do {
             if username.isEmpty || password.isEmpty {
-                errorMessage = "Username & password are required."
+                errorMessage = NSLocalizedString("Username & password are required.", comment: "Login error message")
                 return
             }
             if let userId = try await hproseInstance.getUserId(username) {
@@ -149,10 +149,10 @@ struct LoginView: View {
                         errorMessage = result["reason"] as? String
                     }
                 } else {
-                    errorMessage = "Cannot find user by \(userId)"
+                    errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), userId)
                 }
             } else {
-                errorMessage = "Cannot find userId by \(username)"
+                errorMessage = String(format: NSLocalizedString("Cannot find userId by %@", comment: "UserId not found error"), username)
             }
         } catch {
             errorMessage = error.localizedDescription

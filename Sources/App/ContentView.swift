@@ -46,7 +46,7 @@ struct ContentView: View {
                     VStack(spacing: 4) {
                         Image(systemName: "house")
                             .font(.system(size: 24))
-                        Text("Home")
+                        Text(LocalizedStringKey("Home"))
                             .font(.caption)
                     }
                     .foregroundColor(navigationPath.isEmpty && selectedTab == 0 ? .blue : .gray)
@@ -59,7 +59,7 @@ struct ContentView: View {
                     VStack(spacing: 4) {
                         Image(systemName: "square.and.pencil")
                             .font(.system(size: 24))
-                        Text("Compose")
+                        Text(LocalizedStringKey("Compose"))
                             .font(.caption)
                     }
                     .foregroundColor(.gray)

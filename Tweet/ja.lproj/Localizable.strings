@@ -1,0 +1,152 @@
+/* 
+  Localizable.strings (Japanese)
+  Tweet
+  
+  Created for localization support.
+*/
+
+// MARK: - Tab Bar
+"Home" = "ホーム";
+"Compose" = "投稿";
+
+// MARK: - Login Screen
+"Welcome to dTweet" = "dTweetへようこそ";
+"Username" = "ユーザー名";
+"Password" = "パスワード";
+"Login" = "ログイン";
+"Don't have an account? Register" = "アカウントをお持ちでない方は登録";
+"Close" = "閉じる";
+"Login Successful. Wait for a few minutes before login." = "ログインに成功しました。数分待ってからログインしてください。";
+"Welcome back!" = "おかえりなさい！";
+"OK" = "OK";
+
+// MARK: - Registration Screen
+"Username *" = "ユーザー名 *";
+"Password *" = "パスワード *";
+"Confirm Password" = "パスワード確認";
+"Alias" = "ニックネーム";
+"Profile" = "プロフィール";
+"Host ID (optional)" = "ホストID（任意）";
+"Cloud Drive Port" = "クラウドドライブポート";
+"Register" = "登録";
+"Cancel" = "キャンセル";
+
+// MARK: - Error Messages
+"Username & password are required." = "ユーザー名とパスワードが必要です。";
+"Registration failed." = "登録に失敗しました。";
+"Cannot find user by %@" = "%@でユーザーが見つかりません";
+"Cannot find userId by %@" = "%@でユーザーIDが見つかりません";
+"Failed to upload avatar." = "アバターのアップロードに失敗しました。";
+"Failed to load image data." = "画像データの読み込みに失敗しました。";
+"Tweet cannot be empty." = "ツイートは空にできません。";
+"Failed to upload tweet. Please try again." = "ツイートのアップロードに失敗しました。もう一度お試しください。";
+"Loading HLS stream..." = "HLSストリームを読み込み中...";
+"Failed to load media data" = "メディアデータの読み込みに失敗";
+"Failed to generate thumbnail" = "サムネイルの生成に失敗";
+"FFmpeg conversion failed with code: %d" = "FFmpeg変換に失敗しました。エラーコード：%d";
+"Failed to create output directory: %@" = "出力ディレクトリの作成に失敗：%@";
+"No video track found in the file" = "ファイルにビデオトラックが見つかりません";
+"Failed to get video info: %@" = "ビデオ情報の取得に失敗：%@";
+
+// MARK: - Common Actions
+"Delete" = "削除";
+"Edit" = "編集";
+"Save" = "保存";
+"Done" = "完了";
+"Next" = "次へ";
+"Back" = "戻る";
+"Retry" = "再試行";
+"Share" = "共有";
+"Copy" = "コピー";
+"Report" = "報告";
+"Block" = "ブロック";
+"Mute" = "ミュート";
+"Follow" = "フォロー";
+"Unfollow" = "フォロー解除";
+"Like" = "いいね";
+"Unlike" = "いいね解除";
+"Reply" = "返信";
+"Retweet" = "リツイート";
+"Bookmark" = "ブックマーク";
+"Remove Bookmark" = "ブックマーク削除";
+
+// MARK: - Media
+"Photo" = "写真";
+"Video" = "動画";
+"Audio" = "音声";
+"File" = "ファイル";
+"Camera" = "カメラ";
+"Photo Library" = "写真ライブラリ";
+"Choose Photo" = "写真を選択";
+"Take Photo" = "写真を撮影";
+"Record Video" = "動画を録画";
+
+// MARK: - Settings
+"Settings" = "設定";
+"Account" = "アカウント";
+"Privacy" = "プライバシー";
+"Notifications" = "通知";
+"Appearance" = "外観";
+"Language" = "言語";
+"About" = "について";
+"Help" = "ヘルプ";
+"Log Out" = "ログアウト";
+
+// MARK: - Profile
+"Profile" = "プロフィール";
+"Tweets" = "ツイート";
+"Following" = "フォロー中";
+"Followers" = "フォロワー";
+"Edit Profile" = "プロフィール編集";
+"Change Photo" = "写真を変更";
+
+// MARK: - Time
+"now" = "今";
+"just now" = "たった今";
+"%@s" = "%@秒";
+"%@m" = "%@分";
+"%@h" = "%@時間";
+"%@d" = "%@日";
+"%@w" = "%@週間";
+"%@y" = "%@年";
+
+// MARK: - Numbers
+"%@K" = "%@千";
+"%@M" = "%@百万";
+"%@B" = "%@十億";
+
+// MARK: - Placeholders
+"What's happening?" = "何が起こっていますか？";
+"Add a comment..." = "コメントを追加...";
+"Search" = "検索";
+"Search Twitter" = "Twitterを検索";
+
+// MARK: - Alerts
+"Are you sure?" = "本当によろしいですか？";
+"This action cannot be undone." = "この操作は取り消せません。";
+"Delete Tweet" = "ツイートを削除";
+"Delete Comment" = "コメントを削除";
+"Block User" = "ユーザーをブロック";
+"Mute User" = "ユーザーをミュート";
+"Report User" = "ユーザーを報告";
+
+// MARK: - Success Messages
+"Tweet posted successfully!" = "ツイートが投稿されました！";
+"Comment posted successfully!" = "コメントが投稿されました！";
+"Profile updated successfully!" = "プロフィールが更新されました！";
+"Settings saved successfully!" = "設定が保存されました！";
+
+// MARK: - Network
+"No internet connection" = "インターネット接続がありません";
+"Connection failed" = "接続に失敗しました";
+"Please check your internet connection and try again" = "インターネット接続を確認して、もう一度お試しください";
+"Server error" = "サーバーエラー";
+"Please try again later" = "後でもう一度お試しください";
+
+// MARK: - Permissions
+"Camera Access" = "カメラアクセス";
+"Photo Library Access" = "写真ライブラリアクセス";
+"Microphone Access" = "マイクアクセス";
+"Location Access" = "位置情報アクセス";
+"Please enable %@ in Settings to use this feature." = "この機能を使用するには、設定で%@を有効にしてください。";
+"Go to Settings" = "設定へ"; 

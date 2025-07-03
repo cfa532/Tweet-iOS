@@ -531,9 +531,9 @@ enum ThumbnailError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .dataLoadingFailed:
-            return "Failed to load media data"
+            return NSLocalizedString("Failed to load media data", comment: "Media data loading error")
         case .thumbnailGenerationFailed:
-            return "Failed to generate thumbnail"
+            return NSLocalizedString("Failed to generate thumbnail", comment: "Thumbnail generation error")
         }
     }
 }

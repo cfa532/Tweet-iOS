@@ -18,6 +18,7 @@
 		460680D52E16100500D9D15A /* VideoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680D42E16100500D9D15A /* VideoManager.swift */; };
 		460680E82E16264C00D9D15A /* VideoCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680E72E16264C00D9D15A /* VideoCacheManager.swift */; };
 		460680EA2E16303100D9D15A /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680E92E16302C00D9D15A /* Constants.swift */; };
+		460680EC2E165F8300D9D15A /* LocalizationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680EB2E165F8300D9D15A /* LocalizationHelper.swift */; };
 		4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D72DD5CA640051A92D /* HproseInstance.swift */; };
 		4608E2DA2DD5CD920051A92D /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D92DD5CD920051A92D /* User.swift */; };
 		4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4629FB182DFFEA3100588941 /* MetricKitManager.swift */; };
@@ -88,6 +89,7 @@
 		460680D42E16100500D9D15A /* VideoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoManager.swift; sourceTree = "<group>"; };
 		460680E72E16264C00D9D15A /* VideoCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCacheManager.swift; sourceTree = "<group>"; };
 		460680E92E16302C00D9D15A /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
+		460680EB2E165F8300D9D15A /* LocalizationHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizationHelper.swift; sourceTree = "<group>"; };
 		4608E2D72DD5CA640051A92D /* HproseInstance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseInstance.swift; sourceTree = "<group>"; };
 		4608E2D92DD5CD920051A92D /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		4629FB182DFFEA3100588941 /* MetricKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitManager.swift; sourceTree = "<group>"; };
@@ -305,6 +307,7 @@
 		4629FB172DFFE9FB00588941 /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				460680EB2E165F8300D9D15A /* LocalizationHelper.swift */,
 				460680E72E16264C00D9D15A /* VideoCacheManager.swift */,
 				46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */,
 				46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */,
@@ -532,6 +535,7 @@
 				4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */,
 				4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */,
 				4608E2DA2DD5CD920051A92D /* User.swift in Sources */,
+				460680EC2E165F8300D9D15A /* LocalizationHelper.swift in Sources */,
 				46E5B3632DE1703200AEF31F /* Registration.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */,
 				46E5B3572DDF74B500AEF31F /* CommentComposeView.swift in Sources */,
