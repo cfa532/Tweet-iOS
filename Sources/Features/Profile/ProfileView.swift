@@ -245,20 +245,13 @@ struct ProfileView: View {
             title: tweetListType == .BOOKMARKS ? "Bookmarks" : "Favorites",
             tweets: tweetsBinding,
             tweetFetcher: { page, size, isFromCache in
-                let tweets = try await hproseInstance.getUserTweetsByType(
+                // Don't merge here, let TweetListView handle it
+                return try await hproseInstance.getUserTweetsByType(
                     user: user,
                     type: tweetListType,
                     pageNumber: page,
                     pageSize: size
                 )
-                await MainActor.run {
-                    if tweetListType == .BOOKMARKS {
-                        bookmarks.mergeTweets( tweets.compactMap{ $0 } )
-                    } else {
-                        favorites.mergeTweets( tweets.compactMap{ $0 } )
-                    }
-                }
-                return tweets
             },
             showTitle: true,
             notifications: tweetListType == .BOOKMARKS ? [
