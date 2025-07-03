@@ -143,6 +143,7 @@ struct HLSVideoPlayerWithControls: View {
     @State private var hasNotifiedFinished = false
     @State private var hasFinished = false // Track if video has finished to prevent re-queuing
     @State private var playerInstanceId: String // Use videoKey as instance ID
+    @State private var localMuted: Bool = false // Local mute state for forceUnmuted mode
     @StateObject private var videoManager = VideoManager.shared
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
@@ -205,9 +206,18 @@ struct HLSVideoPlayerWithControls: View {
                                             
                                             // Mute/Unmute button
                                             Button(action: {
-                                                muteState.toggleMute()
+                                                if forceUnmuted {
+                                                    // Use local mute state for full-screen mode
+                                                    localMuted.toggle()
+                                                    videoCache.setMuteState(for: videoKey, isMuted: localMuted)
+                                                    playerMuted = localMuted
+                                                    print("DEBUG: [VIDEO \(videoKey)] Local mute state changed to: \(localMuted) (forceUnmuted mode)")
+                                                } else {
+                                                    // Use global mute state for normal mode
+                                                    muteState.toggleMute()
+                                                }
                                             }) {
-                                                Image(systemName: muteState.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                                Image(systemName: (forceUnmuted ? localMuted : muteState.isMuted) ? "speaker.slash.fill" : "speaker.wave.2.fill")
                                                     .font(.title2)
                                                     .foregroundColor(.white)
                                                     .background(Circle().fill(Color.black.opacity(0.5)))
@@ -251,10 +261,16 @@ struct HLSVideoPlayerWithControls: View {
                             // This automatically updates when the user interacts with native controls
                             if playerMuted != muted {
                                 playerMuted = muted
-                                // Sync with global mute state when user interacts with native controls
-                                if !forceUnmuted && muteState.isMuted != muted {
-                                    print("DEBUG: [VIDEO \(videoKey)] Native controls changed mute to: \(muted), updating global state")
-                                    muteState.setMuted(muted)
+                                if forceUnmuted {
+                                    // Update local mute state for full-screen mode
+                                    localMuted = muted
+                                    print("DEBUG: [VIDEO \(videoKey)] Native controls changed local mute to: \(muted) (forceUnmuted mode)")
+                                } else {
+                                    // Sync with global mute state when user interacts with native controls
+                                    if muteState.isMuted != muted {
+                                        print("DEBUG: [VIDEO \(videoKey)] Native controls changed mute to: \(muted), updating global state")
+                                        muteState.setMuted(muted)
+                                    }
                                 }
                             }
                         }
@@ -433,8 +449,18 @@ struct HLSVideoPlayerWithControls: View {
             self.player = cachedPlayer
             
             // Set initial mute state
-            cachedPlayer.isMuted = forceUnmuted ? false : muteState.isMuted
-            print("DEBUG: [VIDEO \(videoKey)] Setting initial mute state: \(cachedPlayer.isMuted) (forceUnmuted: \(forceUnmuted), globalMuted: \(muteState.isMuted))")
+            if forceUnmuted {
+                // For full-screen mode, start unmuted and use local state
+                cachedPlayer.isMuted = false
+                localMuted = false
+                playerMuted = false
+                print("DEBUG: [VIDEO \(videoKey)] Setting initial mute state: false (forceUnmuted mode)")
+            } else {
+                // For normal mode, use global mute state
+                cachedPlayer.isMuted = muteState.isMuted
+                playerMuted = muteState.isMuted
+                print("DEBUG: [VIDEO \(videoKey)] Setting initial mute state: \(cachedPlayer.isMuted) (globalMuted: \(muteState.isMuted))")
+            }
             
             // Set up observers for the player
             setupPlayerObservers(cachedPlayer)
@@ -665,7 +691,11 @@ struct HLSVideoPlayerWithControls: View {
         // Update local player reference if needed
         if let player = player {
             // Preserve the mute state when resetting
-            player.isMuted = forceUnmuted ? false : muteState.isMuted
+            if forceUnmuted {
+                player.isMuted = localMuted
+            } else {
+                player.isMuted = muteState.isMuted
+            }
         }
         
         // Start controls timer to auto-hide controls
