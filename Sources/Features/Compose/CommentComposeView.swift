@@ -139,7 +139,7 @@ struct CommentComposeView: View {
                             .padding(.bottom, 40)
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.easeInOut, value: error != nil)
+                    .animation(.easeInOut, value: true)
                     .onAppear {
                         // Auto-dismiss error after 3 seconds
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {

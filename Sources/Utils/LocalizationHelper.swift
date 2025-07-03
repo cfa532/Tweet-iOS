@@ -20,17 +20,7 @@ extension String {
 }
 
 // MARK: - LocalizedStringKey Extension
-extension LocalizedStringKey {
-    /// Creates a LocalizedStringKey from a string
-    init(_ key: String) {
-        self.init(key, comment: "")
-    }
-    
-    /// Creates a LocalizedStringKey from a string with a comment
-    init(_ key: String, comment: String) {
-        self.init(key, comment: comment)
-    }
-}
+// Note: LocalizedStringKey already has proper initializers, so we don't need to extend it
 
 // MARK: - Localization Manager
 class LocalizationManager: ObservableObject {
@@ -46,7 +36,7 @@ class LocalizationManager: ObservableObject {
     
     private init() {
         self.currentLanguage = UserDefaults.standard.string(forKey: "AppLanguage") ?? 
-                              Locale.current.languageCode ?? "en"
+                              Locale.current.language.languageCode?.identifier ?? "en"
     }
     
     /// Available languages in the app

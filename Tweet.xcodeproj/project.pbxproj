@@ -21,8 +21,6 @@
 		460680EC2E165F8300D9D15A /* LocalizationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680EB2E165F8300D9D15A /* LocalizationHelper.swift */; };
 		460680F62E1660C700D9D15A /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 460680F32E1660C700D9D15A /* Localizable.strings */; };
 		460680F72E1660C700D9D15A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 460680ED2E1660C700D9D15A /* Assets.xcassets */; };
-
-		460680F92E1660C700D9D15A /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 460680F42E1660C700D9D15A /* Localizable.strings */; };
 		460680FA2E1660C700D9D15A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 460680EF2E1660C700D9D15A /* Assets.xcassets */; };
 		4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D72DD5CA640051A92D /* HproseInstance.swift */; };
 		4608E2DA2DD5CD920051A92D /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D92DD5CD920051A92D /* User.swift */; };
@@ -54,7 +52,6 @@
 		46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */; };
 		46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32A2DDA038E00AEF31F /* AppConfig.swift */; };
 		46E5B32D2DDA045B00AEF31F /* AppHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32C2DDA045B00AEF31F /* AppHeaderView.swift */; };
-		46E5B3322DDA1AF500AEF31F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 46E5B3312DDA1AF500AEF31F /* Assets.xcassets */; };
 		46E5B33A2DDA315700AEF31F /* RecommendedTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3362DDA315700AEF31F /* RecommendedTweetView.swift */; };
 		46E5B33B2DDA315700AEF31F /* TweetItemView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3382DDA315700AEF31F /* TweetItemView.swift */; };
 		46E5B33C2DDA315700AEF31F /* FollowingsTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3352DDA315700AEF31F /* FollowingsTweetView.swift */; };
@@ -97,10 +94,8 @@
 		460680EB2E165F8300D9D15A /* LocalizationHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizationHelper.swift; sourceTree = "<group>"; };
 		460680ED2E1660C700D9D15A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		460680EF2E1660C700D9D15A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-
 		460680F12E1660C700D9D15A /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Localizable.strings; sourceTree = "<group>"; };
 		460680F22E1660C700D9D15A /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
-
 		4608E2D72DD5CA640051A92D /* HproseInstance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseInstance.swift; sourceTree = "<group>"; };
 		4608E2D92DD5CD920051A92D /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		4629FB182DFFEA3100588941 /* MetricKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitManager.swift; sourceTree = "<group>"; };
@@ -329,7 +324,6 @@
 			children = (
 				460680EE2E1660C700D9D15A /* Preview Content */,
 				460680EF2E1660C700D9D15A /* Assets.xcassets */,
-
 				460680F32E1660C700D9D15A /* Localizable.strings */,
 			);
 			path = Tweet;
@@ -435,7 +429,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1500;
-				LastUpgradeCheck = 1630;
+				LastUpgradeCheck = 1640;
 				TargetAttributes = {
 					1A1A1A1A1A1A1A1A1A1A1A0F = {
 						CreatedOnToolsVersion = 15.0;
@@ -469,10 +463,7 @@
 			files = (
 				460680F62E1660C700D9D15A /* Localizable.strings in Resources */,
 				460680F72E1660C700D9D15A /* Assets.xcassets in Resources */,
-
-
 				460680FA2E1660C700D9D15A /* Assets.xcassets in Resources */,
-				46E5B3322DDA1AF500AEF31F /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -618,6 +609,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -688,6 +680,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
