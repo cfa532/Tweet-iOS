@@ -6,6 +6,7 @@ enum Constants {
     static let MAX_TWEET_SIZE = 28000
     static let MIMEI_ID_LENGTH = 27
     static let DEFAULT_CLOUD_PORT = 8010
+    static let VIDEO_CACHE_POOL_SIZE = 50
 }
 
 enum UserContentType: String {

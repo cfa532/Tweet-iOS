@@ -17,7 +17,7 @@ class VideoCacheManager: ObservableObject {
     private let cacheLock = NSLock()
     
     // Maximum number of cached videos to keep in memory
-    private let maxCacheSize = 20
+    private let maxCacheSize = Constants.VIDEO_CACHE_POOL_SIZE
     
     private init() {
         // Set up memory warning observer to clean up cache when system needs memory
