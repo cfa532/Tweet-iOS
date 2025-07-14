@@ -269,6 +269,13 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
         return nil
     }
+    
+    /// Computed property that determines if the user's cached data has expired
+    /// Returns true if the user is not cached or if the cache has expired (30 minutes)
+    var hasExpired: Bool {
+        // Check if user exists in cache and if cache has expired
+        return TweetCacheManager.shared.hasExpired(mid: mid)
+    }
 
     // MARK: - Hashable
     static func == (lhs: User, rhs: User) -> Bool {

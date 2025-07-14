@@ -261,17 +261,19 @@ extension TweetCacheManager {
         return user ?? User.getInstance(mid: mid)
     }
     
-    func shouldRefreshUser(mid: String) -> Bool {
-        var shouldRefresh = true
+    /// Internal method used by User.hasExpired computed property
+    /// Checks if a user's cache has expired (30 minutes)
+    func hasExpired(mid: String) -> Bool {
+        var hasExpired = true
         context.performAndWait {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
             request.predicate = NSPredicate(format: "mid == %@", mid)
             if let cdUser = try? context.fetch(request).first {
-                shouldRefresh = cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -1800 // 30  minutes
+                hasExpired = cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -1800 // 30 minutes
             }
-            // If no cached user found, shouldRefresh remains true
+            // If no cached user found, hasExpired remains true
         }
-        return shouldRefresh
+        return hasExpired
     }
 
     func saveUser(_ user: User) {

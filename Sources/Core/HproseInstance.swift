@@ -368,13 +368,13 @@ final class HproseInstance: ObservableObject {
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
         // Step 1: Check user cache in Core Data.
-        if !TweetCacheManager.shared.shouldRefreshUser(mid: userId), baseUrl == appUser.baseUrl?.absoluteString {
-            // get cached user instance, whose baseUrl might not be the same as appUser's.
+        let user = User.getInstance(mid: userId)
+        if !user.hasExpired {
+            // get cached user instance if it is not expired.
             return TweetCacheManager.shared.fetchUser(mid: userId)
         }
         
         // Step 2: Fetch from server. No instance available in memory or cache.
-        let user = User.getInstance(mid: userId)
         if baseUrl.isEmpty {
             guard let providerIP = try await getProviderIP(userId) else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provide not found"])
