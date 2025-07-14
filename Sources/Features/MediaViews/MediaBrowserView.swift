@@ -23,6 +23,7 @@ struct MediaBrowserView: View {
     @State private var dragOffset = CGSize.zero
     @State private var isDragging = false
 
+
     private var attachments: [MimeiFileType] {
         return tweet.attachments ?? []
     }
@@ -40,7 +41,8 @@ struct MediaBrowserView: View {
 
     var body: some View {
         ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
+            Color.black
+                .ignoresSafeArea(.all, edges: .all)
             
             TabView(selection: $currentIndex) {
                 ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
@@ -106,10 +108,10 @@ struct MediaBrowserView: View {
                         withAnimation(.spring()) {
                             dragOffset = .zero
                         }
+                        isDragging = false
                         // Reset timer after drag ends
                         resetControlsTimer()
                     }
-                    isDragging = false
                 }
         )
         .onTapGesture {
@@ -191,6 +193,8 @@ struct MediaBrowserView: View {
         return String(format: "%x", abs(hash)) // Convert to hex string, use abs to avoid negative
     }
     
+
+    
     @ViewBuilder
     private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
         SimpleVideoPlayer(
@@ -220,6 +224,7 @@ struct MediaBrowserView: View {
         )
         .environmentObject(MuteState.shared)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
     }
     
     @ViewBuilder
@@ -319,4 +324,6 @@ struct ImageViewWithPlaceholder: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-} 
+}
+
+ 
