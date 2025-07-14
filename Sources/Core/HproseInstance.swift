@@ -63,6 +63,9 @@ final class HproseInstance: ObservableObject {
     func initialize() async throws {
         self.preferenceHelper = PreferenceHelper()
         
+        // Clear cached users during initialization
+        TweetCacheManager.shared.clearAllUsers()
+        
         await MainActor.run {
             _appUser = User.getInstance(mid: preferenceHelper?.getUserId() ?? Constants.GUEST_ID)
             _appUser.baseUrl = preferenceHelper?.getAppUrls().first.flatMap { URL(string: $0) } ?? URL(string: "http://localhost")!
