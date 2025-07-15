@@ -186,12 +186,7 @@ struct MediaBrowserView: View {
         return attachment.type.lowercased() == "image"
     }
     
-    // Generate a hash key from tweet mid and video mid for better performance
-    private func generateVideoKey(tweetMid: String, videoMid: String) -> String {
-        let combined = "\(tweetMid)_\(videoMid)"
-        let hash = combined.hashValue
-        return String(format: "%x", abs(hash)) // Convert to hex string, use abs to avoid negative
-    }
+
     
 
     
@@ -200,7 +195,6 @@ struct MediaBrowserView: View {
         SimpleVideoPlayer(
             url: url,
             mid: attachment.mid,
-            videoKey: generateVideoKey(tweetMid: tweet.mid, videoMid: attachment.mid),
             autoPlay: true, // Always auto-play in full-screen
             onMuteChanged: { _ in
                 // In full-screen mode, don't update global mute state

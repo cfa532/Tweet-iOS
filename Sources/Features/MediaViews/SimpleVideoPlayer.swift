@@ -51,7 +51,6 @@ class MuteState: ObservableObject {
 struct SimpleVideoPlayer: View {
     let url: URL
     let mid: String // Add mid field for caching
-    let videoKey: String // Unique key per tweet-video combination
     var autoPlay: Bool = true
     var onTimeUpdate: ((Double) -> Void)? = nil
     var onMuteChanged: ((Bool) -> Void)? = nil
@@ -80,7 +79,6 @@ struct SimpleVideoPlayer: View {
                     HLSDirectoryVideoPlayer(
                         baseURL: url,
                         mid: mid,
-                        videoKey: videoKey,
                         isVisible: isVisible,
                         isMuted: forceUnmuted ? false : muteState.isMuted,
                         autoPlay: autoPlay,
@@ -99,7 +97,6 @@ struct SimpleVideoPlayer: View {
                     HLSDirectoryVideoPlayer(
                         baseURL: url,
                         mid: mid,
-                        videoKey: videoKey,
                         isVisible: isVisible,
                         isMuted: forceUnmuted ? false : muteState.isMuted,
                         autoPlay: autoPlay,
@@ -120,7 +117,6 @@ struct SimpleVideoPlayer: View {
 struct HLSVideoPlayerWithControls: View {
     let videoURL: URL
     let mid: String // Add mid field for caching
-    let videoKey: String // Unique key per tweet-video combination
     let isVisible: Bool
     let isMuted: Bool
     let autoPlay: Bool
@@ -142,20 +138,14 @@ struct HLSVideoPlayerWithControls: View {
     @State private var controlsTimer: Timer?
     @State private var hasNotifiedFinished = false
     @State private var hasFinished = false // Track if video has finished to prevent re-queuing
-    @State private var playerInstanceId: String // Use videoKey as instance ID
     @State private var localMuted: Bool = false // Local mute state for forceUnmuted mode
     @StateObject private var videoManager = VideoManager.shared
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
     
-    // Static counter to track instance creation
-    private static var instanceCounts: [String: Int] = [:]
-    private static let instanceCountLock = NSLock()
-    
-    init(videoURL: URL, mid: String, videoKey: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool) {
+    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool) {
         self.videoURL = videoURL
         self.mid = mid
-        self.videoKey = videoKey
         self.isVisible = isVisible
         self.isMuted = isMuted
         self.autoPlay = autoPlay
@@ -166,21 +156,8 @@ struct HLSVideoPlayerWithControls: View {
         self.forcePlay = forcePlay
         self.forceUnmuted = forceUnmuted
         self._playerMuted = State(initialValue: isMuted)
-        // Use videoKey as instance ID
-        self._playerInstanceId = State(initialValue: videoKey)
         
-        // Track instance creation
-        Self.instanceCountLock.lock()
-        let count = Self.instanceCounts[mid, default: 0] + 1
-        Self.instanceCounts[mid] = count
-        Self.instanceCountLock.unlock()
-        
-        // Check if we already have too many instances for this video
-        if count > 5 {
-            print("DEBUG: [VIDEO \(videoKey)] WARNING: Many instances (\(count)) for video \(mid) - instances are kept alive for performance")
-        }
-        
-        print("DEBUG: [VIDEO \(videoKey)] Creating new HLSVideoPlayerWithControls instance: \(mid) for URL: \(videoURL.absoluteString) (total instances for this video: \(count) - instances kept alive)")
+        print("DEBUG: [VIDEO \(mid)] HLSVideoPlayerWithControls view created for URL: \(videoURL.absoluteString)")
     }
     
     var body: some View {
@@ -211,7 +188,7 @@ struct HLSVideoPlayerWithControls: View {
                     localMuted.toggle()
                     videoCache.setMuteState(for: mid, isMuted: localMuted)
                     playerMuted = localMuted
-                    print("DEBUG: [VIDEO \(videoKey)] Local mute state changed to: \(localMuted) (forceUnmuted mode)")
+                    print("DEBUG: [VIDEO \(mid)] Local mute state changed to: \(localMuted) (forceUnmuted mode)")
                 } else {
                     // Use global mute state for normal mode
                     muteState.toggleMute()
@@ -264,11 +241,11 @@ struct HLSVideoPlayerWithControls: View {
                                 if forceUnmuted {
                                     // Update local mute state for full-screen mode
                                     localMuted = muted
-                                    print("DEBUG: [VIDEO \(videoKey)] Native controls changed local mute to: \(muted) (forceUnmuted mode)")
+                                    print("DEBUG: [VIDEO \(mid)] Native controls changed local mute to: \(muted) (forceUnmuted mode)")
                                 } else {
                                     // Sync with global mute state when user interacts with native controls
                                     if muteState.isMuted != muted {
-                                        print("DEBUG: [VIDEO \(videoKey)] Native controls changed mute to: \(muted), updating global state")
+                                        print("DEBUG: [VIDEO \(mid)] Native controls changed mute to: \(muted), updating global state")
                                         muteState.setMuted(muted)
                                     }
                                 }
@@ -345,7 +322,7 @@ struct HLSVideoPlayerWithControls: View {
                 setupPlayer()
             }
             .onAppear {
-                print("DEBUG: [VIDEO \(videoKey)] HLSVideoPlayerWithControls onAppear - isVisible: \(isVisible)")
+                print("DEBUG: [VIDEO \(mid)] HLSVideoPlayerWithControls onAppear - isVisible: \(isVisible)")
                 
                 // Only update visibility if video hasn't finished to prevent re-queuing
                 if !hasFinished {
@@ -359,7 +336,7 @@ struct HLSVideoPlayerWithControls: View {
                     queue: .main
                 ) { notification in
                     if let pauseMid = notification.object as? String, pauseMid == mid {
-                        print("DEBUG: [VIDEO \(videoKey)] Received pause notification from video manager")
+                        print("DEBUG: [VIDEO \(mid)] Received pause notification from video manager")
                         // Only pause if this instance is currently playing
                         if self.isPlaying {
                             self.player?.pause()
@@ -375,7 +352,7 @@ struct HLSVideoPlayerWithControls: View {
                     queue: .main
                 ) { notification in
                     if let startMid = notification.object as? String, startMid == mid {
-                        print("DEBUG: [VIDEO \(videoKey)] Received start notification from video manager")
+                        print("DEBUG: [VIDEO \(mid)] Received start notification from video manager")
                         // Only start if this instance is visible and not already playing
                         if self.isVisible && !self.isPlaying {
                             if let player = self.player {
@@ -398,7 +375,7 @@ struct HLSVideoPlayerWithControls: View {
                 // Do not resume or start playback here; let parent control via autoPlay
             }
             .onDisappear {
-                print("DEBUG: [VIDEO \(videoKey)] HLSVideoPlayerWithControls onDisappear - isVisible: \(isVisible)")
+                print("DEBUG: [VIDEO \(mid)] HLSVideoPlayerWithControls onDisappear - isVisible: \(isVisible)")
                 
                 // Stop controls timer
                 stopControlsTimer()
@@ -415,7 +392,7 @@ struct HLSVideoPlayerWithControls: View {
                 NotificationCenter.default.removeObserver(self)
             }
             .onChange(of: isVisible) { newVisibility in
-                print("DEBUG: [VIDEO \(videoKey)] Visibility changed to: \(newVisibility)")
+                print("DEBUG: [VIDEO \(mid)] Visibility changed to: \(newVisibility)")
                 
                 // Only update visibility if video hasn't finished to prevent re-queuing
                 if !hasFinished {
@@ -426,18 +403,18 @@ struct HLSVideoPlayerWithControls: View {
                 // Update player mute state when global mute state changes
                 // Only update if not in forceUnmuted mode
                 if !forceUnmuted {
-                    videoCache.setMuteState(for: videoKey, isMuted: newMuteState)
+                    videoCache.setMuteState(for: mid, isMuted: newMuteState)
                     playerMuted = newMuteState
-                    print("DEBUG: [VIDEO \(videoKey)] Global mute state changed to: \(newMuteState) for video key: \(videoKey)")
+                    print("DEBUG: [VIDEO \(mid)] Global mute state changed to: \(newMuteState) for video key: \(mid)")
                 } else {
-                    print("DEBUG: [VIDEO \(videoKey)] Ignoring global mute state change (forceUnmuted mode)")
+                    print("DEBUG: [VIDEO \(mid)] Ignoring global mute state change (forceUnmuted mode)")
                 }
             }
         }
     }
     
     private func setupPlayer() {
-        print("DEBUG: [VIDEO \(videoKey)] Setting up HLS player for URL: \(videoURL.absoluteString), mid: \(mid)")
+        print("DEBUG: [VIDEO \(mid)] Setting up HLS player for URL: \(videoURL.absoluteString), mid: \(mid)")
         
         isLoading = true
         errorMessage = nil
@@ -445,7 +422,7 @@ struct HLSVideoPlayerWithControls: View {
         
         // Try to get cached player first
         if let cachedPlayer = videoCache.getVideoPlayer(for: mid, url: videoURL) {
-            print("DEBUG: [VIDEO \(videoKey)] Got cached player for video mid: \(mid)")
+            print("DEBUG: [VIDEO \(mid)] Got cached player for video mid: \(mid)")
             self.player = cachedPlayer
             
             // Set initial mute state
@@ -454,12 +431,12 @@ struct HLSVideoPlayerWithControls: View {
                 cachedPlayer.isMuted = false
                 localMuted = false
                 playerMuted = false
-                print("DEBUG: [VIDEO \(videoKey)] Setting initial mute state: false (forceUnmuted mode)")
+                print("DEBUG: [VIDEO \(mid)] Setting initial mute state: false (forceUnmuted mode)")
             } else {
                 // For normal mode, use global mute state
                 cachedPlayer.isMuted = muteState.isMuted
                 playerMuted = muteState.isMuted
-                print("DEBUG: [VIDEO \(videoKey)] Setting initial mute state: \(cachedPlayer.isMuted) (globalMuted: \(muteState.isMuted))")
+                print("DEBUG: [VIDEO \(mid)] Setting initial mute state: \(cachedPlayer.isMuted) (globalMuted: \(muteState.isMuted))")
             }
             
             // Set up observers for the player
@@ -471,7 +448,7 @@ struct HLSVideoPlayerWithControls: View {
             // Handle auto-play logic
             handleAutoPlay(cachedPlayer)
         } else {
-            print("DEBUG: [VIDEO \(videoKey)] Failed to get or create player for video mid: \(mid)")
+            print("DEBUG: [VIDEO \(mid)] Failed to get or create player for video mid: \(mid)")
             errorMessage = "Failed to create video player"
             isLoading = false
         }
@@ -488,7 +465,7 @@ struct HLSVideoPlayerWithControls: View {
                 hasNotifiedFinished = true
                 hasFinished = true // Mark video as finished
                 self.videoManager.stopPlaying(videoMid: mid)
-                print("DEBUG: [VIDEO \(videoKey)] Video finished in HLSVideoPlayerWithControls")
+                print("DEBUG: [VIDEO \(mid)] Video finished in HLSVideoPlayerWithControls")
                 self.resetVideoState()
                 self.onVideoFinished?()
             }
@@ -505,10 +482,10 @@ struct HLSVideoPlayerWithControls: View {
                     self.hasNotifiedFinished = true
                     self.hasFinished = true // Mark video as finished
                     self.videoManager.stopPlaying(videoMid: mid)
-                    print("DEBUG: [VIDEO \(videoKey)] Video finished via AVPlayerItemDidPlayToEndTime notification")
-                    print("DEBUG: [VIDEO \(videoKey)] Video URL: \(self.videoURL.absoluteString)")
-                    print("DEBUG: [VIDEO \(videoKey)] Final duration: \(self.duration) seconds")
-                    print("DEBUG: [VIDEO \(videoKey)] Final current time: \(self.currentTime) seconds")
+                    print("DEBUG: [VIDEO \(mid)] Video finished via AVPlayerItemDidPlayToEndTime notification")
+                    print("DEBUG: [VIDEO \(mid)] Video URL: \(self.videoURL.absoluteString)")
+                    print("DEBUG: [VIDEO \(mid)] Final duration: \(self.duration) seconds")
+                    print("DEBUG: [VIDEO \(mid)] Final current time: \(self.currentTime) seconds")
                     self.resetVideoState()
                     self.onVideoFinished?()
                 }
@@ -549,7 +526,7 @@ struct HLSVideoPlayerWithControls: View {
             
             switch playerItem.status {
             case .readyToPlay:
-                print("DEBUG: [VIDEO \(videoKey)] HLS player item is ready to play")
+                print("DEBUG: [VIDEO \(mid)] HLS player item is ready to play")
                 self.isLoading = false
                 self.duration = playerItem.duration.seconds
                 
@@ -710,7 +687,19 @@ struct HLSVideoPlayerWithControls: View {
         
         // Do NOT track instance destruction - we want to keep instances alive
         // Only remove notification observers, keep the player instance
-        print("DEBUG: [VIDEO \(videoKey)] Removed observers for mid: \(mid) (keeping instance alive)")
+        print("DEBUG: [VIDEO \(mid)] Removed observers for mid: \(mid) (keeping instance alive)")
+    }
+    
+    // Static method to get active instance count for debugging
+    static func getActiveInstanceCount() -> Int {
+        // This method is no longer needed as instance management is handled by VideoCacheManager
+        return 0
+    }
+    
+    // Static method to check if an instance exists for a given mid
+    static func hasActiveInstance(for mid: String) -> Bool {
+        // This method is no longer needed as instance management is handled by VideoCacheManager
+        return false
     }
 }
 
@@ -742,7 +731,6 @@ extension View {
 struct HLSDirectoryVideoPlayer: View {
     let baseURL: URL
     let mid: String // Add mid field for caching
-    let videoKey: String // Unique key per tweet-video combination
     let isVisible: Bool
     let isMuted: Bool
     let autoPlay: Bool
@@ -763,7 +751,6 @@ struct HLSDirectoryVideoPlayer: View {
                 HLSVideoPlayerWithControls(
                     videoURL: playlistURL,
                     mid: mid,
-                    videoKey: videoKey,
                     isVisible: isVisible,
                     isMuted: isMuted,
                     autoPlay: autoPlay,

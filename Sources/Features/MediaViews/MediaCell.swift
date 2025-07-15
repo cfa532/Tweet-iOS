@@ -55,7 +55,6 @@ struct MediaCell: View {
                         SimpleVideoPlayer(
                             url: url,
                             mid: attachment.mid,
-                            videoKey: generateVideoKey(tweetMid: parentTweet.mid, videoMid: attachment.mid),
                             autoPlay: play,
                             onVideoFinished: onVideoFinished,
                             isVisible: isVisible,
@@ -195,12 +194,7 @@ struct MediaCell: View {
         }
     }
     
-    // Generate a hash key from tweet mid and video mid for better performance
-    private func generateVideoKey(tweetMid: String, videoMid: String) -> String {
-        let combined = "\(tweetMid)_\(videoMid)"
-        let hash = combined.hashValue
-        return String(format: "%x", abs(hash)) // Convert to hex string, use abs to avoid negative
-    }
+
 }
 
 
