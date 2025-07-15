@@ -324,10 +324,16 @@ struct HLSVideoPlayerWithControls: View {
             .onAppear {
                 print("DEBUG: [VIDEO \(mid)] HLSVideoPlayerWithControls onAppear - isVisible: \(isVisible)")
                 
-                // Only update visibility if video hasn't finished to prevent re-queuing
-                if !hasFinished {
-                    videoManager.setVideoVisible(mid, isVisible: isVisible)
+                // Reset finished state when video appears in a new tweet
+                // This allows the same video to be re-queued when it appears in multiple tweets
+                if hasFinished {
+                    print("DEBUG: [VIDEO \(mid)] Resetting finished state for video appearing in new tweet")
+                    hasFinished = false
+                    hasNotifiedFinished = false
                 }
+                
+                // Update visibility
+                videoManager.setVideoVisible(mid, isVisible: isVisible)
                 
                 // Listen for pause notifications from video manager
                 NotificationCenter.default.addObserver(
@@ -356,9 +362,24 @@ struct HLSVideoPlayerWithControls: View {
                         // Only start if this instance is visible and not already playing
                         if self.isVisible && !self.isPlaying {
                             if let player = self.player {
+                                print("DEBUG: [VIDEO \(mid)] Starting player from notification")
                                 player.play()
                                 self.isPlaying = true
+                            } else {
+                                print("DEBUG: [VIDEO \(mid)] Player not ready, setting up player first")
+                                // If player is not ready, set it up first
+                                self.setupPlayer()
+                                // Try to start again after a short delay
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    if let player = self.player, self.isVisible && !self.isPlaying {
+                                        print("DEBUG: [VIDEO \(mid)] Starting player after setup")
+                                        player.play()
+                                        self.isPlaying = true
+                                    }
+                                }
                             }
+                        } else {
+                            print("DEBUG: [VIDEO \(mid)] Not starting - isVisible: \(self.isVisible), isPlaying: \(self.isPlaying)")
                         }
                     }
                 }
@@ -394,10 +415,8 @@ struct HLSVideoPlayerWithControls: View {
             .onChange(of: isVisible) { newVisibility in
                 print("DEBUG: [VIDEO \(mid)] Visibility changed to: \(newVisibility)")
                 
-                // Only update visibility if video hasn't finished to prevent re-queuing
-                if !hasFinished {
-                    videoManager.setVideoVisible(mid, isVisible: newVisibility)
-                }
+                // Update visibility
+                videoManager.setVideoVisible(mid, isVisible: newVisibility)
             }
             .onChange(of: muteState.isMuted) { newMuteState in
                 // Update player mute state when global mute state changes

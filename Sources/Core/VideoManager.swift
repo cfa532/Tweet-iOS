@@ -120,22 +120,30 @@ class VideoManager: ObservableObject {
             }
         } else {
             let wasVisible = visibleVideos.contains(videoMid)
-            visibleVideos.remove(videoMid)
             
             if wasVisible {
                 print("DEBUG: [VIDEO MANAGER] Video mid \(videoMid) became invisible")
                 
+                // Remove this instance from visible videos
+                visibleVideos.remove(videoMid)
+                
                 // Remove invisible videos from queue to prevent them from starting
                 removeInvisibleFromQueue()
                 
-                // If the invisible video was playing, stop it and start next
+                // If the invisible video was playing, check if there are other visible videos
                 if currentPlayingMid == videoMid {
-                    print("DEBUG: [VIDEO MANAGER] Stopping invisible video mid: \(videoMid)")
-                    NotificationCenter.default.post(name: .pauseVideo, object: videoMid)
-                    currentPlayingMid = nil
-                    
-                    if autoStartNext {
-                        startNextVisibleVideo()
+                    // Check if there are other visible videos to play instead
+                    if !visibleVideos.isEmpty {
+                        print("DEBUG: [VIDEO MANAGER] Stopping invisible video mid: \(videoMid) and starting next visible video")
+                        NotificationCenter.default.post(name: .pauseVideo, object: videoMid)
+                        currentPlayingMid = nil
+                        
+                        if autoStartNext {
+                            startNextVisibleVideo()
+                        }
+                    } else {
+                        print("DEBUG: [VIDEO MANAGER] Video mid \(videoMid) became invisible but no other videos are visible, keeping it playing")
+                        // Keep the video playing if no other videos are visible
                     }
                 } else {
                     print("DEBUG: [VIDEO MANAGER] Video mid \(videoMid) became invisible but was not playing")
@@ -174,6 +182,9 @@ class VideoManager: ObservableObject {
             print("DEBUG: [VIDEO MANAGER] Auto-starting next visible video mid: \(nextVideoMid)")
             NotificationCenter.default.post(name: .startVideo, object: nextVideoMid)
             videoQueue.removeAll { $0 == nextVideoMid }
+            
+            // Set this as the current playing video
+            currentPlayingMid = nextVideoMid
         } else {
             print("DEBUG: [VIDEO MANAGER] No visible videos in queue to start")
         }
