@@ -12,8 +12,8 @@ import AVFoundation
 // Global video manager to handle scroll-based video stopping
 class VideoManager: ObservableObject {
     static let shared = VideoManager()
-    @Published var currentPlayingInstanceId: String? = nil
-    private var videoQueue: [String] = [] // Queue of videos waiting to play
+    @Published var currentPlayingMid: String? = nil // Track which video mid is currently playing
+    private var videoQueue: [String] = [] // Queue of videos waiting to play (by mid)
     private var autoStartNext: Bool = true // Whether to auto-start next video
     private var visibleVideos: Set<String> = [] // Track which videos are visible (by mid)
     private var lastStartTime: [String: Date] = [:] // Track last start time for each video mid to prevent rapid cycling
@@ -21,41 +21,38 @@ class VideoManager: ObservableObject {
     
     private init() {}
     
-    func startPlaying(instanceId: String) {
-        // instanceId is now the video key (hash of tweet_mid + video_mid)
-        let videoKey = instanceId
-        
+    func startPlaying(videoMid: String) {
         // Check if we're trying to start the same video too quickly
-        if let lastStart = lastStartTime[videoKey],
+        if let lastStart = lastStartTime[videoMid],
            Date().timeIntervalSince(lastStart) < startThrottleInterval {
-            print("DEBUG: [VIDEO MANAGER] Throttling start for video \(videoKey) - too soon since last start")
+            print("DEBUG: [VIDEO MANAGER] Throttling start for video mid \(videoMid) - too soon since last start")
             return
         }
         
-        // Check if this video is already playing
-        if currentPlayingInstanceId == instanceId {
-            print("DEBUG: [VIDEO MANAGER] Video \(videoKey) is already playing, ignoring start request")
+        // Check if this video is already playing (singleton pattern by mid)
+        if currentPlayingMid == videoMid {
+            print("DEBUG: [VIDEO MANAGER] Video mid \(videoMid) is already playing, ignoring start request")
             return
         }
         
         // Pause any currently playing video
-        if let currentId = currentPlayingInstanceId, currentId != instanceId {
-            print("DEBUG: [VIDEO MANAGER] Pausing previous video: \(currentId)")
-            NotificationCenter.default.post(name: .pauseVideo, object: currentId)
+        if let currentMid = currentPlayingMid, currentMid != videoMid {
+            print("DEBUG: [VIDEO MANAGER] Pausing previous video mid: \(currentMid)")
+            NotificationCenter.default.post(name: .pauseVideo, object: currentMid)
         }
         
-        currentPlayingInstanceId = instanceId
-        lastStartTime[videoKey] = Date()
-        print("DEBUG: [VIDEO MANAGER] Now playing video: \(videoKey)")
+        currentPlayingMid = videoMid
+        lastStartTime[videoMid] = Date()
+        print("DEBUG: [VIDEO MANAGER] Now playing video mid: \(videoMid)")
         
         // Remove from queue if it was there
-        videoQueue.removeAll { $0 == instanceId }
+        videoQueue.removeAll { $0 == videoMid }
     }
     
-    func stopPlaying(instanceId: String) {
-        if currentPlayingInstanceId == instanceId {
-            currentPlayingInstanceId = nil
-            // print("DEBUG: [VIDEO MANAGER] Stopped playing video instance: \(instanceId)")
+    func stopPlaying(videoMid: String) {
+        if currentPlayingMid == videoMid {
+            currentPlayingMid = nil
+            print("DEBUG: [VIDEO MANAGER] Stopped playing video mid: \(videoMid)")
             
             // Auto-start next visible video if enabled
             if autoStartNext {
@@ -65,98 +62,93 @@ class VideoManager: ObservableObject {
     }
     
     func stopAllVideos() {
-        if let currentId = currentPlayingInstanceId {
-            // print("DEBUG: [VIDEO MANAGER] Stopping all videos due to scroll - current: \(currentId)")
-            NotificationCenter.default.post(name: .pauseVideo, object: currentId)
-            currentPlayingInstanceId = nil
+        if let currentMid = currentPlayingMid {
+            print("DEBUG: [VIDEO MANAGER] Stopping all videos due to scroll - current mid: \(currentMid)")
+            NotificationCenter.default.post(name: .pauseVideo, object: currentMid)
+            currentPlayingMid = nil
         }
         // Clear queue when scrolling
         videoQueue.removeAll()
-        // print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to scroll")
+        print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to scroll")
     }
     
     // Stop all videos when a sheet is presented
     func stopAllVideosForSheet() {
-        if let currentId = currentPlayingInstanceId {
-            // print("DEBUG: [VIDEO MANAGER] Stopping all videos due to sheet presentation - current: \(currentId)")
-            NotificationCenter.default.post(name: .pauseVideo, object: currentId)
-            currentPlayingInstanceId = nil
+        if let currentMid = currentPlayingMid {
+            print("DEBUG: [VIDEO MANAGER] Stopping all videos due to sheet presentation - current mid: \(currentMid)")
+            NotificationCenter.default.post(name: .pauseVideo, object: currentMid)
+            currentPlayingMid = nil
         }
         // Clear queue when sheet is presented
         videoQueue.removeAll()
-        // print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to sheet presentation")
+        print("DEBUG: [VIDEO MANAGER] Cleared all videos from queue due to sheet presentation")
     }
     
     // Clean up queue and check for next visible video
     func cleanupQueueAndStartNext() {
         removeInvisibleFromQueue()
-        if currentPlayingInstanceId == nil && autoStartNext {
+        if currentPlayingMid == nil && autoStartNext {
             startNextVisibleVideo()
         }
     }
     
     // Get video position for debugging (if needed)
-    func getVideoPosition(for instanceId: String) -> CGRect? {
+    func getVideoPosition(for videoMid: String) -> CGRect? {
         return nil // No longer tracking positions
     }
     
     // Simple visibility tracking based on onAppear/onDisappear
-    // Now handles multiple instances of the same video properly
-    func setVideoVisible(_ instanceId: String, isVisible: Bool) {
-        // instanceId is the video key (hash of tweet_mid + video_mid)
-        let videoKey = instanceId
-        
+    // Now handles multiple instances of the same video properly using mid as key
+    func setVideoVisible(_ videoMid: String, isVisible: Bool) {
         if isVisible {
-            let wasVisible = visibleVideos.contains(videoKey)
-            visibleVideos.insert(videoKey)
+            let wasVisible = visibleVideos.contains(videoMid)
+            visibleVideos.insert(videoMid)
             
             if !wasVisible {
-                print("DEBUG: [VIDEO MANAGER] Video became visible: \(videoKey)")
+                print("DEBUG: [VIDEO MANAGER] Video mid \(videoMid) became visible")
                 
                 // If no video is currently playing, try to start this one
-                if currentPlayingInstanceId == nil && autoStartNext {
-                    print("DEBUG: [VIDEO MANAGER] No video playing, starting newly visible video: \(videoKey)")
-                    NotificationCenter.default.post(name: .startVideo, object: videoKey)
-                } else if currentPlayingInstanceId == videoKey {
-                    print("DEBUG: [VIDEO MANAGER] Video \(videoKey) is already playing, no need to start again")
-                } else if currentPlayingInstanceId != nil {
-                    print("DEBUG: [VIDEO MANAGER] Another video (\(currentPlayingInstanceId!)) is already playing, adding \(videoKey) to queue")
-                    addToQueue(instanceId: videoKey)
+                if currentPlayingMid == nil && autoStartNext {
+                    print("DEBUG: [VIDEO MANAGER] No video playing, starting newly visible video mid: \(videoMid)")
+                    NotificationCenter.default.post(name: .startVideo, object: videoMid)
+                } else if currentPlayingMid == videoMid {
+                    print("DEBUG: [VIDEO MANAGER] Video mid \(videoMid) is already playing, no need to start again")
+                } else if currentPlayingMid != nil {
+                    print("DEBUG: [VIDEO MANAGER] Another video mid (\(currentPlayingMid!)) is already playing, adding \(videoMid) to queue")
+                    addToQueue(videoMid: videoMid)
                 }
             }
         } else {
-            let wasVisible = visibleVideos.contains(videoKey)
-            visibleVideos.remove(videoKey)
+            let wasVisible = visibleVideos.contains(videoMid)
+            visibleVideos.remove(videoMid)
             
             if wasVisible {
-                print("DEBUG: [VIDEO MANAGER] Video became invisible: \(videoKey)")
+                print("DEBUG: [VIDEO MANAGER] Video mid \(videoMid) became invisible")
                 
                 // Remove invisible videos from queue to prevent them from starting
                 removeInvisibleFromQueue()
                 
                 // If the invisible video was playing, stop it and start next
-                if currentPlayingInstanceId == videoKey {
-                    print("DEBUG: [VIDEO MANAGER] Stopping invisible video: \(videoKey)")
-                    NotificationCenter.default.post(name: .pauseVideo, object: videoKey)
-                    currentPlayingInstanceId = nil
+                if currentPlayingMid == videoMid {
+                    print("DEBUG: [VIDEO MANAGER] Stopping invisible video mid: \(videoMid)")
+                    NotificationCenter.default.post(name: .pauseVideo, object: videoMid)
+                    currentPlayingMid = nil
                     
                     if autoStartNext {
                         startNextVisibleVideo()
                     }
                 } else {
-                    print("DEBUG: [VIDEO MANAGER] Video \(videoKey) became invisible but was not playing")
+                    print("DEBUG: [VIDEO MANAGER] Video mid \(videoMid) became invisible but was not playing")
                 }
             }
         }
     }
     
     // Add video to queue for auto-play (only if visible)
-    func addToQueue(instanceId: String) {
-        // instanceId is the video key (hash of tweet_mid + video_mid)
-        let videoKey = instanceId
-        if !videoQueue.contains(videoKey) && currentPlayingInstanceId != videoKey && visibleVideos.contains(videoKey) {
-            videoQueue.append(videoKey)
-            // print("DEBUG: [VIDEO MANAGER] Added visible video to queue: \(videoKey), queue size: \(videoQueue.count)")
+    func addToQueue(videoMid: String) {
+        if !videoQueue.contains(videoMid) && currentPlayingMid != videoMid && visibleVideos.contains(videoMid) {
+            videoQueue.append(videoMid)
+            print("DEBUG: [VIDEO MANAGER] Added visible video mid to queue: \(videoMid), queue size: \(videoQueue.count)")
         }
     }
     
@@ -171,19 +163,19 @@ class VideoManager: ObservableObject {
         removeInvisibleFromQueue()
         
         // Find the first visible video in the queue
-        if let nextVideoId = videoQueue.first(where: { visibleVideos.contains($0) }) {
+        if let nextVideoMid = videoQueue.first(where: { visibleVideos.contains($0) }) {
             // Check if this video is already playing
-            if currentPlayingInstanceId == nextVideoId {
-                print("DEBUG: [VIDEO MANAGER] Video \(nextVideoId) is already playing, skipping start")
-                videoQueue.removeAll { $0 == nextVideoId }
+            if currentPlayingMid == nextVideoMid {
+                print("DEBUG: [VIDEO MANAGER] Video mid \(nextVideoMid) is already playing, skipping start")
+                videoQueue.removeAll { $0 == nextVideoMid }
                 return
             }
             
-            // print("DEBUG: [VIDEO MANAGER] Auto-starting next visible video: \(nextVideoId)")
-            NotificationCenter.default.post(name: .startVideo, object: nextVideoId)
-            videoQueue.removeAll { $0 == nextVideoId }
+            print("DEBUG: [VIDEO MANAGER] Auto-starting next visible video mid: \(nextVideoMid)")
+            NotificationCenter.default.post(name: .startVideo, object: nextVideoMid)
+            videoQueue.removeAll { $0 == nextVideoMid }
         } else {
-            // print("DEBUG: [VIDEO MANAGER] No visible videos in queue to start")
+            print("DEBUG: [VIDEO MANAGER] No visible videos in queue to start")
         }
     }
     
@@ -193,8 +185,8 @@ class VideoManager: ObservableObject {
         removeInvisibleFromQueue()
         
         // If no video is currently playing, try to start a visible one
-        if currentPlayingInstanceId == nil && autoStartNext {
-            // print("DEBUG: [VIDEO MANAGER] No video playing, checking for visible videos to start")
+        if currentPlayingMid == nil && autoStartNext {
+            print("DEBUG: [VIDEO MANAGER] No video playing, checking for visible videos to start")
             startNextVisibleVideo()
         }
     }
@@ -202,24 +194,24 @@ class VideoManager: ObservableObject {
     // Enable/disable auto-start next video
     func setAutoStartNext(_ enabled: Bool) {
         autoStartNext = enabled
-        // print("DEBUG: [VIDEO MANAGER] Auto-start next video: \(enabled)")
+        print("DEBUG: [VIDEO MANAGER] Auto-start next video: \(enabled)")
     }
     
     // Static method to trigger scroll detection from anywhere
     static func triggerScroll() {
-        // print("DEBUG: [VIDEO MANAGER] Scroll detected - stopping all videos")
+        print("DEBUG: [VIDEO MANAGER] Scroll detected - stopping all videos")
         NotificationCenter.default.post(name: .scrollStarted, object: nil)
     }
     
     // Static method to trigger scroll ended detection
     static func triggerScrollEnded() {
-        // print("DEBUG: [VIDEO MANAGER] Scroll ended - checking for visible videos")
+        print("DEBUG: [VIDEO MANAGER] Scroll ended - checking for visible videos")
         NotificationCenter.default.post(name: .scrollEnded, object: nil)
     }
     
     // Static method to trigger sheet presentation detection
     static func triggerSheetPresentation() {
-        // print("DEBUG: [VIDEO MANAGER] Sheet presentation detected - stopping all videos")
+        print("DEBUG: [VIDEO MANAGER] Sheet presentation detected - stopping all videos")
         NotificationCenter.default.post(name: .sheetPresented, object: nil)
     }
 }

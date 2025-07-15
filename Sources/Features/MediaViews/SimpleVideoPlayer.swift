@@ -171,8 +171,8 @@ struct HLSVideoPlayerWithControls: View {
         
         // Track instance creation
         Self.instanceCountLock.lock()
-        let count = Self.instanceCounts[videoKey, default: 0] + 1
-        Self.instanceCounts[videoKey] = count
+        let count = Self.instanceCounts[mid, default: 0] + 1
+        Self.instanceCounts[mid] = count
         Self.instanceCountLock.unlock()
         
         // Check if we already have too many instances for this video
@@ -206,16 +206,16 @@ struct HLSVideoPlayerWithControls: View {
                                             
                                             // Mute/Unmute button
                                             Button(action: {
-                                                if forceUnmuted {
-                                                    // Use local mute state for full-screen mode
-                                                    localMuted.toggle()
-                                                    videoCache.setMuteState(for: videoKey, isMuted: localMuted)
-                                                    playerMuted = localMuted
-                                                    print("DEBUG: [VIDEO \(videoKey)] Local mute state changed to: \(localMuted) (forceUnmuted mode)")
-                                                } else {
-                                                    // Use global mute state for normal mode
-                                                    muteState.toggleMute()
-                                                }
+                                                                if forceUnmuted {
+                    // Use local mute state for full-screen mode
+                    localMuted.toggle()
+                    videoCache.setMuteState(for: mid, isMuted: localMuted)
+                    playerMuted = localMuted
+                    print("DEBUG: [VIDEO \(videoKey)] Local mute state changed to: \(localMuted) (forceUnmuted mode)")
+                } else {
+                    // Use global mute state for normal mode
+                    muteState.toggleMute()
+                }
                                             }) {
                                                 Image(systemName: (forceUnmuted ? localMuted : muteState.isMuted) ? "speaker.slash.fill" : "speaker.wave.2.fill")
                                                     .font(.title2)
@@ -310,7 +310,7 @@ struct HLSVideoPlayerWithControls: View {
                     resetVideoState()
                     // Start playing again
                     if let player = player {
-                        videoManager.startPlaying(instanceId: playerInstanceId)
+                        videoManager.startPlaying(videoMid: mid)
                         player.play()
                         isPlaying = true
                     }
@@ -349,7 +349,7 @@ struct HLSVideoPlayerWithControls: View {
                 
                 // Only update visibility if video hasn't finished to prevent re-queuing
                 if !hasFinished {
-                    videoManager.setVideoVisible(videoKey, isVisible: isVisible)
+                    videoManager.setVideoVisible(mid, isVisible: isVisible)
                 }
                 
                 // Listen for pause notifications from video manager
@@ -358,7 +358,7 @@ struct HLSVideoPlayerWithControls: View {
                     object: nil,
                     queue: .main
                 ) { notification in
-                    if let pauseInstanceId = notification.object as? String, pauseInstanceId == videoKey {
+                    if let pauseMid = notification.object as? String, pauseMid == mid {
                         print("DEBUG: [VIDEO \(videoKey)] Received pause notification from video manager")
                         // Only pause if this instance is currently playing
                         if self.isPlaying {
@@ -374,7 +374,7 @@ struct HLSVideoPlayerWithControls: View {
                     object: nil,
                     queue: .main
                 ) { notification in
-                    if let startInstanceId = notification.object as? String, startInstanceId == videoKey {
+                    if let startMid = notification.object as? String, startMid == mid {
                         print("DEBUG: [VIDEO \(videoKey)] Received start notification from video manager")
                         // Only start if this instance is visible and not already playing
                         if self.isVisible && !self.isPlaying {
@@ -404,11 +404,11 @@ struct HLSVideoPlayerWithControls: View {
                 stopControlsTimer()
                 
                 // Notify video manager about visibility change
-                videoManager.setVideoVisible(videoKey, isVisible: false)
+                videoManager.setVideoVisible(mid, isVisible: false)
                 
                 // Pause video using cache, do not destroy instance
-                videoCache.pauseVideoPlayer(for: videoKey)
-                videoManager.stopPlaying(instanceId: videoKey)
+                videoCache.pauseVideoPlayer(for: mid)
+                videoManager.stopPlaying(videoMid: mid)
                 
                 // Do NOT call cleanupObservers() - keep the instance alive
                 // Only remove notification observers, keep the player instance
@@ -419,7 +419,7 @@ struct HLSVideoPlayerWithControls: View {
                 
                 // Only update visibility if video hasn't finished to prevent re-queuing
                 if !hasFinished {
-                    videoManager.setVideoVisible(videoKey, isVisible: newVisibility)
+                    videoManager.setVideoVisible(mid, isVisible: newVisibility)
                 }
             }
             .onChange(of: muteState.isMuted) { newMuteState in
@@ -444,8 +444,8 @@ struct HLSVideoPlayerWithControls: View {
         hasNotifiedFinished = false
         
         // Try to get cached player first
-        if let cachedPlayer = videoCache.getVideoPlayer(for: videoKey, url: videoURL) {
-            print("DEBUG: [VIDEO \(videoKey)] Got cached player for video key: \(videoKey)")
+        if let cachedPlayer = videoCache.getVideoPlayer(for: mid, url: videoURL) {
+            print("DEBUG: [VIDEO \(videoKey)] Got cached player for video mid: \(mid)")
             self.player = cachedPlayer
             
             // Set initial mute state
@@ -471,7 +471,7 @@ struct HLSVideoPlayerWithControls: View {
             // Handle auto-play logic
             handleAutoPlay(cachedPlayer)
         } else {
-            print("DEBUG: [VIDEO \(videoKey)] Failed to get or create player for video key: \(videoKey)")
+            print("DEBUG: [VIDEO \(videoKey)] Failed to get or create player for video mid: \(mid)")
             errorMessage = "Failed to create video player"
             isLoading = false
         }
@@ -487,7 +487,7 @@ struct HLSVideoPlayerWithControls: View {
             if duration > 0 && currentTime >= duration - 0.5 && !hasNotifiedFinished {
                 hasNotifiedFinished = true
                 hasFinished = true // Mark video as finished
-                self.videoManager.stopPlaying(instanceId: videoKey)
+                self.videoManager.stopPlaying(videoMid: mid)
                 print("DEBUG: [VIDEO \(videoKey)] Video finished in HLSVideoPlayerWithControls")
                 self.resetVideoState()
                 self.onVideoFinished?()
@@ -504,7 +504,7 @@ struct HLSVideoPlayerWithControls: View {
                 if !self.hasNotifiedFinished {
                     self.hasNotifiedFinished = true
                     self.hasFinished = true // Mark video as finished
-                    self.videoManager.stopPlaying(instanceId: videoKey)
+                    self.videoManager.stopPlaying(videoMid: mid)
                     print("DEBUG: [VIDEO \(videoKey)] Video finished via AVPlayerItemDidPlayToEndTime notification")
                     print("DEBUG: [VIDEO \(videoKey)] Video URL: \(self.videoURL.absoluteString)")
                     print("DEBUG: [VIDEO \(videoKey)] Final duration: \(self.duration) seconds")
@@ -522,16 +522,16 @@ struct HLSVideoPlayerWithControls: View {
             if self.forcePlay {
                 // Force play mode (for full-screen) - stop all other videos and start this one
                 self.videoManager.stopAllVideosForSheet()
-                self.videoManager.startPlaying(instanceId: videoKey)
+                self.videoManager.startPlaying(videoMid: mid)
                 player.play()
                 self.isPlaying = true
-            } else if self.videoManager.currentPlayingInstanceId == nil {
-                self.videoManager.startPlaying(instanceId: videoKey)
+            } else if self.videoManager.currentPlayingMid == nil {
+                self.videoManager.startPlaying(videoMid: mid)
                 player.play()
                 self.isPlaying = true
             } else {
                 // Add to queue if another video is playing
-                self.videoManager.addToQueue(instanceId: videoKey)
+                self.videoManager.addToQueue(videoMid: mid)
             }
         } else {
             self.isPlaying = false
@@ -558,16 +558,16 @@ struct HLSVideoPlayerWithControls: View {
                 if self.forcePlay {
                     // Force play mode (for full-screen) - stop all other videos and start this one
                     self.videoManager.stopAllVideosForSheet()
-                    self.videoManager.startPlaying(instanceId: videoKey)
+                    self.videoManager.startPlaying(videoMid: mid)
                     player.play()
                     self.isPlaying = true
-                } else if self.videoManager.currentPlayingInstanceId == nil {
-                    self.videoManager.startPlaying(instanceId: videoKey)
+                } else if self.videoManager.currentPlayingMid == nil {
+                    self.videoManager.startPlaying(videoMid: mid)
                     player.play()
                     self.isPlaying = true
                 } else {
                     // Add to queue if another video is playing
-                    self.videoManager.addToQueue(instanceId: videoKey)
+                    self.videoManager.addToQueue(videoMid: mid)
                 }
             }
                 
@@ -642,9 +642,9 @@ struct HLSVideoPlayerWithControls: View {
         
         if isPlaying {
             player.pause()
-            videoManager.stopPlaying(instanceId: videoKey)
+            videoManager.stopPlaying(videoMid: mid)
         } else {
-            videoManager.startPlaying(instanceId: videoKey)
+            videoManager.startPlaying(videoMid: mid)
             player.play()
         }
         isPlaying.toggle()
@@ -686,7 +686,7 @@ struct HLSVideoPlayerWithControls: View {
         showControls = true // Show controls when video finishes
         
         // Reset player to beginning using cache
-        videoCache.resetVideoPlayer(for: videoKey)
+        videoCache.resetVideoPlayer(for: mid)
         
         // Update local player reference if needed
         if let player = player {
