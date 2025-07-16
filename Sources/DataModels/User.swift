@@ -38,7 +38,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 return cached
             } else {
                 let client = HproseHttpClient()
-                client.timeout = 300
+                client.timeout = 30000
                 client.uri = "\(baseUrl)/webapi/"
                 let service = client.useService(HproseService.self) as? AnyObject
                 _hproseService = service
@@ -56,7 +56,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 return cached
             } else {
                 let client = HproseHttpClient()
-                client.timeout = 300
+                client.timeout = 30000
                 client.uri = "\(baseUrl)/webapi/"
                 let service = client.useService(HproseService.self) as? AnyObject
                 _uploadService = service
