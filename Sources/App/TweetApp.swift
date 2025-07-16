@@ -42,8 +42,11 @@ class AppState: ObservableObject {
 struct TweetApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var themeManager = ThemeManager.shared
+    @StateObject private var orientationManager = OrientationManager.shared
     @State private var showGlobalAlert = false
     @State private var globalAlertMessage = ""
+    
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     init() {
         // Initialize MetricKit
@@ -63,6 +66,7 @@ struct TweetApp: App {
                     // Only show content view after initialization is complete
                     ContentView()
                         .environmentObject(themeManager)
+                        .environmentObject(orientationManager)
                 } else {
                     // Show error state if initialization failed
                     VStack {

@@ -113,13 +113,14 @@ struct SimpleVideoPlayer: View {
                     .onAppear {
                         if forceUnmuted {
                             // Lock screen orientation to portrait and keep screen on
-                            UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
+                            OrientationManager.shared.lockToPortrait()
                             UIApplication.shared.isIdleTimerDisabled = true
                         }
                     }
                     .onDisappear {
                         if forceUnmuted {
                             // Re-enable screen rotation and allow screen to sleep
+                            OrientationManager.shared.unlockOrientation()
                             UIApplication.shared.isIdleTimerDisabled = false
                         }
                     }
@@ -148,13 +149,14 @@ struct SimpleVideoPlayer: View {
                     .onAppear {
                         if forceUnmuted {
                             // Lock screen orientation to portrait and keep screen on
-                            UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
+                            OrientationManager.shared.lockToPortrait()
                             UIApplication.shared.isIdleTimerDisabled = true
                         }
                     }
                     .onDisappear {
                         if forceUnmuted {
                             // Re-enable screen rotation and allow screen to sleep
+                            OrientationManager.shared.unlockOrientation()
                             UIApplication.shared.isIdleTimerDisabled = false
                         }
                     }
@@ -180,13 +182,14 @@ struct SimpleVideoPlayer: View {
                     .onAppear {
                         if forceUnmuted {
                             // Lock screen orientation to portrait and keep screen on
-                            UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
+                            OrientationManager.shared.lockToPortrait()
                             UIApplication.shared.isIdleTimerDisabled = true
                         }
                     }
                     .onDisappear {
                         if forceUnmuted {
                             // Re-enable screen rotation and allow screen to sleep
+                            OrientationManager.shared.unlockOrientation()
                             UIApplication.shared.isIdleTimerDisabled = false
                         }
                     }
