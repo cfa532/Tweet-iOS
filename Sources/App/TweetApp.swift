@@ -14,6 +14,9 @@ class AppState: ObservableObject {
             try await HproseInstance.shared.initialize()
             isInitialized = true
             
+            // Reset speaker mute preference to default (muted)
+            PreferenceHelper().resetSpeakerMuteToDefault()
+            
             // Refresh mute state from preferences after HproseInstance is ready
             MuteState.shared.refreshFromPreferences()
             

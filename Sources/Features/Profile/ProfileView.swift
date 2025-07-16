@@ -63,6 +63,27 @@ struct ProfileView: View {
     }
 
     // MARK: - Methods
+    /// Pause all videos when ProfileView disappears
+    private func pauseAllVideos() {
+        print("DEBUG: [ProfileView] Pausing all videos for user: \(user.mid)")
+        
+        // Pause all videos in pinned tweets
+        for tweet in pinnedTweets {
+            if let attachments = tweet.attachments {
+                for attachment in attachments {
+                    if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                        let mid = attachment.mid
+                        print("DEBUG: [ProfileView] Pausing pinned video with mid: \(mid)")
+                        VideoCacheManager.shared.pauseVideoPlayer(for: mid)
+                    }
+                }
+            }
+        }
+        
+        // Pause all videos in regular tweets (this will be handled by the view model)
+        // The view model's tweets are managed by TweetListView, so we need to pause them there
+    }
+    
     /// Refreshes the list of pinned tweets for the profile
     private func refreshPinnedTweets() async {
         do {
@@ -234,6 +255,11 @@ struct ProfileView: View {
             if let selectedTweet = selectedTweet {
                 TweetDetailView(tweet: selectedTweet)
             }
+        }
+        .onDisappear {
+            // Pause all videos when ProfileView disappears
+            print("DEBUG: [ProfileView] View disappeared, pausing all videos")
+            pauseAllVideos()
         }
     }
 

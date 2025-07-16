@@ -139,6 +139,8 @@ struct HLSVideoPlayerWithControls: View {
     @State private var hasNotifiedFinished = false
     @State private var hasFinished = false // Track if video has finished to prevent re-queuing
     @State private var localMuted: Bool = false // Local mute state for forceUnmuted mode
+    @State private var isSettingUpPlayer = false // Flag to prevent mute state changes during setup
+
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
     
@@ -182,16 +184,17 @@ struct HLSVideoPlayerWithControls: View {
                                             
                                             // Mute/Unmute button
                                             Button(action: {
-                                                                if forceUnmuted {
-                    // Use local mute state for full-screen mode
-                    localMuted.toggle()
-                    videoCache.setMuteState(for: mid, isMuted: localMuted)
-                    playerMuted = localMuted
-                    print("DEBUG: [VIDEO \(mid)] Local mute state changed to: \(localMuted) (forceUnmuted mode)")
-                } else {
-                    // Use global mute state for normal mode
-                    muteState.toggleMute()
-                }
+                                                if forceUnmuted {
+                                                    // Use local mute state for full-screen mode
+                                                    localMuted.toggle()
+                                                    videoCache.setMuteState(for: mid, isMuted: localMuted)
+                                                    playerMuted = localMuted
+                                                    print("DEBUG: [VIDEO \(mid)] Local mute state changed to: \(localMuted) (forceUnmuted mode)")
+                                                } else {
+                                                    // Use global mute state for MediaCell
+                                                    muteState.toggleMute()
+                                                    print("DEBUG: [VIDEO \(mid)] Global mute state toggled to: \(muteState.isMuted)")
+                                                }
                                             }) {
                                                 Image(systemName: (forceUnmuted ? localMuted : muteState.isMuted) ? "speaker.slash.fill" : "speaker.wave.2.fill")
                                                     .font(.title2)
@@ -234,15 +237,26 @@ struct HLSVideoPlayerWithControls: View {
                             }
                         )
                         .onReceive(player.publisher(for: \.isMuted)) { muted in
+                            print("DEBUG: [VIDEO \(mid)] onReceive triggered - muted: \(muted), forceUnmuted: \(forceUnmuted)")
+                            
+                            // Skip if we're in the middle of setting up the player
+                            if isSettingUpPlayer {
+                                print("DEBUG: [VIDEO \(mid)] Skipping mute state change during player setup")
+                                return
+                            }
+                            
                             // This automatically updates when the user interacts with native controls
                             if playerMuted != muted {
+                                print("DEBUG: [VIDEO \(mid)] Player mute state changed from \(playerMuted) to \(muted)")
                                 playerMuted = muted
+                                
                                 if forceUnmuted {
                                     // Update local mute state for full-screen mode
                                     localMuted = muted
                                     print("DEBUG: [VIDEO \(mid)] Native controls changed local mute to: \(muted) (forceUnmuted mode)")
                                 } else {
-                                    // Sync with global mute state when user interacts with native controls
+                                    // For MediaCell videos, sync with global mute state when user interacts with native controls
+                                    // Only update if this is a user-initiated change, not a programmatic one
                                     if muteState.isMuted != muted {
                                         print("DEBUG: [VIDEO \(mid)] Native controls changed mute to: \(muted), updating global state")
                                         muteState.setMuted(muted)
@@ -356,6 +370,13 @@ struct HLSVideoPlayerWithControls: View {
             }
             .onChange(of: isVisible) { newVisibility in
                 print("DEBUG: [VIDEO \(mid)] Visibility changed to: \(newVisibility)")
+                
+                // Pause video when it becomes invisible
+                if !newVisibility {
+                    print("DEBUG: [VIDEO \(mid)] Video became invisible, pausing")
+                    videoCache.pauseVideoPlayer(for: mid)
+                    isPlaying = false
+                }
             }
             .onChange(of: muteState.isMuted) { newMuteState in
                 // Update player mute state when global mute state changes
@@ -368,12 +389,14 @@ struct HLSVideoPlayerWithControls: View {
                     print("DEBUG: [VIDEO \(mid)] Ignoring global mute state change (forceUnmuted mode)")
                 }
             }
+
         }
     }
     
     private func setupPlayer() {
         print("DEBUG: [VIDEO \(mid)] Setting up HLS player for URL: \(videoURL.absoluteString), mid: \(mid)")
         
+        isSettingUpPlayer = true // Prevent mute state changes during setup
         isLoading = true
         errorMessage = nil
         hasNotifiedFinished = false
@@ -389,12 +412,12 @@ struct HLSVideoPlayerWithControls: View {
                 cachedPlayer.isMuted = false
                 localMuted = false
                 playerMuted = false
-                print("DEBUG: [VIDEO \(mid)] Setting initial mute state: false (forceUnmuted mode)")
+                print("DEBUG: [VIDEO \(mid)] Fullscreen video - muted: false")
             } else {
                 // For normal mode, use global mute state
                 cachedPlayer.isMuted = muteState.isMuted
                 playerMuted = muteState.isMuted
-                print("DEBUG: [VIDEO \(mid)] Setting initial mute state: \(cachedPlayer.isMuted) (globalMuted: \(muteState.isMuted))")
+                print("DEBUG: [VIDEO \(mid)] Normal video - muted: \(muteState.isMuted)")
             }
             
             // Set up observers for the player
@@ -405,10 +428,14 @@ struct HLSVideoPlayerWithControls: View {
             
             // Handle auto-play logic
             handleAutoPlay(cachedPlayer)
+            
+            isSettingUpPlayer = false // Allow mute state changes after setup
+            print("DEBUG: [VIDEO \(mid)] Player setup complete")
         } else {
             print("DEBUG: [VIDEO \(mid)] Failed to get or create player for video mid: \(mid)")
             errorMessage = "Failed to create video player"
             isLoading = false
+            isSettingUpPlayer = false // Clear flag on error
         }
     }
     

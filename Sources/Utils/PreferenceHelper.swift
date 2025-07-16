@@ -31,6 +31,10 @@ class PreferenceHelper {
         return userDefaults.bool(forKey: "speakerMuted")
     }
     
+    func resetSpeakerMuteToDefault() {
+        userDefaults.removeObject(forKey: "speakerMuted")
+    }
+    
     // MARK: - Dark Mode
     func setDarkMode(_ isEnabled: Bool) {
         userDefaults.set(isEnabled, forKey: "darkModeEnabled")
