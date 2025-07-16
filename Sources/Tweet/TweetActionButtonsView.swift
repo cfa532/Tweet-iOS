@@ -164,10 +164,7 @@ struct TweetActionButtonsView: View {
             }
         }
         .onChange(of: showCommentCompose) { isPresented in
-            if isPresented {
-                // Trigger video stop when comment compose sheet is presented
-                VideoManager.triggerSheetPresentation()
-            }
+            // Video management is now handled locally per grid
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(activityItems: [tweetShareText(tweet)])

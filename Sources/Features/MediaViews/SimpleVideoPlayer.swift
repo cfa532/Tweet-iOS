@@ -113,7 +113,7 @@ struct SimpleVideoPlayer: View {
     }
 }
 
-/// HLSVideoPlayer with custom controls
+@available(iOS 16.0, *)
 struct HLSVideoPlayerWithControls: View {
     let videoURL: URL
     let mid: String // Add mid field for caching
@@ -128,9 +128,9 @@ struct HLSVideoPlayerWithControls: View {
     let forceUnmuted: Bool
     
     @State private var player: AVPlayer?
-    @State private var isPlaying = false
     @State private var isLoading = true
     @State private var errorMessage: String?
+    @State private var isPlaying = false
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
     @State private var showControls = true
@@ -139,7 +139,6 @@ struct HLSVideoPlayerWithControls: View {
     @State private var hasNotifiedFinished = false
     @State private var hasFinished = false // Track if video has finished to prevent re-queuing
     @State private var localMuted: Bool = false // Local mute state for forceUnmuted mode
-    @StateObject private var videoManager = VideoManager.shared
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
     
@@ -287,7 +286,6 @@ struct HLSVideoPlayerWithControls: View {
                     resetVideoState()
                     // Start playing again
                     if let player = player {
-                        videoManager.startPlaying(videoMid: mid)
                         player.play()
                         isPlaying = true
                     }
@@ -332,58 +330,6 @@ struct HLSVideoPlayerWithControls: View {
                     hasNotifiedFinished = false
                 }
                 
-                // Update visibility
-                videoManager.setVideoVisible(mid, isVisible: isVisible)
-                
-                // Listen for pause notifications from video manager
-                NotificationCenter.default.addObserver(
-                    forName: .pauseVideo,
-                    object: nil,
-                    queue: .main
-                ) { notification in
-                    if let pauseMid = notification.object as? String, pauseMid == mid {
-                        print("DEBUG: [VIDEO \(mid)] Received pause notification from video manager")
-                        // Only pause if this instance is currently playing
-                        if self.isPlaying {
-                            self.player?.pause()
-                            self.isPlaying = false
-                        }
-                    }
-                }
-                
-                // Listen for start notifications from video manager
-                NotificationCenter.default.addObserver(
-                    forName: .startVideo,
-                    object: nil,
-                    queue: .main
-                ) { notification in
-                    if let startMid = notification.object as? String, startMid == mid {
-                        print("DEBUG: [VIDEO \(mid)] Received start notification from video manager")
-                        // Only start if this instance is visible and not already playing
-                        if self.isVisible && !self.isPlaying {
-                            if let player = self.player {
-                                print("DEBUG: [VIDEO \(mid)] Starting player from notification")
-                                player.play()
-                                self.isPlaying = true
-                            } else {
-                                print("DEBUG: [VIDEO \(mid)] Player not ready, setting up player first")
-                                // If player is not ready, set it up first
-                                self.setupPlayer()
-                                // Try to start again after a short delay
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    if let player = self.player, self.isVisible && !self.isPlaying {
-                                        print("DEBUG: [VIDEO \(mid)] Starting player after setup")
-                                        player.play()
-                                        self.isPlaying = true
-                                    }
-                                }
-                            }
-                        } else {
-                            print("DEBUG: [VIDEO \(mid)] Not starting - isVisible: \(self.isVisible), isPlaying: \(self.isPlaying)")
-                        }
-                    }
-                }
-                
                 if player == nil {
                     setupPlayer()
                 }
@@ -401,12 +347,8 @@ struct HLSVideoPlayerWithControls: View {
                 // Stop controls timer
                 stopControlsTimer()
                 
-                // Notify video manager about visibility change
-                videoManager.setVideoVisible(mid, isVisible: false)
-                
                 // Pause video using cache, do not destroy instance
                 videoCache.pauseVideoPlayer(for: mid)
-                videoManager.stopPlaying(videoMid: mid)
                 
                 // Do NOT call cleanupObservers() - keep the instance alive
                 // Only remove notification observers, keep the player instance
@@ -414,9 +356,6 @@ struct HLSVideoPlayerWithControls: View {
             }
             .onChange(of: isVisible) { newVisibility in
                 print("DEBUG: [VIDEO \(mid)] Visibility changed to: \(newVisibility)")
-                
-                // Update visibility
-                videoManager.setVideoVisible(mid, isVisible: newVisibility)
             }
             .onChange(of: muteState.isMuted) { newMuteState in
                 // Update player mute state when global mute state changes
@@ -483,7 +422,6 @@ struct HLSVideoPlayerWithControls: View {
             if duration > 0 && currentTime >= duration - 0.5 && !hasNotifiedFinished {
                 hasNotifiedFinished = true
                 hasFinished = true // Mark video as finished
-                self.videoManager.stopPlaying(videoMid: mid)
                 print("DEBUG: [VIDEO \(mid)] Video finished in HLSVideoPlayerWithControls")
                 self.resetVideoState()
                 self.onVideoFinished?()
@@ -500,7 +438,6 @@ struct HLSVideoPlayerWithControls: View {
                 if !self.hasNotifiedFinished {
                     self.hasNotifiedFinished = true
                     self.hasFinished = true // Mark video as finished
-                    self.videoManager.stopPlaying(videoMid: mid)
                     print("DEBUG: [VIDEO \(mid)] Video finished via AVPlayerItemDidPlayToEndTime notification")
                     print("DEBUG: [VIDEO \(mid)] Video URL: \(self.videoURL.absoluteString)")
                     print("DEBUG: [VIDEO \(mid)] Final duration: \(self.duration) seconds")
@@ -516,18 +453,13 @@ struct HLSVideoPlayerWithControls: View {
         // Only play if autoPlay is true
         if autoPlay {
             if self.forcePlay {
-                // Force play mode (for full-screen) - stop all other videos and start this one
-                self.videoManager.stopAllVideosForSheet()
-                self.videoManager.startPlaying(videoMid: mid)
-                player.play()
-                self.isPlaying = true
-            } else if self.videoManager.currentPlayingMid == nil {
-                self.videoManager.startPlaying(videoMid: mid)
+                // Force play mode (for full-screen) - start this video
                 player.play()
                 self.isPlaying = true
             } else {
-                // Add to queue if another video is playing
-                self.videoManager.addToQueue(videoMid: mid)
+                // Normal auto-play mode
+                player.play()
+                self.isPlaying = true
             }
         } else {
             self.isPlaying = false
@@ -549,21 +481,16 @@ struct HLSVideoPlayerWithControls: View {
                 self.isLoading = false
                 self.duration = playerItem.duration.seconds
                 
-                            // If this video should auto-play and no video is currently playing, start it
+                            // If this video should auto-play, start it
             if self.autoPlay {
                 if self.forcePlay {
-                    // Force play mode (for full-screen) - stop all other videos and start this one
-                    self.videoManager.stopAllVideosForSheet()
-                    self.videoManager.startPlaying(videoMid: mid)
-                    player.play()
-                    self.isPlaying = true
-                } else if self.videoManager.currentPlayingMid == nil {
-                    self.videoManager.startPlaying(videoMid: mid)
+                    // Force play mode (for full-screen) - start this video
                     player.play()
                     self.isPlaying = true
                 } else {
-                    // Add to queue if another video is playing
-                    self.videoManager.addToQueue(videoMid: mid)
+                    // Normal auto-play mode
+                    player.play()
+                    self.isPlaying = true
                 }
             }
                 
@@ -638,9 +565,7 @@ struct HLSVideoPlayerWithControls: View {
         
         if isPlaying {
             player.pause()
-            videoManager.stopPlaying(videoMid: mid)
         } else {
-            videoManager.startPlaying(videoMid: mid)
             player.play()
         }
         isPlaying.toggle()
@@ -722,28 +647,10 @@ struct HLSVideoPlayerWithControls: View {
     }
 }
 
-// Scroll detector for stopping videos during scroll
-struct ScrollDetector: ViewModifier {
-    @StateObject private var videoManager = VideoManager.shared
-    @State private var lastScrollTime = Date()
-    
-    func body(content: Content) -> some View {
-        content
-            .onReceive(NotificationCenter.default.publisher(for: .scrollStarted)) { _ in
-                // Stop all videos when scroll is detected
-                videoManager.stopAllVideos()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .sheetPresented)) { _ in
-                // Stop all videos when sheet is presented
-                videoManager.stopAllVideosForSheet()
-            }
-    }
-}
-
 // Extension to easily add scroll detection to any view
 extension View {
     func detectScroll() -> some View {
-        self.modifier(ScrollDetector())
+        self
     }
 }
 

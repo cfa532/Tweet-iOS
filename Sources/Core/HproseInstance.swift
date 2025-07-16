@@ -186,8 +186,6 @@ final class HproseInstance: ObservableObject {
     ///   - entry: The backend entry point (default: "get_tweet_feed").
     /// - Returns: An array of Tweet objects (non-nil, up to pageSize).
     ///
-    /// The backend may return an array containing nils. If the returned array size is less than pageSize, it means there are no more tweets on the backend.
-    /// This function accumulates only non-nil tweets and stops fetching when the backend returns fewer than pageSize items.
     func fetchTweetFeed(
         user: User,
         pageNumber: UInt = 0,

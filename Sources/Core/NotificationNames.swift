@@ -44,11 +44,4 @@ extension Notification.Name {
     static let tweetDeletdFailed = Notification.Name("TweetDeletdFailed")
     static let commentPublishFailed = Notification.Name("CommentPublishFailed")
     static let commentDeleteFailed = Notification.Name("CommentDeleteFailed")
-    
-    // VideoManager
-    static let pauseVideo = Notification.Name("pauseVideo")
-    static let scrollStarted = Notification.Name("scrollStarted")
-    static let startVideo = Notification.Name("startVideo")
-    static let sheetPresented = Notification.Name("sheetPresented")
-    static let scrollEnded = Notification.Name("scrollEnded")
 }

@@ -130,6 +130,9 @@ struct MediaBrowserView: View {
             isVisible = false
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
+            
+            // Pause all videos when exiting full-screen
+            pauseAllVideos()
         }
     }
     
@@ -184,6 +187,22 @@ struct MediaBrowserView: View {
     
     private func isImageAttachment(_ attachment: MimeiFileType) -> Bool {
         return attachment.type.lowercased() == "image"
+    }
+    
+    /// Pause all videos when exiting full-screen mode
+    private func pauseAllVideos() {
+        print("DEBUG: [MediaBrowserView] Pausing all videos when exiting full-screen")
+        
+        // Pause all video attachments in this tweet
+        for attachment in attachments {
+            if isVideoAttachment(attachment) {
+                let mid = attachment.mid
+                print("DEBUG: [MediaBrowserView] Pausing video with mid: \(mid)")
+                
+                // Pause the video (keep it in memory for potential quick return)
+                VideoCacheManager.shared.pauseVideoPlayer(for: mid)
+            }
+        }
     }
     
 
