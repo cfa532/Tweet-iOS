@@ -86,6 +86,7 @@ struct MediaBrowserView: View {
                 .transition(.opacity)
             }
         }
+        .statusBar(hidden: true)
         .offset(y: dragOffset.height)
         .scaleEffect(1.0 - abs(dragOffset.height) / 1000.0)
         .opacity(1.0 - abs(dragOffset.height) / 500.0)
@@ -204,10 +205,6 @@ struct MediaBrowserView: View {
             }
         }
     }
-    
-
-    
-
     
     @ViewBuilder
     private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
