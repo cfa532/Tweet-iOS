@@ -222,7 +222,7 @@ struct MediaBrowserView: View {
             isVisible: true, // Always visible in full-screen
             contentType: attachment.type,
             cellAspectRatio: nil,
-            videoAspectRatio: nil,
+            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
             showNativeControls: true,
             forceUnmuted: true, // Force unmuted in full-screen
             onVideoTap: {

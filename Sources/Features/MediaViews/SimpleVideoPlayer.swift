@@ -70,34 +70,175 @@ struct SimpleVideoPlayer: View {
     private var cacheKey: String {
         return forceUnmuted ? "\(mid)_fullscreen" : mid
     }
+    
+    // Determine if video is portrait or landscape
+    private var isVideoPortrait: Bool {
+        guard let videoAR = videoAspectRatio, videoAR > 0 else { return false }
+        return videoAR < 1.0
+    }
+    
+    // Determine if video is landscape
+    private var isVideoLandscape: Bool {
+        guard let videoAR = videoAspectRatio, videoAR > 0 else { return false }
+        return videoAR > 1.0
+    }
 
     var body: some View {
         GeometryReader { geometry in
-            if let cellAR = cellAspectRatio, let videoAR = videoAspectRatio {
-                let cellWidth = geometry.size.width
-                let cellHeight = cellWidth / cellAR
-                let needsVerticalPadding = videoAR < cellAR
-                let videoHeight = cellWidth / videoAR
-                let overflow = videoHeight - cellHeight
-                let pad = needsVerticalPadding && overflow > 0 ? overflow / 2 : 0
-                ZStack {
-                    HLSDirectoryVideoPlayer(
-                        baseURL: url,
-                        mid: cacheKey,
-                        isVisible: isVisible,
-                        isMuted: forceUnmuted ? false : muteState.isMuted,
-                        autoPlay: autoPlay,
-                        onMuteChanged: onMuteChanged,
-                        onVideoFinished: onVideoFinished,
-                        onVideoTap: onVideoTap,
-                        showCustomControls: showCustomControls,
-                        forcePlay: forcePlay,
-                        forceUnmuted: forceUnmuted
-                    )
-                    .offset(y: -pad)    // align the video vertically in the middle
-                    .aspectRatio(videoAR, contentMode: .fill)
+            let screenWidth = geometry.size.width
+            let screenHeight = geometry.size.height
+            
+            if let videoAR = videoAspectRatio, videoAR > 0 {
+                if forceUnmuted {
+                    // Full-screen mode: apply new display logic
+                                    if isVideoPortrait {
+                    // Portrait video: fit on full screen
+                    ZStack {
+                        HLSDirectoryVideoPlayer(
+                            baseURL: url,
+                            mid: cacheKey,
+                            isVisible: isVisible,
+                            isMuted: forceUnmuted ? false : muteState.isMuted,
+                            autoPlay: autoPlay,
+                            onMuteChanged: onMuteChanged,
+                            onVideoFinished: onVideoFinished,
+                            onVideoTap: onVideoTap,
+                            showCustomControls: showCustomControls,
+                            forcePlay: forcePlay,
+                            forceUnmuted: forceUnmuted
+                        )
+                        .aspectRatio(videoAR, contentMode: .fit)
+                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                    }
+                    .onAppear {
+                        if forceUnmuted {
+                            // Lock screen orientation to portrait and keep screen on
+                            UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
+                            UIApplication.shared.isIdleTimerDisabled = true
+                        }
+                    }
+                    .onDisappear {
+                        if forceUnmuted {
+                            // Re-enable screen rotation and allow screen to sleep
+                            UIApplication.shared.isIdleTimerDisabled = false
+                        }
+                    }
+                                    } else if isVideoLandscape {
+                    // Landscape video: rotate -90 degrees to fit on portrait device
+                    ZStack {
+                        HLSDirectoryVideoPlayer(
+                            baseURL: url,
+                            mid: cacheKey,
+                            isVisible: isVisible,
+                            isMuted: forceUnmuted ? false : muteState.isMuted,
+                            autoPlay: autoPlay,
+                            onMuteChanged: onMuteChanged,
+                            onVideoFinished: onVideoFinished,
+                            onVideoTap: onVideoTap,
+                            showCustomControls: showCustomControls,
+                            forcePlay: forcePlay,
+                            forceUnmuted: forceUnmuted
+                        )
+                        .aspectRatio(videoAR, contentMode: .fit)
+                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                        .rotationEffect(.degrees(-90))
+                        .scaleEffect(screenHeight / screenWidth) // Scale to fit the rotated video
+                    }
+                    .onAppear {
+                        if forceUnmuted {
+                            // Lock screen orientation to portrait and keep screen on
+                            UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
+                            UIApplication.shared.isIdleTimerDisabled = true
+                        }
+                    }
+                    .onDisappear {
+                        if forceUnmuted {
+                            // Re-enable screen rotation and allow screen to sleep
+                            UIApplication.shared.isIdleTimerDisabled = false
+                        }
+                    }
+                                    } else {
+                    // Square video: fit on full screen
+                    ZStack {
+                        HLSDirectoryVideoPlayer(
+                            baseURL: url,
+                            mid: cacheKey,
+                            isVisible: isVisible,
+                            isMuted: forceUnmuted ? false : muteState.isMuted,
+                            autoPlay: autoPlay,
+                            onMuteChanged: onMuteChanged,
+                            onVideoFinished: onVideoFinished,
+                            onVideoTap: onVideoTap,
+                            showCustomControls: showCustomControls,
+                            forcePlay: forcePlay,
+                            forceUnmuted: forceUnmuted
+                        )
+                        .aspectRatio(1.0, contentMode: .fit)
+                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                    }
+                    .onAppear {
+                        if forceUnmuted {
+                            // Lock screen orientation to portrait and keep screen on
+                            UIDevice.current.setValue(UIInterfaceOrientation.portrait.rawValue, forKey: "orientation")
+                            UIApplication.shared.isIdleTimerDisabled = true
+                        }
+                    }
+                    .onDisappear {
+                        if forceUnmuted {
+                            // Re-enable screen rotation and allow screen to sleep
+                            UIApplication.shared.isIdleTimerDisabled = false
+                        }
+                    }
+                    }
+                } else {
+                    // Normal mode: use original logic with cellAspectRatio
+                    if let cellAR = cellAspectRatio {
+                        let cellWidth = geometry.size.width
+                        let cellHeight = cellWidth / cellAR
+                        let needsVerticalPadding = videoAR < cellAR
+                        let videoHeight = cellWidth / videoAR
+                        let overflow = videoHeight - cellHeight
+                        let pad = needsVerticalPadding && overflow > 0 ? overflow / 2 : 0
+                        ZStack {
+                            HLSDirectoryVideoPlayer(
+                                baseURL: url,
+                                mid: cacheKey,
+                                isVisible: isVisible,
+                                isMuted: forceUnmuted ? false : muteState.isMuted,
+                                autoPlay: autoPlay,
+                                onMuteChanged: onMuteChanged,
+                                onVideoFinished: onVideoFinished,
+                                onVideoTap: onVideoTap,
+                                showCustomControls: showCustomControls,
+                                forcePlay: forcePlay,
+                                forceUnmuted: forceUnmuted
+                            )
+                            .offset(y: -pad)    // align the video vertically in the middle
+                            .aspectRatio(videoAR, contentMode: .fill)
+                        }
+                    } else {
+                        // Fallback when no cellAspectRatio is available
+                        ZStack {
+                            HLSDirectoryVideoPlayer(
+                                baseURL: url,
+                                mid: cacheKey,
+                                isVisible: isVisible,
+                                isMuted: forceUnmuted ? false : muteState.isMuted,
+                                autoPlay: autoPlay,
+                                onMuteChanged: onMuteChanged,
+                                onVideoFinished: onVideoFinished,
+                                onVideoTap: onVideoTap,
+                                showCustomControls: showCustomControls,
+                                forcePlay: forcePlay,
+                                forceUnmuted: forceUnmuted
+                            )
+                            .aspectRatio(videoAR, contentMode: .fit)
+                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                        }
+                    }
                 }
             } else {
+                // Fallback when no aspect ratio is available
                 ZStack {
                     HLSDirectoryVideoPlayer(
                         baseURL: url,
@@ -112,6 +253,8 @@ struct SimpleVideoPlayer: View {
                         forcePlay: forcePlay,
                         forceUnmuted: forceUnmuted
                     )
+                    .aspectRatio(16.0/9.0, contentMode: .fit)
+                    .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                 }
             }
         }
