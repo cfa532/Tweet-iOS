@@ -196,11 +196,11 @@ struct MediaBrowserView: View {
         // Pause all video attachments in this tweet
         for attachment in attachments {
             if isVideoAttachment(attachment) {
-                let mid = attachment.mid
-                print("DEBUG: [MediaBrowserView] Pausing video with mid: \(mid)")
+                let fullscreenMid = "\(attachment.mid)_fullscreen"
+                print("DEBUG: [MediaBrowserView] Pausing fullscreen video with mid: \(fullscreenMid)")
                 
-                // Pause the video (keep it in memory for potential quick return)
-                VideoCacheManager.shared.pauseVideoPlayer(for: mid)
+                // Pause the fullscreen video (keep it in memory for potential quick return)
+                VideoCacheManager.shared.pauseVideoPlayer(for: fullscreenMid)
             }
         }
     }

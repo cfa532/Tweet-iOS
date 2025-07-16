@@ -65,6 +65,11 @@ struct SimpleVideoPlayer: View {
     var showCustomControls: Bool = true // Whether to show custom video controls
     var forcePlay: Bool = false // Force play regardless of video manager (for full-screen)
     @EnvironmentObject var muteState: MuteState
+    
+    // Use different cache key for fullscreen videos to isolate them
+    private var cacheKey: String {
+        return forceUnmuted ? "\(mid)_fullscreen" : mid
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -78,7 +83,7 @@ struct SimpleVideoPlayer: View {
                 ZStack {
                     HLSDirectoryVideoPlayer(
                         baseURL: url,
-                        mid: mid,
+                        mid: cacheKey,
                         isVisible: isVisible,
                         isMuted: forceUnmuted ? false : muteState.isMuted,
                         autoPlay: autoPlay,
@@ -96,7 +101,7 @@ struct SimpleVideoPlayer: View {
                 ZStack {
                     HLSDirectoryVideoPlayer(
                         baseURL: url,
-                        mid: mid,
+                        mid: cacheKey,
                         isVisible: isVisible,
                         isMuted: forceUnmuted ? false : muteState.isMuted,
                         autoPlay: autoPlay,
