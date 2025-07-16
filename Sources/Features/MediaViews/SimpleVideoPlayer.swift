@@ -140,9 +140,10 @@ struct SimpleVideoPlayer: View {
                             forceUnmuted: forceUnmuted
                         )
                         .aspectRatio(videoAR, contentMode: .fit)
-                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                        .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2) // Reduce size by 2 points (1 point border on each side)
                         .rotationEffect(.degrees(-90))
                         .scaleEffect(screenHeight / screenWidth) // Scale to fit the rotated video
+                        .background(Color.black)
                     }
                     .onAppear {
                         if forceUnmuted {
