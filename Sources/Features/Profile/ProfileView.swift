@@ -321,6 +321,13 @@ struct ProfileView: View {
                     },
                     onTap: { tweet in
                         selectedTweet = tweet
+                    },
+                    onRemove: { tweetId in
+                        if tweetListType == .BOOKMARKS {
+                            bookmarks.removeAll { $0.mid == tweetId }
+                        } else {
+                            favorites.removeAll { $0.mid == tweetId }
+                        }
                     }
                 )
             }

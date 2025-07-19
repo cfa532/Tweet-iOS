@@ -101,7 +101,7 @@ class TweetCacheManager {
 
 // MARK: - Tweet Caching
 extension TweetCacheManager {
-    func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt) async -> [Tweet?] {
+    func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil) async -> [Tweet?] {
         return await withCheckedContinuation { continuation in
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
@@ -117,6 +117,12 @@ extension TweetCacheManager {
                            let tweetDict = try? JSONSerialization.jsonObject(with: tweetData) as? [String: Any] {
                             do {
                                 let tweet = try Tweet.from(dict: tweetDict)
+                                // Filter out private tweets if they don't belong to the current user
+                                if let currentUserId = currentUserId,
+                                   tweet.isPrivate == true && tweet.authorId != currentUserId {
+                                    tweets.append(nil)
+                                    continue
+                                }
                                 tweets.append(tweet)
                             } catch {
                                 print("Error processing tweet: \(error)")

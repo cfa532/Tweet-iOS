@@ -273,12 +273,11 @@ final class HproseInstance: ObservableObject {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                     tweet.author = try await fetchUser(tweet.authorId)
                     // Only show private tweets if the current user is the author
-//                    if tweet.isPrivate == true && tweet.authorId != appUser.mid {
-//                        tweets.append(nil)
-//                        continue
-//                    }
-                    // Save tweet back to cache
-                    //                        TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
+                    if tweet.isPrivate == true && tweet.authorId != appUser.mid {
+                        tweets.append(nil)
+                        continue
+                    }
+                    // Don't cache tweets from user profiles - only cache from main feed
                     tweets.append(tweet)
                 } catch {
                     print("Error processing tweet: \(error)")
@@ -323,12 +322,12 @@ final class HproseInstance: ObservableObject {
             do {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 tweet.author = try? await fetchUser(authorId)
-                TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                // Don't cache individual tweets - only cache from main feed
                 
                 if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
                     if await TweetCacheManager.shared.fetchTweet(mid: origId) == nil {
                         if let origTweet = try? await getTweet(tweetId: origId, authorId: origAuthorId) {
-                            TweetCacheManager.shared.saveTweet(origTweet, userId: origAuthorId)
+                            // Don't cache original tweets - only cache from main feed
                         }
                     }
                 }
@@ -543,7 +542,7 @@ final class HproseInstance: ObservableObject {
                     if (tweet.author == nil) {
                         tweet.author = try? await fetchUser(tweet.authorId)
                     }
-                    TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                    // Don't cache tweets from bookmarks/favorites - only cache from main feed
                     tweetsWithAuthors.append(tweet)
                 } catch {
                     print("Error processing tweet: \(error)")
@@ -610,9 +609,12 @@ final class HproseInstance: ObservableObject {
                 var favorites = tweet.favorites ?? [false, false, false]
                 favorites[UserActions.FAVORITE.rawValue] = isFavorite
                 let updatedFavorites = favorites
-                return await MainActor.run {
+                let updatedTweet = await MainActor.run {
                     return tweet.copy(favorites: updatedFavorites, favoriteCount: favoriteCount)
                 }
+                // Cache the updated tweet for main feed
+                TweetCacheManager.shared.saveTweet(updatedTweet, userId: appUser.mid)
+                return updatedTweet
             }
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: No favorite info"])
         }
@@ -643,9 +645,12 @@ final class HproseInstance: ObservableObject {
                 var favorites = tweet.favorites ?? [false, false, false]
                 favorites[UserActions.BOOKMARK.rawValue] = hasBookmarked
                 let updatedFavorites = favorites
-                return await MainActor.run {
+                let updatedTweet = await MainActor.run {
                     return tweet.copy(favorites: updatedFavorites, bookmarkCount: bookmarkCount)
                 }
+                // Cache the updated tweet for main feed
+                TweetCacheManager.shared.saveTweet(updatedTweet, userId: appUser.mid)
+                return updatedTweet
             }
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: No bookmark info"])
         }
@@ -693,6 +698,8 @@ final class HproseInstance: ObservableObject {
         }
         if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
             try await MainActor.run { try tweet.update(from: tweetDict) }
+            // Cache the updated tweet for main feed
+            TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
         } else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "updateRetweetCount: No response"])
         }
@@ -779,6 +786,8 @@ final class HproseInstance: ObservableObject {
                 comment.author = appUser
                 tweet.commentCount = count
             }
+            // Cache the updated tweet for main feed
+            TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
             
             // Check if retweetid is present and create a new tweet
             if let retweetId = response["retweetid"] as? String, !retweetId.isEmpty {

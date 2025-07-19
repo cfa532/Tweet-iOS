@@ -26,7 +26,7 @@ struct FollowingsTweetView: View {
                     if isFromCache {
                         // Fetch from cache - don't merge here, let TweetListView handle it
                         return await TweetCacheManager.shared.fetchCachedTweets(
-                            for: hproseInstance.appUser.mid, page: page, pageSize: size)
+                            for: hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
                     } else {
                         // Fetch from server
                         return await viewModel.fetchTweets(page: page, pageSize: size)
