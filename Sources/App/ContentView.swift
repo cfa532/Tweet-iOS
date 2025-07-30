@@ -26,15 +26,20 @@ struct ContentView: View {
                             }
                         )
                     }
+                } else if selectedTab == 1 {
+                    ChatListScreen()
+                } else if selectedTab == 3 {
+                    SearchScreen()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: isNavigationVisible ? 60 : 0)
+                Color.clear.frame(height: isNavigationVisible ? 40 : 0)
             }
             
             // Custom Tab Bar
             HStack(spacing: 0) {
+                // Home Tab
                 Button(action: {
                     if selectedTab != 0 {
                         selectedTab = 0
@@ -43,30 +48,49 @@ struct ContentView: View {
                         selectedTab = 0
                     }
                 }) {
-                    VStack(spacing: 4) {
-                        Image(systemName: "house")
-                            .font(.system(size: 24))
-                        Text(LocalizedStringKey("Home"))
-                            .font(.caption)
-                    }
-                    .foregroundColor(navigationPath.isEmpty && selectedTab == 0 ? .blue : .gray)
+                    Image(systemName: "house")
+                        .font(.system(size: 24))
+                        .foregroundColor(navigationPath.isEmpty && selectedTab == 0 ? .blue : .gray)
                 }
                 .frame(maxWidth: .infinity)
                 
+                // Chat Tab
+                Button(action: {
+                    selectedTab = 1
+                }) {
+                    ZStack {
+                        Image(systemName: "message")
+                            .font(.system(size: 24))
+                            .foregroundColor(selectedTab == 1 ? .blue : .gray)
+                        
+                        // Badge for unread messages
+                        BadgeView(count: 0) // TODO: Update with actual unread count
+                            .offset(x: 12, y: -12)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                
+                // Compose Tab
                 Button(action: {
                     showComposeSheet = true
                 }) {
-                    VStack(spacing: 4) {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 24))
-                        Text(LocalizedStringKey("Compose"))
-                            .font(.caption)
-                    }
-                    .foregroundColor(.gray)
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 24))
+                        .foregroundColor(.gray)
+                }
+                .frame(maxWidth: .infinity)
+                
+                // Search Tab
+                Button(action: {
+                    selectedTab = 3
+                }) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 24))
+                        .foregroundColor(selectedTab == 3 ? .blue : .gray)
                 }
                 .frame(maxWidth: .infinity)
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 4)
             .background(
                 isNavigationVisible ? 
                 Color(.systemBackground).opacity(1.0) : 

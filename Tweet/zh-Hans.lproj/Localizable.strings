@@ -7,7 +7,9 @@
 
 // MARK: - Tab Bar
 "Home" = "首页";
+"Chat" = "聊天";
 "Compose" = "发布";
+"Search" = "搜索";
 "Followings" = "关注";
 "Recommendation" = "推荐";
 
@@ -158,6 +160,8 @@
 "Add a comment..." = "添加评论...";
 "Search" = "搜索";
 "Search Twitter" = "搜索 Twitter";
+"Search users..." = "搜索用户...";
+"Type a message..." = "输入消息...";
 
 // MARK: - Alerts
 "Are you sure?" = "您确定吗？";
@@ -187,4 +191,13 @@
 "Microphone Access" = "麦克风访问";
 "Location Access" = "位置访问";
 "Please enable %@ in Settings to use this feature." = "请在设置中启用 %@ 以使用此功能。";
-"Go to Settings" = "前往设置"; 
+"Go to Settings" = "前往设置";
+
+// MARK: - Chat
+"Chats" = "聊天";
+"No chats yet" = "暂无聊天";
+"Start a conversation to see your chats here" = "开始对话以在此处查看您的聊天";
+"No results found" = "未找到结果";
+"Try searching for a different username" = "尝试搜索其他用户名";
+"Search for users" = "搜索用户";
+"Enter a username to find users" = "输入用户名以查找用户"; 

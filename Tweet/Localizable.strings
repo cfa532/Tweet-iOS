@@ -7,7 +7,9 @@
 
 // MARK: - Tab Bar
 "Home" = "Home";
+"Chat" = "Chat";
 "Compose" = "Compose";
+"Search" = "Search";
 "Followings" = "Followings";
 "Recommendation" = "Recommendation";
 
@@ -164,6 +166,8 @@
 "Add a comment..." = "Add a comment...";
 "Search" = "Search";
 "Search Twitter" = "Search Twitter";
+"Search users..." = "Search users...";
+"Type a message..." = "Type a message...";
 
 // MARK: - Alerts
 "Are you sure?" = "Are you sure?";
@@ -193,4 +197,13 @@
 "Microphone Access" = "Microphone Access";
 "Location Access" = "Location Access";
 "Please enable %@ in Settings to use this feature." = "Please enable %@ in Settings to use this feature.";
-"Go to Settings" = "Go to Settings"; 
+"Go to Settings" = "Go to Settings";
+
+// MARK: - Chat
+"Chats" = "Chats";
+"No chats yet" = "No chats yet";
+"Start a conversation to see your chats here" = "Start a conversation to see your chats here";
+"No results found" = "No results found";
+"Try searching for a different username" = "Try searching for a different username";
+"Search for users" = "Search for users";
+"Enter a username to find users" = "Enter a username to find users"; 

@@ -7,7 +7,9 @@
 
 // MARK: - Tab Bar
 "Home" = "ホーム";
+"Chat" = "チャット";
 "Compose" = "投稿";
+"Search" = "検索";
 "Followings" = "フォロー中";
 "Recommendation" = "おすすめ";
 
@@ -158,6 +160,8 @@
 "Add a comment..." = "コメントを追加...";
 "Search" = "検索";
 "Search Twitter" = "Twitterを検索";
+"Search users..." = "ユーザーを検索...";
+"Type a message..." = "メッセージを入力...";
 
 // MARK: - Alerts
 "Are you sure?" = "本当によろしいですか？";
@@ -187,4 +191,13 @@
 "Microphone Access" = "マイクアクセス";
 "Location Access" = "位置情報アクセス";
 "Please enable %@ in Settings to use this feature." = "この機能を使用するには、設定で%@を有効にしてください。";
-"Go to Settings" = "設定へ"; 
+"Go to Settings" = "設定へ";
+
+// MARK: - Chat
+"Chats" = "チャット";
+"No chats yet" = "まだチャットがありません";
+"Start a conversation to see your chats here" = "会話を始めて、ここにチャットを表示";
+"No results found" = "結果が見つかりません";
+"Try searching for a different username" = "別のユーザー名で検索してみてください";
+"Search for users" = "ユーザーを検索";
+"Enter a username to find users" = "ユーザーを見つけるためにユーザー名を入力"; 

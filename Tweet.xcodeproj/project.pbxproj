@@ -34,6 +34,13 @@
 		467494172DF4A1460082FAC6 /* CommentDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467494162DF4A13E0082FAC6 /* CommentDetailView.swift */; };
 		467494212DF885940082FAC6 /* UserRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467494202DF8858F0082FAC6 /* UserRowView.swift */; };
 		468384A12DFE9EAB0079ECC5 /* MediaBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468384A02DFE9EAB0079ECC5 /* MediaBrowserView.swift */; };
+		468CF20E2E39AF3A00D49038 /* ChatRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF20D2E39AF3900D49038 /* ChatRepository.swift */; };
+		468CF2102E39AF5900D49038 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF20F2E39AF5900D49038 /* ChatMessage.swift */; };
+		468CF2142E39AF7600D49038 /* ChatScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2122E39AF7600D49038 /* ChatScreen.swift */; };
+		468CF2152E39AF7600D49038 /* ChatListScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2112E39AF7600D49038 /* ChatListScreen.swift */; };
+		468CF2162E39AF7600D49038 /* SearchScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2132E39AF7600D49038 /* SearchScreen.swift */; };
+		468CF2192E39B06900D49038 /* ChatBubbleShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2182E39B06900D49038 /* ChatBubbleShape.swift */; };
+		468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2172E39B06900D49038 /* BadgeView.swift */; };
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
 		469A99502DEBFBC100954049 /* Tweet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994F2DEBFBC100954049 /* Tweet.swift */; };
@@ -110,6 +117,13 @@
 		467494162DF4A13E0082FAC6 /* CommentDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentDetailView.swift; sourceTree = "<group>"; };
 		467494202DF8858F0082FAC6 /* UserRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserRowView.swift; sourceTree = "<group>"; };
 		468384A02DFE9EAB0079ECC5 /* MediaBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaBrowserView.swift; sourceTree = "<group>"; };
+		468CF20D2E39AF3900D49038 /* ChatRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRepository.swift; sourceTree = "<group>"; };
+		468CF20F2E39AF5900D49038 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
+		468CF2112E39AF7600D49038 /* ChatListScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatListScreen.swift; sourceTree = "<group>"; };
+		468CF2122E39AF7600D49038 /* ChatScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatScreen.swift; sourceTree = "<group>"; };
+		468CF2132E39AF7600D49038 /* SearchScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchScreen.swift; sourceTree = "<group>"; };
+		468CF2172E39B06900D49038 /* BadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BadgeView.swift; sourceTree = "<group>"; };
+		468CF2182E39B06900D49038 /* ChatBubbleShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatBubbleShape.swift; sourceTree = "<group>"; };
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
 		469A994F2DEBFBC100954049 /* Tweet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tweet.swift; sourceTree = "<group>"; };
@@ -233,6 +247,9 @@
 		1A1A1A1A1A1A1A1A1A1A1A08 /* Screens */ = {
 			isa = PBXGroup;
 			children = (
+				468CF2112E39AF7600D49038 /* ChatListScreen.swift */,
+				468CF2122E39AF7600D49038 /* ChatScreen.swift */,
+				468CF2132E39AF7600D49038 /* SearchScreen.swift */,
 				46E5B3622DE1702C00AEF31F /* Registration.swift */,
 				46E5B3602DE16FD300AEF31F /* Login.swift */,
 				46E5B3502DDC9FFC00AEF31F /* Settings.swift */,
@@ -245,6 +262,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				468CF20D2E39AF3900D49038 /* ChatRepository.swift */,
 				46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */,
 				46B1F59B2E07DA7D00B3CE6C /* FFmpegWrapper.h */,
 				46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */,
@@ -270,6 +288,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A0B /* DataModels */ = {
 			isa = PBXGroup;
 			children = (
+				468CF20F2E39AF5900D49038 /* ChatMessage.swift */,
 				460680E92E16302C00D9D15A /* Constants.swift */,
 				469A994F2DEBFBC100954049 /* Tweet.swift */,
 				46704DE12DD8CEF7001D69B9 /* MediaType.swift */,
@@ -334,6 +353,8 @@
 		4629FB172DFFE9FB00588941 /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				468CF2172E39B06900D49038 /* BadgeView.swift */,
+				468CF2182E39B06900D49038 /* ChatBubbleShape.swift */,
 				469CF0F12E27FED700FBCDB8 /* OrientationManager.swift */,
 				460680EB2E165F8300D9D15A /* LocalizationHelper.swift */,
 				460680E72E16264C00D9D15A /* VideoCacheManager.swift */,
@@ -540,6 +561,9 @@
 				46E5B3432DDAB74400AEF31F /* TweetItemBodyView.swift in Sources */,
 				467494132DF33BFD0082FAC6 /* CommentMenu.swift in Sources */,
 				46E5B3442DDAB74400AEF31F /* TweetItemHeaderView.swift in Sources */,
+				468CF2142E39AF7600D49038 /* ChatScreen.swift in Sources */,
+				468CF2152E39AF7600D49038 /* ChatListScreen.swift in Sources */,
+				468CF2162E39AF7600D49038 /* SearchScreen.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1A /* TweetApp.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */,
 				46F3BFCC2DFB06F500059F18 /* SimpleVideoPlayer.swift in Sources */,
@@ -549,11 +573,15 @@
 				4674940F2DF2C4D60082FAC6 /* CommentListView.swift in Sources */,
 				4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */,
 				4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
+				468CF2192E39B06900D49038 /* ChatBubbleShape.swift in Sources */,
+				468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */,
 				46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */,
 				4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */,
 				469CF0F22E27FED700FBCDB8 /* OrientationManager.swift in Sources */,
+				468CF2102E39AF5900D49038 /* ChatMessage.swift in Sources */,
 				46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */,
+				468CF20E2E39AF3A00D49038 /* ChatRepository.swift in Sources */,
 				46E5B34B2DDC155600AEF31F /* MediaCell.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */,
 				469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */,
