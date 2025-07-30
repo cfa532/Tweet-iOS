@@ -31,16 +31,6 @@ struct ChatListScreen: View {
             }
             .navigationTitle(LocalizedStringKey("Chats"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        dismiss()
-                    }) {
-                        Image(systemName: "chevron.left")
-                            .foregroundColor(.blue)
-                    }
-                }
-            }
         }
         .task {
             await loadChatSessions()
