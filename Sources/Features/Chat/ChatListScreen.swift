@@ -97,13 +97,8 @@ struct ChatSessionRow: View {
             .padding(.vertical, 4)
         }
         .task {
-            await loadUser()
+            await hproseInstance.fetchUser(session.receiptId)
         }
-    }
-    
-    private func loadUser() async {
-        // TODO: Load user information for the receiptId
-        // This would typically call HproseInstance to get user details
     }
     
     private func formatDate(_ timestamp: TimeInterval) -> String {
