@@ -95,16 +95,6 @@ struct SearchScreen: View {
             }
             .navigationTitle(LocalizedStringKey("Search"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        dismiss()
-                    }) {
-                        Image(systemName: "chevron.left")
-                            .foregroundColor(.blue)
-                    }
-                }
-            }
         }
     }
 }
@@ -113,7 +103,7 @@ struct UserSearchResultRow: View {
     let user: User
     
     var body: some View {
-        NavigationLink(destination: UserProfileView(userId: user.mid)) {
+        NavigationLink(destination: ProfileView(user: user)) {
             HStack {
                 UserAvatarView(user: user, size: 40)
                 
@@ -153,13 +143,36 @@ class SearchViewModel: ObservableObject {
             isLoading = true
         }
         
-        // TODO: Implement search functionality through HproseInstance
-        // This would typically call the backend service to search for users
+        do {
+            // If query starts with @, search for a user by username
+            if query.hasPrefix("@") {
+                let username = String(query.dropFirst())
+                if let userId = try await hproseInstance.getUserId(username),
+                   let user = try await hproseInstance.fetchUser(userId) {
+                    await MainActor.run {
+                        searchResults = [user]
+                    }
+                } else {
+                    await MainActor.run {
+                        searchResults = []
+                    }
+                }
+            } else {
+                // TODO: Implement tweet content search
+                // For now, clear results for non-@ searches
+                await MainActor.run {
+                    searchResults = []
+                }
+            }
+        } catch {
+            print("Search error: \(error)")
+            await MainActor.run {
+                searchResults = []
+            }
+        }
         
-        // For now, we'll simulate a search
         await MainActor.run {
             isLoading = false
-            // TODO: Update searchResults with actual results from backend
         }
     }
     
@@ -169,13 +182,3 @@ class SearchViewModel: ObservableObject {
         }
     }
 }
-
-// Placeholder for UserProfileView - this should be implemented based on your existing profile view
-struct UserProfileView: View {
-    let userId: String
-    
-    var body: some View {
-        Text("User Profile for \(userId)")
-            .navigationTitle("Profile")
-    }
-} 
