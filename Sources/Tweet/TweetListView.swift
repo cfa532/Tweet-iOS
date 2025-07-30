@@ -306,8 +306,15 @@ struct TweetListContentView<RowView: View>: View {
                 header()
             }
             
-            ForEach(tweets.compactMap { $0 }, id: \.mid) { tweet in
-                rowView(tweet)
+            ForEach(Array(tweets.compactMap { $0 }.enumerated()), id: \.element.mid) { index, tweet in
+                VStack(spacing: 0) {
+                    if index > 0 {
+                        Rectangle()
+                            .frame(height: 0.5)
+                            .foregroundColor(Color(.systemGray))
+                    }
+                    rowView(tweet)
+                }
             }
             
             // Always present view to detect bottom scrolling

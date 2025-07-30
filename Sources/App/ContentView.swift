@@ -90,19 +90,15 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
-            .padding(.vertical, 4)
+            .padding(.top, 16)
+            .padding(.bottom, 2)
             .background(
                 isNavigationVisible ? 
                 Color(.systemBackground).opacity(1.0) : 
                 Color.clear
             )
-            .overlay(
-                Rectangle()
-                    .frame(height: 0.5)
-                    .foregroundColor(Color(.separator)),
-                alignment: .top
-            )
-            .opacity(isNavigationVisible ? 1.0 : 0.2)
+            .shadow(color: Color(.systemBlue).opacity(0.3), radius: 1, x: 0, y: -1)
+            .opacity(isNavigationVisible ? 1.0 : 0.3)
             .allowsHitTesting(true)
             .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
         }
