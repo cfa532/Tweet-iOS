@@ -14,6 +14,17 @@ struct ChatMessage: Identifiable, Codable {
         self.content = content
         self.timestamp = timestamp
     }
+    
+    /// Convert ChatMessage to JSON string
+    func toJSONString() -> String {
+        do {
+            let jsonData = try JSONEncoder().encode(self)
+            return String(data: jsonData, encoding: .utf8) ?? "{}"
+        } catch {
+            print("[ChatMessage] Error encoding to JSON: \(error)")
+            return "{}"
+        }
+    }
 }
 
 struct ChatSession: Identifiable, Codable {

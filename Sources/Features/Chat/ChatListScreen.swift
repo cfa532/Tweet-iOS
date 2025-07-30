@@ -2,13 +2,14 @@ import SwiftUI
 
 struct ChatListScreen: View {
     @StateObject private var chatRepository = ChatRepository()
-    @State private var chatSessions: [ChatSession] = []
+    @StateObject private var chatSessionManager = ChatSessionManager.shared
+    @State private var messageCheckTimer: Timer?
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         NavigationView {
             VStack {
-                if chatSessions.isEmpty {
+                if chatSessionManager.chatSessions.isEmpty {
                     VStack {
                         Image(systemName: "message")
                             .font(.system(size: 48))
@@ -24,7 +25,7 @@ struct ChatListScreen: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    List(chatSessions) { session in
+                    List(chatSessionManager.chatSessions) { session in
                         ChatSessionRow(session: session)
                     }
                 }
@@ -35,17 +36,47 @@ struct ChatListScreen: View {
         .task {
             await loadChatSessions()
         }
+        .onAppear {
+            // Start periodic checking for new messages
+            startPeriodicMessageCheck()
+        }
+        .onDisappear {
+            // Stop periodic checking when view disappears
+            stopPeriodicMessageCheck()
+        }
     }
     
     private func loadChatSessions() async {
         await chatRepository.loadChatSessions()
-        // TODO: Update chatSessions from repository
+    }
+    
+    // MARK: - Periodic Message Checking
+    
+    private func startPeriodicMessageCheck() {
+        // Check for new messages every 30 seconds
+        messageCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { _ in
+            Task {
+                await chatSessionManager.checkBackendForNewMessages()
+            }
+        }
+        
+        // Also check immediately when starting
+        Task {
+            await chatSessionManager.checkBackendForNewMessages()
+        }
+    }
+    
+    private func stopPeriodicMessageCheck() {
+        messageCheckTimer?.invalidate()
+        messageCheckTimer = nil
     }
 }
 
 struct ChatSessionRow: View {
     let session: ChatSession
     @State private var user: User?
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @StateObject private var chatSessionManager = ChatSessionManager.shared
     
     var body: some View {
         NavigationLink(destination: ChatScreen(receiptId: session.receiptId)) {
@@ -97,7 +128,11 @@ struct ChatSessionRow: View {
             .padding(.vertical, 4)
         }
         .task {
-            await hproseInstance.fetchUser(session.receiptId)
+            user = try? await hproseInstance.fetchUser(session.receiptId)
+        }
+        .onTapGesture {
+            // Mark session as read when tapped
+            chatSessionManager.markSessionAsRead(receiptId: session.receiptId)
         }
     }
     

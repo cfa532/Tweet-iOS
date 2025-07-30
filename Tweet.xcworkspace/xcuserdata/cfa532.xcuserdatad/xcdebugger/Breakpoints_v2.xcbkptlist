@@ -32,7 +32,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1512"
             endingLineNumber = "1512"
-            landmarkName = "uploadTweet(_:)"
+            landmarkName = "withRetry(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -96,7 +96,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "262"
             endingLineNumber = "262"
-            landmarkName = "fetchUserTweet(user:pageNumber:pageSize:entry:)"
+            landmarkName = "fetchTweetFeed(user:pageNumber:pageSize:entry:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

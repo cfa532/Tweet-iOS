@@ -3,6 +3,7 @@ import SwiftUI
 struct ChatScreen: View {
     let receiptId: String
     @StateObject private var chatRepository = ChatRepository()
+    @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messages: [ChatMessage] = []
     @State private var messageText = ""
     @State private var user: User?
@@ -22,7 +23,7 @@ struct ChatScreen: View {
                 if let user = user {
                     UserAvatarView(user: user, size: 32)
                     VStack(alignment: .leading) {
-                        Text("\(user.name)@\(user.username)")
+                        Text("\(user.name ?? "")@\(user.username ?? "")")
                             .font(.headline)
                         if let profile = user.profile {
                             Text(profile)
@@ -87,6 +88,9 @@ struct ChatScreen: View {
             )
         }
         .task {
+            // Mark session as read when opened
+            chatSessionManager.markSessionAsRead(receiptId: receiptId)
+            
             await loadUser()
             await loadMessages()
         }
@@ -102,20 +106,46 @@ struct ChatScreen: View {
         )
         
         Task {
-            await chatRepository.sendMessage(message)
-            messageText = ""
-            await loadMessages()
+            do {
+                try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: message)
+                
+                // Update the chat session
+                await chatSessionManager.updateOrCreateChatSession(
+                    senderId: receiptId,
+                    message: message,
+                    hasNews: false
+                )
+                
+                // Add message to local messages
+                await MainActor.run {
+                    messages.append(message)
+                    messageText = ""
+                }
+                
+                print("[ChatScreen] Message sent successfully")
+            } catch {
+                print("[ChatScreen] Error sending message: \(error)")
+            }
         }
     }
     
     private func loadUser() async {
-        // TODO: Load user information for the receiptId
-        // This would typically call HproseInstance to get user details
+        do {
+            let fetchedUser = try await HproseInstance.shared.fetchUser(receiptId)
+            await MainActor.run {
+                user = fetchedUser
+            }
+        } catch {
+            print("[ChatScreen] Error loading user: \(error)")
+        }
     }
     
     private func loadMessages() async {
-        await chatRepository.loadMessages(for: receiptId)
-        // TODO: Update messages from repository
+        // Fetch messages from the sender (receiptId is the sender's ID)
+        let fetchedMessages = await chatSessionManager.fetchMessagesForConversation(receiptId: receiptId)
+        await MainActor.run {
+            messages = fetchedMessages
+        }
     }
 }
 

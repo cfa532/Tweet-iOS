@@ -56,6 +56,8 @@ final class HproseInstance: ObservableObject {
     }()
     var hproseService: AnyObject?
     
+    // MARK: - Helper Methods
+    
     // MARK: - Initialization
     private init() {}
     
@@ -2036,6 +2038,111 @@ final class HproseInstance: ObservableObject {
             print("Network error getting host IP: \(error)")
         }
         return nil
+    }
+    
+    // MARK: - Chat Functions
+    
+    /// Send a chat message to a recipient
+    func sendMessage(receiptId: String, message: ChatMessage) async throws {
+        guard let service = hproseService else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        
+        let entry = "message_outgoing"
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "entry": entry,
+            "userid": appUser.mid,
+            "receiptid": receiptId,
+            "msg": message.toJSONString(),
+            "hostid": appUser.hostIds?.first ?? ""
+        ]
+        
+        let response = service.runMApp(entry, params, nil) as? Bool
+        
+        if response == true {
+            // Try to send to recipient's node as well
+            if let receiptUser = try await fetchUser(receiptId) {
+                let receiptEntry = "message_incoming"
+                let receiptParams: [String: Any] = [
+                    "aid": appId,
+                    "ver": "last",
+                    "entry": receiptEntry,
+                    "senderid": appUser.mid,
+                    "receiptid": receiptId,
+                    "msg": message.toJSONString()
+                ]
+                
+                do {
+                    let receiptResponse = receiptUser.hproseService?.runMApp(receiptEntry, receiptParams, nil) as? Bool
+                    if receiptResponse != true {
+                        print("[sendMessage] Warning: Failed to send to recipient node")
+                    }
+                } catch {
+                    print("[sendMessage] Warning: Error sending to recipient node: \(error)")
+                }
+            }
+        } else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to send message"])
+        }
+    }
+    
+    /// Fetch recent unread messages from a sender
+    func fetchMessages(senderId: String) async throws -> [ChatMessage] {
+        guard let service = hproseService else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        
+        let entry = "message_fetch"
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "entry": entry,
+            "userid": appUser.mid,
+            "senderid": senderId
+        ]
+        
+        let response = service.runMApp(entry, params, nil) as? [[String: Any]] ?? []
+        
+        return response.compactMap { messageData in
+            do {
+                let jsonData = try JSONSerialization.data(withJSONObject: messageData)
+                return try JSONDecoder().decode(ChatMessage.self, from: jsonData)
+            } catch {
+                print("[fetchMessages] Error decoding message: \(error)")
+                return nil
+            }
+        }
+    }
+    
+    /// Check for new incoming messages (only check, do not fetch them)
+    func checkNewMessages() async throws -> [ChatMessage] {
+        guard !appUser.isGuest else { return [] }
+        
+        guard let service = hproseService else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        }
+        
+        let entry = "message_check"
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "entry": entry,
+            "userid": appUser.mid
+        ]
+        
+        let response = service.runMApp(entry, params, nil) as? [[String: Any]] ?? []
+        
+        return response.compactMap { messageData in
+            do {
+                let jsonData = try JSONSerialization.data(withJSONObject: messageData)
+                return try JSONDecoder().decode(ChatMessage.self, from: jsonData)
+            } catch {
+                print("[checkNewMessages] Error decoding message: \(error)")
+                return nil
+            }
+        }
     }
 }
 
