@@ -113,8 +113,10 @@ final class HproseInstance: ObservableObject {
                         hproseService = client.useService(HproseService.self) as AnyObject
                         let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
                         await MainActor.run {
-                            _appUser.baseUrl = HproseInstance.baseUrl
-                            _appUser.followingList = followings
+                            // Update the appUser to the fetched user with all properties
+                            user.baseUrl = HproseInstance.baseUrl
+                            user.followingList = followings
+                            self.appUser = user
                         }
                         return
                     } else {
@@ -195,7 +197,6 @@ final class HproseInstance: ObservableObject {
         guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
-        print("[fetchTweetFeed] Fetching tweets from server - pn: \(pageNumber), ps: \(pageSize)")
         let params = [
             "aid": appId,
             "ver": "last",
@@ -204,33 +205,66 @@ final class HproseInstance: ObservableObject {
             "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
             "appuserid": appUser.mid,
         ]
-        guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in fetcTweetFeed"])
-        }
-        print("[fetchTweetFeed] Got \(response.count) tweets from server (including nil)")
         
+        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchTweetFeed"])
+        }
+        
+        // Check success status first
+        guard let success = response["success"] as? Bool, success else {
+            let errorMessage = response["message"] as? String ?? "Unknown error occurred"
+            print("[fetchTweetFeed] Tweet feed loading failed: \(errorMessage)")
+            print("[fetchTweetFeed] Response: \(response)")
+            
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+        }
+        
+        // Extract tweets and originalTweets from the new response format
+        let tweetsData = response["tweets"] as? [[String: Any]?] ?? []
+        let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
+        
+        print("[fetchTweetFeed] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
+        
+        // Cache original tweets first
+        for originalTweetDict in originalTweetsData {
+            if let dict = originalTweetDict {
+                do {
+                    let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
+                    originalTweet.author = try? await fetchUser(originalTweet.authorId)
+                    TweetCacheManager.shared.saveTweet(originalTweet, userId: appUser.mid)
+                    print("[fetchTweetFeed] Cached original tweet: \(originalTweet.mid)")
+                } catch {
+                    print("[fetchTweetFeed] Error caching original tweet: \(error)")
+                }
+            }
+        }
+        
+        // Process main tweets
         var tweets: [Tweet?] = []
-        for item in response {
+        for item in tweetsData {
             if let tweetDict = item {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                     tweet.author = try await fetchUser(tweet.authorId)
+                    
                     // Skip private tweets in feed
                     if tweet.isPrivate == true {
                         tweets.append(nil)
                         continue
                     }
+                    
                     // Save tweet back to cache
                     TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
                     tweets.append(tweet)
                 } catch {
-                    print("Error processing tweet: \(error)")
+                    print("[fetchTweetFeed] Error processing tweet: \(error)")
                     tweets.append(nil)
                 }
             } else {
                 tweets.append(nil)
             }
         }
+        
         print("[fetchTweetFeed] Returning \(tweets.count) tweets")
         return tweets
     }
@@ -262,32 +296,66 @@ final class HproseInstance: ObservableObject {
             "ps": pageSize,
             "appuserid": appUser.mid,
         ] as [String : Any]
-        guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in fetchUserTweet"])
+        
+        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
+        }
+        
+        // Check success status first
+        guard let success = response["success"] as? Bool, success else {
+            let errorMessage = response["message"] as? String ?? "Unknown error occurred"
+            print("[fetchUserTweet] Tweets loading failed for user \(user.mid): \(errorMessage)")
+            print("[fetchUserTweet] Response: \(response)")
+            
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+        }
+        
+        // Extract tweets and originalTweets from the new response format
+        let tweetsData = response["tweets"] as? [[String: Any]?] ?? []
+        let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
+        
+        print("[fetchUserTweet] Fetching tweets for user: \(user.mid), page: \(pageNumber), size: \(pageSize)")
+        print("[fetchUserTweet] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
+        
+        // Cache original tweets first (memory cache only for profile tweets)
+        for originalTweetDict in originalTweetsData {
+            if let dict = originalTweetDict {
+                do {
+                    let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
+                    originalTweet.author = try? await fetchUser(originalTweet.authorId)
+                    TweetCacheManager.shared.saveTweet(originalTweet, userId: appUser.mid)
+                    print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid)")
+                } catch {
+                    print("[fetchUserTweet] Error caching original tweet: \(error)")
+                }
+            }
         }
         
         var tweets: [Tweet?] = []
-        for item in response {
-            if let tweetDict = item{
+        for item in tweetsData {
+            if let tweetDict = item {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                    tweet.author = try await fetchUser(tweet.authorId)
+                    tweet.author = user
+                    
                     // Only show private tweets if the current user is the author
                     if tweet.isPrivate == true && tweet.authorId != appUser.mid {
                         tweets.append(nil)
                         continue
                     }
-                    // Don't cache tweets from user profiles - only cache from main feed
+                    
+                    // Keep tweets only in memory cache (not database cache) for profile views
+                    TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
                     tweets.append(tweet)
                 } catch {
-                    print("Error processing tweet: \(error)")
+                    print("[fetchUserTweet] Error processing tweet: \(error)")
                     tweets.append(nil)
                 }
             } else {
-                // Cache nil tweet using tid
                 tweets.append(nil)
             }
         }
+        
         let validTweets = tweets.compactMap{ $0 }
         print("[fetchUserTweet] Returning \(tweets.count) tweets, valid=\(validTweets.count) for \(user.mid) \(pageNumber) \(pageSize)")
         return tweets
@@ -322,15 +390,10 @@ final class HproseInstance: ObservableObject {
             do {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 tweet.author = try? await fetchUser(authorId)
-                // Don't cache individual tweets - only cache from main feed
                 
-                if let origId = tweet.originalTweetId, let origAuthorId = tweet.originalAuthorId {
-                    if await TweetCacheManager.shared.fetchTweet(mid: origId) == nil {
-                        if let origTweet = try? await getTweet(tweetId: origId, authorId: origAuthorId) {
-                            // Don't cache original tweets - only cache from main feed
-                        }
-                    }
-                }
+                // Update cached data for main feed
+                TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                
                 return tweet
             } catch {
                 print("Error processing tweet: \(error)")
@@ -448,6 +511,8 @@ final class HproseInstance: ObservableObject {
                 await MainActor.run {
                     // Update the appUser reference to point to the new user instance
                     preferenceHelper?.setUserId(loginUser.mid)
+                    // Update appUser to the logged-in user
+                    self.appUser = loginUser
                 }
                 return ["reason": "Success", "status": "success"]
             }
@@ -457,6 +522,11 @@ final class HproseInstance: ObservableObject {
     
     func logout() {
         preferenceHelper?.setUserId(nil as String?)
+        // Reset appUser to guest user
+        let guestUser = User.getInstance(mid: Constants.GUEST_ID)
+        guestUser.baseUrl = HproseInstance.baseUrl
+        guestUser.followingList = Gadget.getAlphaIds()
+        self.appUser = guestUser
     }
     
     /*
@@ -1763,7 +1833,7 @@ final class HproseInstance: ObservableObject {
         guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
-        let entry = "toggle_top_tweets"
+        let entry = "toggle_pinned_tweet"
         let params = [
             "aid": appId,
             "ver": "last",
@@ -1784,7 +1854,7 @@ final class HproseInstance: ObservableObject {
         guard let service = hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
-        let entry = "get_top_tweets"
+        let entry = "get_pinned_tweets"
         let params = [
             "aid": appId,
             "ver": "last",

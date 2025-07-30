@@ -44,10 +44,6 @@ class MuteState: ObservableObject {
     }
 }
 
-
-
-
-
 struct SimpleVideoPlayer: View {
     let url: URL
     let mid: String // Add mid field for caching
@@ -91,108 +87,108 @@ struct SimpleVideoPlayer: View {
             if let videoAR = videoAspectRatio, videoAR > 0 {
                 if forceUnmuted {
                     // Full-screen mode: apply new display logic
-                                    if isVideoPortrait {
-                    // Portrait video: fit on full screen
-                    ZStack {
-                        HLSDirectoryVideoPlayer(
-                            baseURL: url,
-                            mid: cacheKey,
-                            isVisible: isVisible,
-                            isMuted: forceUnmuted ? false : muteState.isMuted,
-                            autoPlay: autoPlay,
-                            onMuteChanged: onMuteChanged,
-                            onVideoFinished: onVideoFinished,
-                            onVideoTap: onVideoTap,
-                            showCustomControls: showCustomControls,
-                            forcePlay: forcePlay,
-                            forceUnmuted: forceUnmuted
-                        )
-                        .aspectRatio(videoAR, contentMode: .fit)
-                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
-                    }
-                    .onAppear {
-                        if forceUnmuted {
-                            // Lock screen orientation to portrait and keep screen on
-                            OrientationManager.shared.lockToPortrait()
-                            UIApplication.shared.isIdleTimerDisabled = true
+                    if isVideoPortrait {
+                        // Portrait video: fit on full screen
+                        ZStack {
+                            HLSDirectoryVideoPlayer(
+                                baseURL: url,
+                                mid: cacheKey,
+                                isVisible: isVisible,
+                                isMuted: forceUnmuted ? false : muteState.isMuted,
+                                autoPlay: autoPlay,
+                                onMuteChanged: onMuteChanged,
+                                onVideoFinished: onVideoFinished,
+                                onVideoTap: onVideoTap,
+                                showCustomControls: showCustomControls,
+                                forcePlay: forcePlay,
+                                forceUnmuted: forceUnmuted
+                            )
+                            .aspectRatio(videoAR, contentMode: .fit)
+                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                         }
-                    }
-                    .onDisappear {
-                        if forceUnmuted {
-                            // Re-enable screen rotation and allow screen to sleep
-                            OrientationManager.shared.unlockOrientation()
-                            UIApplication.shared.isIdleTimerDisabled = false
+                        .onAppear {
+                            if forceUnmuted {
+                                // Lock screen orientation to portrait and keep screen on
+                                OrientationManager.shared.lockToPortrait()
+                                UIApplication.shared.isIdleTimerDisabled = true
+                            }
                         }
-                    }
-                                    } else if isVideoLandscape {
-                    // Landscape video: rotate -90 degrees to fit on portrait device
-                    ZStack {
-                        HLSDirectoryVideoPlayer(
-                            baseURL: url,
-                            mid: cacheKey,
-                            isVisible: isVisible,
-                            isMuted: forceUnmuted ? false : muteState.isMuted,
-                            autoPlay: autoPlay,
-                            onMuteChanged: onMuteChanged,
-                            onVideoFinished: onVideoFinished,
-                            onVideoTap: onVideoTap,
-                            showCustomControls: showCustomControls,
-                            forcePlay: forcePlay,
-                            forceUnmuted: forceUnmuted
-                        )
-                        .aspectRatio(videoAR, contentMode: .fit)
-                        .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2) // Reduce size by 2 points (1 point border on each side)
-                        .rotationEffect(.degrees(-90))
-                        .scaleEffect(screenHeight / screenWidth) // Scale to fit the rotated video
-                        .background(Color.black)
-                    }
-                    .onAppear {
-                        if forceUnmuted {
-                            // Lock screen orientation to portrait and keep screen on
-                            OrientationManager.shared.lockToPortrait()
-                            UIApplication.shared.isIdleTimerDisabled = true
+                        .onDisappear {
+                            if forceUnmuted {
+                                // Re-enable screen rotation and allow screen to sleep
+                                OrientationManager.shared.unlockOrientation()
+                                UIApplication.shared.isIdleTimerDisabled = false
+                            }
                         }
-                    }
-                    .onDisappear {
-                        if forceUnmuted {
-                            // Re-enable screen rotation and allow screen to sleep
-                            OrientationManager.shared.unlockOrientation()
-                            UIApplication.shared.isIdleTimerDisabled = false
+                    } else if isVideoLandscape {
+                        // Landscape video: rotate -90 degrees to fit on portrait device
+                        ZStack {
+                            HLSDirectoryVideoPlayer(
+                                baseURL: url,
+                                mid: cacheKey,
+                                isVisible: isVisible,
+                                isMuted: forceUnmuted ? false : muteState.isMuted,
+                                autoPlay: autoPlay,
+                                onMuteChanged: onMuteChanged,
+                                onVideoFinished: onVideoFinished,
+                                onVideoTap: onVideoTap,
+                                showCustomControls: showCustomControls,
+                                forcePlay: forcePlay,
+                                forceUnmuted: forceUnmuted
+                            )
+                            .aspectRatio(videoAR, contentMode: .fit)
+                            .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2) // Reduce size by 2 points (1 point border on each side)
+                            .rotationEffect(.degrees(-90))
+                            .scaleEffect(screenHeight / screenWidth) // Scale to fit the rotated video
+                            .background(Color.black)
                         }
-                    }
-                                    } else {
-                    // Square video: fit on full screen
-                    ZStack {
-                        HLSDirectoryVideoPlayer(
-                            baseURL: url,
-                            mid: cacheKey,
-                            isVisible: isVisible,
-                            isMuted: forceUnmuted ? false : muteState.isMuted,
-                            autoPlay: autoPlay,
-                            onMuteChanged: onMuteChanged,
-                            onVideoFinished: onVideoFinished,
-                            onVideoTap: onVideoTap,
-                            showCustomControls: showCustomControls,
-                            forcePlay: forcePlay,
-                            forceUnmuted: forceUnmuted
-                        )
-                        .aspectRatio(1.0, contentMode: .fit)
-                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
-                    }
-                    .onAppear {
-                        if forceUnmuted {
-                            // Lock screen orientation to portrait and keep screen on
-                            OrientationManager.shared.lockToPortrait()
-                            UIApplication.shared.isIdleTimerDisabled = true
+                        .onAppear {
+                            if forceUnmuted {
+                                // Lock screen orientation to portrait and keep screen on
+                                OrientationManager.shared.lockToPortrait()
+                                UIApplication.shared.isIdleTimerDisabled = true
+                            }
                         }
-                    }
-                    .onDisappear {
-                        if forceUnmuted {
-                            // Re-enable screen rotation and allow screen to sleep
-                            OrientationManager.shared.unlockOrientation()
-                            UIApplication.shared.isIdleTimerDisabled = false
+                        .onDisappear {
+                            if forceUnmuted {
+                                // Re-enable screen rotation and allow screen to sleep
+                                OrientationManager.shared.unlockOrientation()
+                                UIApplication.shared.isIdleTimerDisabled = false
+                            }
                         }
-                    }
+                    } else {
+                        // Square video: fit on full screen
+                        ZStack {
+                            HLSDirectoryVideoPlayer(
+                                baseURL: url,
+                                mid: cacheKey,
+                                isVisible: isVisible,
+                                isMuted: forceUnmuted ? false : muteState.isMuted,
+                                autoPlay: autoPlay,
+                                onMuteChanged: onMuteChanged,
+                                onVideoFinished: onVideoFinished,
+                                onVideoTap: onVideoTap,
+                                showCustomControls: showCustomControls,
+                                forcePlay: forcePlay,
+                                forceUnmuted: forceUnmuted
+                            )
+                            .aspectRatio(1.0, contentMode: .fit)
+                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                        }
+                        .onAppear {
+                            if forceUnmuted {
+                                // Lock screen orientation to portrait and keep screen on
+                                OrientationManager.shared.lockToPortrait()
+                                UIApplication.shared.isIdleTimerDisabled = true
+                            }
+                        }
+                        .onDisappear {
+                            if forceUnmuted {
+                                // Re-enable screen rotation and allow screen to sleep
+                                OrientationManager.shared.unlockOrientation()
+                                UIApplication.shared.isIdleTimerDisabled = false
+                            }
+                        }
                     }
                 } else {
                     // Normal mode: use original logic with cellAspectRatio
@@ -541,7 +537,6 @@ struct HLSVideoPlayerWithControls: View {
                     print("DEBUG: [VIDEO \(mid)] Ignoring global mute state change (forceUnmuted mode)")
                 }
             }
-
         }
     }
     
