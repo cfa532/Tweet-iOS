@@ -4,13 +4,16 @@ struct ChatListScreen: View {
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messageCheckTimer: Timer?
+    @State private var showStartChat = false
+    @State private var selectedSession: ChatSession? = nil
+    @State private var showChatScreen = false
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             VStack {
                 if chatSessionManager.chatSessions.isEmpty {
-                    VStack {
+                    VStack(spacing: 20) {
                         Image(systemName: "message")
                             .font(.system(size: 48))
                             .foregroundColor(.gray)
@@ -22,11 +25,32 @@ struct ChatListScreen: View {
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
+                        
+                        Button(action: {
+                            showStartChat = true
+                        }) {
+                            HStack {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 16, weight: .medium))
+                                Text(LocalizedStringKey("Start Chat"))
+                                    .font(.system(size: 16, weight: .medium))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.blue)
+                            )
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    List(chatSessionManager.chatSessions) { session in
-                        ChatSessionRow(session: session)
+                    List {
+                        ForEach(chatSessionManager.chatSessions) { session in
+                            ChatSessionRow(session: session)
+                        }
+                        .onDelete(perform: deleteChatSession)
                     }
                 }
             }
@@ -43,6 +67,9 @@ struct ChatListScreen: View {
         .onDisappear {
             // Stop periodic checking when view disappears
             stopPeriodicMessageCheck()
+        }
+        .sheet(isPresented: $showStartChat) {
+            StartChatView()
         }
     }
     
@@ -69,6 +96,15 @@ struct ChatListScreen: View {
     private func stopPeriodicMessageCheck() {
         messageCheckTimer?.invalidate()
         messageCheckTimer = nil
+    }
+    
+    // MARK: - Chat Session Management
+    
+    private func deleteChatSession(offsets: IndexSet) {
+        for index in offsets {
+            let session = chatSessionManager.chatSessions[index]
+            chatSessionManager.removeChatSession(receiptId: session.receiptId)
+        }
     }
 }
 
@@ -129,10 +165,6 @@ struct ChatSessionRow: View {
         }
         .task {
             user = try? await hproseInstance.fetchUser(session.receiptId)
-        }
-        .onTapGesture {
-            // Mark session as read when tapped
-            chatSessionManager.markSessionAsRead(receiptId: session.receiptId)
         }
     }
     

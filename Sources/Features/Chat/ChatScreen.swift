@@ -7,19 +7,11 @@ struct ChatScreen: View {
     @State private var messages: [ChatMessage] = []
     @State private var messageText = ""
     @State private var user: User?
-    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
-                Button(action: {
-                    dismiss()
-                }) {
-                    Image(systemName: "chevron.left")
-                        .foregroundColor(.blue)
-                }
-                
                 if let user = user {
                     UserAvatarView(user: user, size: 32)
                     VStack(alignment: .leading) {

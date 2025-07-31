@@ -45,6 +45,8 @@
 		468CF2282E39CC8900D49038 /* ChatBubbleShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2272E39CC8900D49038 /* ChatBubbleShape.swift */; };
 		468CF22A2E39FBBC00D49038 /* ChatSessionRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2292E39FBBC00D49038 /* ChatSessionRepository.swift */; };
 		468CF22C2E3A619A00D49038 /* ChatSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22B2E3A619A00D49038 /* ChatSessionManager.swift */; };
+		468CF22D2E3A619B00D49038 /* StartChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22E2E3A619B00D49038 /* StartChatView.swift */; };
+		468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22D2E3A69F700D49038 /* StartChatView.swift */; };
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
 		469A99502DEBFBC100954049 /* Tweet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994F2DEBFBC100954049 /* Tweet.swift */; };
@@ -130,6 +132,7 @@
 		468CF2272E39CC8900D49038 /* ChatBubbleShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatBubbleShape.swift; sourceTree = "<group>"; };
 		468CF2292E39FBBC00D49038 /* ChatSessionRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionRepository.swift; sourceTree = "<group>"; };
 		468CF22B2E3A619A00D49038 /* ChatSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionManager.swift; sourceTree = "<group>"; };
+		468CF22D2E3A69F700D49038 /* StartChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartChatView.swift; sourceTree = "<group>"; };
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
 		469A994F2DEBFBC100954049 /* Tweet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tweet.swift; sourceTree = "<group>"; };
@@ -372,6 +375,7 @@
 		468CF21D2E39C99200D49038 /* Chat */ = {
 			isa = PBXGroup;
 			children = (
+				468CF22D2E3A69F700D49038 /* StartChatView.swift */,
 				468CF22B2E3A619A00D49038 /* ChatSessionManager.swift */,
 				468CF2272E39CC8900D49038 /* ChatBubbleShape.swift */,
 				468CF21B2E39C99200D49038 /* ChatListScreen.swift */,
@@ -568,6 +572,7 @@
 			files = (
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
+				468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */,
 				468384A12DFE9EAB0079ECC5 /* MediaBrowserView.swift in Sources */,
 				469A99562DEC744200954049 /* ProfileHeaderSection.swift in Sources */,
 				469A99572DEC744200954049 /* ProfileStatsSection.swift in Sources */,

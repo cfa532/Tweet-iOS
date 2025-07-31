@@ -30,8 +30,8 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "1512"
-            endingLineNumber = "1512"
+            startingLineNumber = "1513"
+            endingLineNumber = "1513"
             landmarkName = "withRetry(_:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -97,6 +97,22 @@
             startingLineNumber = "262"
             endingLineNumber = "262"
             landmarkName = "fetchTweetFeed(user:pageNumber:pageSize:entry:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "889155EF-0336-4605-BE24-501AD7DCDE77"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Core/HproseInstance.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "2041"
+            endingLineNumber = "2041"
+            landmarkName = "sendMessage(receiptId:message:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

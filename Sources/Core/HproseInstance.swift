@@ -587,15 +587,16 @@ final class HproseInstance: ObservableObject {
             "ps": pageSize,
             "appuserid": appUser.mid
         ] as [String : Any]
+        
         guard var service = user.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         
         var newClient: HproseClient? = nil
-        if user.baseUrl != appUser.baseUrl {
+        if let baseUrl = user.baseUrl, baseUrl != appUser.baseUrl {
             let client = HproseHttpClient()
             client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
-            client.uri = "\(user.baseUrl!.absoluteString)/webapi/"
+            client.uri = "\(baseUrl)/webapi/"
             service = client.useService(HproseService.self) as AnyObject
             newClient = client
         }
@@ -1558,9 +1559,6 @@ final class HproseInstance: ObservableObject {
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
         return try await withRetry {
-            guard let service = hproseService else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-            }
             // Create a copy of the tweet and remove its author attribute
             tweet.author = nil
             let params: [String: Any] = [
@@ -1570,7 +1568,7 @@ final class HproseInstance: ObservableObject {
                 "tweet": String(data: try JSONEncoder().encode(tweet), encoding: .utf8) ?? ""
             ]
             
-            let rawResponse = service.runMApp("add_tweet", params, nil)
+            let rawResponse = appUser.hproseService?.runMApp("add_tweet", params, nil)
             
             // Handle the JSON response format
             guard let responseDict = rawResponse as? [String: Any] else {
@@ -1832,9 +1830,6 @@ final class HproseInstance: ObservableObject {
      * Return the current tweet list that is pinned to top.
      */
     func togglePinnedTweet(tweetId: String) async throws -> Bool? {
-        guard let service = hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
         let entry = "toggle_pinned_tweet"
         let params = [
             "aid": appId,
@@ -1842,7 +1837,7 @@ final class HproseInstance: ObservableObject {
             "tweetid": tweetId,
             "appuserid": appUser.mid,
         ]
-        guard let response = service.runMApp(entry, params, nil) as? Bool else {
+        guard let response = appUser.hproseService?.runMApp(entry, params, nil) as? Bool else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "togglePinnedTweet: No response"])
         }
         return response
@@ -1853,9 +1848,6 @@ final class HproseInstance: ObservableObject {
      * the tweet is pinned.
      */
     func getPinnedTweets(user: User) async throws -> [[String: Any]] {
-        guard let service = hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
         let entry = "get_pinned_tweets"
         let params = [
             "aid": appId,
@@ -1863,7 +1855,7 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "appuserid": appUser.mid
         ]
-        guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+        guard let response = user.hproseService?.runMApp(entry, params, nil) as? [[String: Any]] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getPinnedTweets: No response"])
         }
         var result: [[String: Any]] = []
@@ -1889,9 +1881,6 @@ final class HproseInstance: ObservableObject {
         hostId: String? = nil,
         cloudDrivePort: Int? = nil
     ) async throws -> Bool {
-        guard let service = hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
         var hosts: [String]? = nil
         if let hostId = hostId, !hostId.isEmpty {
             hosts = [hostId]
@@ -1905,7 +1894,8 @@ final class HproseInstance: ObservableObject {
             "user": String(data: try JSONEncoder().encode(newUser), encoding: .utf8) ?? "",
             "followings": String(data: try JSONEncoder().encode(Gadget.getAlphaIds()), encoding: .utf8) ?? ""
         ]
-        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+        
+        guard let response = appUser.hproseService?.runMApp(entry, params, nil) as? [String: Any] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
         }
         if let result = response["status"] as? String {
@@ -1925,9 +1915,6 @@ final class HproseInstance: ObservableObject {
         hostId: String? = nil,
         cloudDrivePort: Int? = nil
     ) async throws -> Bool {
-        guard let service = hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
         let updatedUser = User(mid: appUser.mid, name: alias, password: password, profile: profile, cloudDrivePort: cloudDrivePort)
         if let hostId = hostId, !hostId.isEmpty {
             updatedUser.hostIds = [hostId]
@@ -1939,7 +1926,7 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "user": String(data: try JSONEncoder().encode(updatedUser), encoding: .utf8) ?? ""
         ]
-        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = appUser.hproseService?.runMApp(entry, params, nil) as? [String: Any] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
         }
         if let result = response["status"] as? String {
@@ -1955,9 +1942,6 @@ final class HproseInstance: ObservableObject {
     // MARK: - User Avatar
     /// Sets the user's avatar on the server
     func setUserAvatar(user: User, avatar: String) async throws {
-        guard let service = hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
         let entry = "set_user_avatar"
         let params: [String: Any] = [
             "aid": appId,
@@ -1965,7 +1949,7 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "avatar": avatar
         ]
-        _ = service.runMApp(entry, params, nil)
+        _ = appUser.hproseService?.runMApp(entry, params, nil)
     }
 
     /// Find IP addresses of given nodeId
@@ -2044,22 +2028,17 @@ final class HproseInstance: ObservableObject {
     
     /// Send a chat message to a recipient
     func sendMessage(receiptId: String, message: ChatMessage) async throws {
-        guard let service = hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
-        }
-        
+
         let entry = "message_outgoing"
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
-            "entry": entry,
             "userid": appUser.mid,
             "receiptid": receiptId,
-            "msg": message.toJSONString(),
-            "hostid": appUser.hostIds?.first ?? ""
+            "msg": message.toJSONString()
         ]
         
-        let response = service.runMApp(entry, params, nil) as? Bool
+        let response = appUser.hproseService?.runMApp(entry, params, nil) as? Bool
         
         if response == true {
             // Try to send to recipient's node as well
@@ -2074,13 +2053,9 @@ final class HproseInstance: ObservableObject {
                     "msg": message.toJSONString()
                 ]
                 
-                do {
-                    let receiptResponse = receiptUser.hproseService?.runMApp(receiptEntry, receiptParams, nil) as? Bool
-                    if receiptResponse != true {
-                        print("[sendMessage] Warning: Failed to send to recipient node")
-                    }
-                } catch {
-                    print("[sendMessage] Warning: Error sending to recipient node: \(error)")
+                let receiptResponse = receiptUser.hproseService?.runMApp(receiptEntry, receiptParams, nil) as? Bool
+                if receiptResponse != true {
+                    print("[sendMessage] Warning: Failed to send to recipient node")
                 }
             }
         } else {
@@ -2090,7 +2065,7 @@ final class HproseInstance: ObservableObject {
     
     /// Fetch recent unread messages from a sender
     func fetchMessages(senderId: String) async throws -> [ChatMessage] {
-        guard let service = hproseService else {
+        guard let service = appUser.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         
@@ -2098,7 +2073,6 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
-            "entry": entry,
             "userid": appUser.mid,
             "senderid": senderId
         ]
@@ -2120,7 +2094,7 @@ final class HproseInstance: ObservableObject {
     func checkNewMessages() async throws -> [ChatMessage] {
         guard !appUser.isGuest else { return [] }
         
-        guard let service = hproseService else {
+        guard let service = appUser.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         
@@ -2128,7 +2102,6 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
-            "entry": entry,
             "userid": appUser.mid
         ]
         
