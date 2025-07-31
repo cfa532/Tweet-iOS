@@ -31,7 +31,7 @@ struct ChatScreen: View {
             // Header
             HStack {
                 if let user = user {
-                    Avatar(user: user, size: 32)
+                    Avatar(user: user, size: 40)
                     VStack(alignment: .leading) {
                         Text("\(user.name ?? "")@\(user.username ?? "")")
                             .font(.headline)
@@ -61,9 +61,22 @@ struct ChatScreen: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(messages) { message in
-                            ChatMessageView(message: message, isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid)
-                                .id(message.id)
+                        ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                            // Add time divider if there's a 5+ minute gap
+                            if index > 0 {
+                                let timeDiff = message.timestamp - messages[index - 1].timestamp
+                                if timeDiff > 300 { // 5 minutes = 300 seconds
+                                    TimeDividerView(timestamp: message.timestamp)
+                                }
+                            }
+                            
+                            ChatMessageView(
+                                message: message, 
+                                isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid,
+                                isLastMessage: index == messages.count - 1,
+                                showTimestamp: index >= messages.count - 2 // Show timestamp for last 2 messages
+                            )
+                            .id(message.id)
                         }
                     }
                     .padding()
@@ -146,9 +159,16 @@ struct ChatScreen: View {
                     
                     // Text input
                     TextField("Type a message...", text: $messageText, axis: .vertical)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 12) // Increased vertical padding for taller touchable area
+                        .background(Color(.systemGray6))
+                        .cornerRadius(12)
                         .lineLimit(1...5)
                         .focused($isTextFieldFocused)
+                        .onTapGesture {
+                            // Focus the text field when tapped anywhere in its area
+                            isTextFieldFocused = true
+                        }
                         .onSubmit {
                             // Hide keyboard when user submits
                             hideKeyboard()
@@ -480,9 +500,43 @@ struct AttachmentOptionView: View {
     }
 }
 
+struct TimeDividerView: View {
+    let timestamp: TimeInterval
+    
+    var body: some View {
+        HStack {
+            Rectangle()
+                .fill(Color(.separator))
+                .frame(height: 0.5)
+            
+            Text(formatTime(timestamp))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(.systemBackground))
+                .cornerRadius(8)
+            
+            Rectangle()
+                .fill(Color(.separator))
+                .frame(height: 0.5)
+        }
+        .padding(.vertical, 16)
+    }
+    
+    private func formatTime(_ timestamp: TimeInterval) -> String {
+        let date = Date(timeIntervalSince1970: timestamp)
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+}
+
 struct ChatMessageView: View {
     let message: ChatMessage
     let isFromCurrentUser: Bool
+    let isLastMessage: Bool
+    let showTimestamp: Bool
     
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -510,19 +564,21 @@ struct ChatMessageView: View {
                         .foregroundColor(
                             isFromCurrentUser ? .white : .primary
                         )
-                        .clipShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser))
+                        .clipShape(isLastMessage ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
                 }
                 
                 // Attachment
                 if let attachment = message.attachment {
-                    AttachmentView(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                    AttachmentView(attachment: attachment, isFromCurrentUser: isFromCurrentUser, isLastMessage: isLastMessage)
                 }
                 
-                // Timestamp
-                Text(formatTime(message.timestamp))
-                    .font(.caption2)
-                    .foregroundColor(.gray)
-                    .padding(.horizontal, 4)
+                // Timestamp - only show for last 2 messages
+                if showTimestamp {
+                    Text(formatTime(message.timestamp))
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                        .padding(.horizontal, 4)
+                }
             }
             .frame(maxWidth: .infinity, alignment: isFromCurrentUser ? .trailing : .leading)
             
@@ -544,6 +600,7 @@ struct ChatMessageView: View {
 struct AttachmentView: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
+    let isLastMessage: Bool
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -606,7 +663,7 @@ struct AttachmentView: View {
         .background(
             isFromCurrentUser ? Color.blue.opacity(0.1) : Color(.systemGray6)
         )
-        .clipShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser))
+        .clipShape(isLastMessage ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
     }
     
     private func getAttachmentIcon(for type: String) -> String {
