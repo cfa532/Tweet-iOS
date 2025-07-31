@@ -61,8 +61,9 @@ class ChatSessionRepository: ObservableObject {
             }
         }
         
+        let sessionsCopy = sessions
         await MainActor.run {
-            self.chatSessions = sessions
+            self.chatSessions = sessionsCopy
         }
         
         return sessions
