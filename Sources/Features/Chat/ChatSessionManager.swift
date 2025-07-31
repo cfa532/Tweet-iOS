@@ -115,6 +115,9 @@ class ChatSessionManager: ObservableObject {
                 chatSessions.append(newSession)
                 print("[ChatSessionManager] Created new chat session for \(senderId)")
             }
+            
+            // Save updated sessions to local storage
+            saveChatSessionsToLocalStorage()
         }
     }
     

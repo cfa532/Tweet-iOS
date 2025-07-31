@@ -43,7 +43,7 @@ struct ChatListScreen: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        ForEach(chatSessionManager.chatSessions) { session in
+                        ForEach(chatSessionManager.chatSessions.sorted(by: { $0.timestamp > $1.timestamp })) { session in
                             ChatSessionRow(session: session)
                         }
                         .onDelete(perform: deleteChatSession)
@@ -114,52 +114,64 @@ struct ChatSessionRow: View {
     
     var body: some View {
         NavigationLink(value: session.receiptId) {
-            HStack {
+            HStack(alignment: .top, spacing: 12) {
                 // User Avatar
                 if let user = user {
-                    Avatar(user: user, size: 40)
+                    Avatar(user: user, size: 44)
                 } else {
                     Circle()
                         .fill(Color.gray.opacity(0.3))
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
                         .overlay(
                             Image(systemName: "person")
                                 .foregroundColor(.gray)
                         )
                 }
                 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     HStack {
+                        // Name and Handle on one line
                         if let user = user {
-                            Text("\(user.name ?? "")@\(user.username ?? "")")
-                                .font(.headline)
-                                .foregroundColor(.primary)
+                            HStack(spacing: 0) {
+                                Text(user.name ?? "")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.primary)
+                                Text("@\(user.username ?? "")")
+                                    .font(.system(size: 16, weight: .regular))
+                                    .foregroundColor(.secondary)
+                            }
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         } else {
                             Text("Loading...")
-                                .font(.headline)
+                                .font(.system(size: 16, weight: .semibold))
                                 .foregroundColor(.gray)
+                                .lineLimit(1)
                         }
                         
                         Spacer()
                         
+                        // Date
                         Text(formatDate(session.timestamp))
-                            .font(.caption)
-                            .foregroundColor(.gray)
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundColor(.secondary)
                     }
                     
-                    Text(session.lastMessage.content)
-                        .font(.body)
-                        .foregroundColor(.secondary)
+                    // Message preview
+                    Text(session.lastMessage.content.isEmpty ? "📎 Attachment" : session.lastMessage.content)
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundColor(.primary)
                         .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                 }
                 
                 if session.hasNews {
                     Circle()
                         .fill(Color.red)
-                        .frame(width: 12, height: 12)
+                        .frame(width: 8, height: 8)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 8)
         }
         .task {
             user = try? await hproseInstance.fetchUser(session.receiptId)
@@ -168,10 +180,20 @@ struct ChatSessionRow: View {
     
     private func formatDate(_ timestamp: TimeInterval) -> String {
         let date = Date(timeIntervalSince1970: timestamp)
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+        let calendar = Calendar.current
+        let now = Date()
+        
+        if calendar.isDate(date, inSameDayAs: now) {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+            return formatter.string(from: date)
+        } else if calendar.isDate(date, equalTo: calendar.date(byAdding: .day, value: -1, to: now) ?? now, toGranularity: .day) {
+            return "昨天"
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "M月d日"
+            return formatter.string(from: date)
+        }
     }
 }
 

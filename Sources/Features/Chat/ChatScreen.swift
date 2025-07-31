@@ -335,6 +335,15 @@ struct ChatScreen: View {
             // Save new messages to local storage
             chatRepository.addMessagesToLocalStorage(backendMessages)
             
+            // Update session timestamp if there are new messages
+            if let latestMessage = sortedMessages.last, latestMessage.timestamp > messages.first?.timestamp ?? 0 {
+                await chatSessionManager.updateOrCreateChatSession(
+                    senderId: receiptId,
+                    message: latestMessage,
+                    hasNews: false
+                )
+            }
+            
             print("[ChatScreen] Fetched \(backendMessages.count) messages from backend, total: \(sortedMessages.count)")
         } catch {
             print("[ChatScreen] Error fetching messages from backend: \(error)")
