@@ -67,7 +67,6 @@ struct ChatScreen: View {
                         }
                     }
                     .padding()
-                    .padding(.bottom, keyboardHeight > 0 ? 120 : 0) // Add padding when keyboard is shown
                 }
                 .onChange(of: messages.count) { _ in
                     if let lastMessage = messages.last {
@@ -172,7 +171,6 @@ struct ChatScreen: View {
             }
             .background(Color(.systemBackground))
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
         .onTapGesture {
             // Hide keyboard when tapping outside input area
             hideKeyboard()
