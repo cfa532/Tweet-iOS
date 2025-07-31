@@ -5,13 +5,9 @@ struct ChatListScreen: View {
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messageCheckTimer: Timer?
     @State private var showStartChat = false
-    @State private var selectedSession: ChatSession? = nil
-    @State private var showChatScreen = false
-    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
-        NavigationStack {
-            VStack {
+        VStack {
                 if chatSessionManager.chatSessions.isEmpty {
                     VStack(spacing: 20) {
                         Image(systemName: "message")
@@ -56,8 +52,10 @@ struct ChatListScreen: View {
             }
             .navigationTitle(LocalizedStringKey("Chats"))
             .navigationBarTitleDisplayMode(.inline)
-        }
-        .task {
+            .navigationDestination(for: String.self) { receiptId in
+                ChatScreen(receiptId: receiptId)
+            }
+            .task {
             await loadChatSessions()
         }
         .onAppear {
@@ -115,11 +113,11 @@ struct ChatSessionRow: View {
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     
     var body: some View {
-        NavigationLink(destination: ChatScreen(receiptId: session.receiptId)) {
+        NavigationLink(value: session.receiptId) {
             HStack {
                 // User Avatar
                 if let user = user {
-                    UserAvatarView(user: user, size: 40)
+                    Avatar(user: user, size: 40)
                 } else {
                     Circle()
                         .fill(Color.gray.opacity(0.3))
@@ -177,36 +175,4 @@ struct ChatSessionRow: View {
     }
 }
 
-struct UserAvatarView: View {
-    let user: User
-    let size: CGFloat
-    
-    var body: some View {
-        if let avatarUrl = user.avatarUrl, !avatarUrl.isEmpty {
-            AsyncImage(url: URL(string: avatarUrl)) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Circle()
-                    .fill(Color.gray.opacity(0.3))
-                    .overlay(
-                        Text(String((user.name ?? "").prefix(1)))
-                            .font(.headline)
-                            .foregroundColor(.gray)
-                    )
-            }
-            .frame(width: size, height: size)
-            .clipShape(Circle())
-        } else {
-            Circle()
-                .fill(Color.gray.opacity(0.3))
-                .frame(width: size, height: size)
-                .overlay(
-                    Text(String((user.name ?? "").prefix(1)))
-                        .font(.headline)
-                        .foregroundColor(.gray)
-                )
-        }
-    }
-} 
+ 

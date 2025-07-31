@@ -2047,7 +2047,6 @@ final class HproseInstance: ObservableObject {
                 let receiptParams: [String: Any] = [
                     "aid": appId,
                     "ver": "last",
-                    "entry": receiptEntry,
                     "senderid": appUser.mid,
                     "receiptid": receiptId,
                     "msg": message.toJSONString()

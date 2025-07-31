@@ -45,7 +45,6 @@
 		468CF2282E39CC8900D49038 /* ChatBubbleShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2272E39CC8900D49038 /* ChatBubbleShape.swift */; };
 		468CF22A2E39FBBC00D49038 /* ChatSessionRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2292E39FBBC00D49038 /* ChatSessionRepository.swift */; };
 		468CF22C2E3A619A00D49038 /* ChatSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22B2E3A619A00D49038 /* ChatSessionManager.swift */; };
-		468CF22D2E3A619B00D49038 /* StartChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22E2E3A619B00D49038 /* StartChatView.swift */; };
 		468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22D2E3A69F700D49038 /* StartChatView.swift */; };
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };

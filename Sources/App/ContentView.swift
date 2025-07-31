@@ -9,6 +9,8 @@ struct ContentView: View {
     @State private var showComposeSheet = false
     @State private var isNavigationVisible = true
     @State private var navigationPath = NavigationPath()
+    @State private var chatNavigationPath = NavigationPath()
+    @State private var isInChatScreen = false
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -27,7 +29,12 @@ struct ContentView: View {
                         )
                     }
                 } else if selectedTab == 1 {
-                    ChatListScreen()
+                    NavigationStack(path: $chatNavigationPath) {
+                        ChatListScreen()
+                    }
+                    .onChange(of: chatNavigationPath.count) { count in
+                        isInChatScreen = count > 0
+                    }
                 } else if selectedTab == 3 {
                     SearchScreen()
                 }
@@ -37,8 +44,9 @@ struct ContentView: View {
                 Color.clear.frame(height: isNavigationVisible ? 40 : 0)
             }
             
-            // Custom Tab Bar
-            HStack(spacing: 0) {
+            // Custom Tab Bar - Hide when in chat screen
+            if !isInChatScreen {
+                HStack(spacing: 0) {
                 // Home Tab
                 Button(action: {
                     if selectedTab != 0 {
@@ -101,6 +109,7 @@ struct ContentView: View {
             .opacity(isNavigationVisible ? 1.0 : 0.3)
             .allowsHitTesting(true)
             .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
+        }
         }
         .sheet(isPresented: $showComposeSheet) {
             ComposeTweetView()

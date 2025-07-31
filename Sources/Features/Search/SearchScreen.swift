@@ -105,7 +105,7 @@ struct UserSearchResultRow: View {
     var body: some View {
         NavigationLink(destination: ProfileView(user: user)) {
             HStack {
-                UserAvatarView(user: user, size: 40)
+                Avatar(user: user, size: 40)
                 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(user.name ?? "")@\(user.username ?? "")")

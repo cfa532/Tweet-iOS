@@ -6,6 +6,8 @@ class ChatRepository: ObservableObject {
     
     private let hproseInstance = HproseInstance.shared
     private let chatSessionManager = ChatSessionManager.shared
+    private let userDefaults = UserDefaults.standard
+    private let messagesKey = "chat_messages"
     
     /// Load chat sessions for the current user
     func loadChatSessions() async {
@@ -23,6 +25,10 @@ class ChatRepository: ObservableObject {
             await MainActor.run {
                 self.chatMessages = messages
             }
+            
+            // Save messages to local storage
+            addMessagesToLocalStorage(messages)
+            
             print("[ChatRepository] Loaded \(messages.count) messages from sender \(receiptId)")
         } catch {
             print("[ChatRepository] Error loading messages: \(error)")
@@ -38,6 +44,9 @@ class ChatRepository: ObservableObject {
             await MainActor.run {
                 self.chatMessages.append(message)
             }
+            
+            // Save to local storage
+            addMessagesToLocalStorage([message])
             
             // Update chat session with the sent message
             await chatSessionManager.updateOrCreateChatSession(
@@ -90,5 +99,62 @@ class ChatRepository: ObservableObject {
     /// Clear messages for a specific conversation
     func clearMessages(for receiptId: String) {
         chatMessages.removeAll { $0.authorId == receiptId || $0.receiptId == receiptId }
+        saveMessagesToLocalStorage()
+    }
+    
+    // MARK: - Local Storage Methods
+    
+    /// Save messages to local storage
+    private func saveMessagesToLocalStorage() {
+        do {
+            let data = try JSONEncoder().encode(chatMessages)
+            userDefaults.set(data, forKey: messagesKey)
+            print("[ChatRepository] Saved \(chatMessages.count) messages to local storage")
+        } catch {
+            print("[ChatRepository] Error saving messages to local storage: \(error)")
+        }
+    }
+    
+    /// Load messages from local storage
+    private func loadMessagesFromLocalStorage() {
+        guard let data = userDefaults.data(forKey: messagesKey) else {
+            chatMessages = []
+            return
+        }
+        
+        do {
+            let messages = try JSONDecoder().decode([ChatMessage].self, from: data)
+            chatMessages = messages
+            print("[ChatRepository] Loaded \(messages.count) messages from local storage")
+        } catch {
+            print("[ChatRepository] Error loading messages from local storage: \(error)")
+            chatMessages = []
+        }
+    }
+    
+    /// Get the last N messages for a specific conversation from local storage
+    func getLastMessages(for receiptId: String, limit: Int = 50) -> [ChatMessage] {
+        let conversationMessages = chatMessages.filter { message in
+            message.authorId == receiptId || message.receiptId == receiptId
+        }
+        
+        // Sort by timestamp (oldest first) and get the last N messages
+        let sortedMessages = conversationMessages.sorted { $0.timestamp < $1.timestamp }
+        return Array(sortedMessages.suffix(limit))
+    }
+    
+    /// Add messages to local storage
+    func addMessagesToLocalStorage(_ newMessages: [ChatMessage]) {
+        for message in newMessages {
+            if !chatMessages.contains(where: { $0.id == message.id }) {
+                chatMessages.append(message)
+            }
+        }
+        saveMessagesToLocalStorage()
+    }
+    
+    /// Initialize the repository
+    init() {
+        loadMessagesFromLocalStorage()
     }
 } 

@@ -1,18 +1,20 @@
 import Foundation
 
-struct ChatMessage: Identifiable, Codable {
+struct ChatMessage: Identifiable, Codable, Hashable {
     let id: String
     let authorId: String
     let receiptId: String
     let content: String
     let timestamp: TimeInterval
+    let attachment: MimeiFileType?
     
-    init(id: String = UUID().uuidString, authorId: String, receiptId: String, content: String, timestamp: TimeInterval = Date().timeIntervalSince1970) {
+    init(id: String = UUID().uuidString, authorId: String, receiptId: String, content: String, timestamp: TimeInterval = Date().timeIntervalSince1970, attachment: MimeiFileType? = nil) {
         self.id = id
         self.authorId = authorId
         self.receiptId = receiptId
         self.content = content
         self.timestamp = timestamp
+        self.attachment = attachment
     }
     
     /// Convert ChatMessage to JSON string

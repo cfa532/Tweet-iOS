@@ -41,7 +41,7 @@ struct StartChatView: View {
                             print("[StartChatView] showChatScreen set to: \(showChatScreen)")
                         }) {
                             HStack {
-                                UserAvatarView(user: user, size: 40)
+                                Avatar(user: user, size: 40)
                                 
                                 VStack(alignment: .leading, spacing: 4) {
                                     HStack {
