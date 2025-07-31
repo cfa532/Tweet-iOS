@@ -14,6 +14,20 @@ struct ChatScreen: View {
     @State private var isSendingMessage = false
     @FocusState private var isTextFieldFocused: Bool
     
+    private func isLastMessageFromSender(index: Int, messages: [ChatMessage]) -> Bool {
+        guard index < messages.count else { return false }
+        let currentMessage = messages[index]
+        let currentSenderId = currentMessage.authorId
+        
+        // Check if this is the last message from this sender
+        for i in (index + 1)..<messages.count {
+            if messages[i].authorId == currentSenderId {
+                return false // Found a later message from the same sender
+            }
+        }
+        return true // No later messages from this sender
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             // Debug info
@@ -74,6 +88,7 @@ struct ChatScreen: View {
                                 message: message, 
                                 isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid,
                                 isLastMessage: index == messages.count - 1,
+                                isLastFromSender: isLastMessageFromSender(index: index, messages: messages),
                                 showTimestamp: index >= messages.count - 2 // Show timestamp for last 2 messages
                             )
                             .id(message.id)
@@ -536,6 +551,7 @@ struct ChatMessageView: View {
     let message: ChatMessage
     let isFromCurrentUser: Bool
     let isLastMessage: Bool
+    let isLastFromSender: Bool
     let showTimestamp: Bool
     
     var body: some View {
@@ -564,12 +580,12 @@ struct ChatMessageView: View {
                         .foregroundColor(
                             isFromCurrentUser ? .white : .primary
                         )
-                        .clipShape(isLastMessage ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
+                        .clipShape(isLastFromSender ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
                 }
                 
                 // Attachment
                 if let attachment = message.attachment {
-                    AttachmentView(attachment: attachment, isFromCurrentUser: isFromCurrentUser, isLastMessage: isLastMessage)
+                    AttachmentView(attachment: attachment, isFromCurrentUser: isFromCurrentUser, isLastMessage: isLastMessage, isLastFromSender: isLastFromSender)
                 }
                 
                 // Timestamp - only show for last 2 messages
@@ -601,6 +617,7 @@ struct AttachmentView: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
     let isLastMessage: Bool
+    let isLastFromSender: Bool
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -663,7 +680,7 @@ struct AttachmentView: View {
         .background(
             isFromCurrentUser ? Color.blue.opacity(0.1) : Color(.systemGray6)
         )
-        .clipShape(isLastMessage ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
+        .clipShape(isLastFromSender ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
     }
     
     private func getAttachmentIcon(for type: String) -> String {
