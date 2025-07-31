@@ -75,6 +75,19 @@ struct ChatScreen: View {
                         }
                     }
                 }
+                .onChange(of: keyboardHeight) { newHeight in
+                    // Scroll to bottom when keyboard appears/disappears
+                    print("[ChatScreen] Keyboard height changed to: \(newHeight)")
+                    if let lastMessage = messages.last {
+                        // Add a delay to ensure keyboard animation is complete
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            print("[ChatScreen] Scrolling to message: \(lastMessage.id)")
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                            }
+                        }
+                    }
+                }
                 .onAppear {
                     // Scroll to bottom when view appears
                     if let lastMessage = messages.last {

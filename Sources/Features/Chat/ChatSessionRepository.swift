@@ -75,7 +75,7 @@ class ChatSessionRepository: ObservableObject {
         
         guard let messageEntity = lastMessageEntity else { return }
         
-        if let existingSession = sessionEntity {
+        if sessionEntity != nil {
             await chatSessionDao.updateSession(
                 userId: userId,
                 receiptId: receiptId,
