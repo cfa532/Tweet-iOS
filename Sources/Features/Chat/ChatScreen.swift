@@ -545,7 +545,7 @@ struct TimeDividerView: View {
                 .fill(Color(.separator))
                 .frame(height: 0.5)
         }
-        .padding(.vertical, 16)
+        .padding(.vertical, 4)
     }
     
     private func formatTime(_ timestamp: TimeInterval) -> String {
@@ -562,18 +562,23 @@ struct ChatMessageView: View {
     let isLastMessage: Bool
     let isLastFromSender: Bool
     let showTimestamp: Bool
+    @State private var receiptUser: User?
     
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             if !isFromCurrentUser {
-                // Avatar for received messages (LEFT)
-                Circle()
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(width: 32, height: 32)
-                    .overlay(
-                        Image(systemName: "person")
-                            .foregroundColor(.gray)
-                    )
+                // Avatar for received messages (LEFT) - use receipt's avatar
+                if let receiptUser = receiptUser {
+                    Avatar(user: receiptUser, size: 32)
+                } else {
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 32, height: 32)
+                        .overlay(
+                            Image(systemName: "person")
+                                .foregroundColor(.gray)
+                        )
+                }
             }
             
             // Message content
@@ -610,6 +615,12 @@ struct ChatMessageView: View {
             if isFromCurrentUser {
                 // Avatar for sent messages (RIGHT)
                 Avatar(user: HproseInstance.shared.appUser, size: 32)
+            }
+        }
+        .task {
+            if !isFromCurrentUser {
+                // Load receipt user for received messages
+                receiptUser = try? await HproseInstance.shared.fetchUser(message.authorId)
             }
         }
     }

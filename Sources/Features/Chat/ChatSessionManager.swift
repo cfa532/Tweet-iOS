@@ -63,15 +63,15 @@ class ChatSessionManager: ObservableObject {
             if !newMessages.isEmpty {
                 print("[ChatSessionManager] Found \(newMessages.count) new messages from backend")
                 
-                // Group messages by sender
-                let messagesBySender = Dictionary(grouping: newMessages) { message in
+                // Group messages by conversation partner
+                let messagesByPartner = Dictionary(grouping: newMessages) { message in
                     message.authorId == hproseInstance.appUser.mid ? message.receiptId : message.authorId
                 }
                 
                 // Update or create chat sessions
-                for (senderId, messages) in messagesBySender {
+                for (partnerId, messages) in messagesByPartner {
                     if let latestMessage = messages.max(by: { $0.timestamp < $1.timestamp }) {
-                        await updateOrCreateChatSession(senderId: senderId, message: latestMessage, hasNews: true)
+                        await updateOrCreateChatSession(senderId: partnerId, message: latestMessage, hasNews: true)
                     }
                 }
                 
@@ -88,32 +88,42 @@ class ChatSessionManager: ObservableObject {
     /// Update or create a chat session
     func updateOrCreateChatSession(senderId: String, message: ChatMessage, hasNews: Bool = false) async {
         await MainActor.run {
+            // Determine the receiptId (the other person in the conversation)
+            let receiptId: String
+            if message.authorId == hproseInstance.appUser.mid {
+                // Message sent by current user, receiptId is the recipient
+                receiptId = message.receiptId
+            } else {
+                // Message received by current user, receiptId is the sender
+                receiptId = message.authorId
+            }
+            
             if let existingIndex = chatSessions.firstIndex(where: { session in
-                session.receiptId == senderId || session.receiptId == message.authorId
+                session.userId == hproseInstance.appUser.mid && session.receiptId == receiptId
             }) {
                 // Update existing session
                 let existingSession = chatSessions[existingIndex]
                 let updatedSession = ChatSession(
                     id: existingSession.id,
-                    userId: existingSession.userId,
-                    receiptId: existingSession.receiptId,
+                    userId: hproseInstance.appUser.mid,
+                    receiptId: receiptId,
                     lastMessage: message,
                     timestamp: message.timestamp,
                     hasNews: hasNews || existingSession.hasNews
                 )
                 chatSessions[existingIndex] = updatedSession
-                print("[ChatSessionManager] Updated existing chat session for \(senderId)")
+                print("[ChatSessionManager] Updated existing chat session for \(receiptId)")
             } else {
                 // Create new session
                 let newSession = ChatSession(
                     userId: hproseInstance.appUser.mid,
-                    receiptId: senderId,
+                    receiptId: receiptId,
                     lastMessage: message,
                     timestamp: message.timestamp,
                     hasNews: hasNews
                 )
                 chatSessions.append(newSession)
-                print("[ChatSessionManager] Created new chat session for \(senderId)")
+                print("[ChatSessionManager] Created new chat session for \(receiptId)")
             }
             
             // Save updated sessions to local storage

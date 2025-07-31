@@ -43,7 +43,9 @@ struct ChatListScreen: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        ForEach(chatSessionManager.chatSessions.sorted(by: { $0.timestamp > $1.timestamp })) { session in
+                        ForEach(chatSessionManager.chatSessions
+                            .filter { $0.userId == HproseInstance.shared.appUser.mid }
+                            .sorted(by: { $0.timestamp > $1.timestamp })) { session in
                             ChatSessionRow(session: session)
                         }
                         .onDelete(perform: deleteChatSession)
