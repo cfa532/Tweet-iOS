@@ -9,7 +9,8 @@ struct ChatScreen: View {
     @State private var messageText = ""
     @State private var user: User?
     @State private var selectedAttachment: MimeiFileType?
-    @State private var showingAttachmentPicker = false
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var attachmentData: Data?
     @State private var keyboardHeight: CGFloat = 0
     @State private var isSendingMessage = false
     @FocusState private var isTextFieldFocused: Bool
@@ -34,53 +35,10 @@ struct ChatScreen: View {
         VStack(spacing: 0) {
             // Debug info
             if messages.isEmpty && user == nil {
-                VStack {
-                    Text("Loading chat...")
-                        .font(.headline)
-                    Text("Receipt ID: \(receiptId)")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.systemBackground))
+                ChatLoadingView(receiptId: receiptId)
             }
             // Header
-            HStack {
-                // Back button
-                Button(action: {
-                    dismiss()
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .foregroundColor(.blue)
-                        Text(NSLocalizedString("Back", comment: "Back button in navigation"))
-                            .foregroundColor(.blue)
-                    }
-                }
-                
-                Spacer()
-                
-                if let user = user {
-                    HStack(spacing: 8) {
-                        Avatar(user: user, size: 32)
-                        Text(user.name ?? "@\(user.username ?? "")")
-                            .font(.headline)
-                    }
-                } else {
-                    Text("Loading...")
-                        .font(.headline)
-                }
-                
-                Spacer()
-            }
-            .padding()
-            .background(Color(.systemBackground))
-            .overlay(
-                Rectangle()
-                    .frame(height: 0.5)
-                    .foregroundColor(Color(.separator)),
-                alignment: .bottom
-            )
+            ChatHeaderView(user: user, dismiss: dismiss)
             
             // Messages - Take remaining space
             ScrollViewReader { proxy in
@@ -175,15 +133,17 @@ struct ChatScreen: View {
                 
                 // Message input bar
                 HStack(spacing: 12) {
-                    // Attachment button
-                    Button(action: {
-                        showingAttachmentPicker = true
-                    }) {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 20))
-                            .foregroundColor(isSendingMessage ? .gray : .blue)
-                    }
-                    .disabled(isSendingMessage)
+                                    // Attachment button
+                PhotosPicker(
+                    selection: $selectedPhotos,
+                    maxSelectionCount: 1,
+                    matching: .any(of: [.images, .videos])
+                ) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 20))
+                        .foregroundColor(isSendingMessage ? .gray : .blue)
+                }
+                .disabled(isSendingMessage)
                     
                     // Text input
                     TextField("Type a message...", text: $messageText, axis: .vertical)
@@ -234,6 +194,31 @@ struct ChatScreen: View {
                         .foregroundColor(Color(.separator)),
                     alignment: .top
                 )
+                
+                // Attachment preview placeholder
+                if selectedAttachment != nil {
+                    HStack {
+                        Text("📎 Attachment selected")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button(action: {
+                            selectedAttachment = nil
+                            attachmentData = nil
+                            selectedPhotos = []
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.red)
+                        }
+                        .disabled(isSendingMessage)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                }
             }
             .background(Color(.systemBackground))
         }
@@ -265,8 +250,10 @@ struct ChatScreen: View {
             
             print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
         }
-        .sheet(isPresented: $showingAttachmentPicker) {
-            AttachmentPickerSheet(selectedAttachment: $selectedAttachment)
+        .onChange(of: selectedPhotos) { items in
+            Task {
+                await handlePhotoSelection(items)
+            }
         }
         .onDisappear {
             // Stop the periodic message refresh timer when leaving the screen
@@ -277,19 +264,35 @@ struct ChatScreen: View {
     private func sendMessage() {
         guard canSendMessage && !isSendingMessage else { return }
         
-        let message = ChatMessage(
-            authorId: HproseInstance.shared.appUser.mid,
-            receiptId: receiptId,
-            chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
-            content: messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : messageText.trimmingCharacters(in: .whitespacesAndNewlines),
-            attachments: selectedAttachment != nil ? [selectedAttachment!] : nil
-        )
-        
         // Set sending state
         isSendingMessage = true
         
         Task {
             do {
+                var uploadedAttachments: [MimeiFileType]? = nil
+                
+                // Upload attachment if present
+                if let attachment = selectedAttachment, let photoData = attachmentData {
+                    print("[ChatScreen] Uploading attachment to IPFS...")
+                    if let uploadedAttachment = try await HproseInstance.shared.uploadToIPFS(
+                        data: photoData,
+                        typeIdentifier: attachment.type == "image" ? "public.image" : "public.movie",
+                        fileName: attachment.fileName
+                    ) {
+                        uploadedAttachments = [uploadedAttachment]
+                        print("[ChatScreen] Attachment uploaded successfully: \(uploadedAttachment.fileName ?? "Unknown")")
+                    }
+                }
+                
+                // Create message with uploaded attachment
+                let message = ChatMessage(
+                    authorId: HproseInstance.shared.appUser.mid,
+                    receiptId: receiptId,
+                    chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+                    content: messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : messageText.trimmingCharacters(in: .whitespacesAndNewlines),
+                    attachments: uploadedAttachments
+                )
+                
                 try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: message)
                 
                 // Update the chat session
@@ -304,6 +307,7 @@ struct ChatScreen: View {
                     messages.append(message)
                     messageText = ""
                     selectedAttachment = nil
+                    attachmentData = nil
                     isSendingMessage = false
                 }
                 
@@ -446,6 +450,34 @@ struct ChatScreen: View {
         print("[ChatScreen] Stopped periodic message refresh timer")
     }
     
+    // MARK: - Photo Selection
+    
+    private func handlePhotoSelection(_ items: [PhotosPickerItem]) async {
+        guard let item = items.first else { return }
+        
+        do {
+            if let data = try await item.loadTransferable(type: Data.self) {
+                // Create a temporary MimeiFileType for the selected photo
+                let tempAttachment = MimeiFileType(
+                    mid: UUID().uuidString,
+                    type: "image",
+                    size: Int64(data.count),
+                    fileName: "photo.jpg",
+                    url: nil
+                )
+                
+                await MainActor.run {
+                    // Replace current attachment with new one
+                    selectedAttachment = tempAttachment
+                    attachmentData = data // Store the actual file data
+                    selectedPhotos = [] // Clear selection
+                }
+            }
+        } catch {
+            print("[ChatScreen] Error loading photo: \(error)")
+        }
+    }
+    
     private func refreshMessagesFromBackend() async {
         do {
             let backendMessages = try await HproseInstance.shared.fetchMessages(senderId: receiptId)
@@ -493,145 +525,7 @@ struct ChatScreen: View {
     }
 }
 
-// MARK: - Attachment Picker Sheet
-struct AttachmentPickerSheet: View {
-    @Binding var selectedAttachment: MimeiFileType?
-    @Environment(\.dismiss) private var dismiss
-    @State private var selectedPhotos: [PhotosPickerItem] = []
-    @State private var isUploading = false
-    
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                // Header
-                Text("Add Attachment")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                    .padding(.top)
-                
-                // Attachment options
-                VStack(spacing: 16) {
-                    // Photo/Video picker
-                    PhotosPicker(
-                        selection: $selectedPhotos,
-                        maxSelectionCount: 1,
-                        matching: .any(of: [.images, .videos])
-                    ) {
-                        AttachmentOptionView(
-                            icon: "photo.on.rectangle",
-                            title: "Photo or Video",
-                            subtitle: "Select from your library"
-                        )
-                    }
-                    
-                    // Document picker
-                    Button(action: {
-                        // TODO: Implement document picker
-                        print("Document picker not implemented yet")
-                    }) {
-                        AttachmentOptionView(
-                            icon: "doc.text",
-                            title: "Document",
-                            subtitle: "Select a file"
-                        )
-                    }
-                    
-                    // Camera
-                    Button(action: {
-                        // TODO: Implement camera
-                        print("Camera not implemented yet")
-                    }) {
-                        AttachmentOptionView(
-                            icon: "camera",
-                            title: "Camera",
-                            subtitle: "Take a photo or video"
-                        )
-                    }
-                }
-                .padding(.horizontal)
-                
-                Spacer()
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationBarBackButtonHidden(true)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-            }
-        }
-        .onChange(of: selectedPhotos) { items in
-            Task {
-                await handlePhotoSelection(items)
-            }
-        }
-    }
-    
-    private func handlePhotoSelection(_ items: [PhotosPickerItem]) async {
-        guard let item = items.first else { return }
-        
-        isUploading = true
-        
-        do {
-            if let data = try await item.loadTransferable(type: Data.self) {
-                // Create a temporary MimeiFileType for the selected photo
-                let tempAttachment = MimeiFileType(
-                    mid: UUID().uuidString,
-                    type: "image",
-                    size: Int64(data.count),
-                    fileName: "photo.jpg",
-                    url: nil
-                )
-                
-                await MainActor.run {
-                    selectedAttachment = tempAttachment
-                    dismiss()
-                }
-            }
-        } catch {
-            print("[AttachmentPickerSheet] Error loading photo: \(error)")
-        }
-        
-        isUploading = false
-    }
-}
 
-struct AttachmentOptionView: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-    
-    var body: some View {
-        HStack(spacing: 16) {
-            Image(systemName: icon)
-                .font(.system(size: 24))
-                .foregroundColor(.blue)
-                .frame(width: 40, height: 40)
-                .background(Color.blue.opacity(0.1))
-                .clipShape(Circle())
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Spacer()
-            
-            Image(systemName: "chevron.right")
-                .foregroundColor(.gray)
-        }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
-    }
-}
 
 struct TimeDividerView: View {
     let timestamp: TimeInterval
@@ -692,7 +586,7 @@ struct ChatMessageView: View {
             
             // Message content
             VStack(alignment: isFromCurrentUser ? .trailing : .leading, spacing: 4) {
-                // Message text
+                // Row 1: Message text (if any)
                 if let content = message.content, !content.isEmpty {
                     Text(content)
                         .padding(.horizontal, 12)
@@ -706,10 +600,25 @@ struct ChatMessageView: View {
                         .clipShape(isLastFromSender ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
                 }
                 
-                // Attachments
+                // Row 2: Attachments
                 if let attachments = message.attachments, !attachments.isEmpty {
-                    ForEach(attachments, id: \.id) { attachment in
-                        AttachmentView(attachment: attachment, isFromCurrentUser: isFromCurrentUser, isLastMessage: isLastMessage, isLastFromSender: isLastFromSender)
+                    if attachments.count == 1, let attachment = attachments.first {
+                        // Single image attachment
+                        if attachment.type.lowercased().contains("image") {
+                            ChatImageViewWithPlaceholder(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                        } else {
+                            // Other file types
+                            Text("📎 Attachment")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 4)
+                        }
+                    } else {
+                        // Multiple attachments
+                        Text("📎 Attachments")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 4)
                     }
                 }
                 
@@ -835,4 +744,166 @@ struct AttachmentView: View {
         formatter.countStyle = .file
         return formatter.string(fromByteCount: size)
     }
-} 
+}
+
+
+
+// MARK: - Helper Components
+
+struct ChatLoadingView: View {
+    let receiptId: String
+    
+    var body: some View {
+        VStack {
+            Text("Loading chat...")
+                .font(.headline)
+            Text("Receipt ID: \(receiptId)")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+    }
+}
+
+struct ChatHeaderView: View {
+    let user: User?
+    let dismiss: DismissAction
+    
+    var body: some View {
+        HStack {
+            // Back button
+            Button(action: {
+                dismiss()
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                        .foregroundColor(.blue)
+                    Text(NSLocalizedString("Back", comment: "Back button in navigation"))
+                        .foregroundColor(.blue)
+                }
+            }
+            
+            Spacer()
+            
+            if let user = user {
+                HStack(spacing: 8) {
+                    Avatar(user: user, size: 32)
+                    Text(user.name ?? "@\(user.username ?? "")")
+                        .font(.headline)
+                }
+            } else {
+                Text("Loading...")
+                    .font(.headline)
+            }
+            
+            Spacer()
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .overlay(
+            Rectangle()
+                .frame(height: 0.5)
+                .foregroundColor(Color(.separator)),
+            alignment: .bottom
+        )
+    }
+}
+
+// MARK: - Chat Image View With Placeholder
+
+struct ChatImageViewWithPlaceholder: View {
+    let attachment: MimeiFileType
+    let isFromCurrentUser: Bool
+    
+    @State private var imageState: ImageState = .loading
+    @State private var showFullScreen = false
+    
+    private let baseUrl = HproseInstance.baseUrl
+    
+    var body: some View {
+        Group {
+            if let url = attachment.getUrl(baseUrl) {
+                ImageViewWithPlaceholder(
+                    attachment: attachment,
+                    baseUrl: baseUrl,
+                    url: url,
+                    imageState: imageState
+                )
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .onTapGesture {
+                    showFullScreen = true
+                }
+                .onAppear {
+                    loadImageIfNeeded()
+                }
+            } else {
+                // Fallback if no URL
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray6))
+                    .frame(width: 100, height: 100)
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.gray)
+                    )
+            }
+        }
+        .sheet(isPresented: $showFullScreen) {
+            if case .loaded(let image) = imageState {
+                FullScreenImageView(image: image)
+            }
+        }
+    }
+    
+    private func loadImageIfNeeded() {
+        // Show compressed image as placeholder first
+        if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            imageState = .placeholder(compressedImage)
+        } else {
+            imageState = .loading
+        }
+        
+        // Load original image from backend
+        guard let url = attachment.getUrl(baseUrl) else { return }
+        
+        Task {
+            if let originalImage = await ImageCacheManager.shared.loadOriginalImage(from: url, for: attachment, baseUrl: baseUrl) {
+                await MainActor.run {
+                    imageState = .loaded(originalImage)
+                }
+            } else {
+                await MainActor.run {
+                    imageState = .error
+                }
+            }
+        }
+    }
+}
+
+struct FullScreenImageView: View {
+    let image: UIImage
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationView {
+            GeometryReader { geometry in
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .background(Color.black)
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                }
+            }
+        }
+    }
+}
