@@ -2062,7 +2062,7 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    /// Fetch recent unread messages from a sender
+    /// Fetch recent unread messages from a sender (incoming messages only)
     func fetchMessages(senderId: String) async throws -> [ChatMessage] {
         guard let service = appUser.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
@@ -2081,7 +2081,16 @@ final class HproseInstance: ObservableObject {
         return response.compactMap { messageData in
             do {
                 let jsonData = try JSONSerialization.data(withJSONObject: messageData)
-                return try JSONDecoder().decode(ChatMessage.self, from: jsonData)
+                let message = try JSONDecoder().decode(ChatMessage.self, from: jsonData)
+                
+                // Only return messages that are incoming (sent by others to current user)
+                // Filter out messages sent by the current user
+                if message.authorId != appUser.mid {
+                    return message
+                } else {
+                    print("[fetchMessages] Filtered out outgoing message from \(message.authorId)")
+                    return nil
+                }
             } catch {
                 print("[fetchMessages] Error decoding message: \(error)")
                 return nil
@@ -2109,7 +2118,16 @@ final class HproseInstance: ObservableObject {
         return response.compactMap { messageData in
             do {
                 let jsonData = try JSONSerialization.data(withJSONObject: messageData)
-                return try JSONDecoder().decode(ChatMessage.self, from: jsonData)
+                let message = try JSONDecoder().decode(ChatMessage.self, from: jsonData)
+                
+                // Only return messages that are incoming (sent by others to current user)
+                // Filter out messages sent by the current user
+                if message.authorId != appUser.mid {
+                    return message
+                } else {
+                    print("[checkNewMessages] Filtered out outgoing message from \(message.authorId)")
+                    return nil
+                }
             } catch {
                 print("[checkNewMessages] Error decoding message: \(error)")
                 return nil

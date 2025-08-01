@@ -209,6 +209,7 @@ struct ChatScreen: View {
                     .disabled(!canSendMessage || isSendingMessage)
                 }
                 .padding()
+                .padding(.bottom, 49) // Add bottom padding to account for tab bar height
                 .background(Color(.systemBackground))
                 .overlay(
                     Rectangle()
@@ -223,6 +224,7 @@ struct ChatScreen: View {
             // Hide keyboard when tapping outside input area
             hideKeyboard()
         }
+        .toolbar(.hidden, for: .tabBar)
 
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
             if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
@@ -254,8 +256,9 @@ struct ChatScreen: View {
         let message = ChatMessage(
             authorId: HproseInstance.shared.appUser.mid,
             receiptId: receiptId,
-            content: messageText.trimmingCharacters(in: .whitespacesAndNewlines),
-            attachment: selectedAttachment
+            chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+            content: messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : messageText.trimmingCharacters(in: .whitespacesAndNewlines),
+            attachments: selectedAttachment != nil ? [selectedAttachment!] : nil
         )
         
         // Set sending state
@@ -309,19 +312,21 @@ struct ChatScreen: View {
     private func loadMessages() async {
         // First, load the last 50 messages from local storage
         let localMessages = chatRepository.getLastMessages(for: receiptId, limit: 50)
+        let validLocalMessages = localMessages.filter { isValidChatMessage($0) }
         await MainActor.run {
-            messages = localMessages
+            messages = validLocalMessages
         }
         
-        print("[ChatScreen] Loaded \(localMessages.count) messages from local storage")
+        print("[ChatScreen] Loaded \(validLocalMessages.count) valid messages from local storage (filtered from \(localMessages.count) total)")
         
         // Then, fetch new messages from backend
         do {
             let backendMessages = try await HproseInstance.shared.fetchMessages(senderId: receiptId)
+            let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
             
             // Merge new messages with existing ones, avoiding duplicates
             var allMessages = Set(messages)
-            for message in backendMessages {
+            for message in validBackendMessages {
                 allMessages.insert(message)
             }
             
@@ -351,6 +356,18 @@ struct ChatScreen: View {
     }
     
     // MARK: - Helper Methods
+    
+    /// Validates if a chat message has a valid chatSessionId
+    private func isValidChatMessage(_ message: ChatMessage) -> Bool {
+        // Check if chatSessionId is not empty and not just whitespace
+        let isValidSessionId = !message.chatSessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        
+        if !isValidSessionId {
+            print("[ChatScreen] Ignoring message with invalid chatSessionId: \(message.id)")
+        }
+        
+        return isValidSessionId
+    }
     
     private var canSendMessage: Bool {
         !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedAttachment != nil
@@ -584,8 +601,8 @@ struct ChatMessageView: View {
             // Message content
             VStack(alignment: isFromCurrentUser ? .trailing : .leading, spacing: 4) {
                 // Message text
-                if !message.content.isEmpty {
-                    Text(message.content)
+                if let content = message.content, !content.isEmpty {
+                    Text(content)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(
@@ -597,9 +614,11 @@ struct ChatMessageView: View {
                         .clipShape(isLastFromSender ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
                 }
                 
-                // Attachment
-                if let attachment = message.attachment {
-                    AttachmentView(attachment: attachment, isFromCurrentUser: isFromCurrentUser, isLastMessage: isLastMessage, isLastFromSender: isLastFromSender)
+                // Attachments
+                if let attachments = message.attachments, !attachments.isEmpty {
+                    ForEach(attachments, id: \.id) { attachment in
+                        AttachmentView(attachment: attachment, isFromCurrentUser: isFromCurrentUser, isLastMessage: isLastMessage, isLastFromSender: isLastFromSender)
+                    }
                 }
                 
                 // Timestamp - only show for last 2 messages

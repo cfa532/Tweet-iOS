@@ -8,7 +8,8 @@ struct ChatListScreen: View {
     
     var body: some View {
         VStack {
-                if chatSessionManager.chatSessions.isEmpty {
+                let currentUserSessions = chatSessionManager.chatSessions.filter { $0.userId == HproseInstance.shared.appUser.mid }
+                if currentUserSessions.isEmpty {
                     VStack(spacing: 20) {
                         Image(systemName: "message")
                             .font(.system(size: 48))
@@ -160,7 +161,7 @@ struct ChatSessionRow: View {
                     }
                     
                     // Message preview
-                    Text(session.lastMessage.content.isEmpty ? "📎 Attachment" : session.lastMessage.content)
+                    Text(session.lastMessage.content?.isEmpty != false ? "📎 Attachment" : (session.lastMessage.content ?? "📎 Attachment"))
                         .font(.system(size: 15, weight: .regular))
                         .foregroundColor(.primary)
                         .lineLimit(2)

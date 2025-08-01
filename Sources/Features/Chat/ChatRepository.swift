@@ -77,15 +77,22 @@ class ChatRepository: ObservableObject {
     func fetchNewMessages() async {
         do {
             let newMessages = try await hproseInstance.checkNewMessages()
+            let validMessages = newMessages.filter { isValidChatMessage($0) }
+            
             await MainActor.run {
                 // Merge new messages with existing ones
-                for message in newMessages {
+                for message in validMessages {
                     if !self.chatMessages.contains(where: { $0.id == message.id }) {
                         self.chatMessages.append(message)
                     }
                 }
             }
-            print("[ChatRepository] Fetched \(newMessages.count) new messages")
+            
+            if validMessages.count != newMessages.count {
+                print("[ChatRepository] Filtered out \(newMessages.count - validMessages.count) invalid messages from new messages")
+            }
+            
+            print("[ChatRepository] Fetched \(validMessages.count) valid new messages (filtered from \(newMessages.count) total)")
         } catch {
             print("[ChatRepository] Error fetching new messages: \(error)")
         }
@@ -124,8 +131,14 @@ class ChatRepository: ObservableObject {
         
         do {
             let messages = try JSONDecoder().decode([ChatMessage].self, from: data)
-            chatMessages = messages
-            print("[ChatRepository] Loaded \(messages.count) messages from local storage")
+            let validMessages = messages.filter { isValidChatMessage($0) }
+            chatMessages = validMessages
+            
+            if validMessages.count != messages.count {
+                print("[ChatRepository] Filtered out \(messages.count - validMessages.count) invalid messages during load")
+            }
+            
+            print("[ChatRepository] Loaded \(validMessages.count) valid messages from local storage (filtered from \(messages.count) total)")
         } catch {
             print("[ChatRepository] Error loading messages from local storage: \(error)")
             chatMessages = []
@@ -143,13 +156,32 @@ class ChatRepository: ObservableObject {
         return Array(sortedMessages.suffix(limit))
     }
     
+    /// Validates if a chat message has a valid chatSessionId
+    private func isValidChatMessage(_ message: ChatMessage) -> Bool {
+        // Check if chatSessionId is not empty and not just whitespace
+        let isValidSessionId = !message.chatSessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        
+        if !isValidSessionId {
+            print("[ChatRepository] Ignoring message with invalid chatSessionId: \(message.id)")
+        }
+        
+        return isValidSessionId
+    }
+    
     /// Add messages to local storage
     func addMessagesToLocalStorage(_ newMessages: [ChatMessage]) {
-        for message in newMessages {
+        let validMessages = newMessages.filter { isValidChatMessage($0) }
+        
+        for message in validMessages {
             if !chatMessages.contains(where: { $0.id == message.id }) {
                 chatMessages.append(message)
             }
         }
+        
+        if validMessages.count != newMessages.count {
+            print("[ChatRepository] Filtered out \(newMessages.count - validMessages.count) invalid messages")
+        }
+        
         saveMessagesToLocalStorage()
     }
     

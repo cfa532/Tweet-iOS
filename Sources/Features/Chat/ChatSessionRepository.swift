@@ -143,11 +143,10 @@ class ChatSessionRepository: ObservableObject {
             
             if existingSession == nil {
                 // A new session is created
-                let newSession = ChatSession(
+                let newSession = ChatSession.createSession(
                     userId: hproseInstance.appUser.mid,
                     receiptId: key.first == hproseInstance.appUser.mid ? key.second : key.first,
                     lastMessage: message,
-                    timestamp: message.timestamp,
                     hasNews: true
                 )
                 updatedSessions.append(newSession)
@@ -175,8 +174,10 @@ extension ChatMessageEntity {
             id: id,
             authorId: authorId,
             receiptId: receiptId,
-            content: content,
-            timestamp: timestamp
+            chatSessionId: ChatMessage.generateSessionId(userId: authorId, receiptId: receiptId),
+            content: content.isEmpty ? nil : content,
+            timestamp: timestamp,
+            attachments: nil // ChatMessageEntity doesn't store attachments, so it's nil
         )
     }
 }

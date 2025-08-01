@@ -85,8 +85,25 @@ class ChatSessionManager: ObservableObject {
         }
     }
     
+    /// Validates if a chat message has a valid chatSessionId
+    private func isValidChatMessage(_ message: ChatMessage) -> Bool {
+        // Check if chatSessionId is not empty and not just whitespace
+        let isValidSessionId = !message.chatSessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        
+        if !isValidSessionId {
+            print("[ChatSessionManager] Ignoring message with invalid chatSessionId: \(message.id)")
+        }
+        
+        return isValidSessionId
+    }
+    
     /// Update or create a chat session
     func updateOrCreateChatSession(senderId: String, message: ChatMessage, hasNews: Bool = false) async {
+        // Validate the message before processing
+        guard isValidChatMessage(message) else {
+            print("[ChatSessionManager] Skipping session update for invalid message: \(message.id)")
+            return
+        }
         await MainActor.run {
             // Determine the receiptId (the other person in the conversation)
             let receiptId: String
@@ -115,11 +132,10 @@ class ChatSessionManager: ObservableObject {
                 print("[ChatSessionManager] Updated existing chat session for \(receiptId)")
             } else {
                 // Create new session
-                let newSession = ChatSession(
+                let newSession = ChatSession.createSession(
                     userId: hproseInstance.appUser.mid,
                     receiptId: receiptId,
                     lastMessage: message,
-                    timestamp: message.timestamp,
                     hasNews: hasNews
                 )
                 chatSessions.append(newSession)
@@ -179,13 +195,18 @@ class ChatSessionManager: ObservableObject {
     func fetchMessagesForConversation(receiptId: String) async -> [ChatMessage] {
         do {
             let messages = try await hproseInstance.fetchMessages(senderId: receiptId)
+            let validMessages = messages.filter { isValidChatMessage($0) }
             
-            // Update the session with the latest message if available
-            if let latestMessage = messages.max(by: { $0.timestamp < $1.timestamp }) {
+            // Update the session with the latest valid message if available
+            if let latestMessage = validMessages.max(by: { $0.timestamp < $1.timestamp }) {
                 await updateOrCreateChatSession(senderId: receiptId, message: latestMessage, hasNews: false)
             }
             
-            return messages
+            if validMessages.count != messages.count {
+                print("[ChatSessionManager] Filtered out \(messages.count - validMessages.count) invalid messages from conversation")
+            }
+            
+            return validMessages
         } catch {
             print("[ChatSessionManager] Error fetching messages for conversation: \(error)")
             return []

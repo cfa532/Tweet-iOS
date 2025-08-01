@@ -50,6 +50,8 @@ struct ProfileView: View {
     @State private var favorites: [Tweet] = []
     /// The tweet selected when tapping on a tweet item
     @State private var selectedTweet: Tweet? = nil
+    /// Controls navigation to chat screen
+    @State private var showChat = false
 
     init(user: User, onLogout: (() -> Void)? = nil) {
         self.user = user
@@ -158,6 +160,18 @@ struct ProfileView: View {
             .id(user.mid)
             .padding(.leading, -4)
         }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if !isAppUser {
+                    Button(action: {
+                        showChat = true
+                    }) {
+                        Image(systemName: "message")
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+        }
         .sheet(isPresented: $showEditSheet) {
             RegistrationView(onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
                 // TODO: Implement user update logic here
@@ -255,6 +269,9 @@ struct ProfileView: View {
             if let selectedTweet = selectedTweet {
                 TweetDetailView(tweet: selectedTweet)
             }
+        }
+        .navigationDestination(isPresented: $showChat) {
+            ChatScreen(receiptId: user.mid)
         }
         .onDisappear {
             // Pause all videos when ProfileView disappears
