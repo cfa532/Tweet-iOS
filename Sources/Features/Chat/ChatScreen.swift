@@ -13,6 +13,7 @@ struct ChatScreen: View {
     @State private var keyboardHeight: CGFloat = 0
     @State private var isSendingMessage = false
     @FocusState private var isTextFieldFocused: Bool
+    @Environment(\.dismiss) private var dismiss
     
     private func isLastMessageFromSender(index: Int, messages: [ChatMessage]) -> Bool {
         guard index < messages.count else { return false }
@@ -44,16 +45,25 @@ struct ChatScreen: View {
             }
             // Header
             HStack {
+                // Back button
+                Button(action: {
+                    dismiss()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .foregroundColor(.blue)
+                        Text(NSLocalizedString("Back", comment: "Back button in navigation"))
+                            .foregroundColor(.blue)
+                    }
+                }
+                
+                Spacer()
+                
                 if let user = user {
-                    Avatar(user: user, size: 40)
-                    VStack(alignment: .leading) {
-                        Text("\(user.name ?? "")@\(user.username ?? "")")
+                    HStack(spacing: 8) {
+                        Avatar(user: user, size: 32)
+                        Text(user.name ?? "@\(user.username ?? "")")
                             .font(.headline)
-                        if let profile = user.profile {
-                            Text(profile)
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                        }
                     }
                 } else {
                     Text("Loading...")
@@ -79,7 +89,7 @@ struct ChatScreen: View {
                             // Add time divider if there's a 5+ minute gap
                             if index > 0 {
                                 let timeDiff = message.timestamp - messages[index - 1].timestamp
-                                if timeDiff > 300 { // 5 minutes = 300 seconds
+                                if timeDiff > 3600 { // 1 hour
                                     TimeDividerView(timestamp: message.timestamp)
                                 }
                             }
@@ -89,7 +99,7 @@ struct ChatScreen: View {
                                 isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid,
                                 isLastMessage: index == messages.count - 1,
                                 isLastFromSender: isLastMessageFromSender(index: index, messages: messages),
-                                showTimestamp: index >= messages.count - 2 // Show timestamp for last 2 messages
+                                showTimestamp: isLastMessageFromSender(index: index, messages: messages) // Show timestamp for last message from each party
                             )
                             .id(message.id)
                         }
@@ -114,9 +124,10 @@ struct ChatScreen: View {
                                 proxy.scrollTo(lastMessage.id, anchor: .bottom)
                             }
                         }
-                    }
-                }
-                .onAppear {
+                                }
+        }
+        .navigationBarHidden(true)
+        .onAppear {
                     // Scroll to bottom when view appears
                     if let lastMessage = messages.last {
                         withAnimation(.easeInOut(duration: 0.3)) {
@@ -169,20 +180,25 @@ struct ChatScreen: View {
                     }) {
                         Image(systemName: "paperclip")
                             .font(.system(size: 20))
-                            .foregroundColor(.blue)
+                            .foregroundColor(isSendingMessage ? .gray : .blue)
                     }
+                    .disabled(isSendingMessage)
                     
                     // Text input
                     TextField("Type a message...", text: $messageText, axis: .vertical)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 12) // Increased vertical padding for taller touchable area
-                        .background(Color(.systemGray6))
+                        .background(isSendingMessage ? Color(.systemGray5) : Color(.systemGray6))
                         .cornerRadius(12)
                         .lineLimit(1...5)
                         .focused($isTextFieldFocused)
+                        .disabled(isSendingMessage)
+                        .foregroundColor(isSendingMessage ? .gray : .primary)
                         .onTapGesture {
                             // Focus the text field when tapped anywhere in its area
-                            isTextFieldFocused = true
+                            if !isSendingMessage {
+                                isTextFieldFocused = true
+                            }
                         }
                         .onSubmit {
                             // Hide keyboard when user submits
@@ -621,12 +637,12 @@ struct ChatMessageView: View {
                     }
                 }
                 
-                // Timestamp - only show for last 2 messages
+                // Timestamp - show for last message from each party
                 if showTimestamp {
                     Text(formatTime(message.timestamp))
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                        .padding(.horizontal, 4)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: isFromCurrentUser ? .trailing : .leading)
