@@ -10,6 +10,7 @@
     <key>BGTaskSchedulerPermittedIdentifiers</key>
     <array>
         <string>com.tweet.upload</string>
+        <string>com.example.Tweet.messageCheck</string>
     </array>
     <key>CFBundleLocalizations</key>
     <array>

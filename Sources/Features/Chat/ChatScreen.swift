@@ -14,6 +14,7 @@ struct ChatScreen: View {
     @State private var isSendingMessage = false
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
+    @State private var messageRefreshTimer: Timer?
     
     private func isLastMessageFromSender(index: Int, messages: [ChatMessage]) -> Bool {
         guard index < messages.count else { return false }
@@ -259,10 +260,17 @@ struct ChatScreen: View {
             await loadUser()
             await loadMessages()
             
+            // Start periodic message refresh after initial load
+            startPeriodicMessageRefresh()
+            
             print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
         }
         .sheet(isPresented: $showingAttachmentPicker) {
             AttachmentPickerSheet(selectedAttachment: $selectedAttachment)
+        }
+        .onDisappear {
+            // Stop the periodic message refresh timer when leaving the screen
+            stopPeriodicMessageRefresh()
         }
     }
     
@@ -414,6 +422,74 @@ struct ChatScreen: View {
     private func hideKeyboard() {
         isTextFieldFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+    
+    // MARK: - Periodic Message Refresh
+    
+    private func startPeriodicMessageRefresh() {
+        // Stop any existing timer first
+        stopPeriodicMessageRefresh()
+        
+        // Start timer to refresh messages every 10 seconds
+        messageRefreshTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { _ in
+            Task {
+                await refreshMessagesFromBackend()
+            }
+        }
+        
+        print("[ChatScreen] Started periodic message refresh timer (10 seconds)")
+    }
+    
+    private func stopPeriodicMessageRefresh() {
+        messageRefreshTimer?.invalidate()
+        messageRefreshTimer = nil
+        print("[ChatScreen] Stopped periodic message refresh timer")
+    }
+    
+    private func refreshMessagesFromBackend() async {
+        do {
+            let backendMessages = try await HproseInstance.shared.fetchMessages(senderId: receiptId)
+            let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
+            
+            // Check if we have new messages
+            let currentMessageIds = Set(messages.map { $0.id })
+            let newMessages = validBackendMessages.filter { !currentMessageIds.contains($0.id) }
+            
+            if !newMessages.isEmpty {
+                print("[ChatScreen] Found \(newMessages.count) new messages from backend")
+                
+                // Merge new messages with existing ones
+                var allMessages = Set(messages)
+                for message in validBackendMessages {
+                    allMessages.insert(message)
+                }
+                
+                // Convert back to array and sort by timestamp
+                let sortedMessages = Array(allMessages).sorted { $0.timestamp < $1.timestamp }
+                
+                await MainActor.run {
+                    messages = sortedMessages
+                }
+                
+                // Save new messages to local storage
+                chatRepository.addMessagesToLocalStorage(newMessages)
+                
+                // Update session timestamp if there are new messages
+                if let latestMessage = sortedMessages.last {
+                    await chatSessionManager.updateOrCreateChatSession(
+                        senderId: receiptId,
+                        message: latestMessage,
+                        hasNews: false
+                    )
+                }
+                
+                print("[ChatScreen] Updated message list with \(newMessages.count) new messages, total: \(sortedMessages.count)")
+            } else {
+                print("[ChatScreen] No new messages found in periodic refresh")
+            }
+        } catch {
+            print("[ChatScreen] Error refreshing messages from backend: \(error)")
+        }
     }
 }
 

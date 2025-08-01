@@ -4,6 +4,7 @@ import SwiftUI
 @available(iOS 17.0, *)
 struct ContentView: View {
     @StateObject private var hproseInstance = HproseInstance.shared
+    @StateObject private var chatSessionManager = ChatSessionManager.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var selectedTab = 0
     @State private var showComposeSheet = false
@@ -72,7 +73,7 @@ struct ContentView: View {
                             .foregroundColor(selectedTab == 1 ? .blue : .gray)
                         
                         // Badge for unread messages
-                        BadgeView(count: 0) // TODO: Update with actual unread count
+                        BadgeView(count: chatSessionManager.unreadMessageCount)
                             .offset(x: 12, y: -12)
                     }
                 }

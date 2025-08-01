@@ -1,17 +1,22 @@
 import Foundation
 import Combine
+import SwiftUI
 
 // MARK: - Chat Session Manager
+@MainActor
 class ChatSessionManager: ObservableObject {
     static let shared = ChatSessionManager()
     
     @Published var chatSessions: [ChatSession] = []
+    @Published var unreadMessageCount: Int = 0
+    
     private let userDefaults = UserDefaults.standard
     private let chatSessionsKey = "chat_sessions"
     private let hproseInstance = HproseInstance.shared
     
     private init() {
         loadChatSessionsFromLocalStorage()
+        updateUnreadMessageCount()
     }
     
     // MARK: - Local Storage Methods
@@ -77,6 +82,9 @@ class ChatSessionManager: ObservableObject {
                 
                 // Save updated sessions to local storage
                 saveChatSessionsToLocalStorage()
+                
+                // Update unread message count after processing new messages
+                updateUnreadMessageCount()
             } else {
                 print("[ChatSessionManager] No new messages found")
             }
@@ -161,6 +169,7 @@ class ChatSessionManager: ObservableObject {
             )
             chatSessions[index] = updatedSession
             saveChatSessionsToLocalStorage()
+            updateUnreadMessageCount()
             print("[ChatSessionManager] Marked session as read for \(receiptId)")
         }
     }
@@ -211,5 +220,24 @@ class ChatSessionManager: ObservableObject {
             print("[ChatSessionManager] Error fetching messages for conversation: \(error)")
             return []
         }
+    }
+    
+    // MARK: - Unread Message Management
+    
+    func updateUnreadMessageCount() {
+        let totalUnread = chatSessions.reduce(0) { count, session in
+            count + (session.hasNews ? 1 : 0)
+        }
+        unreadMessageCount = totalUnread
+        print("[ChatSessionManager] Updated unread message count: \(unreadMessageCount)")
+    }
+    
+    func markAllMessagesAsRead() {
+        for session in chatSessions {
+            if session.hasNews {
+                markSessionAsRead(receiptId: session.receiptId)
+            }
+        }
+        updateUnreadMessageCount()
     }
 } 
