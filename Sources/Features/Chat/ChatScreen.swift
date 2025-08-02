@@ -603,22 +603,18 @@ struct ChatMessageView: View {
                 // Row 2: Attachments
                 if let attachments = message.attachments, !attachments.isEmpty {
                     if attachments.count == 1, let attachment = attachments.first {
-                        // Single image attachment
+                        // Single attachment
                         if attachment.type.lowercased().contains("image") {
                             ChatImageViewWithPlaceholder(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                        } else if attachment.type.lowercased().contains("video") {
+                            ChatVideoPlayer(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
                         } else {
                             // Other file types
-                            Text("📎 Attachment")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .padding(.top, 4)
+                            ChatAttachmentLoader(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
                         }
                     } else {
                         // Multiple attachments
-                        Text("📎 Attachments")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.top, 4)
+                        ChatMultipleAttachmentsLoader(attachments: attachments, isFromCurrentUser: isFromCurrentUser)
                     }
                 }
                 
@@ -831,6 +827,7 @@ struct ChatImageViewWithPlaceholder: View {
                     imageState: imageState
                 )
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 1.0, 0.8)), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .onTapGesture {
                     showFullScreen = true
@@ -876,6 +873,197 @@ struct ChatImageViewWithPlaceholder: View {
                 await MainActor.run {
                     imageState = .error
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Chat Video Player
+
+struct ChatVideoPlayer: View {
+    let attachment: MimeiFileType
+    let isFromCurrentUser: Bool
+    
+    private let baseUrl = HproseInstance.baseUrl
+    
+    var body: some View {
+        Group {
+            if let url = attachment.getUrl(baseUrl) {
+                SimpleVideoPlayer(
+                    url: url,
+                    mid: attachment.mid,
+                    isVisible: true,
+                    cellAspectRatio: CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8))
+                )
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)), contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .environmentObject(MuteState.shared)
+            } else {
+                // Fallback if no URL
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray6))
+                    .frame(width: 200, height: 150)
+                    .overlay(
+                        Image(systemName: "video")
+                            .foregroundColor(.gray)
+                    )
+            }
+        }
+    }
+}
+
+// MARK: - Chat Attachment Loader
+
+struct ChatAttachmentLoader: View {
+    let attachment: MimeiFileType
+    let isFromCurrentUser: Bool
+    
+    @State private var isLoading = true
+    @State private var loadError = false
+    
+    private let baseUrl = HproseInstance.baseUrl
+    
+    var body: some View {
+        Group {
+            if isLoading {
+                // Loading state
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Loading attachment...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .onAppear {
+                    simulateLoading()
+                }
+            } else if loadError {
+                // Error state
+                HStack {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundColor(.orange)
+                    Text("Failed to load attachment")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                // Loaded state - show file info
+                HStack {
+                    Image(systemName: getAttachmentIcon(for: attachment.type))
+                        .foregroundColor(.blue)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(attachment.fileName ?? "Attachment")
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                        if let size = attachment.size {
+                            Text(formatFileSize(size))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    Spacer()
+                }
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+    
+    private func simulateLoading() {
+        // Simulate loading time for non-media attachments
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isLoading = false
+            }
+        }
+    }
+    
+    private func getAttachmentIcon(for type: String) -> String {
+        switch type.lowercased() {
+        case "image", "jpg", "jpeg", "png", "gif", "webp":
+            return "photo"
+        case "video", "mp4", "mov", "avi":
+            return "video"
+        case "audio", "mp3", "wav", "m4a":
+            return "music.note"
+        case "document", "pdf", "doc", "docx":
+            return "doc.text"
+        default:
+            return "paperclip"
+        }
+    }
+    
+    private func formatFileSize(_ size: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: size)
+    }
+}
+
+// MARK: - Chat Multiple Attachments Loader
+
+struct ChatMultipleAttachmentsLoader: View {
+    let attachments: [MimeiFileType]
+    let isFromCurrentUser: Bool
+    
+    @State private var isLoading = true
+    
+    var body: some View {
+        Group {
+            if isLoading {
+                // Loading state for multiple attachments
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Loading \(attachments.count) attachments...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .onAppear {
+                    simulateLoading()
+                }
+            } else {
+                // Loaded state - show summary
+                HStack {
+                    Image(systemName: "doc.on.doc")
+                        .foregroundColor(.blue)
+                    Text("\(attachments.count) attachments")
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                    Spacer()
+                }
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+    
+    private func simulateLoading() {
+        // Simulate loading time for multiple attachments
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isLoading = false
             }
         }
     }
