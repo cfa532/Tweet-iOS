@@ -189,7 +189,8 @@ struct ChatVideoPlayer: View {
                     cellAspectRatio: CGFloat(aspectRatio),
                     videoAspectRatio: CGFloat(aspectRatio),
                     showNativeControls: true,
-                    showCustomControls: false
+                    showCustomControls: false,
+                    disableAutoRestart: true
                 )
                 .environmentObject(MuteState.shared)
             } else {

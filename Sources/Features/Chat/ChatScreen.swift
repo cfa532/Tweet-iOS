@@ -893,7 +893,8 @@ struct ChatVideoPlayer: View {
                     url: url,
                     mid: attachment.mid,
                     isVisible: true,
-                    cellAspectRatio: CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8))
+                    cellAspectRatio: CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)),
+                    disableAutoRestart: true
                 )
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
                 .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)), contentMode: .fit)

@@ -60,6 +60,7 @@ struct SimpleVideoPlayer: View {
     var onVideoTap: (() -> Void)? = nil // Callback when video is tapped
     var showCustomControls: Bool = true // Whether to show custom video controls
     var forcePlay: Bool = false // Force play regardless of video manager (for full-screen)
+    var disableAutoRestart: Bool = false // Disable auto-restart when video finishes
     @EnvironmentObject var muteState: MuteState
     
     // Use different cache key for fullscreen videos to isolate them
@@ -101,7 +102,8 @@ struct SimpleVideoPlayer: View {
                                 onVideoTap: onVideoTap,
                                 showCustomControls: showCustomControls,
                                 forcePlay: forcePlay,
-                                forceUnmuted: forceUnmuted
+                                forceUnmuted: forceUnmuted,
+                                disableAutoRestart: disableAutoRestart
                             )
                             .aspectRatio(videoAR, contentMode: .fit)
                             .frame(maxWidth: screenWidth, maxHeight: screenHeight)
@@ -134,7 +136,8 @@ struct SimpleVideoPlayer: View {
                                 onVideoTap: onVideoTap,
                                 showCustomControls: showCustomControls,
                                 forcePlay: forcePlay,
-                                forceUnmuted: forceUnmuted
+                                forceUnmuted: forceUnmuted,
+                                disableAutoRestart: disableAutoRestart
                             )
                             .aspectRatio(videoAR, contentMode: .fit)
                             .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2) // Reduce size by 2 points (1 point border on each side)
@@ -170,7 +173,8 @@ struct SimpleVideoPlayer: View {
                                 onVideoTap: onVideoTap,
                                 showCustomControls: showCustomControls,
                                 forcePlay: forcePlay,
-                                forceUnmuted: forceUnmuted
+                                forceUnmuted: forceUnmuted,
+                                disableAutoRestart: disableAutoRestart
                             )
                             .aspectRatio(1.0, contentMode: .fit)
                             .frame(maxWidth: screenWidth, maxHeight: screenHeight)
@@ -211,7 +215,8 @@ struct SimpleVideoPlayer: View {
                                 onVideoTap: onVideoTap,
                                 showCustomControls: showCustomControls,
                                 forcePlay: forcePlay,
-                                forceUnmuted: forceUnmuted
+                                forceUnmuted: forceUnmuted,
+                                disableAutoRestart: disableAutoRestart
                             )
                             .offset(y: -pad)    // align the video vertically in the middle
                             .aspectRatio(videoAR, contentMode: .fill)
@@ -230,7 +235,8 @@ struct SimpleVideoPlayer: View {
                                 onVideoTap: onVideoTap,
                                 showCustomControls: showCustomControls,
                                 forcePlay: forcePlay,
-                                forceUnmuted: forceUnmuted
+                                forceUnmuted: forceUnmuted,
+                                disableAutoRestart: disableAutoRestart
                             )
                             .aspectRatio(videoAR, contentMode: .fit)
                             .frame(maxWidth: screenWidth, maxHeight: screenHeight)
@@ -251,7 +257,8 @@ struct SimpleVideoPlayer: View {
                         onVideoTap: onVideoTap,
                         showCustomControls: showCustomControls,
                         forcePlay: forcePlay,
-                        forceUnmuted: forceUnmuted
+                        forceUnmuted: forceUnmuted,
+                        disableAutoRestart: disableAutoRestart
                     )
                     .aspectRatio(16.0/9.0, contentMode: .fit)
                     .frame(maxWidth: screenWidth, maxHeight: screenHeight)
@@ -274,6 +281,7 @@ struct HLSVideoPlayerWithControls: View {
     let showCustomControls: Bool
     let forcePlay: Bool
     let forceUnmuted: Bool
+    let disableAutoRestart: Bool
     
     @State private var player: AVPlayer?
     @State private var isLoading = true
@@ -292,7 +300,7 @@ struct HLSVideoPlayerWithControls: View {
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
     
-    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool) {
+    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool, disableAutoRestart: Bool = false) {
         self.videoURL = videoURL
         self.mid = mid
         self.isVisible = isVisible
@@ -304,6 +312,7 @@ struct HLSVideoPlayerWithControls: View {
         self.showCustomControls = showCustomControls
         self.forcePlay = forcePlay
         self.forceUnmuted = forceUnmuted
+        self.disableAutoRestart = disableAutoRestart
         self._playerMuted = State(initialValue: isMuted)
         
         print("DEBUG: [VIDEO \(mid)] HLSVideoPlayerWithControls view created for URL: \(videoURL.absoluteString)")
@@ -780,17 +789,22 @@ struct HLSVideoPlayerWithControls: View {
         hasFinished = false // Reset finished flag when video is restarted
         showControls = true // Show controls when video finishes
         
-        // Reset player to beginning using cache
-        videoCache.resetVideoPlayer(for: mid)
-        
-        // Update local player reference if needed
-        if let player = player {
-            // Preserve the mute state when resetting
-            if forceUnmuted {
-                player.isMuted = localMuted
-            } else {
-                player.isMuted = muteState.isMuted
+        // Only reset player to beginning if auto-restart is not disabled
+        if !disableAutoRestart {
+            // Reset player to beginning using cache
+            videoCache.resetVideoPlayer(for: mid)
+            
+            // Update local player reference if needed
+            if let player = player {
+                // Preserve the mute state when resetting
+                if forceUnmuted {
+                    player.isMuted = localMuted
+                } else {
+                    player.isMuted = muteState.isMuted
+                }
             }
+        } else {
+            print("DEBUG: [VIDEO \(mid)] Auto-restart disabled, not resetting video to beginning")
         }
         
         // Start controls timer to auto-hide controls
@@ -840,6 +854,7 @@ struct HLSDirectoryVideoPlayer: View {
     let showCustomControls: Bool
     let forcePlay: Bool
     let forceUnmuted: Bool
+    let disableAutoRestart: Bool
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
     @State private var loading = true
@@ -859,7 +874,8 @@ struct HLSDirectoryVideoPlayer: View {
                     onVideoTap: onVideoTap,
                     showCustomControls: showCustomControls,
                     forcePlay: forcePlay,
-                    forceUnmuted: forceUnmuted
+                    forceUnmuted: forceUnmuted,
+                    disableAutoRestart: disableAutoRestart
                 )
             } else if loading {
                 ProgressView("Loading video...")

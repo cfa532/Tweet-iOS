@@ -62,7 +62,8 @@ struct MediaCell: View {
                             cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                             showNativeControls: true,
-                            showCustomControls: false
+                            showCustomControls: false,
+                            disableAutoRestart: false
                         )
                         .environmentObject(MuteState.shared)
                         .onTapGesture(count: 2) {
