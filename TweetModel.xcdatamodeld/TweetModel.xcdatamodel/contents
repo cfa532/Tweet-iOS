@@ -1,5 +1,26 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23788.4" systemVersion="24F74" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithSwiftData="YES" userDefinedModelVersionIdentifier="">
+    <entity name="CDChatMessage" representedClassName="CDChatMessage" syncable="YES" codeGenerationType="class">
+        <attribute name="authorId" attributeType="String"/>
+        <attribute name="chatSessionId" attributeType="String"/>
+        <attribute name="content" optional="YES" attributeType="String"/>
+        <attribute name="id" attributeType="String"/>
+        <attribute name="receiptId" attributeType="String"/>
+        <attribute name="timestamp" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="timeCached" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="attachmentData" optional="YES" attributeType="Binary"/>
+        <relationship name="session" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CDChatSession" inverseName="messages" inverseEntity="CDChatSession"/>
+    </entity>
+    <entity name="CDChatSession" representedClassName="CDChatSession" syncable="YES" codeGenerationType="class">
+        <attribute name="hasNews" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="id" attributeType="String"/>
+        <attribute name="lastMessageId" attributeType="String"/>
+        <attribute name="receiptId" attributeType="String"/>
+        <attribute name="timestamp" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="timeCached" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userId" attributeType="String"/>
+        <relationship name="messages" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="CDChatMessage" inverseName="session" inverseEntity="CDChatMessage"/>
+    </entity>
     <entity name="CDTweet" representedClassName="CDTweet" syncable="YES" codeGenerationType="class">
         <attribute name="tid" optional="YES" attributeType="String"/>
         <attribute name="timeCached" optional="YES" attributeType="Date" usesScalarValueType="NO"/>

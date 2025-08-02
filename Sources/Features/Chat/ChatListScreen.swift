@@ -5,6 +5,8 @@ struct ChatListScreen: View {
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messageCheckTimer: Timer?
     @State private var showStartChat = false
+    @State private var sessionToDelete: ChatSession?
+    @State private var showDeleteConfirmation = false
     
     var body: some View {
         VStack {
@@ -72,6 +74,18 @@ struct ChatListScreen: View {
         .sheet(isPresented: $showStartChat) {
             StartChatView()
         }
+        .alert("Delete Chat", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {
+                sessionToDelete = nil
+            }
+            Button("Delete", role: .destructive) {
+                confirmDeleteChatSession()
+            }
+        } message: {
+            if let session = sessionToDelete {
+                Text("Are you sure you want to delete the chat with \(session.receiptId)? This will permanently delete all messages in this conversation.")
+            }
+        }
     }
     
     private func loadChatSessions() async {
@@ -104,8 +118,19 @@ struct ChatListScreen: View {
     private func deleteChatSession(offsets: IndexSet) {
         for index in offsets {
             let session = chatSessionManager.chatSessions[index]
-            chatSessionManager.removeChatSession(receiptId: session.receiptId)
+            sessionToDelete = session
+            showDeleteConfirmation = true
         }
+    }
+    
+    private func confirmDeleteChatSession() {
+        guard let session = sessionToDelete else { return }
+        
+        // Delete from Core Data (this will cascade delete all messages)
+        chatSessionManager.removeChatSession(receiptId: session.receiptId)
+        
+        sessionToDelete = nil
+        showDeleteConfirmation = false
     }
 }
 

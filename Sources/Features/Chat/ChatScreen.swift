@@ -311,8 +311,8 @@ struct ChatScreen: View {
                     isSendingMessage = false
                 }
                 
-                // Save message to local storage
-                chatRepository.addMessagesToLocalStorage([message])
+                // Save message to Core Data
+                chatRepository.addMessagesToCoreData([message])
                 
                 print("[ChatScreen] Message sent successfully")
             } catch {
@@ -365,8 +365,8 @@ struct ChatScreen: View {
                 messages = sortedMessages
             }
             
-            // Save new messages to local storage
-            chatRepository.addMessagesToLocalStorage(backendMessages)
+            // Save new messages to Core Data
+            chatRepository.addMessagesToCoreData(backendMessages)
             
             // Update session timestamp if there are new messages
             if let latestMessage = sortedMessages.last, latestMessage.timestamp > messages.first?.timestamp ?? 0 {
@@ -503,8 +503,8 @@ struct ChatScreen: View {
                     messages = sortedMessages
                 }
                 
-                // Save new messages to local storage
-                chatRepository.addMessagesToLocalStorage(newMessages)
+                // Save new messages to Core Data
+                chatRepository.addMessagesToCoreData(newMessages)
                 
                 // Update session timestamp if there are new messages
                 if let latestMessage = sortedMessages.last {

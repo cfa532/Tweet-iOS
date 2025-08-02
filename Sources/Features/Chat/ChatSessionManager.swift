@@ -10,43 +10,26 @@ class ChatSessionManager: ObservableObject {
     @Published var chatSessions: [ChatSession] = []
     @Published var unreadMessageCount: Int = 0
     
-    private let userDefaults = UserDefaults.standard
-    private let chatSessionsKey = "chat_sessions"
+    private let chatCacheManager = ChatCacheManager.shared
     private let hproseInstance = HproseInstance.shared
     
     private init() {
-        loadChatSessionsFromLocalStorage()
+        loadChatSessionsFromCoreData()
         updateUnreadMessageCount()
     }
     
-    // MARK: - Local Storage Methods
+    // MARK: - Core Data Methods
     
-    /// Load chat sessions from local storage
-    private func loadChatSessionsFromLocalStorage() {
-        guard let data = userDefaults.data(forKey: chatSessionsKey) else {
-            chatSessions = []
-            return
-        }
-        
-        do {
-            let sessions = try JSONDecoder().decode([ChatSession].self, from: data)
-            chatSessions = sessions
-            print("[ChatSessionManager] Loaded \(sessions.count) chat sessions from local storage")
-        } catch {
-            print("[ChatSessionManager] Error loading chat sessions from local storage: \(error)")
-            chatSessions = []
-        }
+    /// Load chat sessions from Core Data
+    private func loadChatSessionsFromCoreData() {
+        let sessions = chatCacheManager.fetchChatSessions(for: hproseInstance.appUser.mid)
+        chatSessions = sessions
+        print("[ChatSessionManager] Loaded \(sessions.count) chat sessions from Core Data")
     }
     
-    /// Save chat sessions to local storage
-    private func saveChatSessionsToLocalStorage() {
-        do {
-            let data = try JSONEncoder().encode(chatSessions)
-            userDefaults.set(data, forKey: chatSessionsKey)
-            print("[ChatSessionManager] Saved \(chatSessions.count) chat sessions to local storage")
-        } catch {
-            print("[ChatSessionManager] Error saving chat sessions to local storage: \(error)")
-        }
+    /// Save chat session to Core Data
+    private func saveChatSessionToCoreData(_ session: ChatSession) {
+        chatCacheManager.saveChatSession(session)
     }
     
     // MARK: - Public Methods
@@ -80,11 +63,13 @@ class ChatSessionManager: ObservableObject {
                     }
                 }
                 
-                // Save updated sessions to local storage
-                saveChatSessionsToLocalStorage()
-                
-                // Update unread message count after processing new messages
-                updateUnreadMessageCount()
+                            // Save updated sessions to Core Data
+            for session in chatSessions {
+                saveChatSessionToCoreData(session)
+            }
+            
+            // Update unread message count after processing new messages
+            updateUnreadMessageCount()
             } else {
                 print("[ChatSessionManager] No new messages found")
             }
@@ -150,8 +135,10 @@ class ChatSessionManager: ObservableObject {
                 print("[ChatSessionManager] Created new chat session for \(receiptId)")
             }
             
-            // Save updated sessions to local storage
-            saveChatSessionsToLocalStorage()
+            // Save updated sessions to Core Data
+            for session in chatSessions {
+                saveChatSessionToCoreData(session)
+            }
         }
     }
     
@@ -168,7 +155,7 @@ class ChatSessionManager: ObservableObject {
                 hasNews: false
             )
             chatSessions[index] = updatedSession
-            saveChatSessionsToLocalStorage()
+            saveChatSessionToCoreData(updatedSession)
             updateUnreadMessageCount()
             print("[ChatSessionManager] Marked session as read for \(receiptId)")
         }
@@ -181,17 +168,26 @@ class ChatSessionManager: ObservableObject {
         }
     }
     
-    /// Remove a chat session
+    /// Remove a chat session and all associated messages
     func removeChatSession(receiptId: String) {
+        // Remove the chat session from Core Data (this will cascade delete messages)
+        chatCacheManager.deleteChatSessionByReceiptId(userId: hproseInstance.appUser.mid, receiptId: receiptId)
+        
+        // Remove from local array
         chatSessions.removeAll { $0.receiptId == receiptId }
-        saveChatSessionsToLocalStorage()
-        print("[ChatSessionManager] Removed chat session for \(receiptId)")
+        
+        print("[ChatSessionManager] Removed chat session and messages for \(receiptId)")
     }
     
     /// Clear all chat sessions
     func clearAllChatSessions() {
+        // Delete all sessions from Core Data
+        for session in chatSessions {
+            chatCacheManager.deleteChatSession(id: session.id)
+        }
+        
+        // Clear local array
         chatSessions.removeAll()
-        saveChatSessionsToLocalStorage()
         print("[ChatSessionManager] Cleared all chat sessions")
     }
     

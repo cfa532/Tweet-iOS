@@ -1,13 +1,13 @@
 import Foundation
+import CoreData
 
 class ChatRepository: ObservableObject {
     @Published var chatSessions: [ChatSession] = []
     @Published var chatMessages: [ChatMessage] = []
     
     private let hproseInstance = HproseInstance.shared
-    private let chatSessionManager = ChatSessionManager.shared
-    private let userDefaults = UserDefaults.standard
-    private let messagesKey = "chat_messages"
+    @MainActor private let chatSessionManager = ChatSessionManager.shared
+    private let chatCacheManager = ChatCacheManager.shared
     
     /// Load chat sessions for the current user
     func loadChatSessions() async {
@@ -26,8 +26,10 @@ class ChatRepository: ObservableObject {
                 self.chatMessages = messages
             }
             
-            // Save messages to local storage
-            addMessagesToLocalStorage(messages)
+            // Save messages to Core Data
+            for message in messages {
+                saveMessageToCoreData(message)
+            }
             
             print("[ChatRepository] Loaded \(messages.count) messages from sender \(receiptId)")
         } catch {
@@ -45,8 +47,8 @@ class ChatRepository: ObservableObject {
                 self.chatMessages.append(message)
             }
             
-            // Save to local storage
-            addMessagesToLocalStorage([message])
+            // Save to Core Data
+            saveMessageToCoreData(message)
             
             // Update chat session with the sent message
             await chatSessionManager.updateOrCreateChatSession(
@@ -100,60 +102,51 @@ class ChatRepository: ObservableObject {
     
     /// Get messages for a specific conversation
     func getMessages(for receiptId: String) -> [ChatMessage] {
-        return chatMessages.filter { $0.authorId == receiptId || $0.receiptId == receiptId }
+        return chatCacheManager.fetchMessages(for: receiptId, userId: hproseInstance.appUser.mid)
     }
     
     /// Clear messages for a specific conversation
     func clearMessages(for receiptId: String) {
+        chatCacheManager.deleteMessagesForConversation(authorId: hproseInstance.appUser.mid, receiptId: receiptId)
+        // Update local array
         chatMessages.removeAll { $0.authorId == receiptId || $0.receiptId == receiptId }
-        saveMessagesToLocalStorage()
     }
     
-    // MARK: - Local Storage Methods
-    
-    /// Save messages to local storage
-    private func saveMessagesToLocalStorage() {
-        do {
-            let data = try JSONEncoder().encode(chatMessages)
-            userDefaults.set(data, forKey: messagesKey)
-            print("[ChatRepository] Saved \(chatMessages.count) messages to local storage")
-        } catch {
-            print("[ChatRepository] Error saving messages to local storage: \(error)")
-        }
-    }
-    
-    /// Load messages from local storage
-    private func loadMessagesFromLocalStorage() {
-        guard let data = userDefaults.data(forKey: messagesKey) else {
-            chatMessages = []
-            return
-        }
-        
-        do {
-            let messages = try JSONDecoder().decode([ChatMessage].self, from: data)
-            let validMessages = messages.filter { isValidChatMessage($0) }
-            chatMessages = validMessages
+    /// Delete all messages for a conversation using authorId and receiptId pair
+    func deleteMessagesForConversation(authorId: String, receiptId: String) async {
+        await MainActor.run {
+            // Delete from Core Data
+            chatCacheManager.deleteMessagesForConversation(authorId: authorId, receiptId: receiptId)
             
-            if validMessages.count != messages.count {
-                print("[ChatRepository] Filtered out \(messages.count - validMessages.count) invalid messages during load")
+            // Update local array
+            let messagesToRemove = chatMessages.filter { message in
+                (message.authorId == authorId && message.receiptId == receiptId) ||
+                (message.authorId == receiptId && message.receiptId == authorId)
             }
             
-            print("[ChatRepository] Loaded \(validMessages.count) valid messages from local storage (filtered from \(messages.count) total)")
-        } catch {
-            print("[ChatRepository] Error loading messages from local storage: \(error)")
-            chatMessages = []
+            for message in messagesToRemove {
+                chatMessages.removeAll { $0.id == message.id }
+            }
         }
     }
     
-    /// Get the last N messages for a specific conversation from local storage
+    // MARK: - Core Data Methods
+    
+    /// Save message to Core Data
+    private func saveMessageToCoreData(_ message: ChatMessage) {
+        chatCacheManager.saveChatMessage(message)
+    }
+    
+    /// Load messages from Core Data
+    private func loadMessagesFromCoreData() {
+        // This will be called when needed for specific conversations
+        chatMessages = []
+    }
+    
+    /// Get the last N messages for a specific conversation from Core Data
     func getLastMessages(for receiptId: String, limit: Int = 50) -> [ChatMessage] {
-        let conversationMessages = chatMessages.filter { message in
-            message.authorId == receiptId || message.receiptId == receiptId
-        }
-        
-        // Sort by timestamp (oldest first) and get the last N messages
-        let sortedMessages = conversationMessages.sorted { $0.timestamp < $1.timestamp }
-        return Array(sortedMessages.suffix(limit))
+        let allMessages = chatCacheManager.fetchMessages(for: receiptId, userId: hproseInstance.appUser.mid)
+        return Array(allMessages.suffix(limit))
     }
     
     /// Validates if a chat message has a valid chatSessionId
@@ -168,25 +161,21 @@ class ChatRepository: ObservableObject {
         return isValidSessionId
     }
     
-    /// Add messages to local storage
-    func addMessagesToLocalStorage(_ newMessages: [ChatMessage]) {
+    /// Add messages to Core Data
+    func addMessagesToCoreData(_ newMessages: [ChatMessage]) {
         let validMessages = newMessages.filter { isValidChatMessage($0) }
         
         for message in validMessages {
-            if !chatMessages.contains(where: { $0.id == message.id }) {
-                chatMessages.append(message)
-            }
+            saveMessageToCoreData(message)
         }
         
         if validMessages.count != newMessages.count {
             print("[ChatRepository] Filtered out \(newMessages.count - validMessages.count) invalid messages")
         }
-        
-        saveMessagesToLocalStorage()
     }
     
     /// Initialize the repository
     init() {
-        loadMessagesFromLocalStorage()
+        loadMessagesFromCoreData()
     }
 } 
