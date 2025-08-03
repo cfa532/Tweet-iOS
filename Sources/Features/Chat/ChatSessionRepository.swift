@@ -3,8 +3,8 @@ import Combine
 
 // MARK: - Chat Session Entity (Database Model)
 struct ChatSessionEntity: Codable {
-    let userId: String
-    let receiptId: String
+    let userId: MimeiId
+    let receiptId: MimeiId
     let lastMessageId: String
     let timestamp: TimeInterval
     let hasNews: Bool
@@ -13,23 +13,23 @@ struct ChatSessionEntity: Codable {
 // MARK: - Chat Message Entity (Database Model)
 struct ChatMessageEntity: Codable {
     let id: String
-    let authorId: String
-    let receiptId: String
+    let authorId: MimeiId
+    let receiptId: MimeiId
     let content: String
     let timestamp: TimeInterval
 }
 
 // MARK: - Data Access Objects (DAO)
 protocol ChatSessionDao {
-    func getAllSessions(for userId: String) async -> [ChatSessionEntity]
-    func getSession(userId: String, receiptId: String) async -> ChatSessionEntity?
-    func updateSession(userId: String, receiptId: String, timestamp: TimeInterval, lastMessageId: String, hasNews: Bool) async
+    func getAllSessions(for userId: MimeiId) async -> [ChatSessionEntity]
+    func getSession(userId: MimeiId, receiptId: MimeiId) async -> ChatSessionEntity?
+    func updateSession(userId: MimeiId, receiptId: MimeiId, timestamp: TimeInterval, lastMessageId: String, hasNews: Bool) async
     func insertSession(_ session: ChatSessionEntity) async
 }
 
 protocol ChatMessageDao {
     func getMessageById(_ id: String) async -> ChatMessageEntity?
-    func getLatestMessage(userId: String, receiptId: String) async -> ChatMessageEntity?
+    func getLatestMessage(userId: MimeiId, receiptId: MimeiId) async -> ChatMessageEntity?
 }
 
 // MARK: - Chat Session Repository
@@ -70,7 +70,7 @@ class ChatSessionRepository: ObservableObject {
     }
     
     /// Update chat session with new message information
-    func updateChatSession(userId: String, receiptId: String, hasNews: Bool) async {
+    func updateChatSession(userId: MimeiId, receiptId: MimeiId, hasNews: Bool) async {
         let sessionEntity = await chatSessionDao.getSession(userId: userId, receiptId: receiptId)
         let lastMessageEntity = await chatMessageDao.getLatestMessage(userId: userId, receiptId: receiptId)
         

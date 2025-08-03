@@ -2,7 +2,7 @@ import Foundation
 
 struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
     var id: String { mid }  // Computed property that returns mid
-    var mid: String
+    var mid: MimeiId
     var type: String    // Image
     let size: Int64?
     var fileName: String?
@@ -20,7 +20,7 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
         case url
     }
     
-    init(mid: String, type: String, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(), aspectRatio: Float? = nil, url: String? = nil) {
+    init(mid: MimeiId, type: String, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(), aspectRatio: Float? = nil, url: String? = nil) {
         self.mid = mid
         self.type = type
         self.size = size

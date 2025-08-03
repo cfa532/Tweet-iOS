@@ -2,11 +2,11 @@ import Foundation
 
 class Tweet: Identifiable, Codable, ObservableObject {
     // MARK: - Singleton
-    private static var instances: [String: Tweet] = [:]
+    private static var instances: [MimeiId: Tweet] = [:]
     private static let instanceLock = NSLock()
     
-    private static func getInstance(mid: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
-                          originalTweetId: String? = nil, originalAuthorId: String? = nil, author: User? = nil,
+    private static func getInstance(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
+                          originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, author: User? = nil,
                           favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
                           commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
                           downloadable: Bool? = nil) -> Tweet {
@@ -38,7 +38,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         return newInstance
     }
     
-    static func clearInstance(mid: String) {
+    static func clearInstance(mid: MimeiId) {
         instanceLock.lock()
         defer { instanceLock.unlock() }
         instances.removeValue(forKey: mid)
@@ -52,14 +52,14 @@ class Tweet: Identifiable, Codable, ObservableObject {
     
     // MARK: - Properties
     var id: String { mid }  // Computed property that returns mid
-    var mid: String
-    let authorId: String // mid of the author
+    var mid: MimeiId
+    let authorId: MimeiId // mid of the author
     var content: String?
     var timestamp: Date = Date()
     var title: String?
     
-    var originalTweetId: String? // retweet id of the original tweet
-    var originalAuthorId: String? // authorId of the forwarded tweet
+    var originalTweetId: MimeiId? // retweet id of the original tweet
+    var originalAuthorId: MimeiId? // authorId of the forwarded tweet
         
     // Media attachments
     var attachments: [MimeiFileType]?
@@ -147,8 +147,8 @@ class Tweet: Identifiable, Codable, ObservableObject {
         downloadable = try container.decodeIfPresent(Bool.self, forKey: .downloadable)
     }
     
-    init(mid: String, authorId: String, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
-         originalTweetId: String? = nil, originalAuthorId: String? = nil, author: User? = nil,
+    init(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
+         originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, author: User? = nil,
          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
          commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
          downloadable: Bool? = nil) {

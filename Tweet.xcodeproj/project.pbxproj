@@ -24,6 +24,7 @@
 		4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D72DD5CA640051A92D /* HproseInstance.swift */; };
 		4608E2DA2DD5CD920051A92D /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D92DD5CD920051A92D /* User.swift */; };
 		461438172E3E426A002D1B22 /* ChatCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438162E3E426A002D1B22 /* ChatCacheManager.swift */; };
+		461438192E3EEE2D002D1B22 /* MimeiId.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438182E3EEE2D002D1B22 /* MimeiId.swift */; };
 		4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4629FB182DFFEA3100588941 /* MetricKitManager.swift */; };
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
@@ -110,6 +111,7 @@
 		4608E2D72DD5CA640051A92D /* HproseInstance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseInstance.swift; sourceTree = "<group>"; };
 		4608E2D92DD5CD920051A92D /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		461438162E3E426A002D1B22 /* ChatCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCacheManager.swift; sourceTree = "<group>"; };
+		461438182E3EEE2D002D1B22 /* MimeiId.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiId.swift; sourceTree = "<group>"; };
 		4629FB182DFFEA3100588941 /* MetricKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitManager.swift; sourceTree = "<group>"; };
 		4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiFileType.swift; sourceTree = "<group>"; };
 		4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHelper.swift; sourceTree = "<group>"; };
@@ -293,6 +295,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A0B /* DataModels */ = {
 			isa = PBXGroup;
 			children = (
+				461438182E3EEE2D002D1B22 /* MimeiId.swift */,
 				468CF20F2E39AF5900D49038 /* ChatMessage.swift */,
 				460680E92E16302C00D9D15A /* Constants.swift */,
 				469A994F2DEBFBC100954049 /* Tweet.swift */,
@@ -605,6 +608,7 @@
 				46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */,
 				4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */,
+				461438192E3EEE2D002D1B22 /* MimeiId.swift in Sources */,
 				469CF0F22E27FED700FBCDB8 /* OrientationManager.swift in Sources */,
 				468CF2102E39AF5900D49038 /* ChatMessage.swift in Sources */,
 				46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */,

@@ -2,25 +2,23 @@ import Foundation
 
 struct ChatMessage: Identifiable, Codable, Hashable {
     let id: String
-    let authorId: String
-    let receiptId: String
+    let authorId: MimeiId
+    let receiptId: MimeiId
     let chatSessionId: String
     let content: String?
     let timestamp: TimeInterval
     let attachments: [MimeiFileType]?
     
-    /// Generate a unique session ID based on user IDs
-    /// This ensures consistent sessionId for the same chat participants
-    /// Note: sessionId is only stored locally, not in backend
-    static func generateSessionId(userId: String, receiptId: String) -> String {
+    /// Generate a consistent session ID for a pair of users
+    /// This ensures the same session ID is used for all messages between the same users
+    static func generateSessionId(userId: MimeiId, receiptId: MimeiId) -> String {
         // Create a deterministic hash based on sorted user IDs to ensure consistency
-        // This allows us to recreate the same sessionId when loading from backend
         let sortedIds = [userId, receiptId].sorted()
         let combinedString = "\(sortedIds[0])_\(sortedIds[1])"
         return String(combinedString.hash)
     }
     
-    init(id: String = UUID().uuidString, authorId: String, receiptId: String, chatSessionId: String, content: String? = nil, timestamp: TimeInterval = Date().timeIntervalSince1970, attachments: [MimeiFileType]? = nil) {
+    init(id: String = UUID().uuidString, authorId: MimeiId, receiptId: MimeiId, chatSessionId: String, content: String? = nil, timestamp: TimeInterval = Date().timeIntervalSince1970, attachments: [MimeiFileType]? = nil) {
         // Validate that either content or attachments (or both) are present
         guard content != nil || (attachments != nil && !attachments!.isEmpty) else {
             fatalError("ChatMessage must have either content or attachments (or both)")
@@ -42,11 +40,10 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.id = UUID().uuidString
         
         // Decode other fields from backend first
-        self.authorId = try container.decode(String.self, forKey: .authorId)
-        self.receiptId = try container.decode(String.self, forKey: .receiptId)
+        self.authorId = try container.decode(MimeiId.self, forKey: .authorId)
+        self.receiptId = try container.decode(MimeiId.self, forKey: .receiptId)
         
-        // Generate chatSessionId using the same algorithm as Kotlin
-        // We need the authorId and receiptId first to generate the sessionId
+        // Generate consistent session ID based on user IDs
         self.chatSessionId = ChatMessage.generateSessionId(userId: self.authorId, receiptId: self.receiptId)
         
         // Decode other fields from backend
@@ -91,24 +88,13 @@ struct ChatMessage: Identifiable, Codable, Hashable {
 
 struct ChatSession: Identifiable, Codable {
     let id: String
-    let userId: String
-    let receiptId: String
+    let userId: MimeiId
+    let receiptId: MimeiId
     let lastMessage: ChatMessage
     let timestamp: TimeInterval
     let hasNews: Bool
     
-    /// Generate a unique session ID based on user IDs
-    /// This ensures consistent sessionId for the same chat participants
-    /// Note: sessionId is only stored locally, not in backend
-    static func generateSessionId(userId: String, receiptId: String) -> String {
-        // Create a deterministic hash based on sorted user IDs to ensure consistency
-        // This allows us to recreate the same sessionId when loading from backend
-        let sortedIds = [userId, receiptId].sorted()
-        let combinedString = "\(sortedIds[0])_\(sortedIds[1])"
-        return String(combinedString.hash)
-    }
-    
-    init(id: String = UUID().uuidString, userId: String, receiptId: String, lastMessage: ChatMessage, timestamp: TimeInterval, hasNews: Bool = false) {
+    init(id: String = UUID().uuidString, userId: MimeiId, receiptId: MimeiId, lastMessage: ChatMessage, timestamp: TimeInterval, hasNews: Bool = false) {
         self.id = id
         self.userId = userId
         self.receiptId = receiptId
@@ -117,14 +103,14 @@ struct ChatSession: Identifiable, Codable {
         self.hasNews = hasNews
     }
     
-    /// Create a new chat session with auto-generated session ID
+    /// Create a new chat session with consistent session ID
     static func createSession(
-        userId: String,
-        receiptId: String,
+        userId: MimeiId,
+        receiptId: MimeiId,
         lastMessage: ChatMessage,
         hasNews: Bool = false
     ) -> ChatSession {
-        let sessionId = generateSessionId(userId: userId, receiptId: receiptId)
+        let sessionId = ChatMessage.generateSessionId(userId: userId, receiptId: receiptId)
         return ChatSession(
             id: sessionId,
             userId: userId,

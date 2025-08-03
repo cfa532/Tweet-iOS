@@ -3,16 +3,16 @@ import Combine
 
 class User: ObservableObject, Codable, Identifiable, Hashable {
     // MARK: - Singleton Dictionary
-    private static var userInstances: [String: User] = [:]
+    private static var userInstances: [MimeiId: User] = [:]
     
     // MARK: - Properties
-    @Published var mid: String
+    @Published var mid: MimeiId
     @Published var baseUrl: URL?
     @Published var writableUrl: URL?
     @Published var name: String?
     @Published var username: String?
     @Published var password: String?
-    @Published var avatar: String? // MimeiId
+    @Published var avatar: MimeiId? // MimeiId
     @Published var email: String?
     @Published var profile: String?
     @Published var timestamp: Date
@@ -26,7 +26,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var favoritesCount: Int?
     @Published var commentsCount: Int?
     
-    @Published var hostIds: [String]? // List of MimeiId
+    @Published var hostIds: [MimeiId]? // List of MimeiId
     @Published var publicKey: String?
     private var _hproseService: AnyObject?
     public var hproseService: AnyObject? {
@@ -79,16 +79,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // MARK: - Initialization
     init(
-        mid: String = Constants.GUEST_ID,
+        mid: MimeiId = Constants.GUEST_ID,
         baseUrl: URL? = nil,
         name: String? = nil,
         username: String? = nil,
         password: String? = nil,
-        avatar: String? = nil,
+        avatar: MimeiId? = nil,
         email: String? = nil,
         profile: String? = nil,
         cloudDrivePort: Int? = nil,
-        hostIds: [String]? = nil,
+        hostIds: [MimeiId]? = nil,
         publicKey: String? = nil
     ) {
         self.mid = mid
@@ -118,7 +118,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     
     // MARK: - Factory Methods
-    static func getInstance(mid: String) -> User {
+    static func getInstance(mid: MimeiId) -> User {
         if let existingUser = userInstances[mid] {
             return existingUser
         }

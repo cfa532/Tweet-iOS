@@ -1941,7 +1941,7 @@ final class HproseInstance: ObservableObject {
 
     // MARK: - User Avatar
     /// Sets the user's avatar on the server
-    func setUserAvatar(user: User, avatar: String) async throws {
+    func setUserAvatar(user: User, avatar: MimeiId) async throws {
         let entry = "set_user_avatar"
         let params: [String: Any] = [
             "aid": appId,
