@@ -48,6 +48,9 @@ final class HproseInstance: ObservableObject {
     private var appId: String = Constants.GUEST_ID      // placeholder mimei id
     var preferenceHelper: PreferenceHelper?
     
+    // MARK: - BlackList Management
+    private let blackList = BlackList.shared
+    
     private lazy var client: HproseClient = {
         let client = HproseHttpClient()
         client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
@@ -1478,14 +1481,120 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - Private Methods
     private func fetchHTML(from urlString: String) async throws -> String {
+        // Extract MimeiId from URL if possible (assuming it's in the URL path)
+        if let url = URL(string: urlString),
+           let mimeiId = extractMimeiIdFromURL(url) {
+            // Check if this resource is blacklisted
+            if blackList.isBlacklisted(mimeiId) {
+                print("[HproseInstance] Skipping blacklisted resource: \(mimeiId)")
+                throw URLError(.badServerResponse)
+            }
+        }
+        
         guard let url = URL(string: urlString) else {
             throw URLError(.badURL)
         }
-        let (data, _) = try await URLSession.shared.data(from: url)
-        guard let htmlString = String(data: data, encoding: .utf8) else {
-            throw URLError(.cannotDecodeContentData)
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let htmlString = String(data: data, encoding: .utf8) else {
+                throw URLError(.cannotDecodeContentData)
+            }
+            
+            // Record success if we can extract MimeiId
+            if let mimeiId = extractMimeiIdFromURL(url) {
+                blackList.recordSuccess(mimeiId)
+            }
+            
+            return htmlString
+        } catch {
+            // Record failure if we can extract MimeiId
+            if let url = URL(string: urlString),
+               let mimeiId = extractMimeiIdFromURL(url) {
+                blackList.recordFailure(mimeiId)
+            }
+            throw error
         }
-        return htmlString
+    }
+    
+    /// Extract MimeiId from URL if present
+    private func extractMimeiIdFromURL(_ url: URL) -> MimeiId? {
+        // Try to extract MimeiId from URL path components
+        let pathComponents = url.pathComponents
+        for component in pathComponents {
+            // Check if component looks like a MimeiId (you may need to adjust this logic)
+            if component.count > 10 && component.range(of: "^[a-zA-Z0-9]+$", options: .regularExpression) != nil {
+                return MimeiId(component)
+            }
+        }
+        return nil
+    }
+    
+    /// Access a resource by MimeiId with BlackList integration
+    func accessResource(mimeiId: MimeiId, url: String) async throws -> Data {
+        // Check if this resource is blacklisted
+        if blackList.isBlacklisted(mimeiId) {
+            print("[HproseInstance] Skipping blacklisted resource: \(mimeiId)")
+            throw URLError(.badServerResponse)
+        }
+        
+        guard let resourceURL = URL(string: url) else {
+            throw URLError(.badURL)
+        }
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(from: resourceURL)
+            // Record success
+            blackList.recordSuccess(mimeiId)
+            return data
+        } catch {
+            // Record failure
+            blackList.recordFailure(mimeiId)
+            throw error
+        }
+    }
+    
+    /// Get hosts IPs with BlackList integration
+    func getHostsIPs(mimeiId: MimeiId) async throws -> [String] {
+        // Check if this resource is blacklisted
+        if blackList.isBlacklisted(mimeiId) {
+            print("[HproseInstance] Skipping blacklisted resource: \(mimeiId)")
+            throw URLError(.badServerResponse)
+        }
+        
+        do {
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "mid": mimeiId
+            ]
+            
+            if let response = hproseService?.runMApp("get_hosts", params, []) {
+                if let ips = response as? [String] {
+                    // Record success
+                    blackList.recordSuccess(mimeiId)
+                    return ips
+                }
+            }
+            
+            // Record failure if no valid response
+            blackList.recordFailure(mimeiId)
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from get_hosts"])
+        } catch {
+            // Record failure
+            blackList.recordFailure(mimeiId)
+            throw error
+        }
+    }
+    
+    /// Process BlackList candidates (move eligible ones to blacklist)
+    func processBlackListCandidates() {
+        blackList.processCandidates()
+    }
+    
+    /// Get BlackList statistics for debugging/monitoring
+    func getBlackListStats() -> (candidates: Int, blacklisted: Int) {
+        return blackList.getStats()
     }
     
     private func getProviderIP(_ mid: String) async throws -> String? {
