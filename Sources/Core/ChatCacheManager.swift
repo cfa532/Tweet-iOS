@@ -7,6 +7,7 @@ class ChatCacheManager {
     private let coreDataManager = CoreDataManager.shared
 
     private init() {
+        print("[ChatCacheManager] Initializing ChatCacheManager")
         // No periodic cleanup needed - messages are only removed manually by user
     }
     
@@ -21,6 +22,8 @@ extension ChatCacheManager {
             request.predicate = NSPredicate(format: "id == %@", session.id)
             let cdSession = (try? context.fetch(request).first) ?? CDChatSession(context: context)
             
+            print("[ChatCacheManager] Before saving - cdSession.id: \(cdSession.id ?? "nil"), cdSession.userId: \(cdSession.userId ?? "nil")")
+            
             cdSession.id = session.id
             cdSession.userId = session.userId
             cdSession.receiptId = session.receiptId
@@ -32,15 +35,34 @@ extension ChatCacheManager {
             // Encode the entire lastMessage as JSON and store it
             if let messageData = try? JSONEncoder().encode(session.lastMessage) {
                 cdSession.lastMessageData = messageData
+                print("[ChatCacheManager] Successfully encoded lastMessage data")
+            } else {
+                print("[ChatCacheManager] Failed to encode lastMessage data")
             }
             
+            print("[ChatCacheManager] After setting - cdSession.id: \(cdSession.id ?? "nil"), cdSession.userId: \(cdSession.userId ?? "nil")")
             print("[ChatCacheManager] Saving chat session: id=\(session.id), userId=\(session.userId), receiptId=\(session.receiptId), lastMessageId=\(session.lastMessage.id)")
             
             do {
                 try context.save()
                 print("[ChatCacheManager] Successfully saved chat session to Core Data")
+                
+                // Check if there are any Core Data errors
+                if context.hasChanges {
+                    print("[ChatCacheManager] Warning: Context still has changes after save")
+                }
+                
+                // Verify the session was actually saved
+                let verifyRequest: NSFetchRequest<CDChatSession> = CDChatSession.fetchRequest()
+                verifyRequest.predicate = NSPredicate(format: "id == %@", session.id)
+                if let savedSession = try? context.fetch(verifyRequest).first {
+                    print("[ChatCacheManager] Verification: Found saved session with id=\(savedSession.id ?? "nil"), userId=\(savedSession.userId ?? "nil")")
+                } else {
+                    print("[ChatCacheManager] Verification: Failed to find saved session!")
+                }
             } catch {
                 print("[ChatCacheManager] Error saving chat session: \(error)")
+                print("[ChatCacheManager] Error details: \(error.localizedDescription)")
             }
         }
     }
@@ -68,8 +90,37 @@ extension ChatCacheManager {
             } else {
                 print("[ChatCacheManager] No CDChatSession objects found")
             }
+            
+            // Debug: Check if there are any sessions with different user IDs
+            let allSessionsRequest: NSFetchRequest<CDChatSession> = CDChatSession.fetchRequest()
+            if let allSessions = try? context.fetch(allSessionsRequest) {
+                print("[ChatCacheManager] Total sessions in Core Data: \(allSessions.count)")
+                for session in allSessions {
+                    print("[ChatCacheManager] All session: userId=\(session.userId ?? "nil"), receiptId=\(session.receiptId ?? "nil")")
+                }
+            }
+            
+            // Debug: Check Core Data store file
+            if let coordinator = context.persistentStoreCoordinator,
+               let firstStore = coordinator.persistentStores.first,
+               let storeURL = firstStore.url {
+                let fileManager = FileManager.default
+                if fileManager.fileExists(atPath: storeURL.path) {
+                    let attributes = try? fileManager.attributesOfItem(atPath: storeURL.path)
+                    let fileSize = attributes?[.size] as? Int64 ?? 0
+                    print("[ChatCacheManager] Core Data store exists at: \(storeURL.path)")
+                    print("[ChatCacheManager] Core Data store size: \(fileSize) bytes")
+                } else {
+                    print("[ChatCacheManager] Core Data store file does not exist at: \(storeURL.path)")
+                }
+            }
         }
         print("[ChatCacheManager] Returning \(sessions.count) chat sessions")
+        
+        // Simple Core Data store check
+        print("[ChatCacheManager] Core Data context: \(context)")
+        print("[ChatCacheManager] Core Data coordinator: \(context.persistentStoreCoordinator?.description ?? "nil")")
+        
         return sessions
     }
     

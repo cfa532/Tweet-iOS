@@ -28,6 +28,7 @@ class ChatSessionManager: ObservableObject {
             return
         }
         
+        print("[ChatSessionManager] Loading sessions for user ID: \(hproseInstance.appUser.mid)")
         let sessions = chatCacheManager.fetchChatSessions(for: hproseInstance.appUser.mid)
         chatSessions = sessions
         print("[ChatSessionManager] Loaded \(sessions.count) chat sessions from Core Data for user: \(hproseInstance.appUser.mid)")
@@ -109,6 +110,7 @@ class ChatSessionManager: ObservableObject {
                         } else {
                             // No existing session - create new session with the actual message
                             // The message is stored as a copy in the session, not saved to Core Data yet
+                            print("[ChatSessionManager] Creating new session with user ID: \(hproseInstance.appUser.mid), partner ID: \(partnerId)")
                             let newSession = ChatSession.createSession(
                                 userId: hproseInstance.appUser.mid,
                                 receiptId: partnerId,
