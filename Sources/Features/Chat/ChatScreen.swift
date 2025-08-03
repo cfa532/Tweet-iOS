@@ -2,7 +2,7 @@ import SwiftUI
 import PhotosUI
 
 struct ChatScreen: View {
-    let receiptId: String
+    let receiptId: MimeiId
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messages: [ChatMessage] = []
@@ -12,10 +12,14 @@ struct ChatScreen: View {
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var attachmentData: Data?
     @State private var keyboardHeight: CGFloat = 0
-    @State private var isSendingMessage = false
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var messageRefreshTimer: Timer?
+    
+    // Toast message states
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastType: ToastView.ToastType = .info
     
     private func isLastMessageFromSender(index: Int, messages: [ChatMessage]) -> Bool {
         guard index < messages.count else { return false }
@@ -125,6 +129,7 @@ struct ChatScreen: View {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundColor(.red)
                         }
+                        .disabled(false)
                     }
                     .padding(.horizontal)
                     .padding(.vertical, 8)
@@ -141,25 +146,21 @@ struct ChatScreen: View {
                 ) {
                     Image(systemName: "paperclip")
                         .font(.system(size: 20))
-                        .foregroundColor(isSendingMessage ? .gray : .blue)
+                        .foregroundColor(.blue)
                 }
-                .disabled(isSendingMessage)
                     
                     // Text input
                     TextField("Type a message...", text: $messageText, axis: .vertical)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 12) // Increased vertical padding for taller touchable area
-                        .background(isSendingMessage ? Color(.systemGray5) : Color(.systemGray6))
+                        .background(Color(.systemGray6))
                         .cornerRadius(12)
                         .lineLimit(1...5)
                         .focused($isTextFieldFocused)
-                        .disabled(isSendingMessage)
-                        .foregroundColor(isSendingMessage ? .gray : .primary)
+                        .foregroundColor(.primary)
                         .onTapGesture {
                             // Focus the text field when tapped anywhere in its area
-                            if !isSendingMessage {
-                                isTextFieldFocused = true
-                            }
+                            isTextFieldFocused = true
                         }
                         .onSubmit {
                             // Hide keyboard when user submits
@@ -168,22 +169,14 @@ struct ChatScreen: View {
                     
                     // Send button
                     Button(action: sendMessage) {
-                        if isSendingMessage {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.8)
-                        } else {
-                            Image(systemName: "paperplane.fill")
-                                .font(.system(size: 18))
-                                .foregroundColor(.white)
-                        }
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(.white)
                     }
                     .frame(width: 32, height: 32)
-                    .background(
-                        canSendMessage && !isSendingMessage ? Color.blue : Color.gray
-                    )
+                    .background(canSendMessage ? Color.blue : Color.gray)
                     .clipShape(Circle())
-                    .disabled(!canSendMessage || isSendingMessage)
+                    .disabled(!canSendMessage)
                 }
                 .padding()
                 .padding(.bottom, 49) // Add bottom padding to account for tab bar height
@@ -210,7 +203,6 @@ struct ChatScreen: View {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundColor(.red)
                         }
-                        .disabled(isSendingMessage)
                     }
                     .padding(.horizontal)
                     .padding(.vertical, 8)
@@ -227,6 +219,18 @@ struct ChatScreen: View {
             hideKeyboard()
         }
         .toolbar(.hidden, for: .tabBar)
+        .overlay(
+            // Toast message overlay
+            VStack {
+                Spacer()
+                if showToast {
+                    ToastView(message: toastMessage, type: toastType)
+                        .padding(.bottom, 100)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: showToast)
+        )
 
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
             if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
@@ -235,6 +239,13 @@ struct ChatScreen: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardHeight = 0
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .chatMessageSendFailed)) { notification in
+            if let error = notification.userInfo?["error"] as? Error {
+                showToastMessage(error.localizedDescription, type: .error)
+            } else {
+                showToastMessage("Failed to send message", type: .error)
+            }
         }
         .task {
             print("[ChatScreen] Starting to load chat for receiptId: \(receiptId)")
@@ -262,18 +273,120 @@ struct ChatScreen: View {
     }
     
     private func sendMessage() {
-        guard canSendMessage && !isSendingMessage else { return }
+        guard canSendMessage else { return }
         
-        // Set sending state
-        isSendingMessage = true
+        // Check if message has attachments
+        let hasAttachments = selectedAttachment != nil
         
-        Task {
+        if hasAttachments {
+            // Send message with attachments in background
+            sendMessageWithAttachments()
+        } else {
+            // Send text-only message directly
+            sendTextMessageDirectly()
+        }
+    }
+    
+    private func sendTextMessageDirectly() {
+        // Create message for immediate sending
+        let message = ChatMessage(
+            authorId: HproseInstance.shared.appUser.mid,
+            receiptId: receiptId,
+            chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+            content: messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : messageText.trimmingCharacters(in: .whitespacesAndNewlines),
+            attachments: nil
+        )
+        
+        // Store current text for background processing
+        let currentMessageText = messageText
+        
+        // Clear input immediately
+        messageText = ""
+        
+        // Add message to UI immediately
+        messages.append(message)
+        
+        // Send message in background task
+        Task.detached(priority: .background) {
+            do {
+                // Send message to backend
+                try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: message)
+                
+                // Update the chat session
+                await chatSessionManager.updateOrCreateChatSession(
+                    senderId: receiptId,
+                    message: message,
+                    hasNews: false
+                )
+                
+                // Save message to Core Data
+                await MainActor.run {
+                    chatRepository.addMessagesToCoreData([message])
+                    print("[ChatScreen] Text message sent successfully")
+                }
+                
+            } catch {
+                print("[ChatScreen] Error sending text message: \(error)")
+                
+                // Remove the message on failure
+                await MainActor.run {
+                    messages.removeAll { $0.id == message.id }
+                    
+                    // Post notification for failure
+                    NotificationCenter.default.post(
+                        name: .chatMessageSendFailed,
+                        object: nil,
+                        userInfo: ["error": error]
+                    )
+                }
+            }
+        }
+    }
+    
+    private func sendMessageWithAttachments() {
+        // Generate a consistent message ID for both temporary and final messages
+        let messageId = UUID().uuidString
+        
+        // Create a temporary message for immediate UI feedback
+        let tempMessage = ChatMessage(
+            id: messageId,
+            authorId: HproseInstance.shared.appUser.mid,
+            receiptId: receiptId,
+            chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+            content: messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : messageText.trimmingCharacters(in: .whitespacesAndNewlines),
+            attachments: selectedAttachment != nil ? [selectedAttachment!] : nil
+        )
+        
+        print("[ChatScreen] Created temporary message: content=\(tempMessage.content ?? "nil"), attachments=\(tempMessage.attachments?.count ?? 0)")
+        
+        // Add temporary message to UI immediately
+        messages.append(tempMessage)
+        print("[ChatScreen] Added temporary message to UI with ID: \(messageId)")
+        print("[ChatScreen] Total messages in array: \(messages.count)")
+        
+        // Store current values for background processing
+        let currentMessageText = messageText
+        let currentAttachment = selectedAttachment
+        let currentAttachmentData = attachmentData
+        
+        // Clear input immediately
+        messageText = ""
+        selectedAttachment = nil
+        attachmentData = nil
+        selectedPhotos = []
+        
+        // Show toast message for background upload
+        showToastMessage("Uploading attachment in background...", type: .info)
+        
+        // Process message in background
+        Task.detached(priority: .background) {
+            print("[ChatScreen] Starting background message processing for ID: \(messageId)")
             do {
                 var uploadedAttachments: [MimeiFileType]? = nil
                 
                 // Upload attachment if present
-                if let attachment = selectedAttachment, let photoData = attachmentData {
-                    print("[ChatScreen] Uploading attachment to IPFS...")
+                if let attachment = currentAttachment, let photoData = currentAttachmentData {
+                    print("[ChatScreen] Uploading attachment to IPFS in background...")
                     if let uploadedAttachment = try await HproseInstance.shared.uploadToIPFS(
                         data: photoData,
                         typeIdentifier: attachment.type == "image" ? "public.image" : "public.movie",
@@ -284,43 +397,59 @@ struct ChatScreen: View {
                     }
                 }
                 
-                // Create message with uploaded attachment
-                let message = ChatMessage(
+                // Create final message with the same ID and uploaded attachment
+                let finalMessage = ChatMessage(
+                    id: messageId, // Use the same ID as temporary message
                     authorId: HproseInstance.shared.appUser.mid,
                     receiptId: receiptId,
                     chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
-                    content: messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : messageText.trimmingCharacters(in: .whitespacesAndNewlines),
+                    content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
                     attachments: uploadedAttachments
                 )
                 
-                try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: message)
+                // Send message to backend
+                print("[ChatScreen] Sending message to backend...")
+                try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: finalMessage)
+                print("[ChatScreen] Message sent to backend successfully")
                 
                 // Update the chat session
                 await chatSessionManager.updateOrCreateChatSession(
                     senderId: receiptId,
-                    message: message,
+                    message: finalMessage,
                     hasNews: false
                 )
                 
-                // Add message to local messages
+                // Update the temporary message with the final one
                 await MainActor.run {
-                    messages.append(message)
-                    messageText = ""
-                    selectedAttachment = nil
-                    attachmentData = nil
-                    isSendingMessage = false
+                    if let index = messages.firstIndex(where: { $0.id == messageId }) {
+                        messages[index] = finalMessage
+                        print("[ChatScreen] Updated temporary message with final message at index: \(index)")
+                    } else {
+                        print("[ChatScreen] Warning: Could not find temporary message with ID: \(messageId) to update")
+                    }
+                    
+                    // Save final message to Core Data only after successful upload
+                    chatRepository.addMessagesToCoreData([finalMessage])
+                    
+                    // Show success toast
+                    showToastMessage("Message sent successfully", type: .success)
+                    
+                    print("[ChatScreen] Message sent successfully in background")
                 }
                 
-                // Save message to Core Data
-                chatRepository.addMessagesToCoreData([message])
-                
-                print("[ChatScreen] Message sent successfully")
             } catch {
-                print("[ChatScreen] Error sending message: \(error)")
+                print("[ChatScreen] Error sending message in background: \(error)")
                 
-                // Reset sending state on error
+                // Remove the temporary message on failure
                 await MainActor.run {
-                    isSendingMessage = false
+                    messages.removeAll { $0.id == messageId }
+                    
+                    // Post notification for failure
+                    NotificationCenter.default.post(
+                        name: .chatMessageSendFailed,
+                        object: nil,
+                        userInfo: ["error": error]
+                    )
                 }
             }
         }
@@ -394,6 +523,7 @@ struct ChatScreen: View {
             print("[ChatScreen] Ignoring message with invalid chatSessionId: \(message.id)")
         }
         
+        print("[ChatScreen] Message validation for \(message.id): sessionId=\(message.chatSessionId), isValid=\(isValidSessionId)")
         return isValidSessionId
     }
     
@@ -426,6 +556,19 @@ struct ChatScreen: View {
     private func hideKeyboard() {
         isTextFieldFocused = false
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+    
+    private func showToastMessage(_ message: String, type: ToastView.ToastType) {
+        toastMessage = message
+        toastType = type
+        showToast = true
+        
+        // Auto-dismiss toast after 3 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            withAnimation {
+                showToast = false
+            }
+        }
     }
     
     // MARK: - Periodic Message Refresh

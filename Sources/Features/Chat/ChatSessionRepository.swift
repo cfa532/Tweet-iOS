@@ -197,8 +197,8 @@ extension ChatSessionEntity {
 extension ChatSession {
     func copy(
         id: String? = nil,
-        userId: String? = nil,
-        receiptId: String? = nil,
+        userId: MimeiId? = nil,
+        receiptId: MimeiId? = nil,
         lastMessage: ChatMessage? = nil,
         timestamp: TimeInterval? = nil,
         hasNews: Bool? = nil

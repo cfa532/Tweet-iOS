@@ -18,7 +18,7 @@ class ChatRepository: ObservableObject {
     }
     
     /// Load messages for a specific chat conversation
-    func loadMessages(for receiptId: String) async {
+    func loadMessages(for receiptId: MimeiId) async {
         do {
             // Fetch messages from the sender (receiptId is the sender's ID)
             let messages = try await hproseInstance.fetchMessages(senderId: receiptId)

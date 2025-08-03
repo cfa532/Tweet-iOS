@@ -25,6 +25,7 @@
 		4608E2DA2DD5CD920051A92D /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D92DD5CD920051A92D /* User.swift */; };
 		461438172E3E426A002D1B22 /* ChatCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438162E3E426A002D1B22 /* ChatCacheManager.swift */; };
 		461438192E3EEE2D002D1B22 /* MimeiId.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438182E3EEE2D002D1B22 /* MimeiId.swift */; };
+		4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4614381A2E3F5E97002D1B22 /* BlackList.swift */; };
 		4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4629FB182DFFEA3100588941 /* MetricKitManager.swift */; };
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
@@ -112,6 +113,7 @@
 		4608E2D92DD5CD920051A92D /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		461438162E3E426A002D1B22 /* ChatCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCacheManager.swift; sourceTree = "<group>"; };
 		461438182E3EEE2D002D1B22 /* MimeiId.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiId.swift; sourceTree = "<group>"; };
+		4614381A2E3F5E97002D1B22 /* BlackList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackList.swift; sourceTree = "<group>"; };
 		4629FB182DFFEA3100588941 /* MetricKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitManager.swift; sourceTree = "<group>"; };
 		4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiFileType.swift; sourceTree = "<group>"; };
 		4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHelper.swift; sourceTree = "<group>"; };
@@ -267,6 +269,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				4614381A2E3F5E97002D1B22 /* BlackList.swift */,
 				461438162E3E426A002D1B22 /* ChatCacheManager.swift */,
 				46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */,
 				46B1F59B2E07DA7D00B3CE6C /* FFmpegWrapper.h */,
@@ -578,6 +581,7 @@
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
 				468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */,
+				4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */,
 				468384A12DFE9EAB0079ECC5 /* MediaBrowserView.swift in Sources */,
 				469A99562DEC744200954049 /* ProfileHeaderSection.swift in Sources */,
 				469A99572DEC744200954049 /* ProfileStatsSection.swift in Sources */,

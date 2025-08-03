@@ -99,7 +99,7 @@ class ChatSessionManager: ObservableObject {
         }
         await MainActor.run {
             // Determine the receiptId (the other person in the conversation)
-            let receiptId: String
+            let receiptId: MimeiId
             if message.authorId == hproseInstance.appUser.mid {
                 // Message sent by current user, receiptId is the recipient
                 receiptId = message.receiptId
@@ -169,7 +169,7 @@ class ChatSessionManager: ObservableObject {
     }
     
     /// Remove a chat session and all associated messages
-    func removeChatSession(receiptId: String) {
+    func removeChatSession(receiptId: MimeiId) {
         // Remove the chat session from Core Data (this will cascade delete messages)
         chatCacheManager.deleteChatSessionByReceiptId(userId: hproseInstance.appUser.mid, receiptId: receiptId)
         
