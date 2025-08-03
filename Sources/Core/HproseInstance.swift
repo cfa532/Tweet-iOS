@@ -69,7 +69,7 @@ final class HproseInstance: ObservableObject {
         self.preferenceHelper = PreferenceHelper()
         
         // Clear cached users during initialization
-        TweetCacheManager.shared.clearAllUsers()
+//        TweetCacheManager.shared.clearAllUsers()
         
         await MainActor.run {
             _appUser = User.getInstance(mid: preferenceHelper?.getUserId() ?? Constants.GUEST_ID)

@@ -172,6 +172,8 @@ class ChatRepository: ObservableObject {
         if validMessages.count != newMessages.count {
             print("[ChatRepository] Filtered out \(newMessages.count - validMessages.count) invalid messages")
         }
+        
+        print("[ChatRepository] Added \(validMessages.count) messages to Core Data")
     }
     
     /// Initialize the repository

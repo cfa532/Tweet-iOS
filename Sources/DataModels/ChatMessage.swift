@@ -103,16 +103,15 @@ struct ChatSession: Identifiable, Codable {
         self.hasNews = hasNews
     }
     
-    /// Create a new chat session with consistent session ID
+    /// Create a new chat session using the other party's ID as the session ID
     static func createSession(
         userId: MimeiId,
         receiptId: MimeiId,
         lastMessage: ChatMessage,
         hasNews: Bool = false
     ) -> ChatSession {
-        let sessionId = ChatMessage.generateSessionId(userId: userId, receiptId: receiptId)
         return ChatSession(
-            id: sessionId,
+            id: receiptId,  // receiptId is already the other party's ID
             userId: userId,
             receiptId: receiptId,
             lastMessage: lastMessage,

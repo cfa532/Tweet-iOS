@@ -5,59 +5,9 @@ import UIKit
 class ChatCacheManager {
     static let shared = ChatCacheManager()
     private let coreDataManager = CoreDataManager.shared
-    private let maxCacheAge: TimeInterval = 30 * 24 * 60 * 60 // 30 days for chat data
-    private let maxCacheSize: Int = 5000 // Maximum number of messages to cache
-    private var cleanupTimer: Timer?
 
     private init() {
-        // Set up periodic cleanup
-        setupPeriodicCleanup()
-        
-        // Register for memory warnings
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleMemoryWarning),
-            name: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil
-        )
-    }
-    
-    deinit {
-        cleanupTimer?.invalidate()
-        NotificationCenter.default.removeObserver(self)
-    }
-    
-    private func setupPeriodicCleanup() {
-        // Clean up every 6 hours
-        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 21600, repeats: true) { [weak self] _ in
-            self?.performPeriodicCleanup()
-        }
-    }
-    
-    @objc private func handleMemoryWarning() {
-        performPeriodicCleanup()
-    }
-    
-    private func performPeriodicCleanup() {
-        context.performAndWait {
-            // Delete expired messages
-            deleteExpiredMessages()
-            
-            // Limit total number of messages
-            let request: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
-            request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
-            request.fetchLimit = maxCacheSize
-            
-            if let allMessages = try? context.fetch(request) {
-                if allMessages.count > maxCacheSize {
-                    let messagesToDelete = Array(allMessages[maxCacheSize...])
-                    for message in messagesToDelete {
-                        context.delete(message)
-                    }
-                    try? context.save()
-                }
-            }
-        }
+        // No periodic cleanup needed - messages are only removed manually by user
     }
     
     var context: NSManagedObjectContext { coreDataManager.context }
@@ -79,7 +29,19 @@ extension ChatCacheManager {
             cdSession.hasNews = session.hasNews
             cdSession.timeCached = Date()
             
-            try? context.save()
+            // Encode the entire lastMessage as JSON and store it
+            if let messageData = try? JSONEncoder().encode(session.lastMessage) {
+                cdSession.lastMessageData = messageData
+            }
+            
+            print("[ChatCacheManager] Saving chat session: id=\(session.id), userId=\(session.userId), receiptId=\(session.receiptId), lastMessageId=\(session.lastMessage.id)")
+            
+            do {
+                try context.save()
+                print("[ChatCacheManager] Successfully saved chat session to Core Data")
+            } catch {
+                print("[ChatCacheManager] Error saving chat session: \(error)")
+            }
         }
     }
     
@@ -90,14 +52,24 @@ extension ChatCacheManager {
             request.predicate = NSPredicate(format: "userId == %@", userId)
             request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
             
+            print("[ChatCacheManager] Fetching chat sessions for userId: \(userId)")
+            
             if let cdSessions = try? context.fetch(request) {
+                print("[ChatCacheManager] Found \(cdSessions.count) CDChatSession objects")
                 for cdSession in cdSessions {
+                    print("[ChatCacheManager] CDSession: id=\(cdSession.id ?? "nil"), userId=\(cdSession.userId ?? "nil"), receiptId=\(cdSession.receiptId ?? "nil"), lastMessageId=\(cdSession.lastMessageId ?? "nil")")
                     if let session = convertToChatSession(cdSession) {
                         sessions.append(session)
+                        print("[ChatCacheManager] Successfully converted session for \(session.receiptId)")
+                    } else {
+                        print("[ChatCacheManager] Failed to convert session")
                     }
                 }
+            } else {
+                print("[ChatCacheManager] No CDChatSession objects found")
             }
         }
+        print("[ChatCacheManager] Returning \(sessions.count) chat sessions")
         return sessions
     }
     
@@ -145,30 +117,71 @@ extension ChatCacheManager {
         guard let id = cdSession.id,
               let userId = cdSession.userId,
               let receiptId = cdSession.receiptId,
-              let lastMessageId = cdSession.lastMessageId,
               let timestamp = cdSession.timestamp else {
+            print("[ChatCacheManager] Failed to convert session - missing required fields: id=\(cdSession.id ?? "nil"), userId=\(cdSession.userId ?? "nil"), receiptId=\(cdSession.receiptId ?? "nil"), timestamp=\(cdSession.timestamp?.description ?? "nil")")
             return nil
         }
         
-        // Create a placeholder message for the session
-        let placeholderMessage = ChatMessage(
-            id: lastMessageId,
-            authorId: "", // Will be filled by actual message data
-            receiptId: receiptId,
-            chatSessionId: ChatMessage.generateSessionId(userId: userId, receiptId: receiptId),
-            content: nil,
-            timestamp: timestamp.timeIntervalSince1970,
-            attachments: nil
-        )
+        // Try to decode the lastMessage from lastMessageData first
+        if let messageData = cdSession.lastMessageData,
+           let lastMessage = try? JSONDecoder().decode(ChatMessage.self, from: messageData) {
+            print("[ChatCacheManager] Successfully decoded lastMessage from lastMessageData for session: \(id)")
+            return ChatSession(
+                id: id,
+                userId: userId,
+                receiptId: receiptId,
+                lastMessage: lastMessage,
+                timestamp: timestamp.timeIntervalSince1970,
+                hasNews: cdSession.hasNews
+            )
+        }
         
-        return ChatSession(
-            id: id,
-            userId: userId,
-            receiptId: receiptId,
-            lastMessage: placeholderMessage,
-            timestamp: timestamp.timeIntervalSince1970,
-            hasNews: cdSession.hasNews
-        )
+        // Fallback: try to fetch from lastMessageId (for backward compatibility)
+        if let lastMessageId = cdSession.lastMessageId {
+            print("[ChatCacheManager] Converting session with lastMessageId: \(lastMessageId)")
+            let lastMessage = fetchLastMessage(for: lastMessageId)
+            return ChatSession(
+                id: id,
+                userId: userId,
+                receiptId: receiptId,
+                lastMessage: lastMessage,
+                timestamp: timestamp.timeIntervalSince1970,
+                hasNews: cdSession.hasNews
+            )
+        } else {
+            print("[ChatCacheManager] Failed to convert session - missing lastMessageId for session: \(id)")
+            return nil
+        }
+    }
+    
+    private func fetchLastMessage(for messageId: String) -> ChatMessage {
+        var lastMessage: ChatMessage?
+        
+        context.performAndWait {
+            let request: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", messageId)
+            
+            if let cdMessage = try? context.fetch(request).first {
+                lastMessage = convertToChatMessage(cdMessage)
+            }
+        }
+        
+        // If we can't find the actual message, create a fallback
+        if let message = lastMessage {
+            return message
+        } else {
+            // Fallback message if the actual message is not found
+            // Use the session's receiptId as the authorId for the fallback
+            return ChatMessage(
+                id: messageId,
+                authorId: "unknown", // Use a valid placeholder
+                receiptId: "unknown", // Use a valid placeholder
+                chatSessionId: "unknown", // Use a valid placeholder
+                content: "Message",
+                timestamp: Date().timeIntervalSince1970,
+                attachments: nil
+            )
+        }
     }
 }
 
@@ -233,6 +246,28 @@ extension ChatCacheManager {
             }
         }
     }
+    
+    /// Fetch all message IDs from Core Data
+    func fetchAllMessageIds() -> [String] {
+        var messageIds: [String] = []
+        
+        context.performAndWait {
+            let request: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
+            request.propertiesToFetch = ["id"]
+            request.resultType = .dictionaryResultType
+            
+            do {
+                let results = try context.fetch(request) as? [[String: Any]] ?? []
+                messageIds = results.compactMap { $0["id"] as? String }
+            } catch {
+                print("[ChatCacheManager] Error fetching message IDs: \(error)")
+            }
+        }
+        
+        return messageIds
+    }
+    
+
     
     private func convertToChatMessage(_ cdMessage: CDChatMessage) -> ChatMessage? {
         guard let id = cdMessage.id,

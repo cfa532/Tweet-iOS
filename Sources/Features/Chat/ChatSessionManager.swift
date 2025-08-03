@@ -14,17 +14,28 @@ class ChatSessionManager: ObservableObject {
     private let hproseInstance = HproseInstance.shared
     
     private init() {
-        loadChatSessionsFromCoreData()
-        updateUnreadMessageCount()
+        // Don't load sessions immediately - wait for user to be available
+        // Sessions will be loaded when the user is properly initialized
     }
     
     // MARK: - Core Data Methods
     
     /// Load chat sessions from Core Data
     private func loadChatSessionsFromCoreData() {
+        // Check if user ID is available and not guest
+        guard hproseInstance.appUser.mid != Constants.GUEST_ID else {
+            print("[ChatSessionManager] Cannot load sessions - user is still guest")
+            return
+        }
+        
         let sessions = chatCacheManager.fetchChatSessions(for: hproseInstance.appUser.mid)
         chatSessions = sessions
-        print("[ChatSessionManager] Loaded \(sessions.count) chat sessions from Core Data")
+        print("[ChatSessionManager] Loaded \(sessions.count) chat sessions from Core Data for user: \(hproseInstance.appUser.mid)")
+        
+        // Debug: Print session details
+        for session in sessions {
+            print("[ChatSessionManager] Session: \(session.receiptId), timestamp: \(session.timestamp), hasNews: \(session.hasNews)")
+        }
     }
     
     /// Save chat session to Core Data
@@ -36,14 +47,29 @@ class ChatSessionManager: ObservableObject {
     
     /// Load chat sessions from local storage first, then check backend for updates
     func loadChatSessions() async {
-        // Load from local storage first (already done in init)
+        // Load from local storage first
+        loadChatSessionsFromCoreData()
         print("[ChatSessionManager] Loading chat sessions from local storage")
         
-        // Check backend for new messages and update sessions
+        // Only check backend for new messages, don't overwrite existing sessions
         await checkBackendForNewMessages()
     }
     
-    /// Check backend for new messages and update chat sessions
+    /// Force reload chat sessions from Core Data (useful for debugging)
+    func reloadChatSessionsFromCoreData() {
+        loadChatSessionsFromCoreData()
+        updateUnreadMessageCount()
+        print("[ChatSessionManager] Force reloaded chat sessions from Core Data")
+    }
+    
+    /// Load sessions when user is properly initialized
+    func loadSessionsWhenUserAvailable() {
+        loadChatSessionsFromCoreData()
+        updateUnreadMessageCount()
+        print("[ChatSessionManager] Loaded sessions after user initialization")
+    }
+    
+    /// Check backend for new messages (for notification purposes only)
     func checkBackendForNewMessages() async {
         do {
             let newMessages = try await hproseInstance.checkNewMessages()
@@ -56,20 +82,48 @@ class ChatSessionManager: ObservableObject {
                     message.authorId == hproseInstance.appUser.mid ? message.receiptId : message.authorId
                 }
                 
-                // Update or create chat sessions
+                // Update or create chat sessions (only add new ones, don't overwrite existing)
                 for (partnerId, messages) in messagesByPartner {
-                    if let latestMessage = messages.max(by: { $0.timestamp < $1.timestamp }) {
-                        await updateOrCreateChatSession(senderId: partnerId, message: latestMessage, hasNews: true)
+                    // Use the last message from the array (newest message)
+                    if let lastMessage = messages.last {
+                        // Check if session already exists using the other party's ID
+                        let existingSession = chatSessions.first { session in
+                            session.receiptId == partnerId
+                        }
+                        
+                        if let existingSession = existingSession {
+                            // Update session with the new last message (don't worry about duplicates)
+                            if let index = chatSessions.firstIndex(where: { $0.id == existingSession.id }) {
+                                let updatedSession = ChatSession(
+                                    id: existingSession.id,
+                                    userId: existingSession.userId,
+                                    receiptId: existingSession.receiptId,
+                                    lastMessage: lastMessage,
+                                    timestamp: lastMessage.timestamp,
+                                    hasNews: true
+                                )
+                                chatSessions[index] = updatedSession
+                                saveChatSessionToCoreData(updatedSession)
+                                print("[ChatSessionManager] Updated session with new last message for \(partnerId): \(lastMessage.id)")
+                            }
+                        } else {
+                            // No existing session - create new session with the actual message
+                            // The message is stored as a copy in the session, not saved to Core Data yet
+                            let newSession = ChatSession.createSession(
+                                userId: hproseInstance.appUser.mid,
+                                receiptId: partnerId,
+                                lastMessage: lastMessage,
+                                hasNews: true
+                            )
+                            chatSessions.append(newSession)
+                            saveChatSessionToCoreData(newSession)
+                            print("[ChatSessionManager] Created new session for \(partnerId) with actual message: \(lastMessage.id)")
+                        }
                     }
                 }
                 
-                            // Save updated sessions to Core Data
-            for session in chatSessions {
-                saveChatSessionToCoreData(session)
-            }
-            
-            // Update unread message count after processing new messages
-            updateUnreadMessageCount()
+                // Update unread message count
+                updateUnreadMessageCount()
             } else {
                 print("[ChatSessionManager] No new messages found")
             }
@@ -98,47 +152,57 @@ class ChatSessionManager: ObservableObject {
             return
         }
         await MainActor.run {
-            // Determine the receiptId (the other person in the conversation)
-            let receiptId: MimeiId
+            // Determine the other party's ID (the person we're chatting with)
+            let otherPartyId: MimeiId
             if message.authorId == hproseInstance.appUser.mid {
-                // Message sent by current user, receiptId is the recipient
-                receiptId = message.receiptId
+                // Message sent by current user, other party is the recipient
+                otherPartyId = message.receiptId
             } else {
-                // Message received by current user, receiptId is the sender
-                receiptId = message.authorId
+                // Message received by current user, other party is the sender
+                otherPartyId = message.authorId
             }
             
             if let existingIndex = chatSessions.firstIndex(where: { session in
-                session.userId == hproseInstance.appUser.mid && session.receiptId == receiptId
+                session.receiptId == otherPartyId
             }) {
-                // Update existing session
+                // Check if this message ID already exists in the current session to avoid duplicates
                 let existingSession = chatSessions[existingIndex]
+                
+                // Check if this message is already the last message
+                if existingSession.lastMessage.id == message.id {
+                    print("[ChatSessionManager] Skipping duplicate message for \(otherPartyId), message ID: \(message.id) is already the last message")
+                    return
+                }
+                
+                // Always update the session with the new message
+                // Don't rely on timestamps as they are not trustworthy across devices
                 let updatedSession = ChatSession(
                     id: existingSession.id,
                     userId: hproseInstance.appUser.mid,
-                    receiptId: receiptId,
+                    receiptId: otherPartyId,
                     lastMessage: message,
                     timestamp: message.timestamp,
                     hasNews: hasNews || existingSession.hasNews
                 )
                 chatSessions[existingIndex] = updatedSession
-                print("[ChatSessionManager] Updated existing chat session for \(receiptId)")
+                print("[ChatSessionManager] Updated existing chat session for \(otherPartyId) with new message: \(message.id)")
             } else {
                 // Create new session
                 let newSession = ChatSession.createSession(
                     userId: hproseInstance.appUser.mid,
-                    receiptId: receiptId,
+                    receiptId: otherPartyId,
                     lastMessage: message,
                     hasNews: hasNews
                 )
                 chatSessions.append(newSession)
-                print("[ChatSessionManager] Created new chat session for \(receiptId)")
+                print("[ChatSessionManager] Created new chat session for \(otherPartyId)")
             }
             
             // Save updated sessions to Core Data
             for session in chatSessions {
                 saveChatSessionToCoreData(session)
             }
+            print("[ChatSessionManager] Saved \(chatSessions.count) sessions to Core Data after session update")
         }
     }
     
@@ -236,4 +300,4 @@ class ChatSessionManager: ObservableObject {
         }
         updateUnreadMessageCount()
     }
-} 
+}

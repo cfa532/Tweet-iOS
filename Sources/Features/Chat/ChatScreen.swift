@@ -125,11 +125,12 @@ struct ChatScreen: View {
                         
                         Button(action: {
                             selectedAttachment = nil
+                            attachmentData = nil
+                            selectedPhotos = []
                         }) {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundColor(.red)
                         }
-                        .disabled(false)
                     }
                     .padding(.horizontal)
                     .padding(.vertical, 8)
@@ -138,16 +139,16 @@ struct ChatScreen: View {
                 
                 // Message input bar
                 HStack(spacing: 12) {
-                                    // Attachment button
-                PhotosPicker(
-                    selection: $selectedPhotos,
-                    maxSelectionCount: 1,
-                    matching: .any(of: [.images, .videos])
-                ) {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 20))
-                        .foregroundColor(.blue)
-                }
+                    // Attachment button
+                    PhotosPicker(
+                        selection: $selectedPhotos,
+                        maxSelectionCount: 1,
+                        matching: .any(of: [.images, .videos])
+                    ) {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 20))
+                            .foregroundColor(.blue)
+                    }
                     
                     // Text input
                     TextField("Type a message...", text: $messageText, axis: .vertical)
@@ -179,7 +180,6 @@ struct ChatScreen: View {
                     .disabled(!canSendMessage)
                 }
                 .padding()
-                .padding(.bottom, 49) // Add bottom padding to account for tab bar height
                 .background(Color(.systemBackground))
                 .overlay(
                     Rectangle()
@@ -187,30 +187,6 @@ struct ChatScreen: View {
                         .foregroundColor(Color(.separator)),
                     alignment: .top
                 )
-                
-                // Attachment preview placeholder
-                if selectedAttachment != nil {
-                    HStack {
-                        Text("📎 Attachment selected")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Button(action: {
-                            selectedAttachment = nil
-                            attachmentData = nil
-                            selectedPhotos = []
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.red)
-                        }
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemGray6))
-                    .cornerRadius(8)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                }
             }
             .background(Color(.systemBackground))
         }
@@ -297,7 +273,7 @@ struct ChatScreen: View {
             attachments: nil
         )
         
-        // Store current text for background processing
+        // Store current text
         let currentMessageText = messageText
         
         // Clear input immediately
@@ -306,8 +282,8 @@ struct ChatScreen: View {
         // Add message to UI immediately
         messages.append(message)
         
-        // Send message in background task
-        Task.detached(priority: .background) {
+        // Send message directly (synchronously)
+        Task {
             do {
                 // Send message to backend
                 try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: message)
@@ -344,26 +320,6 @@ struct ChatScreen: View {
     }
     
     private func sendMessageWithAttachments() {
-        // Generate a consistent message ID for both temporary and final messages
-        let messageId = UUID().uuidString
-        
-        // Create a temporary message for immediate UI feedback
-        let tempMessage = ChatMessage(
-            id: messageId,
-            authorId: HproseInstance.shared.appUser.mid,
-            receiptId: receiptId,
-            chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
-            content: messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : messageText.trimmingCharacters(in: .whitespacesAndNewlines),
-            attachments: selectedAttachment != nil ? [selectedAttachment!] : nil
-        )
-        
-        print("[ChatScreen] Created temporary message: content=\(tempMessage.content ?? "nil"), attachments=\(tempMessage.attachments?.count ?? 0)")
-        
-        // Add temporary message to UI immediately
-        messages.append(tempMessage)
-        print("[ChatScreen] Added temporary message to UI with ID: \(messageId)")
-        print("[ChatScreen] Total messages in array: \(messages.count)")
-        
         // Store current values for background processing
         let currentMessageText = messageText
         let currentAttachment = selectedAttachment
@@ -376,11 +332,10 @@ struct ChatScreen: View {
         selectedPhotos = []
         
         // Show toast message for background upload
-        showToastMessage("Uploading attachment in background...", type: .info)
+        showToastMessage("Sending message in background...", type: .info)
         
         // Process message in background
         Task.detached(priority: .background) {
-            print("[ChatScreen] Starting background message processing for ID: \(messageId)")
             do {
                 var uploadedAttachments: [MimeiFileType]? = nil
                 
@@ -397,9 +352,8 @@ struct ChatScreen: View {
                     }
                 }
                 
-                // Create final message with the same ID and uploaded attachment
+                // Create final message with uploaded attachment
                 let finalMessage = ChatMessage(
-                    id: messageId, // Use the same ID as temporary message
                     authorId: HproseInstance.shared.appUser.mid,
                     receiptId: receiptId,
                     chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
@@ -419,32 +373,18 @@ struct ChatScreen: View {
                     hasNews: false
                 )
                 
-                // Update the temporary message with the final one
+                // Add message to UI and save to Core Data
                 await MainActor.run {
-                    if let index = messages.firstIndex(where: { $0.id == messageId }) {
-                        messages[index] = finalMessage
-                        print("[ChatScreen] Updated temporary message with final message at index: \(index)")
-                    } else {
-                        print("[ChatScreen] Warning: Could not find temporary message with ID: \(messageId) to update")
-                    }
-                    
-                    // Save final message to Core Data only after successful upload
+                    messages.append(finalMessage)
                     chatRepository.addMessagesToCoreData([finalMessage])
-                    
-                    // Show success toast
-                    showToastMessage("Message sent successfully", type: .success)
-                    
                     print("[ChatScreen] Message sent successfully in background")
                 }
                 
             } catch {
                 print("[ChatScreen] Error sending message in background: \(error)")
                 
-                // Remove the temporary message on failure
+                // Post notification for failure
                 await MainActor.run {
-                    messages.removeAll { $0.id == messageId }
-                    
-                    // Post notification for failure
                     NotificationCenter.default.post(
                         name: .chatMessageSendFailed,
                         object: nil,

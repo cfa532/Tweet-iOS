@@ -64,6 +64,9 @@ struct ChatListScreen: View {
             await loadChatSessions()
         }
         .onAppear {
+            // Force reload sessions from Core Data when view appears
+            chatSessionManager.reloadChatSessionsFromCoreData()
+            
             // Start periodic checking for new messages
             startPeriodicMessageCheck()
         }
@@ -95,8 +98,8 @@ struct ChatListScreen: View {
     // MARK: - Periodic Message Checking
     
     private func startPeriodicMessageCheck() {
-        // Check for new messages every 30 seconds
-        messageCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { _ in
+        // Check for new messages every 60 seconds
+        messageCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
             Task {
                 await chatSessionManager.checkBackendForNewMessages()
             }
@@ -186,7 +189,7 @@ struct ChatSessionRow: View {
                     }
                     
                     // Message preview
-                    Text(session.lastMessage.content?.isEmpty != false ? "📎 Attachment" : (session.lastMessage.content ?? "📎 Attachment"))
+                    Text(getMessagePreview())
                         .font(.system(size: 15, weight: .regular))
                         .foregroundColor(.primary)
                         .lineLimit(2)
@@ -204,6 +207,24 @@ struct ChatSessionRow: View {
         .task {
             user = try? await hproseInstance.fetchUser(session.receiptId)
         }
+    }
+    
+    private func getMessagePreview() -> String {
+        let message = session.lastMessage
+        let isFromCurrentUser = message.authorId == hproseInstance.appUser.mid
+        
+        // If there's text content, show it
+        if let content = message.content, !content.isEmpty {
+            return content
+        }
+        
+        // If there are attachments, show appropriate message based on direction
+        if let attachments = message.attachments, !attachments.isEmpty {
+            return isFromCurrentUser ? "📎 Attachment sent" : "📎 Attachment received"
+        }
+        
+        // Fallback
+        return isFromCurrentUser ? "Message sent" : "Message received"
     }
     
     private func formatDate(_ timestamp: TimeInterval) -> String {
