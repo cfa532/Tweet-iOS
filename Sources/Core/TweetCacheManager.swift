@@ -4,34 +4,12 @@ import UIKit
 
 class TweetCacheManager {
     static let shared = TweetCacheManager()
-    let container: NSPersistentContainer
+    private let coreDataManager = CoreDataManager.shared
     private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days
     private let maxCacheSize: Int = 1000 // Maximum number of tweets to cache
     private var cleanupTimer: Timer?
 
     private init() {
-        container = NSPersistentContainer(name: "TweetModel")
-        
-        // Enable automatic lightweight migration
-        let description = NSPersistentStoreDescription()
-        description.shouldMigrateStoreAutomatically = true
-        description.shouldInferMappingModelAutomatically = true
-        container.persistentStoreDescriptions = [description]
-        
-        container.loadPersistentStores { _, error in
-            if let error = error {
-                // Log the error but don't crash
-                print("Core Data failed to load: \(error)")
-                
-                // Try to recover by removing the store and creating a new one
-                do {
-                    try self.recoverFromError()
-                } catch {
-                    print("Failed to recover from Core Data error: \(error)")
-                }
-            }
-        }
-        
         // Set up periodic cleanup
         setupPeriodicCleanup()
         
@@ -83,20 +61,7 @@ class TweetCacheManager {
         }
     }
     
-    private func recoverFromError() throws {
-        // Get the store URL
-        guard let storeURL = container.persistentStoreDescriptions.first?.url else {
-            throw NSError(domain: "TweetCacheManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "No store URL found"])
-        }
-        
-        // Remove the existing store
-        try container.persistentStoreCoordinator.destroyPersistentStore(at: storeURL, ofType: NSSQLiteStoreType, options: nil)
-        
-        // Create a new store
-        try container.persistentStoreCoordinator.addPersistentStore(ofType: NSSQLiteStoreType, configurationName: nil, at: storeURL, options: nil)
-    }
-
-    var context: NSManagedObjectContext { container.viewContext }
+    var context: NSManagedObjectContext { coreDataManager.context }
 }
 
 // MARK: - Tweet Caching

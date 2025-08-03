@@ -4,31 +4,12 @@ import UIKit
 
 class ChatCacheManager {
     static let shared = ChatCacheManager()
-    let container: NSPersistentContainer
+    private let coreDataManager = CoreDataManager.shared
     private let maxCacheAge: TimeInterval = 30 * 24 * 60 * 60 // 30 days for chat data
     private let maxCacheSize: Int = 5000 // Maximum number of messages to cache
     private var cleanupTimer: Timer?
 
     private init() {
-        container = NSPersistentContainer(name: "TweetModel")
-        
-        // Enable automatic lightweight migration
-        let description = NSPersistentStoreDescription()
-        description.shouldMigrateStoreAutomatically = true
-        description.shouldInferMappingModelAutomatically = true
-        container.persistentStoreDescriptions = [description]
-        
-        container.loadPersistentStores { _, error in
-            if let error = error {
-                print("Core Data failed to load: \(error)")
-                do {
-                    try self.recoverFromError()
-                } catch {
-                    print("Failed to recover from Core Data error: \(error)")
-                }
-            }
-        }
-        
         // Set up periodic cleanup
         setupPeriodicCleanup()
         
@@ -79,16 +60,7 @@ class ChatCacheManager {
         }
     }
     
-    private func recoverFromError() throws {
-        guard let storeURL = container.persistentStoreDescriptions.first?.url else {
-            throw NSError(domain: "ChatCacheManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "No store URL found"])
-        }
-        
-        try container.persistentStoreCoordinator.destroyPersistentStore(at: storeURL, ofType: NSSQLiteStoreType, options: nil)
-        try container.persistentStoreCoordinator.addPersistentStore(ofType: NSSQLiteStoreType, configurationName: nil, at: storeURL, options: nil)
-    }
-
-    var context: NSManagedObjectContext { container.viewContext }
+    var context: NSManagedObjectContext { coreDataManager.context }
 }
 
 // MARK: - Chat Session Caching
