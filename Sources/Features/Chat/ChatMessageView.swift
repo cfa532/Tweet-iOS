@@ -209,17 +209,25 @@ struct ChatImageViewWithPlaceholder: View {
     var body: some View {
         Group {
             if let url = attachment.getUrl(baseUrl) {
-                ZoomableImageView(
-                    imageURL: url,
-                    placeholderImage: getCachedPlaceholder(),
-                    contentMode: .fit
-                )
-                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
-                .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 1.0, 0.8)), contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .onTapGesture {
-                    showFullScreen = true
-                }
+                WebImage(url: url)
+                    .placeholder {
+                        if let placeholderImage = getCachedPlaceholder() {
+                            Image(uiImage: placeholderImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                        } else {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                        }
+                    }
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                    .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 1.0, 0.8)), contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .onTapGesture {
+                        showFullScreen = true
+                    }
             } else {
                 // Fallback if no URL
                 RoundedRectangle(cornerRadius: 8)
