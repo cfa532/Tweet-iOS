@@ -250,7 +250,6 @@ struct MediaGridView: View {
                                     onVideoFinished: onVideoFinished
                                 )
                                 .environmentObject(MuteState.shared)
-                                .aspectRatio(3.0/2.0, contentMode: .fill)
                                 .frame(width: gridWidth/3 - 1, height: gridHeight)
                                 .clipped()
                                 .contentShape(Rectangle())
@@ -269,7 +268,6 @@ struct MediaGridView: View {
                                     onVideoFinished: onVideoFinished
                                 )
                                 .environmentObject(MuteState.shared)
-                                .aspectRatio(4.0/5.0, contentMode: .fill)
                                 .frame(width: gridWidth, height: gridHeight/3 - 1)
                                 .clipped()
                                 .contentShape(Rectangle())
@@ -287,7 +285,6 @@ struct MediaGridView: View {
                                 onVideoFinished: onVideoFinished
                             )
                             .environmentObject(MuteState.shared)
-                            .aspectRatio(contentMode: .fill)
                             .frame(width: gridWidth/2 - 1, height: gridHeight)
                             .clipped()
                             .contentShape(Rectangle())
@@ -302,7 +299,6 @@ struct MediaGridView: View {
                                         onVideoFinished: onVideoFinished
                                     )
                                     .environmentObject(MuteState.shared)
-                                    .aspectRatio(contentMode: .fill)
                                     .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                     .clipped()
                                     .contentShape(Rectangle())
@@ -321,7 +317,6 @@ struct MediaGridView: View {
                                 onVideoFinished: onVideoFinished
                             )
                             .environmentObject(MuteState.shared)
-                            .aspectRatio(contentMode: .fill)
                             .frame(width: gridWidth, height: gridHeight/2 - 1)
                             .clipped()
                             .contentShape(Rectangle())
@@ -336,7 +331,6 @@ struct MediaGridView: View {
                                         onVideoFinished: onVideoFinished
                                     )
                                     .environmentObject(MuteState.shared)
-                                    .aspectRatio(contentMode: .fill)
                                     .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                     .clipped()
                                     .contentShape(Rectangle())
