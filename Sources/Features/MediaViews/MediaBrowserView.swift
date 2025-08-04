@@ -52,6 +52,9 @@ struct MediaBrowserView: View {
                             // Only create video player for currently visible attachment
                             if index == currentIndex {
                                 videoView(for: attachment, url: url, index: index)
+                                    .onAppear {
+                                        print("DEBUG: [MediaBrowserView] Video view appeared for index: \(index), currentIndex: \(currentIndex)")
+                                    }
                             } else {
                                 // Show placeholder for non-visible videos
                                 videoPlaceholderView(for: attachment, url: url, index: index)

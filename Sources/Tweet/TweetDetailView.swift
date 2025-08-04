@@ -94,6 +94,7 @@ struct TweetDetailView: View {
                 TweetDetailView(tweet: selectedComment)
             }
         }
+        .environmentObject(MuteState.shared)
     }
     
     private var mediaSection: some View {
@@ -108,10 +109,15 @@ struct TweetDetailView: View {
                             attachmentIndex: index,
                             aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
                             play: index == selectedMediaIndex,
-                            shouldLoadVideo:  index == selectedMediaIndex
+                            shouldLoadVideo:  index == selectedMediaIndex,
+                            showMuteButton: false
                         )
+                        .environmentObject(MuteState.shared)
+                        .onAppear {
+                            // Unmute videos in tweet detail screen
+                            MuteState.shared.setMuted(false)
+                        }
                         .tag(index)
-                        .onTapGesture { showBrowser = true }
                     }
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))

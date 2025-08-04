@@ -21,15 +21,16 @@ struct MediaCell: View {
     @State private var isVisible = false
     @State private var shouldLoadVideo: Bool
     @State private var onVideoFinished: (() -> Void)?
+    let showMuteButton: Bool
     
-    
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
         self._play = State(initialValue: play)
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
+        self.showMuteButton = showMuteButton
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -75,14 +76,18 @@ struct MediaCell: View {
                         }
                         
                         .overlay(
-                            // Mute button in bottom right corner
-                            VStack {
-                                Spacer()
-                                HStack {
-                                    Spacer()
-                                    MuteButton()
-                                        .padding(.trailing, 8)
-                                        .padding(.bottom, 8)
+                            // Mute button in bottom right corner (only if showMuteButton is true)
+                            Group {
+                                if showMuteButton {
+                                    VStack {
+                                        Spacer()
+                                        HStack {
+                                            Spacer()
+                                            MuteButton()
+                                                .padding(.trailing, 8)
+                                                .padding(.bottom, 8)
+                                        }
+                                    }
                                 }
                             }
                         )
@@ -225,6 +230,12 @@ struct MuteButton: View {
                 .background(Color.black.opacity(0.4))
                 .clipShape(Circle())
                 .contentShape(Circle())
+        }
+        .onAppear {
+            print("DEBUG: [MUTE BUTTON] Appeared with mute state: \(muteState.isMuted)")
+        }
+        .onReceive(muteState.$isMuted) { isMuted in
+            print("DEBUG: [MUTE BUTTON] Mute state changed to: \(isMuted)")
         }
     }
 }
