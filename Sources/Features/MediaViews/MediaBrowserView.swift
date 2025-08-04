@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AVKit
+import SDWebImageSwiftUI
 
 struct MediaBrowserView: View {
     let tweet: Tweet
@@ -267,15 +268,18 @@ struct MediaBrowserView: View {
     
     @ViewBuilder
     private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
-        ImageViewWithPlaceholder(
-            attachment: attachment,
-            baseUrl: baseUrl,
-            url: url,
-            imageState: imageStates[index] ?? .loading
+        ZoomableImageView(
+            imageURL: url,
+            placeholderImage: getCachedPlaceholder(for: attachment),
+            contentMode: .fit
         )
         .onAppear {
             loadImageIfNeeded(for: attachment, at: index)
         }
+    }
+    
+    private func getCachedPlaceholder(for attachment: MimeiFileType) -> UIImage? {
+        return ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl)
     }
 }
 

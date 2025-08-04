@@ -3,6 +3,7 @@ platform :ios, '15.0'
 target 'Tweet' do
   use_frameworks!  # Use dynamic frameworks
   pod 'hprose', '2.0.3'
+  pod 'SDWebImageSwiftUI', '~> 2.0'
 end
 
 post_install do |installer|

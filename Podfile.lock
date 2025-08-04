@@ -1,16 +1,26 @@
 PODS:
   - hprose (2.0.3)
+  - SDWebImage (5.21.1):
+    - SDWebImage/Core (= 5.21.1)
+  - SDWebImage/Core (5.21.1)
+  - SDWebImageSwiftUI (2.2.7):
+    - SDWebImage (~> 5.10)
 
 DEPENDENCIES:
   - hprose (= 2.0.3)
+  - SDWebImageSwiftUI (~> 2.0)
 
 SPEC REPOS:
   trunk:
     - hprose
+    - SDWebImage
+    - SDWebImageSwiftUI
 
 SPEC CHECKSUMS:
   hprose: 8b021625ba6ce9e4e2ae8eeb7170be89bf5ffc1a
+  SDWebImage: f29024626962457f3470184232766516dee8dfea
+  SDWebImageSwiftUI: 65a2c8b4b0d9577f2e11556cb163cc4613b9ee54
 
-PODFILE CHECKSUM: a7c7fd6af37831f2df6e84306962ca057fae2c5d
+PODFILE CHECKSUM: d7d85d005de8b9090d2007529fe98f7800659243
 
 COCOAPODS: 1.16.2

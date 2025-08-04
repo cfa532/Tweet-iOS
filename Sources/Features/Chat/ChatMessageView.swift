@@ -6,6 +6,8 @@
 //
 
 import SwiftUI
+import AVKit
+import SDWebImageSwiftUI
 
 // MARK: - Chat Message View
 
@@ -200,7 +202,6 @@ struct ChatImageViewWithPlaceholder: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
     
-    @State private var imageState: ImageState = .loading
     @State private var showFullScreen = false
     
     private let baseUrl = HproseInstance.baseUrl
@@ -208,20 +209,16 @@ struct ChatImageViewWithPlaceholder: View {
     var body: some View {
         Group {
             if let url = attachment.getUrl(baseUrl) {
-                ImageViewWithPlaceholder(
-                    attachment: attachment,
-                    baseUrl: baseUrl,
-                    url: url,
-                    imageState: imageState
+                ZoomableImageView(
+                    imageURL: url,
+                    placeholderImage: getCachedPlaceholder(),
+                    contentMode: .fit
                 )
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
                 .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 1.0, 0.8)), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .onTapGesture {
                     showFullScreen = true
-                }
-                .onAppear {
-                    loadImageIfNeeded()
                 }
             } else {
                 // Fallback if no URL
@@ -235,34 +232,18 @@ struct ChatImageViewWithPlaceholder: View {
             }
         }
         .sheet(isPresented: $showFullScreen) {
-            if case .loaded(let image) = imageState {
-                FullScreenImageView(image: image)
+            if let url = attachment.getUrl(baseUrl) {
+                FullScreenImageView(
+                    imageURL: url,
+                    placeholderImage: getCachedPlaceholder(),
+                    isPresented: $showFullScreen
+                )
             }
         }
     }
     
-    private func loadImageIfNeeded() {
-        // Show compressed image as placeholder first
-        if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-            imageState = .placeholder(compressedImage)
-        } else {
-            imageState = .loading
-        }
-        
-        // Load original image from backend
-        guard let url = attachment.getUrl(baseUrl) else { return }
-        
-        Task {
-            if let originalImage = await ImageCacheManager.shared.loadOriginalImage(from: url, for: attachment, baseUrl: baseUrl) {
-                await MainActor.run {
-                    imageState = .loaded(originalImage)
-                }
-            } else {
-                await MainActor.run {
-                    imageState = .error
-                }
-            }
-        }
+    private func getCachedPlaceholder() -> UIImage? {
+        return ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl)
     }
 }
 
@@ -453,35 +434,6 @@ struct ChatMultipleAttachmentsLoader: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             withAnimation(.easeInOut(duration: 0.3)) {
                 isLoading = false
-            }
-        }
-    }
-}
-
-// MARK: - Full Screen Image View
-
-struct FullScreenImageView: View {
-    let image: UIImage
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationView {
-            GeometryReader { geometry in
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .background(Color.black)
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationBarBackButtonHidden(true)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Close") {
-                        dismiss()
-                    }
-                    .foregroundColor(.white)
-                }
             }
         }
     }

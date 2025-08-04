@@ -1,9 +1,10 @@
 import SwiftUI
+import SDWebImageSwiftUI
 
 struct AvatarFullScreenView: View {
     let user: User
     @Binding var isPresented: Bool
-    @State private var imageState: ImageState = .loading
+    @State private var cachedPlaceholderImage: UIImage?
     
     private let baseUrl: URL
     
@@ -16,16 +17,17 @@ struct AvatarFullScreenView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             Color.black.ignoresSafeArea()
+            
             VStack {
                 Spacer()
-                if let avatarUrl = user.avatarUrl {
-                    AvatarImageViewWithPlaceholder(
-                        avatarUrl: avatarUrl,
-                        baseUrl: baseUrl,
-                        imageState: imageState
+                if let avatarUrl = user.avatarUrl, let url = URL(string: avatarUrl) {
+                    ZoomableImageView(
+                        imageURL: url,
+                        placeholderImage: cachedPlaceholderImage,
+                        contentMode: .fit
                     )
                     .onAppear {
-                        loadAvatarIfNeeded()
+                        loadCachedPlaceholder()
                     }
                 } else {
                     Image("ic_splash")
@@ -33,6 +35,7 @@ struct AvatarFullScreenView: View {
                         .aspectRatio(contentMode: .fit)
                 }
                 Spacer()
+                
                 VStack(alignment: .leading, spacing: 8) {
                     Text(user.mid)
                     if let baseUrl = user.baseUrl {
@@ -48,6 +51,7 @@ struct AvatarFullScreenView: View {
                 .cornerRadius(12)
                 .padding(.bottom, 32)
             }
+            
             VStack {
                 HStack {
                     Spacer()
@@ -63,7 +67,7 @@ struct AvatarFullScreenView: View {
         }
     }
     
-    private func loadAvatarIfNeeded() {
+    private func loadCachedPlaceholder() {
         guard let avatarUrl = user.avatarUrl,
               let url = URL(string: avatarUrl) else { return }
         
@@ -73,72 +77,9 @@ struct AvatarFullScreenView: View {
             type: "image"
         )
         
-        // Show compressed image as placeholder first
+        // Load cached compressed image as placeholder
         if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
-            imageState = .placeholder(compressedImage)
-        } else {
-            imageState = .loading
+            cachedPlaceholderImage = compressedImage
         }
-        
-        // Load original image from backend
-        Task {
-            if let originalImage = await ImageCacheManager.shared.loadOriginalImage(from: url, for: avatarAttachment, baseUrl: baseUrl) {
-                await MainActor.run {
-                    imageState = .loaded(originalImage)
-                }
-            } else {
-                await MainActor.run {
-                    imageState = .error
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Avatar Image View With Placeholder
-struct AvatarImageViewWithPlaceholder: View {
-    let avatarUrl: String
-    let baseUrl: URL
-    let imageState: ImageState
-    
-    var body: some View {
-        Group {
-            switch imageState {
-            case .loading:
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.5)
-                
-            case .placeholder(let placeholderImage):
-                Image(uiImage: placeholderImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .overlay(
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.0)
-                            .background(Color.black.opacity(0.3))
-                            .clipShape(Circle())
-                            .padding(),
-                        alignment: .topTrailing
-                    )
-                
-            case .loaded(let image):
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                
-            case .error:
-                VStack {
-                    Image(systemName: "person.circle")
-                        .font(.system(size: 50))
-                        .foregroundColor(.gray)
-                    Text(LocalizedStringKey("Failed to load avatar"))
-                        .foregroundColor(.gray)
-                        .font(.caption)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 } 
