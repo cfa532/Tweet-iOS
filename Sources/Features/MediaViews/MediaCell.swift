@@ -61,14 +61,14 @@ struct MediaCell: View {
                             contentType: attachment.type,
                             cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showNativeControls: true,
+                            showNativeControls: false,
+                            onVideoTap: {
+                                showFullScreen = true
+                            },
                             showCustomControls: false,
-                            disableAutoRestart: false
+                            disableAutoRestart: false,
                         )
                         .environmentObject(MuteState.shared)
-                        .onTapGesture(count: 2) {
-                            showFullScreen = true
-                        }
                     } else {
                         // Show placeholder for videos that haven't been loaded yet
                         Color.black
@@ -79,9 +79,8 @@ struct MediaCell: View {
                                     .foregroundColor(.white)
                             )
                             .onTapGesture {
-                                // Force load video on tap
-                                shouldLoadVideo = true
-                                play = true
+                                // Open full screen for video placeholders
+                                showFullScreen = true
                             }
                     }
                 case "audio":
@@ -141,14 +140,8 @@ struct MediaCell: View {
     private func handleTap() {
         switch attachment.type.lowercased() {
         case "video", "hls_video":
-            if shouldLoadVideo {
-                // Video is already loaded, toggle playback
-                play.toggle()
-            } else {
-                // Force load video immediately on tap
-                shouldLoadVideo = true
-                play.toggle()
-            }
+            // Open full screen for videos
+            showFullScreen = true
         case "audio":
             // Toggle audio playback
             play.toggle()

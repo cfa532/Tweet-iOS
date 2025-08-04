@@ -324,6 +324,18 @@ struct HLSVideoPlayerWithControls: View {
                 if let player = player {
                     VideoPlayer(player: player)
                         .overlay(
+                            // Transparent overlay to capture taps when custom controls are disabled
+                            Group {
+                                if !showCustomControls {
+                                    Color.clear
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            onVideoTap?()
+                                        }
+                                }
+                            }
+                        )
+                        .overlay(
                             // Custom controls overlay - only show if showCustomControls is true
                             Group {
                                 if showControls && showCustomControls {
@@ -452,19 +464,20 @@ struct HLSVideoPlayerWithControls: View {
             }
             .contentShape(Rectangle()) // Make entire area tappable
             .onTapGesture {
-                // Check if video is at the end and restart if needed
-                if duration > 0 && currentTime >= duration - 0.5 {
-                    resetVideoState()
-                    // Start playing again
-                    if let player = player {
-                        player.play()
-                        isPlaying = true
-                    }
-                    return
-                }
-                
-                // Only toggle controls if custom controls are enabled
+                // Only handle tap if custom controls are enabled
                 if showCustomControls {
+                    // Check if video is at the end and restart if needed
+                    if duration > 0 && currentTime >= duration - 0.5 {
+                        resetVideoState()
+                        // Start playing again
+                        if let player = player {
+                            player.play()
+                            isPlaying = true
+                        }
+                        return
+                    }
+                    
+                    // Toggle controls
                     withAnimation {
                         showControls.toggle()
                     }
@@ -475,16 +488,14 @@ struct HLSVideoPlayerWithControls: View {
                     } else {
                         stopControlsTimer()
                     }
+                    
+                    // If player is paused and we tap, also resume playback
+                    if let player = player, player.rate == 0 {
+                        player.play()
+                        isPlaying = true
+                    }
                 }
-                
-                // If player is paused and we tap, also resume playback
-                if let player = player, player.rate == 0 {
-                    player.play()
-                    isPlaying = true
-                }
-                
-                // Always call the onVideoTap callback if provided
-                onVideoTap?()
+                // Note: onVideoTap is now handled by the transparent overlay when custom controls are disabled
             }
             .onLongPressGesture {
                 // Manual reload on long press
