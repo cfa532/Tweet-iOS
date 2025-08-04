@@ -20,6 +20,8 @@ struct TweetItemView: View {
     var onRemove: ((String) -> Void)? = nil
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
+    @State private var showEmbeddedBrowser = false
+    @State private var selectedEmbeddedMediaIndex = 0
 
     private func mediaGrid(for tweet: Tweet) -> some View {
         Group {
@@ -72,12 +74,11 @@ struct TweetItemView: View {
                             onTap?(tweet)
                         }
                         
-                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
+                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, onItemTap: { idx in
+                            selectedEmbeddedMediaIndex = idx
+                            showEmbeddedBrowser = true
+                        })
                             .padding(.top, -12)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                onTap?(tweet)
-                            }
                         
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
@@ -99,10 +100,6 @@ struct TweetItemView: View {
                             showBrowser = true
                         })
                             .padding(.top, -12)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                onTap?(tweet)
-                            }
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
                         TweetItemView(
@@ -114,6 +111,14 @@ struct TweetItemView: View {
                         )
                         .cornerRadius(6)
                         .padding(.leading, -16)
+                        .onTapGesture {
+                            // Handle media taps in embedded original tweet
+                            if let attachments = originalTweet.attachments, !attachments.isEmpty {
+                                // This will be handled by the MediaGridView's onItemTap
+                            } else {
+                                onTap?(originalTweet)
+                            }
+                        }
                         
                         if !hideActions {
                             TweetActionButtonsView(tweet: tweet)
@@ -169,6 +174,12 @@ struct TweetItemView: View {
             MediaBrowserView(
                 tweet: tweet,
                 initialIndex: selectedMediaIndex
+            )
+        }
+        .fullScreenCover(isPresented: $showEmbeddedBrowser) {
+            MediaBrowserView(
+                tweet: originalTweet ?? tweet,
+                initialIndex: selectedEmbeddedMediaIndex
             )
         }
         .task {
