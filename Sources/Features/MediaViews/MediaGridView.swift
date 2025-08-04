@@ -101,7 +101,7 @@ struct MediaGridView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let gridWidth: CGFloat = 320
+            let gridWidth: CGFloat = geometry.size.width
             let gridHeight = gridWidth / MediaGridViewModel.aspectRatio(for: attachments)
 
             ZStack {
