@@ -1294,10 +1294,12 @@ final class HproseInstance: ObservableObject {
             let fileSize = fileAttributes[.size] as? UInt64 ?? 0
             let fileTimestamp = fileAttributes[.modificationDate] as? Date ?? Date()
             
-            // Get aspect ratio for videos (only for original videos, not HLS packages)
+            // Get aspect ratio for videos and images
             var aspectRatio: Float?
             if mediaType == .video {
                 aspectRatio = try await getVideoAspectRatio(from: data)
+            } else if mediaType == .image {
+                aspectRatio = try await getImageAspectRatio(from: data)
             }
             
             return MimeiFileType(
@@ -1346,6 +1348,29 @@ final class HproseInstance: ObservableObject {
                 // Clean up any temporary files that might have been created
                 let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
                 try? FileManager.default.removeItem(at: tempURL)
+                return nil
+            }
+        }
+        
+        /// Get image aspect ratio from data
+        private func getImageAspectRatio(from data: Data) async throws -> Float? {
+            do {
+                guard let image = UIImage(data: data) else {
+                    print("Warning: Could not create UIImage from data")
+                    return nil
+                }
+                
+                let size = image.size
+                guard size.height > 0 else {
+                    print("Warning: Image height is zero")
+                    return nil
+                }
+                
+                let aspectRatio = Float(size.width / size.height)
+                print("DEBUG: Image aspect ratio: \(aspectRatio) (size: \(size))")
+                return aspectRatio
+            } catch {
+                print("Warning: Could not determine image aspect ratio: \(error)")
                 return nil
             }
         }
