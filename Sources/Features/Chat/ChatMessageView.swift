@@ -261,6 +261,8 @@ struct ChatVideoPlayer: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
     
+    @State private var showFullScreen = false
+    
     private let baseUrl = HproseInstance.baseUrl
     
     var body: some View {
@@ -272,12 +274,31 @@ struct ChatVideoPlayer: View {
                     isVisible: true,
                     cellAspectRatio: CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)),
                     videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
+                    showNativeControls: false,
+                    onVideoTap: {
+                        showFullScreen = true
+                    },
+                    showCustomControls: false,
                     disableAutoRestart: true
                 )
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
                 .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .environmentObject(MuteState.shared)
+                .fullScreenCover(isPresented: $showFullScreen) {
+                    // Create a temporary tweet-like structure for the video
+                    let tempTweet = Tweet(
+                        mid: "chat_video_\(attachment.mid)",
+                        authorId: "chat_author",
+                        content: "",
+                        attachments: [attachment]
+                    )
+                    
+                    MediaBrowserView(
+                        tweet: tempTweet,
+                        initialIndex: 0
+                    )
+                }
             } else {
                 // Fallback if no URL
                 RoundedRectangle(cornerRadius: 8)
