@@ -274,7 +274,6 @@ struct ChatVideoPlayer: View {
                     videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
                     disableAutoRestart: true
                 )
-                .frame(maxWidth: UIScreen.main.bounds.width * 0.6)
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
                 .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
