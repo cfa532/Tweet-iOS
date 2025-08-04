@@ -25,8 +25,11 @@ struct FollowingsTweetView: View {
                 tweetFetcher: { page, size, isFromCache in
                     if isFromCache {
                         // Fetch from cache - don't merge here, let TweetListView handle it
-                        return await TweetCacheManager.shared.fetchCachedTweets(
+                        let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                             for: hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
+                        // Filter out private tweets from cache for following view
+                        let filteredCachedTweets = cachedTweets.compactMap { $0 }.filter { !($0.isPrivate ?? false) }
+                        return filteredCachedTweets.map { Optional($0) }
                     } else {
                         // Fetch from server
                         return await viewModel.fetchTweets(page: page, pageSize: size)
