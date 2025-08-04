@@ -22,6 +22,7 @@ struct MediaCell: View {
     @State private var shouldLoadVideo: Bool
     @State private var onVideoFinished: (() -> Void)?
     
+    
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
@@ -69,6 +70,22 @@ struct MediaCell: View {
                             disableAutoRestart: false,
                         )
                         .environmentObject(MuteState.shared)
+                        .onReceive(MuteState.shared.$isMuted) { isMuted in
+                            print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
+                        }
+                        
+                        .overlay(
+                            // Mute button in bottom right corner
+                            VStack {
+                                Spacer()
+                                HStack {
+                                    Spacer()
+                                    MuteButton()
+                                        .padding(.trailing, 8)
+                                        .padding(.bottom, 8)
+                                }
+                            }
+                        )
                     } else {
                         // Show placeholder for videos that haven't been loaded yet
                         Color.black
@@ -117,6 +134,8 @@ struct MediaCell: View {
             // Set visibility for videos
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 isVisible = true
+                // Auto-load videos when they become visible
+                shouldLoadVideo = true
                 // Log video player decision when cell appears
                 logVideoPlayerDecision()
             }
@@ -187,8 +206,81 @@ struct MediaCell: View {
             print("DEBUG: [MEDIA CELL] Showing placeholder for \(attachment.mid) - shouldLoadVideo: \(shouldLoadVideo), hasCachedPlayer: \(hasCachedPlayer)")
         }
     }
-    
+}
 
+// MARK: - MuteButton
+struct MuteButton: View {
+    @EnvironmentObject var muteState: MuteState
+    
+    var body: some View {
+        Button(action: {
+            print("DEBUG: [MUTE BUTTON] Tapped")
+            muteState.toggleMute()
+            print("DEBUG: [MUTE BUTTON] Mute state after toggle: \(muteState.isMuted)")
+        }) {
+            Image(systemName: muteState.isMuted ? "speaker.slash" : "speaker.wave.2")
+                .font(.system(size: 14))
+                .foregroundColor(.white.opacity(0.8))
+                .frame(width: 30, height: 30)
+                .background(Color.black.opacity(0.4))
+                .clipShape(Circle())
+                .contentShape(Circle())
+        }
+    }
+}
+
+// MARK: - VideoTimeLabel
+struct VideoTimeLabel: View {
+    let mid: String
+    @State private var currentTime: Double = 0
+    @State private var duration: Double = 0
+    @State private var timeObserver: Any?
+    
+    var body: some View {
+        Text(formatTimeRemaining())
+            .font(.caption)
+            .foregroundColor(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.black.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .onAppear {
+                setupTimeObserver()
+            }
+            .onDisappear {
+                removeTimeObserver()
+            }
+    }
+    
+    private func setupTimeObserver() {
+        guard let player = VideoCacheManager.shared.getVideoPlayer(for: mid, url: URL(string: "placeholder")!) else {
+            return
+        }
+        
+        // Get duration
+        if let durationTime = player.currentItem?.duration {
+            duration = durationTime.seconds
+        }
+        
+        // Add time observer
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { time in
+            currentTime = time.seconds
+        }
+    }
+    
+    private func removeTimeObserver() {
+        if let observer = timeObserver {
+            VideoCacheManager.shared.getVideoPlayer(for: mid, url: URL(string: "placeholder")!)?.removeTimeObserver(observer)
+            timeObserver = nil
+        }
+    }
+    
+    private func formatTimeRemaining() -> String {
+        let remaining = max(0, duration - currentTime)
+        let minutes = Int(remaining) / 60
+        let seconds = Int(remaining) % 60
+        return String(format: "-%d:%02d", minutes, seconds)
+    }
 }
 
 
