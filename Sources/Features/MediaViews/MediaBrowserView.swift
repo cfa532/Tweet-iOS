@@ -7,7 +7,6 @@
 
 import SwiftUI
 import AVKit
-import SDWebImageSwiftUI
 
 struct MediaBrowserView: View {
     let tweet: Tweet
@@ -23,6 +22,7 @@ struct MediaBrowserView: View {
     @State private var controlsTimer: Timer?
     @State private var dragOffset = CGSize.zero
     @State private var isDragging = false
+    @State private var previousIndex: Int = -1 // Track previous index for video management
 
 
     private var attachments: [MimeiFileType] {
@@ -37,6 +37,7 @@ struct MediaBrowserView: View {
         self.tweet = tweet
         self.initialIndex = initialIndex
         self._currentIndex = State(initialValue: initialIndex)
+        self._previousIndex = State(initialValue: initialIndex)
         print("MediaBrowserView init - attachments count: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
     }
 
@@ -54,6 +55,7 @@ struct MediaBrowserView: View {
                                 videoView(for: attachment, url: url, index: index)
                                     .onAppear {
                                         print("DEBUG: [MediaBrowserView] Video view appeared for index: \(index), currentIndex: \(currentIndex)")
+                                        handleVideoVisibilityChange(newIndex: index, oldIndex: previousIndex)
                                     }
                             } else {
                                 // Show placeholder for non-visible videos
@@ -70,6 +72,11 @@ struct MediaBrowserView: View {
             }
             .tabViewStyle(.page)
             .indexViewStyle(.page(backgroundDisplayMode: .always))
+            .onChange(of: currentIndex) { newIndex in
+                print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
+                handleVideoVisibilityChange(newIndex: newIndex, oldIndex: previousIndex)
+                previousIndex = newIndex
+            }
             
             // Close button overlay
             if showControls {
@@ -130,6 +137,24 @@ struct MediaBrowserView: View {
             isVisible = true
             UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
+            
+            // Initialize previous index
+            previousIndex = currentIndex
+            
+            // Start playing the initial video
+            if let initialAttachment = attachments[safe: currentIndex],
+               isVideoAttachment(initialAttachment) {
+                let fullscreenMid = "\(initialAttachment.mid)_fullscreen"
+                print("DEBUG: [MediaBrowserView] Starting initial video with mid: \(fullscreenMid)")
+                
+                // Pause all other videos and start playing the initial one
+                VideoCacheManager.shared.pauseAllVideosExcept(for: fullscreenMid)
+                
+                if let player = VideoCacheManager.shared.getVideoPlayer(for: fullscreenMid, url: initialAttachment.getUrl(baseUrl)!) {
+                    player.play()
+                    print("DEBUG: [MediaBrowserView] Started playing initial video for mid: \(fullscreenMid)")
+                }
+            }
         }
         .onDisappear {
             isVisible = false
@@ -138,6 +163,39 @@ struct MediaBrowserView: View {
             
             // Pause all videos when exiting full-screen
             pauseAllVideos()
+        }
+    }
+    
+    /// Handle video visibility changes when swiping between pages
+    private func handleVideoVisibilityChange(newIndex: Int, oldIndex: Int) {
+        print("DEBUG: [MediaBrowserView] Handling video visibility change: \(oldIndex) -> \(newIndex)")
+        
+        // Pause the previous video if it was a video
+        if oldIndex >= 0 && oldIndex < attachments.count {
+            let oldAttachment = attachments[oldIndex]
+            if isVideoAttachment(oldAttachment) {
+                let oldFullscreenMid = "\(oldAttachment.mid)_fullscreen"
+                print("DEBUG: [MediaBrowserView] Pausing previous video with mid: \(oldFullscreenMid)")
+                VideoCacheManager.shared.pauseVideoPlayer(for: oldFullscreenMid)
+            }
+        }
+        
+        // Start playing the new video if it's a video
+        if newIndex >= 0 && newIndex < attachments.count {
+            let newAttachment = attachments[newIndex]
+            if isVideoAttachment(newAttachment), let url = newAttachment.getUrl(baseUrl) {
+                let newFullscreenMid = "\(newAttachment.mid)_fullscreen"
+                print("DEBUG: [MediaBrowserView] Starting new video with mid: \(newFullscreenMid)")
+                
+                // Pause all other videos and start playing the new one
+                VideoCacheManager.shared.pauseAllVideosExcept(for: newFullscreenMid)
+                
+                // Get or create the video player and start playing
+                if let player = VideoCacheManager.shared.getVideoPlayer(for: newFullscreenMid, url: url) {
+                    player.play()
+                    print("DEBUG: [MediaBrowserView] Started playing video for mid: \(newFullscreenMid)")
+                }
+            }
         }
     }
     
@@ -340,6 +398,13 @@ struct ImageViewWithPlaceholder: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Array Extension for Safe Access
+extension Array {
+    subscript(safe index: Index) -> Element? {
+        return indices.contains(index) ? self[index] : nil
     }
 }
 

@@ -40,20 +40,25 @@ class ChatRepository: ObservableObject {
     /// Send a message to a recipient
     func sendMessage(_ message: ChatMessage) async {
         do {
-            try await hproseInstance.sendMessage(receiptId: message.receiptId, message: message)
+            let resultMessage = try await hproseInstance.sendMessage(receiptId: message.receiptId, message: message)
             
-            // Add the message to the local messages array
+            // Add the message with status to the local messages array
             await MainActor.run {
-                self.chatMessages.append(message)
+                // Replace the original message with the result message that has status
+                if let index = self.chatMessages.firstIndex(where: { $0.id == message.id }) {
+                    self.chatMessages[index] = resultMessage
+                } else {
+                    self.chatMessages.append(resultMessage)
+                }
             }
             
             // Save to Core Data
-            saveMessageToCoreData(message)
+            saveMessageToCoreData(resultMessage)
             
             // Update chat session with the sent message
             await chatSessionManager.updateOrCreateChatSession(
                 senderId: message.receiptId,
-                message: message,
+                message: resultMessage,
                 hasNews: false
             )
             
@@ -62,9 +67,41 @@ class ChatRepository: ObservableObject {
                 self.chatSessions = chatSessionManager.chatSessions
             }
             
-            print("[ChatRepository] Message sent successfully to \(message.receiptId)")
+            if resultMessage.success == true {
+                print("[ChatRepository] Message sent successfully to \(message.receiptId)")
+            } else {
+                print("[ChatRepository] Message failed to send to \(message.receiptId): \(resultMessage.errorMsg ?? "Unknown error")")
+            }
         } catch {
             print("[ChatRepository] Error sending message: \(error)")
+            
+            // Handle network exceptions the same as backend failures
+            await MainActor.run {
+                // Create a failed message with error details
+                let failedMessage = ChatMessage(
+                    id: message.id,
+                    authorId: message.authorId,
+                    receiptId: message.receiptId,
+                    chatSessionId: message.chatSessionId,
+                    content: message.content,
+                    timestamp: message.timestamp,
+                    attachments: message.attachments,
+                    success: false,
+                    errorMsg: error.localizedDescription
+                )
+                
+                // Replace the original message with the failed message
+                if let index = self.chatMessages.firstIndex(where: { $0.id == message.id }) {
+                    self.chatMessages[index] = failedMessage
+                } else {
+                    self.chatMessages.append(failedMessage)
+                }
+                
+                // Save failed message to Core Data
+                saveMessageToCoreData(failedMessage)
+                
+                print("[ChatRepository] Message failed to send (network error): \(error.localizedDescription)")
+            }
         }
     }
     

@@ -1354,25 +1354,21 @@ final class HproseInstance: ObservableObject {
         
         /// Get image aspect ratio from data
         private func getImageAspectRatio(from data: Data) async throws -> Float? {
-            do {
-                guard let image = UIImage(data: data) else {
-                    print("Warning: Could not create UIImage from data")
-                    return nil
-                }
-                
-                let size = image.size
-                guard size.height > 0 else {
-                    print("Warning: Image height is zero")
-                    return nil
-                }
-                
-                let aspectRatio = Float(size.width / size.height)
-                print("DEBUG: Image aspect ratio: \(aspectRatio) (size: \(size))")
-                return aspectRatio
-            } catch {
-                print("Warning: Could not determine image aspect ratio: \(error)")
+            guard let image = UIImage(data: data) else {
+                print("Warning: Could not create UIImage from data")
                 return nil
             }
+            
+            let size = image.size
+            guard size.height > 0 else {
+                print("Warning: Image height is zero")
+                return nil
+            }
+            
+            let aspectRatio = Float(size.width / size.height)
+            print("DEBUG: Image aspect ratio: \(aspectRatio) (size: \(size))")
+            return aspectRatio
+            
         }
         
         /// Upload with retry mechanism for video conversion
@@ -2161,7 +2157,7 @@ final class HproseInstance: ObservableObject {
     // MARK: - Chat Functions
     
     /// Send a chat message to a recipient
-    func sendMessage(receiptId: String, message: ChatMessage) async throws {
+    func sendMessage(receiptId: String, message: ChatMessage) async throws -> ChatMessage {
 
         let entry = "message_outgoing"
         let params: [String: Any] = [
@@ -2172,9 +2168,31 @@ final class HproseInstance: ObservableObject {
             "msg": message.toJSONString()
         ]
         
-        let response = appUser.hproseService?.runMApp(entry, params, nil) as? Bool
+        let response = appUser.hproseService?.runMApp(entry, params, nil)
         
-        if response == true {
+        // Handle new response format: {success: false, error: e.message}
+        if let responseDict = response as? [String: Any] {
+            if let success = responseDict["success"] as? Bool, !success {
+                let errorMessage = responseDict["error"] as? String ?? "Unknown error"
+                // Return message with failure status
+                return ChatMessage(
+                    id: message.id,
+                    authorId: message.authorId,
+                    receiptId: message.receiptId,
+                    chatSessionId: message.chatSessionId,
+                    content: message.content,
+                    timestamp: message.timestamp,
+                    attachments: message.attachments,
+                    success: false,
+                    errorMsg: errorMessage
+                )
+            }
+        }
+        
+        // Handle legacy boolean response or successful response
+        let isSuccess = response as? Bool ?? false
+        
+        if isSuccess {
             // Try to send to recipient's node as well
             if let receiptUser = try await fetchUser(receiptId) {
                 let receiptEntry = "message_incoming"
@@ -2186,13 +2204,59 @@ final class HproseInstance: ObservableObject {
                     "msg": message.toJSONString()
                 ]
                 
-                let receiptResponse = receiptUser.hproseService?.runMApp(receiptEntry, receiptParams, nil) as? Bool
-                if receiptResponse != true {
-                    print("[sendMessage] Warning: Failed to send to recipient node")
+                let receiptResponse = receiptUser.hproseService?.runMApp(receiptEntry, receiptParams, nil)
+                
+                // Handle new response format for message_incoming
+                if let receiptResponseDict = receiptResponse as? [String: Any] {
+                    if let success = receiptResponseDict["success"] as? Bool, !success {
+                        let errorMessage = receiptResponseDict["error"] as? String ?? "Failed to send to recipient node"
+                        print("[sendMessage] Warning: Failed to send to recipient node: \(errorMessage)")
+                        // Return message with failure status
+                        return ChatMessage(
+                            id: message.id,
+                            authorId: message.authorId,
+                            receiptId: message.receiptId,
+                            chatSessionId: message.chatSessionId,
+                            content: message.content,
+                            timestamp: message.timestamp,
+                            attachments: message.attachments,
+                            success: false,
+                            errorMsg: errorMessage
+                        )
+                    }
+                } else {
+                    let receiptSuccess = receiptResponse as? Bool ?? false
+                    if !receiptSuccess {
+                        print("[sendMessage] Warning: Failed to send to recipient node")
+                    }
                 }
             }
+            
+            // Return message with success status
+            return ChatMessage(
+                id: message.id,
+                authorId: message.authorId,
+                receiptId: message.receiptId,
+                chatSessionId: message.chatSessionId,
+                content: message.content,
+                timestamp: message.timestamp,
+                attachments: message.attachments,
+                success: true,
+                errorMsg: nil
+            )
         } else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to send message"])
+            // Return message with failure status
+            return ChatMessage(
+                id: message.id,
+                authorId: message.authorId,
+                receiptId: message.receiptId,
+                chatSessionId: message.chatSessionId,
+                content: message.content,
+                timestamp: message.timestamp,
+                attachments: message.attachments,
+                success: false,
+                errorMsg: "Failed to send message"
+            )
         }
     }
     
@@ -2210,9 +2274,20 @@ final class HproseInstance: ObservableObject {
             "senderid": senderId
         ]
         
-        let response = service.runMApp(entry, params, nil) as? [[String: Any]] ?? []
+        let response = service.runMApp(entry, params, nil)
         
-        return response.compactMap { messageData in
+        // Handle new response format: {success: false, error: e.message}
+        if let responseDict = response as? [String: Any] {
+            if let success = responseDict["success"] as? Bool, !success {
+                let errorMessage = responseDict["error"] as? String ?? "Unknown error"
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            }
+        }
+        
+        // Handle legacy array format or successful response
+        let messageArray = response as? [[String: Any]] ?? []
+        
+        return messageArray.compactMap { messageData in
             do {
                 let jsonData = try JSONSerialization.data(withJSONObject: messageData)
                 let message = try JSONDecoder().decode(ChatMessage.self, from: jsonData)

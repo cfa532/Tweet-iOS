@@ -9,6 +9,8 @@
         <attribute name="timestamp" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="timeCached" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="attachmentData" optional="YES" attributeType="Binary"/>
+        <attribute name="success" optional="YES" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <attribute name="errorMsg" optional="YES" attributeType="String"/>
         <relationship name="session" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="CDChatSession" inverseName="messages" inverseEntity="CDChatSession"/>
     </entity>
     <entity name="CDChatSession" representedClassName="CDChatSession" syncable="YES" codeGenerationType="class">

@@ -845,7 +845,7 @@ id decode(NSData *data, NSArray *args, HproseClientContext *context) {
     if (autoId == nil) {
         autoId = (Promise *)[self invoke:@"#" settings:autoIdSettings];
         [autoId done:^(NSString *value) {
-            self->_clientId = value;
+            _clientId = value;
         }];
     }
     return autoId;

@@ -251,6 +251,8 @@ extension ChatCacheManager {
             cdMessage.content = message.content
             cdMessage.timestamp = Date(timeIntervalSince1970: message.timestamp)
             cdMessage.timeCached = Date()
+            cdMessage.success = message.success ?? true // Default to true for backward compatibility
+            cdMessage.errorMsg = message.errorMsg
             
             // Handle attachments
             if let attachments = message.attachments, !attachments.isEmpty {
@@ -342,7 +344,9 @@ extension ChatCacheManager {
             chatSessionId: chatSessionId,
             content: cdMessage.content,
             timestamp: timestamp.timeIntervalSince1970,
-            attachments: attachments
+            attachments: attachments,
+            success: cdMessage.success,
+            errorMsg: cdMessage.errorMsg
         )
     }
     

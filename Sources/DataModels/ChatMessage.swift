@@ -8,6 +8,8 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     let content: String?
     let timestamp: TimeInterval
     let attachments: [MimeiFileType]?
+    let success: Bool?
+    let errorMsg: String?
     
     /// Generate a consistent session ID for a pair of users
     /// This ensures the same session ID is used for all messages between the same users
@@ -18,7 +20,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         return String(combinedString.hash)
     }
     
-    init(id: String = UUID().uuidString, authorId: MimeiId, receiptId: MimeiId, chatSessionId: String, content: String? = nil, timestamp: TimeInterval = Date().timeIntervalSince1970, attachments: [MimeiFileType]? = nil) {
+    init(id: String = UUID().uuidString, authorId: MimeiId, receiptId: MimeiId, chatSessionId: String, content: String? = nil, timestamp: TimeInterval = Date().timeIntervalSince1970, attachments: [MimeiFileType]? = nil, success: Bool? = nil, errorMsg: String? = nil) {
         // Validate that either content or attachments (or both) are present
         guard content != nil || (attachments != nil && !attachments!.isEmpty) else {
             fatalError("ChatMessage must have either content or attachments (or both)")
@@ -30,6 +32,8 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.content = content
         self.timestamp = timestamp
         self.attachments = attachments
+        self.success = success
+        self.errorMsg = errorMsg
     }
     
     // Custom decoding to ignore id and chatSessionId from backend
@@ -53,6 +57,10 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         // Handle attachments - decode as array
         self.attachments = try? container.decode([MimeiFileType].self, forKey: .attachments)
         
+        // Decode new fields
+        self.success = try container.decodeIfPresent(Bool.self, forKey: .success)
+        self.errorMsg = try container.decodeIfPresent(String.self, forKey: .errorMsg)
+        
         // Validate that either content or attachments (or both) are present
         guard self.content != nil || (self.attachments != nil && !self.attachments!.isEmpty) else {
             throw DecodingError.dataCorruptedError(forKey: .content, in: container, debugDescription: "ChatMessage must have either content or attachments (or both)")
@@ -68,10 +76,12 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(content, forKey: .content)
         try container.encode(timestamp, forKey: .timestamp)
         try container.encodeIfPresent(attachments, forKey: .attachments)
+        try container.encodeIfPresent(success, forKey: .success)
+        try container.encodeIfPresent(errorMsg, forKey: .errorMsg)
     }
     
     private enum CodingKeys: String, CodingKey {
-        case authorId, receiptId, content, timestamp, attachments
+        case authorId, receiptId, content, timestamp, attachments, success, errorMsg
     }
     
     /// Convert ChatMessage to JSON string

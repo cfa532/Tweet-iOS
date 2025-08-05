@@ -283,34 +283,57 @@ struct ChatScreen: View {
         Task {
             do {
                 // Send message to backend
-                try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: message)
+                let resultMessage = try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: message)
                 
-                // Update the chat session
+                // Update the chat session with the result message
                 await chatSessionManager.updateOrCreateChatSession(
                     senderId: receiptId,
-                    message: message,
+                    message: resultMessage,
                     hasNews: false
                 )
                 
-                // Save message to Core Data
+                // Save message to Core Data and update UI
                 await MainActor.run {
-                    chatRepository.addMessagesToCoreData([message])
-                    print("[ChatScreen] Text message sent successfully")
+                    // Replace the original message with the result message that has status
+                    if let index = messages.firstIndex(where: { $0.id == message.id }) {
+                        messages[index] = resultMessage
+                    }
+                    chatRepository.addMessagesToCoreData([resultMessage])
+                    
+                    if resultMessage.success == true {
+                        print("[ChatScreen] Text message sent successfully")
+                    } else {
+                        print("[ChatScreen] Text message failed to send: \(resultMessage.errorMsg ?? "Unknown error")")
+                    }
                 }
                 
             } catch {
                 print("[ChatScreen] Error sending text message: \(error)")
                 
-                // Remove the message on failure
+                // Handle network exceptions the same as backend failures
                 await MainActor.run {
-                    messages.removeAll { $0.id == message.id }
-                    
-                    // Post notification for failure
-                    NotificationCenter.default.post(
-                        name: .chatMessageSendFailed,
-                        object: nil,
-                        userInfo: ["error": error]
+                    // Create a failed message with error details
+                    let failedMessage = ChatMessage(
+                        id: message.id,
+                        authorId: message.authorId,
+                        receiptId: message.receiptId,
+                        chatSessionId: message.chatSessionId,
+                        content: message.content,
+                        timestamp: message.timestamp,
+                        attachments: message.attachments,
+                        success: false,
+                        errorMsg: error.localizedDescription
                     )
+                    
+                    // Replace the original message with the failed message
+                    if let index = messages.firstIndex(where: { $0.id == message.id }) {
+                        messages[index] = failedMessage
+                    }
+                    
+                    // Save failed message to Core Data
+                    chatRepository.addMessagesToCoreData([failedMessage])
+                    
+                    print("[ChatScreen] Text message failed to send (network error): \(error.localizedDescription)")
                 }
             }
         }
@@ -333,9 +356,9 @@ struct ChatScreen: View {
         
         // Process message in background
         Task.detached(priority: .background) {
+            var uploadedAttachments: [MimeiFileType]? = nil
+            
             do {
-                var uploadedAttachments: [MimeiFileType]? = nil
-                
                 // Upload attachment if present
                 if let attachment = currentAttachment, let photoData = currentAttachmentData {
                     print("[ChatScreen] Uploading attachment to IPFS in background...")
@@ -360,33 +383,54 @@ struct ChatScreen: View {
                 
                 // Send message to backend
                 print("[ChatScreen] Sending message to backend...")
-                try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: finalMessage)
-                print("[ChatScreen] Message sent to backend successfully")
+                let resultMessage = try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: finalMessage)
                 
-                // Update the chat session
+                if resultMessage.success == true {
+                    print("[ChatScreen] Message sent to backend successfully")
+                } else {
+                    print("[ChatScreen] Message failed to send: \(resultMessage.errorMsg ?? "Unknown error")")
+                }
+                
+                // Update the chat session with the result message
                 await chatSessionManager.updateOrCreateChatSession(
                     senderId: receiptId,
-                    message: finalMessage,
+                    message: resultMessage,
                     hasNews: false
                 )
                 
                 // Add message to UI and save to Core Data
                 await MainActor.run {
-                    messages.append(finalMessage)
-                    chatRepository.addMessagesToCoreData([finalMessage])
-                    print("[ChatScreen] Message sent successfully in background")
+                    messages.append(resultMessage)
+                    chatRepository.addMessagesToCoreData([resultMessage])
+                    
+                    if resultMessage.success == true {
+                        print("[ChatScreen] Message sent successfully in background")
+                    } else {
+                        print("[ChatScreen] Message failed to send in background: \(resultMessage.errorMsg ?? "Unknown error")")
+                    }
                 }
                 
             } catch {
                 print("[ChatScreen] Error sending message in background: \(error)")
                 
-                // Post notification for failure
+                // Handle network exceptions the same as backend failures
                 await MainActor.run {
-                    NotificationCenter.default.post(
-                        name: .chatMessageSendFailed,
-                        object: nil,
-                        userInfo: ["error": error]
+                    // Create a failed message with error details
+                    let failedMessage = ChatMessage(
+                        authorId: HproseInstance.shared.appUser.mid,
+                        receiptId: receiptId,
+                        chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+                        content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
+                        attachments: uploadedAttachments,
+                        success: false,
+                        errorMsg: error.localizedDescription
                     )
+                    
+                    // Add failed message to UI and save to Core Data
+                    messages.append(failedMessage)
+                    chatRepository.addMessagesToCoreData([failedMessage])
+                    
+                    print("[ChatScreen] Message failed to send in background (network error): \(error.localizedDescription)")
                 }
             }
         }

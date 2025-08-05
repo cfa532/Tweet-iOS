@@ -644,19 +644,34 @@ struct HLSVideoPlayerWithControls: View {
     }
     
     private func handleAutoPlay(_ player: AVPlayer) {
-        // Only play if autoPlay is true
-        if autoPlay {
+        // Only play if autoPlay is true and video is visible
+        if autoPlay && isVisible {
             if self.forcePlay {
-                // Force play mode (for full-screen) - start this video
+                // Force play mode (for full-screen) - start this video and stop others
+                print("DEBUG: [VIDEO \(mid)] Force playing video (full-screen mode)")
                 player.play()
                 self.isPlaying = true
+                
+                // Pause all other videos when force play is enabled
+                pauseAllOtherVideos()
             } else {
-                // Normal auto-play mode
+                // Normal auto-play mode - only play if visible
+                print("DEBUG: [VIDEO \(mid)] Auto-playing video (normal mode)")
                 player.play()
                 self.isPlaying = true
             }
         } else {
+            print("DEBUG: [VIDEO \(mid)] Not auto-playing - autoPlay: \(autoPlay), isVisible: \(isVisible)")
             self.isPlaying = false
+        }
+    }
+    
+    /// Pause all other videos when force play is enabled
+    private func pauseAllOtherVideos() {
+        if forcePlay {
+            // Pause all other videos except this one when force play is enabled
+            VideoCacheManager.shared.pauseAllVideosExcept(for: mid)
+            print("DEBUG: [VIDEO \(mid)] Force play enabled - paused all other videos")
         }
     }
     
@@ -675,18 +690,8 @@ struct HLSVideoPlayerWithControls: View {
                 self.isLoading = false
                 self.duration = playerItem.duration.seconds
                 
-                            // If this video should auto-play, start it
-            if self.autoPlay {
-                if self.forcePlay {
-                    // Force play mode (for full-screen) - start this video
-                    player.play()
-                    self.isPlaying = true
-                } else {
-                    // Normal auto-play mode
-                    player.play()
-                    self.isPlaying = true
-                }
-            }
+                // Handle auto-play when player is ready
+                self.handleAutoPlay(player)
                 
                 timer.invalidate()
             case .failed:

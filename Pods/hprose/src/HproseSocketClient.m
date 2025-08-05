@@ -121,7 +121,7 @@
     _timer = [Promise promise];
     [[_timer timeout:_idleTimeout] fail:^(NSError *error) {
         if ([error code] == PromiseRuntimeError) {
-            [self->_sock disconnect];
+            [_sock disconnect];
         }
     }];
 }
@@ -201,10 +201,10 @@
     if (timeout > 0) {
         [[request.result timeout:timeout] fail:^(NSError *error) {
             if ([error code] == PromiseRuntimeError) {
-                [self->_results removeObjectForKey:send_id];
-                self->_count--;
+                [_results removeObjectForKey:send_id];
+                _count--;
                 [self sendNext];
-                if (self->_count == 0) {
+                if (_count == 0) {
                     [self recycle];
                 }
             }
@@ -327,9 +327,9 @@
         [[request.result timeout:timeout] fail:^(NSError *error) {
             if ([error code] == PromiseRuntimeError) {
                 [self.sock disconnect];
-                @synchronized (self->_pool) {
-                    if (![self->_pool containsObject:self]) {
-                        [self->_pool addObject:self];
+                @synchronized (_pool) {
+                    if (![_pool containsObject:self]) {
+                        [_pool addObject:self];
                     }
                 }
             }

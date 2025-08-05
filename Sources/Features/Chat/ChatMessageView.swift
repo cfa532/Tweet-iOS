@@ -40,33 +40,63 @@ struct ChatMessageView: View {
             VStack(alignment: isFromCurrentUser ? .trailing : .leading, spacing: 4) {
                 // Row 1: Message text (if any)
                 if let content = message.content, !content.isEmpty {
-                    Text(content)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            isFromCurrentUser ? Color.blue : Color(.systemGray5)
-                        )
-                        .foregroundColor(
-                            isFromCurrentUser ? .white : .primary
-                        )
-                        .clipShape(isLastFromSender ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
+                    HStack(spacing: 4) {
+                        Text(content)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                isFromCurrentUser ? Color.blue : Color(.systemGray5)
+                            )
+                            .foregroundColor(
+                                isFromCurrentUser ? .white : .primary
+                            )
+                            .clipShape(isLastFromSender ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
+                        
+                        // Show failure icon for sent messages that failed
+                        if isFromCurrentUser && message.success == false {
+                            Button(action: {
+                                // TODO: Implement retry functionality
+                                print("Retry sending message: \(message.errorMsg ?? "Unknown error")")
+                            }) {
+                                Image(systemName: "exclamationmark.circle.fill")
+                                    .foregroundColor(.red)
+                                    .font(.system(size: 16))
+                            }
+                            .help(message.errorMsg ?? "Message failed to send")
+                        }
+                    }
                 }
                 
                 // Row 2: Attachments
                 if let attachments = message.attachments, !attachments.isEmpty {
-                    if attachments.count == 1, let attachment = attachments.first {
-                        // Single attachment
-                        if attachment.type.lowercased().contains("image") {
-                            ChatImageViewWithPlaceholder(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
-                        } else if attachment.type.lowercased().contains("video") {
-                            ChatVideoPlayer(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                    HStack(spacing: 4) {
+                        if attachments.count == 1, let attachment = attachments.first {
+                            // Single attachment
+                            if attachment.type.lowercased().contains("image") {
+                                ChatImageViewWithPlaceholder(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                            } else if attachment.type.lowercased().contains("video") {
+                                ChatVideoPlayer(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                            } else {
+                                // Other file types
+                                ChatAttachmentLoader(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                            }
                         } else {
-                            // Other file types
-                            ChatAttachmentLoader(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                            // Multiple attachments
+                            ChatMultipleAttachmentsLoader(attachments: attachments, isFromCurrentUser: isFromCurrentUser)
                         }
-                    } else {
-                        // Multiple attachments
-                        ChatMultipleAttachmentsLoader(attachments: attachments, isFromCurrentUser: isFromCurrentUser)
+                        
+                        // Show failure icon for sent messages with attachments that failed
+                        if isFromCurrentUser && message.success == false {
+                            Button(action: {
+                                // TODO: Implement retry functionality
+                                print("Retry sending message with attachments: \(message.errorMsg ?? "Unknown error")")
+                            }) {
+                                Image(systemName: "exclamationmark.circle.fill")
+                                    .foregroundColor(.red)
+                                    .font(.system(size: 16))
+                            }
+                            .help(message.errorMsg ?? "Message failed to send")
+                        }
                     }
                 }
                 
