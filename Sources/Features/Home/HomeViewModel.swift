@@ -60,7 +60,6 @@ struct HomeView: View {
                 // Tab Content
                 TabView(selection: $selectedTab) {
                     FollowingsTweetView(
-                        isLoading: $isLoading,
                         onAvatarTap: { user in
                             navigationPath.append(user)
                             onNavigateToProfile?()

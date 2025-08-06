@@ -2,15 +2,13 @@ import SwiftUI
 
 @available(iOS 16.0, *)
 struct FollowingsTweetView: View {
-    @Binding var isLoading: Bool
     let onAvatarTap: (User) -> Void
     @Binding var selectedTweet: Tweet?
     let onScroll: ((CGFloat) -> Void)?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @StateObject private var viewModel: FollowingsTweetViewModel
 
-    init(isLoading: Binding<Bool>, onAvatarTap: @escaping (User) -> Void, selectedTweet: Binding<Tweet?>, onScroll: ((CGFloat) -> Void)? = nil) {
-        self._isLoading = isLoading
+    init(onAvatarTap: @escaping (User) -> Void, selectedTweet: Binding<Tweet?>, onScroll: ((CGFloat) -> Void)? = nil) {
         self.onAvatarTap = onAvatarTap
         self._selectedTweet = selectedTweet
         self.onScroll = onScroll
