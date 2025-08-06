@@ -636,7 +636,6 @@ final class HproseInstance: ObservableObject {
      * @param followedId is the user that appUser is following or unfollowing.
      * */
     func toggleFollowing(
-        userId: String,
         followingId: String
     )  async throws -> Bool? {
         try await withRetry {
@@ -645,9 +644,9 @@ final class HproseInstance: ObservableObject {
                 "aid": appId,
                 "ver": "last",
                 "followingid": followingId,
-                "userid": userId,
+                "userid": appUser.mid,
             ]
-            guard let service = hproseService else {
+            guard let service = appUser.hproseService else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             guard let response = service.runMApp(entry, params, nil) as? Bool else {
@@ -671,7 +670,7 @@ final class HproseInstance: ObservableObject {
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
             ]
-            guard let service = hproseService else {
+            guard let service = appUser.hproseService else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
@@ -707,7 +706,7 @@ final class HproseInstance: ObservableObject {
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
             ]
-            guard let service = hproseService else {
+            guard let service = appUser.hproseService else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
@@ -769,7 +768,7 @@ final class HproseInstance: ObservableObject {
             "tweetid": tweet.mid,
             "authorid": tweet.authorId,
         ]
-        guard let service = hproseService else {
+        guard let service = appUser.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
@@ -792,7 +791,7 @@ final class HproseInstance: ObservableObject {
             "authorid": appUser.mid,
             "tweetid": tweetId
         ]
-        guard let service = hproseService else {
+        guard let service = appUser.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
