@@ -147,10 +147,7 @@ struct MediaCell: View {
         }
         .onDisappear {
             isVisible = false
-            // Pause video when cell disappears
-            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                VideoCacheManager.shared.pauseVideoPlayer(for: attachment.mid)
-            }
+            // Video playback is now controlled by visibility detection in SimpleVideoPlayer
         }
         .onChange(of: isVisible) { newValue in
             if newValue && image == nil {
@@ -160,20 +157,13 @@ struct MediaCell: View {
             // Handle video visibility changes
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 if newValue {
-                    // Video became visible - ensure it's loaded and playing if autoPlay is enabled
+                    // Video became visible - ensure it's loaded
                     shouldLoadVideo = true
-                    if play {
-                        // Resume video playback if it should be playing
-                        if let player = VideoCacheManager.shared.getVideoPlayer(for: attachment.mid, url: attachment.getUrl(baseUrl)!) {
-                            player.play()
-                        }
-                    }
-                } else {
-                    // Video became invisible - pause it
-                    VideoCacheManager.shared.pauseVideoPlayer(for: attachment.mid)
                 }
+                // Video playback is now controlled by SimpleVideoPlayer's autoPlay parameter
             }
         }
+
         .fullScreenCover(isPresented: $showFullScreen) {
             MediaBrowserView(
                 tweet: parentTweet,

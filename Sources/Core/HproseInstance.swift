@@ -284,7 +284,7 @@ final class HproseInstance: ObservableObject {
     ///
     /// The backend may return an array containing nils. If the returned array size is less than pageSize, it means there are no more tweets on the backend.
     /// This function accumulates only non-nil tweets and stops fetching when the backend returns fewer than pageSize items.
-    func fetchUserTweet(
+    func fetchUserTweets(
         user: User,
         pageNumber: UInt = 0,
         pageSize: UInt = 20,

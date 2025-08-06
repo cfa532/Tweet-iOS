@@ -52,6 +52,12 @@ struct ProfileView: View {
     @State private var selectedTweet: Tweet? = nil
     /// Controls navigation to chat screen
     @State private var showChat = false
+    /// Indicates if avatar is currently being uploaded
+    @State private var isUploadingAvatar = false
+    /// Toast message states
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastType: ToastView.ToastType = .info
 
     init(user: User, onLogout: (() -> Void)? = nil) {
         self.user = user
@@ -107,58 +113,105 @@ struct ProfileView: View {
             print("Error refreshing pinned tweets: \(error)")
         }
     }
+    
+    /// Shows a toast message
+    private func showToastMessage(_ message: String, type: ToastView.ToastType) {
+        toastMessage = message
+        toastType = type
+        showToast = true
+        
+        // Auto-dismiss toast after 3 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                showToast = false
+            }
+        }
+    }
 
     // MARK: - Body
     var body: some View {
-        VStack(spacing: 0) {
-            // Only the tweet list is scrollable and refreshable, now including the header and stats
-            ProfileTweetsSection(
-                isLoading: isLoading,
-                pinnedTweets: pinnedTweets,
-                pinnedTweetIds: pinnedTweetIds,
-                user: user,
-                hproseInstance: hproseInstance,
-                onUserSelect: { user in selectedUser = user },
-                onTweetTap: { tweet in selectedTweet = tweet },
-                onPinnedTweetsRefresh: refreshPinnedTweets,
-                onScroll: { offset in
-                    previousScrollOffset = offset
-                },
-                header: {
-                    VStack(spacing: 0) {
-                        ProfileHeaderSection(
-                            user: user,
-                            isCurrentUser: isAppUser,
-                            isFollowing: isFollowing,
-                            onEditTap: { showEditSheet = true },
-                            onFollowToggle: { isFollowing.toggle() },
-                            onAvatarTap: { showAvatarFullScreen = true }
-                        )
-                        ProfileStatsSection(
-                            user: user,
-                            onFollowersTap: {
-                                userListType = .FOLLOWER
-                                showUserList = true
-                            },
-                            onFollowingTap: {
-                                userListType = .FOLLOWING
-                                showUserList = true
-                            },
-                            onBookmarksTap: {
-                                tweetListType = .BOOKMARKS
-                                showTweetList = true
-                            },
-                            onFavoritesTap: {
-                                tweetListType = .FAVORITES
-                                showTweetList = true
-                            }
-                        )
+        ZStack {
+            VStack(spacing: 0) {
+                // Only the tweet list is scrollable and refreshable, now including the header and stats
+                ProfileTweetsSection(
+                    isLoading: isLoading,
+                    pinnedTweets: pinnedTweets,
+                    pinnedTweetIds: pinnedTweetIds,
+                    user: user,
+                    hproseInstance: hproseInstance,
+                    onUserSelect: { user in selectedUser = user },
+                    onTweetTap: { tweet in selectedTweet = tweet },
+                    onPinnedTweetsRefresh: refreshPinnedTweets,
+                    onScroll: { offset in
+                        previousScrollOffset = offset
+                    },
+                    header: {
+                        VStack(spacing: 0) {
+                            ProfileHeaderSection(
+                                user: user,
+                                isCurrentUser: isAppUser,
+                                isFollowing: isFollowing,
+                                onEditTap: { showEditSheet = true },
+                                onFollowToggle: { isFollowing.toggle() },
+                                onAvatarTap: { showAvatarFullScreen = true }
+                            )
+                            ProfileStatsSection(
+                                user: user,
+                                onFollowersTap: {
+                                    userListType = .FOLLOWER
+                                    showUserList = true
+                                },
+                                onFollowingTap: {
+                                    userListType = .FOLLOWING
+                                    showUserList = true
+                                },
+                                onBookmarksTap: {
+                                    tweetListType = .BOOKMARKS
+                                    showTweetList = true
+                                },
+                                onFavoritesTap: {
+                                    tweetListType = .FAVORITES
+                                    showTweetList = true
+                                }
+                            )
+                        }
+                        .padding(.top, 2)
                     }
-                    .padding(.top, 2)
+                )
+                .id(user.mid)
+                .padding(.leading, -4)
+            }
+            .allowsHitTesting(!isUploadingAvatar)
+            
+            // Loading overlay for avatar upload
+            if isUploadingAvatar {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(true)
+                
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    
+                    Text("Updating avatar...")
+                        .foregroundColor(.white)
+                        .font(.headline)
                 }
-            )
-            .id(user.mid)
-            .padding(.leading, -4)
+                .padding(24)
+                .background(Color.black.opacity(0.7))
+                .cornerRadius(12)
+            }
+            
+            // Toast message overlay
+            VStack {
+                Spacer()
+                if showToast {
+                    ToastView(message: toastMessage, type: toastType)
+                        .padding(.bottom, 100)
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: showToast)
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -173,14 +226,32 @@ struct ProfileView: View {
             }
         }
         .sheet(isPresented: $showEditSheet) {
-            RegistrationView(onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
-                // TODO: Implement user update logic here
-                Task {
-                    try? await hproseInstance.updateUserCore(
-                        password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort
-                    )
+            RegistrationView(
+                onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
+                    // TODO: Implement user update logic here
+                    Task {
+                        try? await hproseInstance.updateUserCore(
+                            password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort
+                        )
+                    }
+                },
+                onAvatarUploadStateChange: { isUploading in
+                    isUploadingAvatar = isUploading
+                },
+                onAvatarUploadSuccess: {
+                    showToastMessage("Avatar updated successfully!", type: .success)
+                    // Clear all avatar cache to ensure fresh images are loaded everywhere
+                    ImageCacheManager.shared.clearAllAvatarCache()
+                    // Force refresh all avatar images by triggering a UI update
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        // This will trigger the Avatar view to reload due to the .id(user.mid) modifier
+                        hproseInstance.objectWillChange.send()
+                    }
+                },
+                onAvatarUploadFailure: { errorMessage in
+                    showToastMessage(errorMessage, type: .error)
                 }
-            })
+            )
         }
         .fullScreenCover(isPresented: $showAvatarFullScreen) {
             AvatarFullScreenView(user: user, isPresented: $showAvatarFullScreen)

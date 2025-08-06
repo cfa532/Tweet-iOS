@@ -50,17 +50,12 @@ struct MediaBrowserView: View {
                 ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
                     Group {
                         if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                            // Only create video player for currently visible attachment
-                            if index == currentIndex {
-                                videoView(for: attachment, url: url, index: index)
-                                    .onAppear {
-                                        print("DEBUG: [MediaBrowserView] Video view appeared for index: \(index), currentIndex: \(currentIndex)")
-                                        handleVideoVisibilityChange(newIndex: index, oldIndex: previousIndex)
-                                    }
-                            } else {
-                                // Show placeholder for non-visible videos
-                                videoPlaceholderView(for: attachment, url: url, index: index)
-                            }
+                            // Create video player for all video attachments, but only play the current one
+                            videoView(for: attachment, url: url, index: index)
+                                .onAppear {
+                                    print("DEBUG: [MediaBrowserView] Video view appeared for index: \(index), currentIndex: \(currentIndex)")
+                                    handleVideoVisibilityChange(newIndex: index, oldIndex: previousIndex)
+                                }
                         } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
                             audioView(for: attachment, url: url, index: index)
                         } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
@@ -272,13 +267,13 @@ struct MediaBrowserView: View {
     private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
         SimpleVideoPlayer(
             url: url,
-            mid: attachment.mid,
-            autoPlay: true, // Always auto-play in full-screen
+            mid: "\(attachment.mid)_fullscreen", // Use fullscreen cache key
+            autoPlay: index == currentIndex, // Only auto-play if this is the current video
             onMuteChanged: { _ in
                 // In full-screen mode, don't update global mute state
                 // Full-screen videos should have independent audio control
             },
-            isVisible: true, // Always visible in full-screen
+            isVisible: index == currentIndex, // Only visible if this is the current video
             contentType: attachment.type,
             cellAspectRatio: nil,
             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
@@ -292,31 +287,14 @@ struct MediaBrowserView: View {
                 resetControlsTimer() // Reset close button timer
             },
             showCustomControls: true, // Enable custom controls in full-screen
-            forcePlay: true // Force play and stop all other videos
+            forcePlay: index == currentIndex // Only force play if this is the current video
         )
         .environmentObject(MuteState.shared)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
     }
     
-    @ViewBuilder
-    private func videoPlaceholderView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
-        // Show a placeholder for videos that are not currently visible
-        Color.black
-            .aspectRatio(contentMode: .fit)
-            .overlay(
-                VStack {
-                    Image(systemName: "play.circle")
-                        .font(.system(size: 60))
-                        .foregroundColor(.white)
-                    Text(LocalizedStringKey("Swipe to view"))
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                        .padding(.top, 8)
-                }
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
+
     
     @ViewBuilder
     private func audioView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {

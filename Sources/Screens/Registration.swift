@@ -12,6 +12,9 @@ import PhotosUI
 struct RegistrationView: View {
     @Environment(\.dismiss) private var dismiss
     var onSubmit: (String, String?, String?, String?, String?, Int?) -> Void // username, password, alias, profile, hostId, cloudDrivePort
+    var onAvatarUploadStateChange: ((Bool) -> Void)? = nil // Callback for avatar upload state
+    var onAvatarUploadSuccess: (() -> Void)? = nil // Callback for successful avatar upload
+    var onAvatarUploadFailure: ((String) -> Void)? = nil // Callback for failed avatar upload
 
     @State private var username: String = ""
     @State private var password: String = ""
@@ -34,8 +37,11 @@ struct RegistrationView: View {
         case username, password, confirmPassword, alias, profile, hostId, cloudDrivePort
     }
 
-    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int?) -> Void) {
+    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int?) -> Void, onAvatarUploadStateChange: ((Bool) -> Void)? = nil, onAvatarUploadSuccess: (() -> Void)? = nil, onAvatarUploadFailure: ((String) -> Void)? = nil) {
         self.onSubmit = onSubmit
+        self.onAvatarUploadStateChange = onAvatarUploadStateChange
+        self.onAvatarUploadSuccess = onAvatarUploadSuccess
+        self.onAvatarUploadFailure = onAvatarUploadFailure
     }
 
     var body: some View {
@@ -75,6 +81,7 @@ struct RegistrationView: View {
                                 Task {
                                     isUploadingAvatar = true
                                     avatarUploadError = nil
+                                    onAvatarUploadStateChange?(true) // Notify parent about upload start
                                     do {
                                         if let data = try await item.loadTransferable(type: Data.self) {
                                             let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
@@ -84,16 +91,24 @@ struct RegistrationView: View {
                                                 await MainActor.run {
                                                     hproseInstance.appUser.avatar = uploaded.mid
                                                 }
+                                                // Notify success
+                                                onAvatarUploadSuccess?()
                                             } else {
-                                                avatarUploadError = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
+                                                let errorMessage = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
+                                                avatarUploadError = errorMessage
+                                                onAvatarUploadFailure?(errorMessage)
                                             }
                                         } else {
-                                            avatarUploadError = NSLocalizedString("Failed to load image data.", comment: "Image data loading error")
+                                            let errorMessage = NSLocalizedString("Failed to load image data.", comment: "Image data loading error")
+                                            avatarUploadError = errorMessage
+                                            onAvatarUploadFailure?(errorMessage)
                                         }
                                     } catch {
                                         avatarUploadError = error.localizedDescription
+                                        onAvatarUploadFailure?(error.localizedDescription)
                                     }
                                     isUploadingAvatar = false
+                                    onAvatarUploadStateChange?(false) // Notify parent about upload end
                                 }
                             }
                         }

@@ -17,7 +17,7 @@ class ProfileTweetsViewModel: ObservableObject {
     
     func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
         do {
-            let serverTweets = try await hproseInstance.fetchUserTweet(
+            let serverTweets = try await hproseInstance.fetchUserTweets(
                 user: user,
                 pageNumber: page,
                 pageSize: pageSize

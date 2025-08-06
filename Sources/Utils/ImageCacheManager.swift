@@ -110,6 +110,42 @@ class ImageCacheManager {
         }
     }
     
+    func clearAvatarCache(for userId: String) {
+        // NSCache doesn't have allKeys, so we'll just clear the disk cache
+        // The memory cache will be cleared when the app receives memory warnings
+        
+        // Clear disk cache for avatar files
+        do {
+            let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [])
+            for fileURL in contents {
+                let fileName = fileURL.lastPathComponent
+                if fileName.contains("avatar_") && fileName.contains(userId) {
+                    try? fileManager.removeItem(at: fileURL)
+                }
+            }
+        } catch {
+            print("Error clearing avatar cache: \(error)")
+        }
+    }
+    
+    func clearAllAvatarCache() {
+        // NSCache doesn't have allKeys, so we'll just clear the disk cache
+        // The memory cache will be cleared when the app receives memory warnings
+        
+        // Clear disk cache for all avatar files
+        do {
+            let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [])
+            for fileURL in contents {
+                let fileName = fileURL.lastPathComponent
+                if fileName.contains("avatar_") {
+                    try? fileManager.removeItem(at: fileURL)
+                }
+            }
+        } catch {
+            print("Error clearing all avatar cache: \(error)")
+        }
+    }
+    
     private func getCacheKey(for attachment: MimeiFileType, baseUrl: URL) -> String {
         if !attachment.mid.isEmpty {
             return attachment.mid

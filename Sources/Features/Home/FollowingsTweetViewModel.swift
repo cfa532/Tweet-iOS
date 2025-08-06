@@ -27,7 +27,7 @@ class FollowingsTweetViewModel: ObservableObject {
             do {
                 print("[HproseInstance] Loading tweets for guest user from alphaId")
                 if let adminUser = try await hproseInstance.fetchUser(AppConfig.alphaId) {
-                    let serverTweets = try await hproseInstance.fetchUserTweet(user: adminUser, pageNumber: 0, pageSize: 20)
+                    let serverTweets = try await hproseInstance.fetchUserTweets(user: adminUser, pageNumber: 0, pageSize: 20)
                     print("[HproseInstance] Loaded \(serverTweets.compactMap { $0 }.count) tweets for guest user")
                     await MainActor.run {
                         tweets.mergeTweets(serverTweets.compactMap{ $0 })
