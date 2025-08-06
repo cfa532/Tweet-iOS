@@ -306,40 +306,66 @@ struct TweetListContentView<RowView: View>: View {
                 header()
             }
             
-            ForEach(Array(tweets.compactMap { $0 }.enumerated()), id: \.element.mid) { index, tweet in
-                VStack(spacing: 0) {
-                    if index > 0 {
-                        Rectangle()
-                            .frame(height: 0.5)
-                            .foregroundColor(Color(.systemGray))
-                    }
-                    rowView(tweet)
+            // Show loading state
+            if isLoading {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.2)
+                    Text("Loading tweets...")
+                        .foregroundColor(.secondary)
+                        .font(.subheadline)
                 }
-            }
-            
-            // Always present view to detect bottom scrolling
-            Color.clear
-                .frame(height: 40)
-                .onAppear {
-                    print("[TweetListContentView] Bottom view appeared - initialLoadComplete: \(initialLoadComplete), isLoadingMore: \(isLoadingMore)")
-                    if initialLoadComplete && !isLoadingMore {
-                        print("[TweetListContentView] Setting hasMoreTweets to true")
-                        hasMoreTweets = true
-                        print("[TweetListContentView] Scheduling loadMoreTweets")
-                        // Add a delay to prevent rapid re-triggering
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            if initialLoadComplete && !isLoadingMore {
-                                print("[TweetListContentView] Calling loadMoreTweets")
-                                loadMoreTweets()
+                .frame(maxWidth: .infinity, minHeight: 200)
+                .padding()
+            } else if initialLoadComplete && tweets.compactMap({ $0 }).isEmpty {
+                // Show empty state when loading is complete but no tweets
+                VStack(spacing: 16) {
+                    Image(systemName: "tray")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text("No tweet yet")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 200)
+                .padding()
+            } else {
+                // Show tweets
+                ForEach(Array(tweets.compactMap { $0 }.enumerated()), id: \.element.mid) { index, tweet in
+                    VStack(spacing: 0) {
+                        if index > 0 {
+                            Rectangle()
+                                .frame(height: 0.5)
+                                .foregroundColor(Color(.systemGray))
+                        }
+                        rowView(tweet)
+                    }
+                }
+                
+                // Always present view to detect bottom scrolling
+                Color.clear
+                    .frame(height: 40)
+                    .onAppear {
+                        print("[TweetListContentView] Bottom view appeared - initialLoadComplete: \(initialLoadComplete), isLoadingMore: \(isLoadingMore)")
+                        if initialLoadComplete && !isLoadingMore {
+                            print("[TweetListContentView] Setting hasMoreTweets to true")
+                            hasMoreTweets = true
+                            print("[TweetListContentView] Scheduling loadMoreTweets")
+                            // Add a delay to prevent rapid re-triggering
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                if initialLoadComplete && !isLoadingMore {
+                                    print("[TweetListContentView] Calling loadMoreTweets")
+                                    loadMoreTweets()
+                                }
                             }
                         }
                     }
+                
+                // Loading indicator for more tweets
+                if hasMoreTweets {
+                    ProgressView()
+                        .frame(height: 40)
                 }
-            
-            // Loading indicator
-            if hasMoreTweets {
-                ProgressView()
-                    .frame(height: 40)
             }
         }
     }
