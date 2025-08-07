@@ -1006,6 +1006,291 @@ final class HproseInstance: ObservableObject {
     /// Consolidated video processing class that handles all video-related operations
     class VideoProcessor {
         
+        /// Robust file type detection utility using multiple methods
+        private class FileTypeDetector {
+            
+            /// Comprehensive file signature database
+            private static let fileSignatures: [(signature: [UInt8], mediaType: MediaType, name: String)] = [
+                // Image formats
+                ([0xFF, 0xD8, 0xFF], .image, "JPEG"),
+                ([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], .image, "PNG"),
+                ([0x47, 0x49, 0x46, 0x38, 0x37, 0x61], .image, "GIF87a"),
+                ([0x47, 0x49, 0x46, 0x38, 0x39, 0x61], .image, "GIF89a"),
+                ([0x42, 0x4D], .image, "BMP"),
+                ([0x49, 0x49, 0x2A, 0x00], .image, "TIFF (Intel)"),
+                ([0x4D, 0x4D, 0x00, 0x2A], .image, "TIFF (Motorola)"),
+                ([0x52, 0x49, 0x46, 0x46], .image, "WebP/RIFF"), // Will be refined below
+                
+                // Video formats - MP4/MOV family
+                ([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70], .video, "MP4/MOV"), // Will be refined below
+                ([0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70], .video, "MP4/MOV"), // Will be refined below
+                ([0x00, 0x00, 0x00, 0x1C, 0x66, 0x74, 0x79, 0x70], .video, "MP4/MOV"), // Will be refined below
+                ([0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70], .video, "MP4/MOV"), // Will be refined below
+                
+                // Other video formats
+                ([0x1A, 0x45, 0xDF, 0xA3], .video, "MKV/WebM"),
+                ([0x46, 0x4C, 0x56], .video, "FLV"),
+                ([0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11], .video, "WMV/ASF"),
+                ([0x52, 0x49, 0x46, 0x46], .video, "AVI"), // Will be refined below
+                
+                // Audio formats
+                ([0x49, 0x44, 0x33], .audio, "MP3 (ID3)"),
+                ([0xFF, 0xFB], .audio, "MP3 (MPEG)"),
+                ([0xFF, 0xF3], .audio, "MP3 (MPEG)"),
+                ([0xFF, 0xF2], .audio, "MP3 (MPEG)"),
+                ([0x66, 0x4C, 0x61, 0x43], .audio, "FLAC"),
+                ([0x4F, 0x67, 0x67, 0x53], .audio, "OGG"),
+                
+                // Document formats
+                ([0x25, 0x50, 0x44, 0x46], .pdf, "PDF"),
+                ([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1], .word, "Office Document"), // Will be refined below
+                ([0x50, 0x4B, 0x03, 0x04], .zip, "ZIP"),
+                ([0x50, 0x4B, 0x05, 0x06], .zip, "ZIP"),
+                ([0x50, 0x4B, 0x07, 0x08], .zip, "ZIP"),
+                
+                // Text formats
+                ([0x3C, 0x21, 0x44, 0x4F, 0x43, 0x54, 0x59, 0x50, 0x45], .html, "HTML"),
+                ([0x3C, 0x68, 0x74, 0x6D, 0x6C], .html, "HTML"),
+                ([0x3C, 0x48, 0x54, 0x4D, 0x4C], .html, "HTML"),
+            ]
+            
+            /// Detect file type using multiple methods
+            static func detectFromData(_ data: Data) async -> MediaType {
+                print("DEBUG: [FILE TYPE] Starting file type detection for \(data.count) bytes")
+                
+                // Method 1: Try iOS UniformTypeIdentifiers first (most reliable)
+                if let mediaType = detectUsingUTType(data) {
+                    print("DEBUG: [FILE TYPE] Detected using UTType: \(mediaType.rawValue)")
+                    return mediaType
+                }
+                
+                // Method 2: Try comprehensive file signature detection
+                if let mediaType = detectUsingFileSignatures(data) {
+                    print("DEBUG: [FILE TYPE] Detected using file signatures: \(mediaType.rawValue)")
+                    return mediaType
+                }
+                
+                // Method 3: Try AVFoundation for media files
+                if let mediaType = await detectUsingAVFoundation(data) {
+                    print("DEBUG: [FILE TYPE] Detected using AVFoundation: \(mediaType.rawValue)")
+                    return mediaType
+                }
+                
+                print("DEBUG: [FILE TYPE] Could not determine file type")
+                return .unknown
+            }
+            
+            /// Detect using iOS UniformTypeIdentifiers
+            private static func detectUsingUTType(_ data: Data) -> MediaType? {
+                guard data.count >= 512 else { return nil }
+                
+                // Create a temporary file to use UTType detection
+                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).tmp")
+                
+                do {
+                    try data.write(to: tempURL)
+                    defer { try? FileManager.default.removeItem(at: tempURL) }
+                    
+                    // Try to determine the UTI
+                    let resourceValues = try tempURL.resourceValues(forKeys: [.typeIdentifierKey])
+                    if let typeIdentifier = resourceValues.typeIdentifier {
+                        print("DEBUG: [FILE TYPE] UTType identifier: \(typeIdentifier)")
+                        
+                        // Map UTI to MediaType
+                        if typeIdentifier.hasPrefix("public.image") || 
+                           typeIdentifier.contains("jpeg") || 
+                           typeIdentifier.contains("png") || 
+                           typeIdentifier.contains("gif") || 
+                           typeIdentifier.contains("heic") || 
+                           typeIdentifier.contains("heif") ||
+                           typeIdentifier.contains("tiff") ||
+                           typeIdentifier.contains("bmp") ||
+                           typeIdentifier.contains("webp") {
+                            return .image
+                        } else if typeIdentifier.hasPrefix("public.movie") || 
+                                  typeIdentifier.contains("quicktime") || 
+                                  typeIdentifier.contains("movie") ||
+                                  typeIdentifier.contains("video") ||
+                                  typeIdentifier.contains("mp4") ||
+                                  typeIdentifier.contains("mov") ||
+                                  typeIdentifier.contains("m4v") ||
+                                  typeIdentifier.contains("avi") ||
+                                  typeIdentifier.contains("mkv") ||
+                                  typeIdentifier.contains("wmv") ||
+                                  typeIdentifier.contains("flv") ||
+                                  typeIdentifier.contains("webm") {
+                            return .video
+                        } else if typeIdentifier.hasPrefix("public.audio") || 
+                                  typeIdentifier.contains("audio") ||
+                                  typeIdentifier.contains("mp3") ||
+                                  typeIdentifier.contains("m4a") ||
+                                  typeIdentifier.contains("wav") ||
+                                  typeIdentifier.contains("aac") ||
+                                  typeIdentifier.contains("flac") ||
+                                  typeIdentifier.contains("ogg") {
+                            return .audio
+                        } else if typeIdentifier == "public.composite-content" || 
+                                  typeIdentifier.contains("pdf") {
+                            return .pdf
+                        } else if typeIdentifier == "public.zip-archive" || 
+                                  typeIdentifier.contains("zip") {
+                            return .zip
+                        }
+                    }
+                } catch {
+                    print("DEBUG: [FILE TYPE] UTType detection failed: \(error)")
+                }
+                
+                return nil
+            }
+            
+            /// Detect using comprehensive file signatures
+            private static func detectUsingFileSignatures(_ data: Data) -> MediaType? {
+                guard data.count >= 12 else { return nil }
+                
+                let bytes = [UInt8](data.prefix(12))
+                
+                // Check basic signatures first
+                for (signature, mediaType, name) in fileSignatures {
+                    if bytes.starts(with: signature) {
+                        print("DEBUG: [FILE TYPE] Found signature for \(name)")
+                        
+                        // Refine detection for complex formats
+                        switch mediaType {
+                        case .image where name == "WebP/RIFF":
+                            return refineRIFFDetection(data, bytes)
+                        case .video where name == "MP4/MOV":
+                            return refineMP4Detection(data, bytes)
+                        case .video where name == "AVI":
+                            return refineAVIDetection(data, bytes)
+                        case .word where name == "Office Document":
+                            return refineOfficeDetection(data, bytes)
+                        default:
+                            return mediaType
+                        }
+                    }
+                }
+                
+                // Special handling for HEIC/HEIF
+                if bytes.count >= 12 {
+                    let ftypString = String(bytes: bytes[4...11], encoding: .ascii) ?? ""
+                    if ftypString.hasPrefix("ftyp") && (ftypString.contains("heic") || ftypString.contains("heix") || 
+                                                       ftypString.contains("heis") || ftypString.contains("heim") ||
+                                                       ftypString.contains("hevc") || ftypString.contains("hevx")) {
+                        print("DEBUG: [FILE TYPE] Detected HEIC/HEIF from ftyp")
+                        return .image
+                    }
+                }
+                
+                // Check for plain text
+                if data.count >= 512 {
+                    let textCheck = data.prefix(512)
+                    if !textCheck.contains(0) && textCheck.allSatisfy({ $0 >= 32 || $0 == 9 || $0 == 10 || $0 == 13 }) {
+                        print("DEBUG: [FILE TYPE] Detected as plain text")
+                        return .txt
+                    }
+                }
+                
+                return nil
+            }
+            
+            /// Detect using AVFoundation for media files
+            private static func detectUsingAVFoundation(_ data: Data) async -> MediaType? {
+                guard data.count >= 1024 else { return nil }
+                
+                let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).tmp")
+                
+                do {
+                    try data.write(to: tempURL)
+                    defer { try? FileManager.default.removeItem(at: tempURL) }
+                    
+                    let asset = AVAsset(url: tempURL)
+                    
+                    // Check if it has video tracks
+                    let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                    if !videoTracks.isEmpty {
+                        print("DEBUG: [FILE TYPE] AVFoundation detected video tracks")
+                        return .video
+                    }
+                    
+                    // Check if it has audio tracks
+                    let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+                    if !audioTracks.isEmpty {
+                        print("DEBUG: [FILE TYPE] AVFoundation detected audio tracks")
+                        return .audio
+                    }
+                    
+                } catch {
+                    print("DEBUG: [FILE TYPE] AVFoundation detection failed: \(error)")
+                }
+                
+                return nil
+            }
+            
+            // MARK: - Refinement Methods
+            
+            private static func refineRIFFDetection(_ data: Data, _ bytes: [UInt8]) -> MediaType? {
+                guard bytes.count >= 12 else { return .image }
+                
+                let format = String(bytes: bytes[8...11], encoding: .ascii) ?? ""
+                switch format {
+                case "WEBP":
+                    return .image
+                case "AVI ":
+                    return .video
+                case "WAVE":
+                    return .audio
+                default:
+                    return .image // Default to image for other RIFF formats
+                }
+            }
+            
+            private static func refineMP4Detection(_ data: Data, _ bytes: [UInt8]) -> MediaType? {
+                guard bytes.count >= 12 else { return .video }
+                
+                let codecString = String(bytes: bytes[8...11], encoding: .ascii) ?? ""
+                print("DEBUG: [FILE TYPE] MP4 codec string: \(codecString)")
+                
+                // Video codecs
+                if codecString.contains("mp4") || codecString.contains("M4V") || codecString.contains("isom") ||
+                   codecString.contains("iso2") || codecString.contains("avc1") || codecString.contains("mp41") ||
+                   codecString.contains("mp42") || codecString.contains("3gp") || codecString.contains("qt") ||
+                   codecString.contains("M4A") || codecString.contains("M4B") || codecString.contains("M4P") {
+                    return .video
+                }
+                
+                // Audio codecs
+                if codecString.contains("M4A") || codecString.contains("M4B") || codecString.contains("M4P") {
+                    return .audio
+                }
+                
+                return .video // Default to video for MP4 containers
+            }
+            
+            private static func refineAVIDetection(_ data: Data, _ bytes: [UInt8]) -> MediaType? {
+                guard bytes.count >= 12 else { return .video }
+                
+                let format = String(bytes: bytes[8...11], encoding: .ascii) ?? ""
+                return format == "AVI " ? .video : .video // Default to video
+            }
+            
+            private static func refineOfficeDetection(_ data: Data, _ bytes: [UInt8]) -> MediaType? {
+                guard data.count >= 512 else { return .word }
+                
+                let oleHeader = data.prefix(512)
+                if let oleString = String(data: oleHeader, encoding: .ascii) {
+                    if oleString.contains("WordDocument") {
+                        return .word
+                    } else if oleString.contains("Workbook") || oleString.contains("Excel") {
+                        return .excel
+                    } else if oleString.contains("PowerPoint") {
+                        return .ppt
+                    }
+                }
+                return .word // Default to Word for OLE files
+            }
+        }
+        
         /// Process and upload video or other media files
         func processAndUpload(
             data: Data,
@@ -1018,7 +1303,7 @@ final class HproseInstance: ObservableObject {
         ) async throws -> MimeiFileType? {
             
             // Determine media type
-            let mediaType = detectMediaType(from: typeIdentifier, fileName: fileName)
+            let mediaType = await detectMediaType(from: typeIdentifier, fileName: fileName, data: data)
             print("DEBUG: Detected media type: \(mediaType.rawValue)")
             
             // Handle video files with backend conversion
@@ -1045,8 +1330,8 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        /// Detect media type from type identifier and filename
-        private func detectMediaType(from typeIdentifier: String, fileName: String?) -> MediaType {
+        /// Detect media type from type identifier, filename, and file header
+        private func detectMediaType(from typeIdentifier: String, fileName: String?, data: Data) async -> MediaType {
             // Check type identifier first
             if typeIdentifier.hasPrefix("public.image") {
                 return .image
@@ -1063,7 +1348,7 @@ final class HproseInstance: ObservableObject {
             // Fallback to file extension check
             let fileExtension = (fileName ?? typeIdentifier).components(separatedBy: ".").last?.lowercased()
             switch fileExtension {
-            case "jpg", "jpeg", "png", "gif", "heic", "heif":
+            case "jpg", "jpeg", "png", "gif", "heic", "heif", "bmp", "webp":
                 return .image
             case "mp4", "mov", "m4v", "mkv", "avi", "flv", "wmv", "webm", "ts", "mts", "m2ts", "vob", "dat", "ogv", "ogg", "f4v", "asf":
                 return .video
@@ -1075,8 +1360,21 @@ final class HproseInstance: ObservableObject {
                 return .zip
             case "doc", "docx":
                 return .word
+            case "xls", "xlsx":
+                return .excel
+            case "ppt", "pptx":
+                return .ppt
+            case "txt":
+                return .txt
+            case "html", "htm":
+                return .html
             default:
-                return .unknown
+                // If type identifier and file extension cannot determine the type,
+                // try to read file header to figure out the file type
+                print("DEBUG: Type identifier and file extension cannot determine file type, analyzing file header...")
+                let detectedType = await FileTypeDetector.detectFromData(data)
+                print("DEBUG: File header analysis detected type: \(detectedType.rawValue)")
+                return detectedType
             }
         }
         

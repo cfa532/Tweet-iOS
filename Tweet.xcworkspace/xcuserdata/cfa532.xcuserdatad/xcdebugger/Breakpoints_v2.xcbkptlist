@@ -80,7 +80,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "2091"
             endingLineNumber = "2091"
-            landmarkName = "setUserAvatar(user:avatar:)"
+            landmarkName = "uploadTweetWithPersistenceAndRetry(tweet:itemData:retryCount:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

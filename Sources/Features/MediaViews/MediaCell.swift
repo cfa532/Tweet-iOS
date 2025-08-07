@@ -275,7 +275,7 @@ struct VideoTimeLabel: View {
     }
     
     private func setupTimeObserver() {
-        guard let player = VideoCacheManager.shared.getVideoPlayer(for: mid, url: URL(string: "placeholder")!) else {
+        guard let player = VideoCacheManager.shared.getVideoPlayer(for: mid, url: URL(string: "placeholder")!, isHLS: true) else {
             return
         }
         
@@ -292,7 +292,7 @@ struct VideoTimeLabel: View {
     
     private func removeTimeObserver() {
         if let observer = timeObserver {
-            VideoCacheManager.shared.getVideoPlayer(for: mid, url: URL(string: "placeholder")!)?.removeTimeObserver(observer)
+            VideoCacheManager.shared.getVideoPlayer(for: mid, url: URL(string: "placeholder")!, isHLS: true)?.removeTimeObserver(observer)
             timeObserver = nil
         }
     }

@@ -145,7 +145,7 @@ struct MediaBrowserView: View {
                 // Pause all other videos and start playing the initial one
                 VideoCacheManager.shared.pauseAllVideosExcept(for: fullscreenMid)
                 
-                if let player = VideoCacheManager.shared.getVideoPlayer(for: fullscreenMid, url: initialAttachment.getUrl(baseUrl)!) {
+                if let player = VideoCacheManager.shared.getVideoPlayer(for: fullscreenMid, url: initialAttachment.getUrl(baseUrl)!, isHLS: true) {
                     player.play()
                     print("DEBUG: [MediaBrowserView] Started playing initial video for mid: \(fullscreenMid)")
                 }
@@ -186,7 +186,7 @@ struct MediaBrowserView: View {
                 VideoCacheManager.shared.pauseAllVideosExcept(for: newFullscreenMid)
                 
                 // Get or create the video player and start playing
-                if let player = VideoCacheManager.shared.getVideoPlayer(for: newFullscreenMid, url: url) {
+                if let player = VideoCacheManager.shared.getVideoPlayer(for: newFullscreenMid, url: url, isHLS: true) {
                     player.play()
                     print("DEBUG: [MediaBrowserView] Started playing video for mid: \(newFullscreenMid)")
                 }

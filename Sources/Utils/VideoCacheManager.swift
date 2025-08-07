@@ -34,7 +34,7 @@ class VideoCacheManager: ObservableObject {
     }
     
     /// Get or create a video player for the given video mid
-    func getVideoPlayer(for videoMid: String, url: URL) -> AVPlayer? {
+    func getVideoPlayer(for videoMid: String, url: URL, isHLS: Bool = true) -> AVPlayer? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
@@ -46,8 +46,8 @@ class VideoCacheManager: ObservableObject {
         }
         
         // Create new player and cache it
-        print("DEBUG: [VIDEO CACHE] Creating new player for video mid: \(videoMid)")
-        let player = createVideoPlayer(for: url)
+        print("DEBUG: [VIDEO CACHE] Creating new player for video mid: \(videoMid), isHLS: \(isHLS)")
+        let player = createVideoPlayer(for: url, isHLS: isHLS)
         let cachedPlayer = CachedVideoPlayer(player: player, videoMid: videoMid, url: url)
         videoCache[videoMid] = cachedPlayer
         
@@ -58,12 +58,23 @@ class VideoCacheManager: ObservableObject {
     }
     
     /// Create a new video player for the given URL
-    private func createVideoPlayer(for url: URL) -> AVPlayer {
-        // Create asset with hardware acceleration support
-        let asset = AVURLAsset(url: url, options: [
-            "AVURLAssetOutOfBandMIMETypeKey": "application/x-mpegURL",
-            "AVURLAssetHTTPHeaderFieldsKey": ["Accept": "*/*"]
-        ])
+    private func createVideoPlayer(for url: URL, isHLS: Bool = true) -> AVPlayer {
+        // Create asset with appropriate options based on video type
+        let options: [String: Any]
+        if isHLS {
+            // HLS video options
+            options = [
+                "AVURLAssetOutOfBandMIMETypeKey": "application/x-mpegURL",
+                "AVURLAssetHTTPHeaderFieldsKey": ["Accept": "*/*"]
+            ]
+        } else {
+            // Regular video options
+            options = [
+                "AVURLAssetHTTPHeaderFieldsKey": ["Accept": "*/*"]
+            ]
+        }
+        
+        let asset = AVURLAsset(url: url, options: options)
         
         // Create player item with asset
         let playerItem = AVPlayerItem(asset: asset)

@@ -282,6 +282,7 @@ struct HLSVideoPlayerWithControls: View {
     let forcePlay: Bool
     let forceUnmuted: Bool
     let disableAutoRestart: Bool
+    let isHLS: Bool // Whether this is an HLS video or regular video
     
     @State private var player: AVPlayer?
     @State private var isLoading = true
@@ -300,7 +301,7 @@ struct HLSVideoPlayerWithControls: View {
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
     
-    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool, disableAutoRestart: Bool = false) {
+    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool, disableAutoRestart: Bool = false, isHLS: Bool = true) {
         self.videoURL = videoURL
         self.mid = mid
         self.isVisible = isVisible
@@ -313,9 +314,10 @@ struct HLSVideoPlayerWithControls: View {
         self.forcePlay = forcePlay
         self.forceUnmuted = forceUnmuted
         self.disableAutoRestart = disableAutoRestart
+        self.isHLS = isHLS
         self._playerMuted = State(initialValue: isMuted)
         
-        print("DEBUG: [VIDEO \(mid)] HLSVideoPlayerWithControls view created for URL: \(videoURL.absoluteString)")
+        print("DEBUG: [VIDEO \(mid)] HLSVideoPlayerWithControls view created for URL: \(videoURL.absoluteString), isHLS: \(isHLS)")
     }
     
     var body: some View {
@@ -437,7 +439,7 @@ struct HLSVideoPlayerWithControls: View {
                     VStack {
                         ProgressView()
                             .scaleEffect(1.5)
-                        Text(LocalizedStringKey("Loading HLS stream..."))
+                        Text(LocalizedStringKey(isHLS ? "Loading HLS stream..." : "Loading video..."))
                             .font(.caption)
                             .foregroundColor(.themeSecondaryText)
                     }
@@ -446,7 +448,7 @@ struct HLSVideoPlayerWithControls: View {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.largeTitle)
                             .foregroundColor(.red)
-                        Text(LocalizedStringKey("HLS Playback Error"))
+                        Text(LocalizedStringKey(isHLS ? "HLS Playback Error" : "Video Playback Error"))
                             .font(.headline)
                         Text(errorMessage)
                             .font(.caption)
@@ -561,7 +563,7 @@ struct HLSVideoPlayerWithControls: View {
     }
     
     private func setupPlayer() {
-        print("DEBUG: [VIDEO \(mid)] Setting up HLS player for URL: \(videoURL.absoluteString), mid: \(mid)")
+        print("DEBUG: [VIDEO \(mid)] Setting up \(isHLS ? "HLS" : "regular") player for URL: \(videoURL.absoluteString), mid: \(mid)")
         
         isSettingUpPlayer = true // Prevent mute state changes during setup
         isLoading = true
@@ -569,7 +571,7 @@ struct HLSVideoPlayerWithControls: View {
         hasNotifiedFinished = false
         
         // Try to get cached player first
-        if let cachedPlayer = videoCache.getVideoPlayer(for: mid, url: videoURL) {
+        if let cachedPlayer = videoCache.getVideoPlayer(for: mid, url: videoURL, isHLS: isHLS) {
             print("DEBUG: [VIDEO \(mid)] Got cached player for video mid: \(mid)")
             self.player = cachedPlayer
             
@@ -686,7 +688,7 @@ struct HLSVideoPlayerWithControls: View {
             
             switch playerItem.status {
             case .readyToPlay:
-                print("DEBUG: [VIDEO \(mid)] HLS player item is ready to play")
+                print("DEBUG: [VIDEO \(mid)] \(isHLS ? "HLS" : "Regular") player item is ready to play")
                 self.isLoading = false
                 self.duration = playerItem.duration.seconds
                 
@@ -695,7 +697,7 @@ struct HLSVideoPlayerWithControls: View {
                 
                 timer.invalidate()
             case .failed:
-                print("DEBUG: HLS player item failed: \(playerItem.error?.localizedDescription ?? "Unknown error")")
+                print("DEBUG: \(isHLS ? "HLS" : "Regular") player item failed: \(playerItem.error?.localizedDescription ?? "Unknown error")")
                 if let error = playerItem.error as NSError? {
                     print("DEBUG: Error domain: \(error.domain), code: \(error.code)")
                     print("DEBUG: Error user info: \(error.userInfo)")
@@ -704,13 +706,13 @@ struct HLSVideoPlayerWithControls: View {
                     switch (error.domain, error.code) {
                     case ("CoreMediaErrorDomain", -12642):
                         print("DEBUG: Playlist parse error - invalid HLS manifest format")
-                        self.errorMessage = "Invalid HLS playlist format"
+                        self.errorMessage = isHLS ? "Invalid HLS playlist format" : "Invalid video format"
                     case ("CoreMediaErrorDomain", -12643):
                         print("DEBUG: Segment not found error")
-                        self.errorMessage = "HLS segment not found"
+                        self.errorMessage = isHLS ? "HLS segment not found" : "Video segment not found"
                     case ("CoreMediaErrorDomain", -12644):
                         print("DEBUG: Segment duration error")
-                        self.errorMessage = "HLS segment duration error"
+                        self.errorMessage = isHLS ? "HLS segment duration error" : "Video duration error"
                     case ("CoreMediaErrorDomain", -12645):
                         print("DEBUG: Codec not supported error")
                         self.errorMessage = "Video codec not supported by this device"
@@ -721,16 +723,16 @@ struct HLSVideoPlayerWithControls: View {
                         print("DEBUG: Profile not supported error")
                         self.errorMessage = "Video profile not supported by this device"
                     case ("NSURLErrorDomain", 404):
-                        print("DEBUG: HLS playlist not found (404)")
-                        self.errorMessage = "HLS playlist not found"
+                        print("DEBUG: \(isHLS ? "HLS playlist" : "Video file") not found (404)")
+                        self.errorMessage = isHLS ? "HLS playlist not found" : "Video file not found"
                     case ("NSURLErrorDomain", 403):
-                        print("DEBUG: HLS playlist access denied (403)")
-                        self.errorMessage = "HLS playlist access denied"
+                        print("DEBUG: \(isHLS ? "HLS playlist" : "Video file") access denied (403)")
+                        self.errorMessage = isHLS ? "HLS playlist access denied" : "Video file access denied"
                     case ("NSURLErrorDomain", 500):
-                        print("DEBUG: HLS server error (500)")
-                        self.errorMessage = "HLS server error"
+                        print("DEBUG: \(isHLS ? "HLS server" : "Video server") error (500)")
+                        self.errorMessage = isHLS ? "HLS server error" : "Video server error"
                     default:
-                        print("DEBUG: Unknown HLS error")
+                        print("DEBUG: Unknown \(isHLS ? "HLS" : "video") error")
                         // Check for common codec compatibility issues
                         if error.localizedDescription.contains("codec") || 
                            error.localizedDescription.contains("format") ||
@@ -738,7 +740,7 @@ struct HLSVideoPlayerWithControls: View {
                            error.localizedDescription.contains("hardware") {
                             self.errorMessage = "Video codec not compatible with this device. Please try uploading a different video format."
                         } else {
-                            self.errorMessage = "HLS playback error: \(error.localizedDescription)"
+                            self.errorMessage = "\(isHLS ? "HLS" : "Video") playback error: \(error.localizedDescription)"
                         }
                     }
                 }
@@ -875,6 +877,7 @@ struct HLSDirectoryVideoPlayer: View {
     @State private var error: String? = nil
     @State private var loading = true
     @State private var didRetry = false // Track if we've retried once
+    @State private var isHLSMode = true // Track if we're in HLS mode or fallback mode
 
     var body: some View {
         Group {
@@ -891,7 +894,8 @@ struct HLSDirectoryVideoPlayer: View {
                     showCustomControls: showCustomControls,
                     forcePlay: forcePlay,
                     forceUnmuted: forceUnmuted,
-                    disableAutoRestart: disableAutoRestart
+                    disableAutoRestart: disableAutoRestart,
+                    isHLS: isHLSMode
                 )
             } else if loading {
                 ProgressView("Loading video...")
@@ -905,16 +909,17 @@ struct HLSDirectoryVideoPlayer: View {
                 loading = false
                 if let url = await getHLSPlaylistURL(baseURL: baseURL) {
                     playlistURL = url
+                    isHLSMode = true
                 } else if !didRetry {
                     // Retry once after a short delay
                     didRetry = true
                     try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
                     loading = true
                 } else {
-                    // Both attempts failed, show empty placeholder
-                    playlistURL = nil
-                    error = nil
-                    loading = false
+                    // HLS failed, try as regular video
+                    print("DEBUG: [VIDEO \(mid)] HLS playlist not found, trying as regular video")
+                    playlistURL = baseURL
+                    isHLSMode = false
                 }
             }
         }
