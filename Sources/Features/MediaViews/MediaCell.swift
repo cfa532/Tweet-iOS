@@ -69,7 +69,7 @@ struct MediaCell: View, Equatable {
                                 showFullScreen = true
                             },
                             showCustomControls: false,
-                            disableAutoRestart: false,
+                            disableAutoRestart: true,
                         )
                         .environmentObject(MuteState.shared)
                         .onReceive(MuteState.shared.$isMuted) { isMuted in

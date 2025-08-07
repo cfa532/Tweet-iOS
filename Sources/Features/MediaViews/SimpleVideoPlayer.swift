@@ -549,6 +549,24 @@ struct HLSVideoPlayerWithControls: View {
                     print("DEBUG: [VIDEO \(mid)] Ignoring global mute state change (forceUnmuted mode)")
                 }
             }
+            .onChange(of: autoPlay) { newAutoPlay in
+                // Handle autoPlay parameter changes
+                if newAutoPlay && isVisible && !isPlaying {
+                    // AutoPlay was enabled and video is visible but not playing - start playback
+                    if let player = player {
+                        print("DEBUG: [VIDEO \(mid)] AutoPlay enabled, starting playback")
+                        player.play()
+                        isPlaying = true
+                    }
+                } else if !newAutoPlay && isPlaying {
+                    // AutoPlay was disabled and video is playing - pause playback
+                    if let player = player {
+                        print("DEBUG: [VIDEO \(mid)] AutoPlay disabled, pausing playback")
+                        player.pause()
+                        isPlaying = false
+                    }
+                }
+            }
         }
     }
     
