@@ -9,7 +9,7 @@ import SwiftUI
 import AVFoundation
 
 // MARK: - MediaCell
-struct MediaCell: View {
+struct MediaCell: View, Equatable {
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
@@ -137,9 +137,6 @@ struct MediaCell: View {
             // Refresh mute state from preferences when cell appears
             MuteState.shared.refreshFromPreferences()
             
-            // Set visibility to true when cell appears
-            isVisible = true
-            
             // Auto-load videos when they become visible
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 shouldLoadVideo = true
@@ -147,7 +144,12 @@ struct MediaCell: View {
                 logVideoPlayerDecision()
             }
         }
+        .task {
+            // Set visibility to true when cell appears
+            isVisible = true
+        }
         .onDisappear {
+            // Set visibility to false when cell disappears
             isVisible = false
         }
         .onChange(of: isVisible) { newValue in
@@ -225,6 +227,17 @@ struct MediaCell: View {
         } else {
             print("DEBUG: [MEDIA CELL] Showing placeholder for \(attachment.mid) - shouldLoadVideo: \(shouldLoadVideo), hasCachedPlayer: \(hasCachedPlayer)")
         }
+    }
+    
+    // MARK: - Equatable
+    static func == (lhs: MediaCell, rhs: MediaCell) -> Bool {
+        // Only compare the essential properties that should trigger recomposition
+        return lhs.parentTweet.mid == rhs.parentTweet.mid &&
+               lhs.attachmentIndex == rhs.attachmentIndex &&
+               lhs.aspectRatio == rhs.aspectRatio &&
+               lhs.play == rhs.play &&
+               lhs.shouldLoadVideo == rhs.shouldLoadVideo &&
+               lhs.showMuteButton == rhs.showMuteButton
     }
 }
 

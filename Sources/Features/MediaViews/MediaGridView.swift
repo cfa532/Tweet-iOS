@@ -61,7 +61,7 @@ struct MediaGridView: View {
         
         return isCurrentVideo || shouldStartFirstVideo
     }
-
+    
     private func getVideoIndices() -> [Int] {
         return attachments.enumerated().compactMap { index, attachment in
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
