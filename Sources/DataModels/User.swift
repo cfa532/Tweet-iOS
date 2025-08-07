@@ -52,28 +52,25 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     private var _uploadService: AnyObject?
     public var uploadService: AnyObject? {
         get {
-            guard let baseUrl = writableUrl else { 
+            guard let writableUrl = writableUrl else { 
                 print("DEBUG: uploadService - writableUrl is nil")
                 return nil 
             }
 
             if let cached = _uploadService {
-                print("DEBUG: uploadService - returning cached service")
                 return cached
             } else {
-                print("DEBUG: uploadService - creating new service for baseUrl: \(baseUrl)")
-                if baseUrl == HproseInstance.shared.appUser.baseUrl {
+                if writableUrl == HproseInstance.shared.appUser.baseUrl {
                     // Use the main hprose service if available, otherwise create a new one
                     if let mainService = HproseInstance.shared.appUser._hproseService {
-                        print("DEBUG: uploadService - using main hprose service")
                         _uploadService = mainService
                         return mainService
                     } else {
                         // Fallback to creating a new service
                         print("DEBUG: uploadService - main service not available, creating new one")
                         let client = HproseHttpClient()
-                        client.timeout = 30000
-                        client.uri = "\(baseUrl)/webapi/"
+                        client.timeout = 180000
+                        client.uri = "\(writableUrl)/webapi/"
                         let service = client.useService(HproseService.self) as? AnyObject
                         _uploadService = service
                         print("DEBUG: uploadService - new service created: \(service != nil)")
@@ -82,8 +79,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 } else {
                     print("DEBUG: uploadService - creating service for different baseUrl")
                     let client = HproseHttpClient()
-                    client.timeout = 30000
-                    client.uri = "\(baseUrl)/webapi/"
+                    client.timeout = 180000
+                    client.uri = "\(writableUrl)/webapi/"
                     let service = client.useService(HproseService.self) as? AnyObject
                     _uploadService = service
                     print("DEBUG: uploadService - new service created: \(service != nil)")
@@ -338,17 +335,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
         throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No writable url available"])
     }
-    
-    /**
-     * Resolves the most responsive writable URL from the user's first hostId.
-     * It checks only the first hostId, constructs a potential URL, and checks for its reachability.
-     * If a responsive URL is found, it is set as the user's `writableUrl` and returned.
-     * If the first host is not responsive, it defaults to the user's `baseUrl`.
-     * This method runs asynchronously and updates the `writableUrl` property directly.
-     * Only accepts public IP addresses with ports between 8000 and 9000.
-     * Returns the resolved URL or nil if resolution fails.
-     */
-    
+
     /// Force refresh the upload service cache
     func refreshUploadService() {
         _uploadService = nil

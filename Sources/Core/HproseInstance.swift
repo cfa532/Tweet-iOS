@@ -2087,15 +2087,7 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "avatar": avatar
         ]
-        var uploadService = appUser.uploadService
-        if uploadService == nil {
-            _ = try await appUser.resolveWritableUrl()
-            uploadService = appUser.uploadService
-            if uploadService == nil {
-                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
-            }
-        }
-        _ = uploadService?.runMApp(entry, params, nil)
+        _ = appUser.hproseService?.runMApp(entry, params, nil)
     }
 
     private func getProviderIP(_ mid: String) async throws -> String? {

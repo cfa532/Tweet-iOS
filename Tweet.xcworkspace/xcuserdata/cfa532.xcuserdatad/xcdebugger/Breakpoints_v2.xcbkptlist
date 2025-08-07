@@ -78,8 +78,8 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2099"
-            endingLineNumber = "2099"
+            startingLineNumber = "2091"
+            endingLineNumber = "2091"
             landmarkName = "setUserAvatar(user:avatar:)"
             landmarkType = "7">
          </BreakpointContent>
