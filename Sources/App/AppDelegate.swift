@@ -8,6 +8,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Register background tasks before application finishes launching
         registerBackgroundTasks()
+        
+        // Setup app lifecycle notifications
+        setupAppLifecycleNotifications()
+        
         return true
     }
     
@@ -66,5 +70,58 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         } catch {
             print("[AppDelegate] Failed to schedule background message check: \(error)")
         }
+    }
+    
+    // MARK: - App Lifecycle Notifications
+    
+    private func setupAppLifecycleNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppWillResignActive),
+            name: UIApplication.willResignActiveNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAppWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+        
+        print("[AppDelegate] App lifecycle notifications setup completed")
+    }
+    
+    @objc private func handleAppWillResignActive() {
+        print("[AppDelegate] App will resign active - pausing all videos")
+        VideoCacheManager.shared.pauseAllVideos()
+    }
+    
+    @objc private func handleAppDidBecomeActive() {
+        print("[AppDelegate] App did become active - posting notification to restore video state")
+        NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
+    }
+    
+    @objc private func handleAppDidEnterBackground() {
+        print("[AppDelegate] App did enter background - pausing all videos")
+        VideoCacheManager.shared.pauseAllVideos()
+    }
+    
+    @objc private func handleAppWillEnterForeground() {
+        print("[AppDelegate] App will enter foreground")
     }
 } 

@@ -202,6 +202,20 @@ struct MediaCell: View, Equatable {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+            // Restore video state when app becomes active
+            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                // Ensure video is loaded
+                shouldLoadVideo = true
+                
+                // Update play state based on visibility and VideoManager
+                let newPlayState = isVisible && videoManager.shouldPlayVideo(for: attachment.mid)
+                if play != newPlayState {
+                    print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - updating play from \(play) to \(newPlayState) (isVisible: \(isVisible))")
+                    play = newPlayState
+                }
+            }
+        }
 
         .fullScreenCover(isPresented: $showFullScreen) {
             MediaBrowserView(

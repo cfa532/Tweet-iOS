@@ -52,4 +52,8 @@ extension Notification.Name {
     static let chatMessageSent = Notification.Name("ChatMessageSent")
     /// Posted when chat message sending fails
     static let chatMessageSendFailed = Notification.Name("ChatMessageSendFailed")
+    
+    // MARK: - App Lifecycle
+    /// Posted when the app becomes active (returns from background)
+    static let appDidBecomeActive = Notification.Name("AppDidBecomeActive")
 }

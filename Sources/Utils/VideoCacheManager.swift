@@ -130,6 +130,18 @@ class VideoCacheManager: ObservableObject {
         }
     }
     
+    /// Pause all videos in cache (useful for app lifecycle management)
+    func pauseAllVideos() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        
+        for (mid, cachedPlayer) in videoCache {
+            print("DEBUG: [VIDEO CACHE] Pausing player for video mid: \(mid)")
+            cachedPlayer.player.pause()
+            cachedPlayer.lastAccessed = Date()
+        }
+    }
+    
     /// Set mute state for a video player
     func setMuteState(for videoMid: String, isMuted: Bool) {
         cacheLock.lock()
