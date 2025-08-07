@@ -12,6 +12,8 @@ final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
     static var baseUrl: URL = URL(string: "http://localhost")!
+    var _hproseService: AnyObject?
+    
     @Published private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
     var appUser: User {
         get { _appUser }
@@ -106,13 +108,14 @@ final class HproseInstance: ObservableObject {
                     
                     HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                    
+                    _hproseService = client.useService(HproseService.self) as AnyObject
 //                    let providerIp = firstIp
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid),
                        let user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)") {
                         // Valid login user is found, use its provider IP as base.
                         HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
                         client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
+                        _hproseService = client.useService(HproseService.self) as AnyObject
                         let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
                         await MainActor.run {
                             // Update the appUser to the fetched user with all properties
