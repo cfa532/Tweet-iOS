@@ -69,8 +69,9 @@ final class HproseInstance: ObservableObject {
     func initialize() async throws {
         self.preferenceHelper = PreferenceHelper()
         
-        // Clear cached users during initialization
-//        TweetCacheManager.shared.clearAllUsers()
+        // Clear cached users during initialization to ensure fresh data
+        TweetCacheManager.shared.clearAllUsers()
+        print("DEBUG: Cleared all user cache during app initialization")
         
         await MainActor.run {
             _appUser = User.getInstance(mid: preferenceHelper?.getUserId() ?? Constants.GUEST_ID)
@@ -818,7 +819,7 @@ final class HproseInstance: ObservableObject {
         
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
         // Wait for writableUrl to be resolved
-        let resolvedUrl = await appUser.resolveWritableUrl()
+        let resolvedUrl = try await appUser.resolveWritableUrl()
         guard resolvedUrl != nil else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve writable URL"])
         }
@@ -982,8 +983,11 @@ final class HproseInstance: ObservableObject {
         referenceId: String? = nil,
         noResample: Bool = false
     ) async throws -> MimeiFileType? {
-        _ = await appUser.resolveWritableUrl()
+        _ = try await appUser.resolveWritableUrl()
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
+        
+        // Force refresh upload service to ensure we have a fresh connection
+        appUser.refreshUploadService()
         
         // Use VideoProcessor to determine media type and handle upload
         let videoProcessor = VideoProcessor()
@@ -1092,7 +1096,7 @@ final class HproseInstance: ObservableObject {
             // Ensure writableUrl is available
             var writableUrl = appUser.writableUrl
             if writableUrl == nil {
-                writableUrl = await appUser.resolveWritableUrl()
+                writableUrl = try await appUser.resolveWritableUrl()
             }
             
             guard let writableUrl = writableUrl else {
@@ -1228,7 +1232,7 @@ final class HproseInstance: ObservableObject {
             // Get upload service
             var uploadService = appUser.uploadService
             if uploadService == nil {
-                _ = await appUser.resolveWritableUrl()
+                _ = try await appUser.resolveWritableUrl()
                 uploadService = appUser.uploadService
                 if uploadService == nil {
                     throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
@@ -1615,18 +1619,6 @@ final class HproseInstance: ObservableObject {
     /// Get BlackList statistics for debugging/monitoring
     func getBlackListStats() -> (candidates: Int, blacklisted: Int) {
         return blackList.getStats()
-    }
-    
-    private func getProviderIP(_ mid: String) async throws -> String? {
-        let params = [
-            "aid": appId,
-            "ver": "last",
-            "mid": mid
-        ]
-        if let response = appUser.hproseService?.runMApp("get_provider", params, []) {
-            return response as? String
-        }
-        return nil
     }
     
     private func getAccessibleUser(_ providers: [String], userId: String) -> User? {
@@ -2044,6 +2036,8 @@ final class HproseInstance: ObservableObject {
         hostId: String? = nil,
         cloudDrivePort: Int? = nil
     ) async throws -> Bool {
+        print("DEBUG: updateUserCore called with - alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort?.description ?? "nil")")
+        
         let updatedUser = User(mid: appUser.mid, name: alias, password: password, profile: profile, cloudDrivePort: cloudDrivePort)
         if let hostId = hostId, !hostId.isEmpty {
             updatedUser.hostIds = [hostId]
@@ -2055,16 +2049,31 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "user": String(data: try JSONEncoder().encode(updatedUser), encoding: .utf8) ?? ""
         ]
+        
+        print("DEBUG: updateUserCore - sending request to server with user data")
         guard let response = appUser.hproseService?.runMApp(entry, params, nil) as? [String: Any] else {
+            print("DEBUG: updateUserCore - failed to get response from server")
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
         }
+        
+        print("DEBUG: updateUserCore - server response: \(response)")
         if let result = response["status"] as? String {
             if result == "success" {
+                print("DEBUG: updateUserCore - server returned success")
+                
+                // Clear user cache to ensure fresh data is loaded
+                TweetCacheManager.shared.deleteUser(mid: appUser.mid)
+                print("DEBUG: updateUserCore - cleared user cache for: \(appUser.mid)")
+                
                 return true
             } else {
-                throw NSError(domain: "hproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: response["reason"] as? String ?? "Unknown registration error."])
+                let errorMessage = response["reason"] as? String ?? "Unknown registration error."
+                print("DEBUG: updateUserCore - server returned error: \(errorMessage)")
+                throw NSError(domain: "hproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
         }
+        
+        print("DEBUG: updateUserCore - unexpected response format")
         return false
     }
 
@@ -2078,77 +2087,38 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "avatar": avatar
         ]
-        _ = appUser.hproseService?.runMApp(entry, params, nil)
+        var uploadService = appUser.uploadService
+        if uploadService == nil {
+            _ = try await appUser.resolveWritableUrl()
+            uploadService = appUser.uploadService
+            if uploadService == nil {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
+            }
+        }
+        _ = uploadService?.runMApp(entry, params, nil)
     }
 
+    private func getProviderIP(_ mid: String) async throws -> String? {
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "mid": mid
+        ]
+        if let response = appUser.hproseService?.runMApp("get_provider_ip", params, []) {
+            return response as? String
+        }
+        return nil
+    }
+    
     /// Find IP addresses of given nodeId
     func getHostIP(_ nodeId: String) async -> String? {
-        // Check if we have a valid baseUrl
-        guard let baseUrl = appUser.baseUrl else {
-            return nil
-        }
-        
-        let urlString = "\(baseUrl.absoluteString)/getvar?name=ips&arg0=\(nodeId)"
-        guard let url = URL(string: urlString) else { 
-            return nil 
-        }
-        
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            
-            if let httpResponse = response as? HTTPURLResponse {
-                if httpResponse.statusCode == 200 {
-                    let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: CharacterSet(charactersIn: "\" ,\n\r")) ?? ""
-                    
-                    let ips = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                    
-                    if !ips.isEmpty {
-                        // Find the first available public IP
-                        for ip in ips {
-                            // Extract clean IP and port
-                            let (cleanIP, port): (String, String)
-                            
-                            if ip.hasPrefix("[") && ip.contains("]:") {
-                                // IPv6 with port, e.g. [240e:391:edf:ad90:b25a:daff:fe87:21d4]:8002
-                                if let endBracket = ip.firstIndex(of: "]"),
-                                   let colon = ip[endBracket...].firstIndex(of: ":") {
-                                    let ipv6 = String(ip[ip.index(after: ip.startIndex)..<endBracket])
-                                    port = String(ip[ip.index(after: colon)...]).trimmingCharacters(in: CharacterSet(charactersIn: ":"))
-                                    cleanIP = ipv6
-                                } else {
-                                    continue
-                                }
-                            } else if ip.contains(":") && !ip.contains("]:") && !ip.contains("[") {
-                                // IPv4 with port, e.g. 60.163.239.184:8002
-                                let parts = ip.split(separator: ":", maxSplits: 1)
-                                if parts.count == 2 {
-                                    cleanIP = String(parts[0])
-                                    port = String(parts[1])
-                                } else {
-                                    continue
-                                }
-                            } else {
-                                // No port specified, use default port 8010
-                                cleanIP = ip.hasPrefix("[") && ip.hasSuffix("]") ? 
-                                    String(ip.dropFirst().dropLast()) : ip
-                                port = "8010"
-                            }
-                            
-                            // Check if this is a valid public IP with correct port
-                            if Gadget.isValidPublicIpAddress(cleanIP) {
-                                if let portNumber = Int(port), (8000...9000).contains(portNumber) {
-                                    return ip
-                                }
-                            }
-                        }
-                        
-                        // If no public IPs found, return the first IP as fallback
-                        return ips.first!
-                    }
-                }
-            }
-        } catch {
-            print("Network error getting host IP: \(error)")
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "nodeid": nodeId
+        ]
+        if let response = appUser.hproseService?.runMApp("get_node_ip", params, []) {
+            return response as? String
         }
         return nil
     }

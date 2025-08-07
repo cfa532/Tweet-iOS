@@ -11,7 +11,8 @@ import PhotosUI
 @available(iOS 16.0, *)
 struct RegistrationView: View {
     @Environment(\.dismiss) private var dismiss
-    var onSubmit: (String, String?, String?, String?, String?, Int?) -> Void // username, password, alias, profile, hostId, cloudDrivePort
+    var onSubmit: (String, String?, String?, String?, String?, Int?) async -> Void // username, password, alias, profile, hostId, cloudDrivePort
+    var onSubmissionStateChange: ((Bool) -> Void)? = nil // Callback for submission state
     var onAvatarUploadStateChange: ((Bool) -> Void)? = nil // Callback for avatar upload state
     var onAvatarUploadSuccess: (() -> Void)? = nil // Callback for successful avatar upload
     var onAvatarUploadFailure: ((String) -> Void)? = nil // Callback for failed avatar upload
@@ -31,14 +32,16 @@ struct RegistrationView: View {
     @State private var selectedPhoto: PhotosPickerItem? = nil
     @State private var isUploadingAvatar = false
     @State private var avatarUploadError: String? = nil
+    @State private var isSubmitting = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
         case username, password, confirmPassword, alias, profile, hostId, cloudDrivePort
     }
 
-    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int?) -> Void, onAvatarUploadStateChange: ((Bool) -> Void)? = nil, onAvatarUploadSuccess: (() -> Void)? = nil, onAvatarUploadFailure: ((String) -> Void)? = nil) {
+    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int?) async -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onAvatarUploadStateChange: ((Bool) -> Void)? = nil, onAvatarUploadSuccess: (() -> Void)? = nil, onAvatarUploadFailure: ((String) -> Void)? = nil) {
         self.onSubmit = onSubmit
+        self.onSubmissionStateChange = onSubmissionStateChange
         self.onAvatarUploadStateChange = onAvatarUploadStateChange
         self.onAvatarUploadSuccess = onAvatarUploadSuccess
         self.onAvatarUploadFailure = onAvatarUploadFailure
@@ -56,10 +59,21 @@ struct RegistrationView: View {
                                     .overlay(
                                         Group {
                                             if isUploadingAvatar {
-                                                ProgressView()
-                                                    .frame(width: 80, height: 80)
-                                                    .background(Color.black.opacity(0.3))
-                                                    .clipShape(Circle())
+                                                ZStack {
+                                                    Color.black.opacity(0.6)
+                                                        .clipShape(Circle())
+                                                    
+                                                    VStack(spacing: 8) {
+                                                        ProgressView()
+                                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                                            .scaleEffect(1.2)
+                                                        
+                                                        Text("Uploading...")
+                                                            .font(.caption)
+                                                            .foregroundColor(.white)
+                                                    }
+                                                }
+                                                .frame(width: 80, height: 80)
                                             }
                                         }
                                     )
@@ -226,13 +240,39 @@ struct RegistrationView: View {
                     }
 
                     Button(action: handleSubmit) {
-                        Text(hproseInstance.appUser.isGuest ? "Create Account" : "Save")
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.themeAccent)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
+                        HStack {
+                            if isSubmitting {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                            }
+                            Text(isSubmitting ? (hproseInstance.appUser.isGuest ? "Creating Account..." : "Saving...") : (hproseInstance.appUser.isGuest ? "Create Account" : "Save"))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background((isSubmitting || isUploadingAvatar) ? Color.themeAccent.opacity(0.6) : Color.themeAccent)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
                     }
+                    .disabled(isSubmitting || isUploadingAvatar)
+                    .overlay(
+                        Group {
+                            if isSubmitting {
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.white.opacity(0.3), lineWidth: 2)
+                                    .overlay(
+                                        HStack {
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                                .scaleEffect(0.8)
+                                            Text("Saving...")
+                                                .foregroundColor(.white)
+                                                .font(.caption)
+                                        }
+                                    )
+                            }
+                        }
+                    )
                 }
                 .padding()
             }
@@ -252,6 +292,9 @@ struct RegistrationView: View {
     }
 
     private func handleSubmit() {
+        // Prevent repeated submission
+        guard !isSubmitting else { return }
+        
         // Validation
         if username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             errorMessage = "Username is required."
@@ -286,15 +329,28 @@ struct RegistrationView: View {
             }
         }
         errorMessage = nil
-        onSubmit(
-            username,
-            password.isEmpty ? nil : password,
-            alias.isEmpty ? nil : alias,
-            profile.isEmpty ? nil : profile,
-            hostId,
-            Int(cloudDrivePort)
-        )
-        dismiss()
+        
+        // Set loading state
+        isSubmitting = true
+        onSubmissionStateChange?(true) // Notify parent about submission start
+        
+        // Call the submit function asynchronously
+        Task {
+            await onSubmit(
+                username,
+                password.isEmpty ? nil : password,
+                alias.isEmpty ? nil : alias,
+                profile.isEmpty ? nil : profile,
+                hostId,
+                Int(cloudDrivePort)
+            )
+            
+            // Reset submission state after completion
+            await MainActor.run {
+                isSubmitting = false
+                onSubmissionStateChange?(false)
+            }
+        }
     }
 }
 

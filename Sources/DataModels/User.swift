@@ -52,19 +52,41 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     private var _uploadService: AnyObject?
     public var uploadService: AnyObject? {
         get {
-            guard let baseUrl = writableUrl else { return nil }
+            guard let baseUrl = writableUrl else { 
+                print("DEBUG: uploadService - writableUrl is nil")
+                return nil 
+            }
 
             if let cached = _uploadService {
+                print("DEBUG: uploadService - returning cached service")
                 return cached
             } else {
+                print("DEBUG: uploadService - creating new service for baseUrl: \(baseUrl)")
                 if baseUrl == HproseInstance.shared.appUser.baseUrl {
-                    return HproseInstance.shared.appUser._hproseService
+                    // Use the main hprose service if available, otherwise create a new one
+                    if let mainService = HproseInstance.shared.appUser._hproseService {
+                        print("DEBUG: uploadService - using main hprose service")
+                        _uploadService = mainService
+                        return mainService
+                    } else {
+                        // Fallback to creating a new service
+                        print("DEBUG: uploadService - main service not available, creating new one")
+                        let client = HproseHttpClient()
+                        client.timeout = 30000
+                        client.uri = "\(baseUrl)/webapi/"
+                        let service = client.useService(HproseService.self) as? AnyObject
+                        _uploadService = service
+                        print("DEBUG: uploadService - new service created: \(service != nil)")
+                        return service
+                    }
                 } else {
+                    print("DEBUG: uploadService - creating service for different baseUrl")
                     let client = HproseHttpClient()
                     client.timeout = 30000
                     client.uri = "\(baseUrl)/webapi/"
                     let service = client.useService(HproseService.self) as? AnyObject
                     _uploadService = service
+                    print("DEBUG: uploadService - new service created: \(service != nil)")
                     return service
                 }
             }
@@ -82,6 +104,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     var id: String { mid }  // Computed property that returns mid
     
     private var baseUrlCancellable: AnyCancellable?
+    private var writableUrlCancellable: AnyCancellable?
     
     // MARK: - Initialization
     init(
@@ -116,10 +139,17 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.commentsCount = nil
         self.hostIds = hostIds
         self.publicKey = publicKey
-        // Observe baseUrl changes to clear cached client
+        // Observe baseUrl changes to clear cached clients
         baseUrlCancellable = $baseUrl
             .sink { [weak self] _ in
                 self?._hproseService = nil
+                self?._uploadService = nil
+            }
+        
+        // Observe writableUrl changes to clear upload service cache
+        writableUrlCancellable = $writableUrl
+            .sink { [weak self] _ in
+                self?._uploadService = nil
             }
     }
     
@@ -294,7 +324,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // MARK: - Writable URL Resolution
     /// Returns the writable URL for the user, resolving via hostIds if needed
-    func resolvedWritableUrl() async throws -> URL? {
+    @MainActor
+    func resolveWritableUrl() async throws -> URL? {
         if let writableUrl = self.writableUrl {
             return writableUrl
         }
@@ -317,109 +348,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
      * Only accepts public IP addresses with ports between 8000 and 9000.
      * Returns the resolved URL or nil if resolution fails.
      */
-    func resolveWritableUrl() async -> URL? {
-        print("[resolveWritableUrl] Starting resolution for user: \(mid)")
-        print("[resolveWritableUrl] Current hostIds: \(hostIds ?? [])")
-        print("[resolveWritableUrl] Current baseUrl: \(baseUrl?.absoluteString ?? "nil")")
-        print("[resolveWritableUrl] Current writableUrl: \(writableUrl?.absoluteString ?? "nil")")
-        
-        if let existingWritableUrl = writableUrl {
-            print("[resolveWritableUrl] Using existing writableUrl: \(existingWritableUrl.absoluteString)")
-            return existingWritableUrl
-        }
-        
-        guard let hostIds = hostIds, !hostIds.isEmpty else {
-            print("[resolveWritableUrl] No hostIds available, keeping existing writableUrl")
-            return writableUrl
-        }
-        
-        let firstHostId = hostIds.first!
-        print("[resolveWritableUrl] Attempting to resolve first hostId: \(firstHostId)")
-        
-        guard !firstHostId.isEmpty else {
-            print("[resolveWritableUrl] First hostId is empty, keeping existing writableUrl")
-            return writableUrl
-        }
-        
-        if let hostIP = await HproseInstance.shared.getHostIP(firstHostId) {
-            print("[resolveWritableUrl] Successfully resolved hostIP: \(hostIP) for hostId: \(firstHostId)")
-            
-            // Extract clean IP and port first
-            let (cleanIP, port): (String, String)
-            
-            if hostIP.hasPrefix("[") && hostIP.contains("]:") {
-                // IPv6 with port, e.g. [240e:391:edf:ad90:b25a:daff:fe87:21d4]:8002
-                if let endBracket = hostIP.firstIndex(of: "]"),
-                   let colon = hostIP[endBracket...].firstIndex(of: ":") {
-                    let ipv6 = String(hostIP[hostIP.index(after: hostIP.startIndex)..<endBracket])
-                    port = String(hostIP[hostIP.index(after: colon)...]).trimmingCharacters(in: CharacterSet(charactersIn: ":"))
-                    cleanIP = ipv6
-                } else {
-                    print("[resolveWritableUrl] Failed to parse IPv6 with port: \(hostIP)")
-                    print("⚠️ Failed to parse IPv6 with port (\(hostIP)), keeping existing writableUrl")
-                    return writableUrl
-                }
-            } else if hostIP.contains(":") && !hostIP.contains("]:") && !hostIP.contains("[") {
-                // IPv4 with port, e.g. 60.163.239.184:8002
-                let parts = hostIP.split(separator: ":", maxSplits: 1)
-                if parts.count == 2 {
-                    cleanIP = String(parts[0])
-                    port = String(parts[1])
-                } else {
-                    print("[resolveWritableUrl] Failed to parse IPv4 with port: \(hostIP)")
-                    print("⚠️ Failed to parse IPv4 with port (\(hostIP)), keeping existing writableUrl")
-                    return writableUrl
-                }
-            } else {
-                // No port specified, use default port 8010
-                cleanIP = hostIP.hasPrefix("[") && hostIP.hasSuffix("]") ? 
-                    String(hostIP.dropFirst().dropLast()) : hostIP
-                port = "8010"
-            }
-            
-            // Validate that the cleanIP is a valid public IP address
-            print("[resolveWritableUrl] Validating cleanIP: \(cleanIP)")
-            print("[resolveWritableUrl] Is IPv6: \(Gadget.isIPv6Address(cleanIP))")
-            print("[resolveWritableUrl] Is private: \(Gadget.isPrivateIP(cleanIP))")
-            print("[resolveWritableUrl] Is valid public: \(Gadget.isValidPublicIpAddress(cleanIP))")
-            
-            guard Gadget.isValidPublicIpAddress(cleanIP) else {
-                print("[resolveWritableUrl] CleanIP is not a valid public IP address: \(cleanIP)")
-                print("⚠️ Invalid public IP address (\(cleanIP)), keeping existing writableUrl")
-                return writableUrl
-            }
-            
-            // Validate port is between 8000-9000
-            guard let portNumber = Int(port), (8000...9000).contains(portNumber) else {
-                print("[resolveWritableUrl] Port \(port) is not in valid range 8000-9000")
-                print("⚠️ Invalid port (\(port)), keeping existing writableUrl")
-                return writableUrl
-            }
-            
-            // Construct URL string
-            var urlString: String
-            if Gadget.isIPv6Address(cleanIP) {
-                urlString = "http://[\(cleanIP)]:\(port)"
-            } else {
-                urlString = "http://\(cleanIP):\(port)"
-            }
-            
-            print("[resolveWritableUrl] Final constructed urlString: \(urlString)")
-            if let url = URL(string: urlString) {
-                // Set the writableUrl property synchronously to avoid race conditions
-                await MainActor.run {
-                    self.writableUrl = url
-                    print("✅ Resolved writableUrl to: \(url.absoluteString) from first hostId: \(firstHostId)")
-                }
-                return url
-            } else {
-                print("[resolveWritableUrl] Failed to construct URL from hostIP: \(hostIP)")
-            }
-        } else {
-            print("[resolveWritableUrl] Failed to resolve hostIP for hostId: \(firstHostId)")
-        }
-        print("[resolveWritableUrl] Keeping existing writableUrl")
-        print("⚠️ Could not resolve writableUrl from the first hostId (\(firstHostId)), keeping existing writableUrl")
-        return writableUrl
+    
+    /// Force refresh the upload service cache
+    func refreshUploadService() {
+        _uploadService = nil
     }
 }

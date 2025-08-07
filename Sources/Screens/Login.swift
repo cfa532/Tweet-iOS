@@ -95,25 +95,23 @@ struct LoginView: View {
             })
             .sheet(isPresented: $showRegistration) {
                 RegistrationView { (username: String, password: String?, alias: String?, profile: String?, hostId: String?, cloudDrivePort: Int?) in
-                    Task {
-                        do {
-                            let success = try await hproseInstance.registerUser(
-                                username: username,
-                                password: password ?? "",
-                                alias: alias ?? "",
-                                profile: profile ?? "",
-                                hostId: (hostId?.isEmpty ?? true) ? nil : hostId,
-                                cloudDrivePort: cloudDrivePort
-                            )
-                            if success {
-                                showSuccess = true
-                                showRegistration = false
-                            } else {
-                                errorMessage = NSLocalizedString("Registration failed.", comment: "Registration error message")
-                            }
-                        } catch {
-                            errorMessage = error.localizedDescription
+                    do {
+                        let success = try await hproseInstance.registerUser(
+                            username: username,
+                            password: password ?? "",
+                            alias: alias ?? "",
+                            profile: profile ?? "",
+                            hostId: (hostId?.isEmpty ?? true) ? nil : hostId,
+                            cloudDrivePort: cloudDrivePort
+                        )
+                        if success {
+                            showSuccess = true
+                            showRegistration = false
+                        } else {
+                            errorMessage = NSLocalizedString("Registration failed.", comment: "Registration error message")
                         }
+                    } catch {
+                        errorMessage = error.localizedDescription
                     }
                 }
             }

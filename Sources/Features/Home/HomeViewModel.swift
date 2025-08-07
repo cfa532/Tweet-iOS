@@ -98,6 +98,7 @@ struct HomeView: View {
                 Task {
                     await MainActor.run {
                         TweetCacheManager.shared.clearAllCache()
+                        print("DEBUG: Cleared all cache on user login")
                     }
                     try await HproseInstance.shared.initialize()
                 }
@@ -106,6 +107,7 @@ struct HomeView: View {
                 Task {
                     await MainActor.run {
                         TweetCacheManager.shared.clearAllCache()
+                        print("DEBUG: Cleared all cache on user logout")
                     }
                     try await HproseInstance.shared.initialize()
                 }

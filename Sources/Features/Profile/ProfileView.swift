@@ -1,140 +1,52 @@
 import SwiftUI
 
-// MARK: - ProfileView
-/// A view that displays a user's profile, including their tweets, pinned tweets, and user information.
-/// This view handles both the current user's profile and other users' profiles.
-@available(iOS 16.0, *)
 struct ProfileView: View {
-    // MARK: - Environment
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var hproseInstance: HproseInstance
-
-    // MARK: - Properties
-    /// The user whose profile is being displayed
     let user: User
-    /// Optional callback for handling logout
     let onLogout: (() -> Void)?
-
-    // MARK: - State
-    /// List of tweets that are pinned to the top of the profile
-    @State private var pinnedTweets: [Tweet] = []
-    /// Set of tweet IDs that are pinned, used for quick lookup
-    @State private var pinnedTweetIds: Set<String> = []
-    /// Controls the visibility of the edit profile sheet
-    @State private var showEditSheet = false
-    /// Controls the visibility of the full-screen avatar view
-    @State private var showAvatarFullScreen = false
-    /// Tracks whether the current user is following the profile user
-    @State private var isFollowing = false
-    /// Indicates if tweets are currently being loaded
-    @State private var isLoading = false
-    /// Tracks if the initial data load has been completed
-    @State private var didLoad = false
-    /// The user selected when tapping on an avatar
+    
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @Environment(\.dismiss) private var dismiss
+    
+    /// Navigation state
     @State private var selectedUser: User? = nil
-    /// Controls the visibility of the user list (followers/following)
-    @State private var showUserList = false
-    /// Determines which type of user list to show (followers or following)
-    @State private var userListType: UserContentType = .FOLLOWING
-    /// Controls the visibility of the tweet list (bookmarks/favorites)
-    @State private var showTweetList = false
-    /// Determines which type of tweet list to show (bookmarks or favorites)
-    @State private var tweetListType: UserContentType = .BOOKMARKS
-    /// Tracks the scroll position for header collapse
-    @State private var scrollOffset: CGFloat = 0
-    /// Previous scroll offset for determining scroll direction
-    @State private var previousScrollOffset: CGFloat = 0
-    /// Controls header visibility
-    @State private var isHeaderVisible = true
-    @State private var bookmarks: [Tweet] = []
-    @State private var favorites: [Tweet] = []
-    /// The tweet selected when tapping on a tweet item
     @State private var selectedTweet: Tweet? = nil
-    /// Controls navigation to chat screen
+    @State private var showUserList = false
+    @State private var showTweetList = false
     @State private var showChat = false
+    @State private var userListType: UserListType = .FOLLOWER
+    @State private var tweetListType: TweetListType = .BOOKMARKS
+    
+    /// UI state
+    @State private var showEditSheet = false
+    @State private var showAvatarFullScreen = false
+    @State private var previousScrollOffset: CGFloat = 0
+    @State private var isLoading = false
+    @State private var didLoad = false
+    
+    /// Pinned tweets state
+    @State private var pinnedTweets: [Tweet] = []
+    @State private var pinnedTweetIds: Set<String> = []
+    
     /// Indicates if avatar is currently being uploaded
     @State private var isUploadingAvatar = false
+    /// Indicates if profile data is currently being submitted
+    @State private var isSubmittingProfile = false
     /// Toast message states
     @State private var showToast = false
     @State private var toastMessage = ""
-    @State private var toastType: ToastView.ToastType = .info
-
-    init(user: User, onLogout: (() -> Void)? = nil) {
-        self.user = user
-        self.onLogout = onLogout
-    }
-
-    // MARK: - Computed Properties
-    /// Returns true if the displayed profile belongs to the current user
-    var isAppUser: Bool {
+    @State private var toastType: ToastView.ToastType = .success
+    
+    /// Computed properties
+    private var isAppUser: Bool {
         user.mid == hproseInstance.appUser.mid
     }
-
-    // MARK: - Methods
-    /// Pause all videos when ProfileView disappears
-    private func pauseAllVideos() {
-        print("DEBUG: [ProfileView] Pausing all videos for user: \(user.mid)")
-        
-        // Pause all videos in pinned tweets
-        for tweet in pinnedTweets {
-            if let attachments = tweet.attachments {
-                for attachment in attachments {
-                    if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                        let mid = attachment.mid
-                        print("DEBUG: [ProfileView] Pausing pinned video with mid: \(mid)")
-                        VideoCacheManager.shared.pauseVideoPlayer(for: mid)
-                    }
-                }
-            }
-        }
-        
-        // Pause all videos in regular tweets (this will be handled by the view model)
-        // The view model's tweets are managed by TweetListView, so we need to pause them there
-    }
     
-    /// Refreshes the list of pinned tweets for the profile
-    private func refreshPinnedTweets() async {
-        do {
-            let pinnedList = try await hproseInstance.getPinnedTweets(user: user)
-            // Extract tweets and their pin times, sort by timePinned descending
-            let sortedPinned = pinnedList.compactMap { dict -> (Tweet, Any)? in
-                guard let tweet = dict["tweet"] as? Tweet, let timePinned = dict["timePinned"] else { return nil }
-                return (tweet, timePinned)
-            }.sorted { lhs, rhs in
-                // Sort by timePinned descending (most recent first)
-                guard let l = lhs.1 as? TimeInterval, let r = rhs.1 as? TimeInterval else { return false }
-                return l > r
-            }
-            await MainActor.run {
-                pinnedTweets = sortedPinned.map { $0.0 }
-                pinnedTweetIds = Set(pinnedTweets.map { $0.mid })
-            }
-        } catch {
-            print("Error refreshing pinned tweets: \(error)")
-        }
-    }
+    @State private var isFollowing: Bool = false
     
-    /// Shows a toast message
-    private func showToastMessage(_ message: String, type: ToastView.ToastType) {
-        toastMessage = message
-        toastType = type
-        showToast = true
-        
-        // Auto-dismiss toast after 3 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            withAnimation(.easeInOut(duration: 0.3)) {
-                showToast = false
-            }
-        }
-    }
-
-    // MARK: - Body
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                // Only the tweet list is scrollable and refreshable, now including the header and stats
                 ProfileTweetsSection(
-                    isLoading: isLoading,
                     pinnedTweets: pinnedTweets,
                     pinnedTweetIds: pinnedTweetIds,
                     user: user,
@@ -181,46 +93,56 @@ struct ProfileView: View {
                 .id(user.mid)
                 .padding(.leading, -4)
             }
-            .allowsHitTesting(!isUploadingAvatar)
+            .allowsHitTesting(!isUploadingAvatar && !isSubmittingProfile)
             
-            // Loading overlay for avatar upload
-            if isUploadingAvatar {
-                Color.black.opacity(0.3)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(true)
-                
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    
-                    Text("Updating avatar...")
-                        .foregroundColor(.white)
-                        .font(.headline)
+            // Loading overlay for avatar upload and profile submission
+            if isUploadingAvatar || isSubmittingProfile {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            
+                            Text(isUploadingAvatar ? "Updating avatar..." : "Updating profile...")
+                                .foregroundColor(.white)
+                                .font(.headline)
+                                .fontWeight(.medium)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(24)
+                        .background(Color.black.opacity(0.8))
+                        .cornerRadius(12)
+                        Spacer()
+                    }
+                    Spacer()
                 }
-                .padding(24)
-                .background(Color.black.opacity(0.7))
-                .cornerRadius(12)
+                .allowsHitTesting(true)
             }
             
-            // Toast message overlay
+            // Toast overlay
             VStack {
                 Spacer()
                 if showToast {
-                    ToastView(message: toastMessage, type: toastType)
-                        .padding(.bottom, 100)
+                    Text(toastMessage)
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(8)
+                        .padding(.bottom, 20)
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                if !isAppUser {
-                    Button(action: {
-                        showChat = true
-                    }) {
-                        Image(systemName: "message")
-                            .foregroundColor(.blue)
+                if isAppUser {
+                    Button("Logout") {
+                        onLogout?()
                     }
                 }
             }
@@ -228,11 +150,67 @@ struct ProfileView: View {
         .sheet(isPresented: $showEditSheet) {
             RegistrationView(
                 onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
-                    // TODO: Implement user update logic here
-                    Task {
-                        try? await hproseInstance.updateUserCore(
+                    // Set submission state
+                    isSubmittingProfile = true
+                    print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort?.description ?? "nil")")
+                    do {
+                        let success = try await hproseInstance.updateUserCore(
                             password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort
                         )
+                        print("DEBUG: Profile update result: \(success)")
+                        await MainActor.run {
+                            if success {
+                                // Update local user data
+                                if let alias = alias, !alias.isEmpty {
+                                    hproseInstance.appUser.name = alias
+                                    print("DEBUG: Updated name to: \(alias)")
+                                }
+                                if let profile = profile, !profile.isEmpty {
+                                    hproseInstance.appUser.profile = profile
+                                    print("DEBUG: Updated profile to: \(profile)")
+                                }
+                                if let hostId = hostId, !hostId.isEmpty {
+                                    hproseInstance.appUser.hostIds = [hostId]
+                                    print("DEBUG: Updated hostIds to: [\(hostId)]")
+                                }
+                                if let cloudDrivePort = cloudDrivePort {
+                                    hproseInstance.appUser.cloudDrivePort = cloudDrivePort
+                                    print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
+                                }
+                                
+                                // Clear user cache to ensure fresh data is loaded on next app launch
+                                TweetCacheManager.shared.deleteUser(mid: hproseInstance.appUser.mid)
+                                print("DEBUG: Cleared user cache for: \(hproseInstance.appUser.mid)")
+                                
+                                // Save updated user to cache with fresh data
+                                TweetCacheManager.shared.saveUser(hproseInstance.appUser)
+                                print("DEBUG: Saved updated user to cache")
+                                
+                                // Force refresh user data from server to ensure consistency
+                                Task {
+                                    do {
+                                        _ = try await hproseInstance.fetchUser(hproseInstance.appUser.mid, baseUrl: "")
+                                        print("DEBUG: Forced refresh of user data from server")
+                                    } catch {
+                                        print("DEBUG: Failed to refresh user data: \(error)")
+                                    }
+                                }
+                                
+                                showToastMessage("Profile updated successfully!", type: .success)
+                                // Keep the sheet open after successful update
+                            } else {
+                                showToastMessage("Profile update failed", type: .error)
+                            }
+                            // Reset submission state
+                            isSubmittingProfile = false
+                        }
+                    } catch {
+                        print("DEBUG: Profile update error: \(error)")
+                        await MainActor.run {
+                            showToastMessage("Failed to update profile: \(error.localizedDescription)", type: .error)
+                            // Reset submission state
+                            isSubmittingProfile = false
+                        }
                     }
                 },
                 onAvatarUploadStateChange: { isUploading in
@@ -282,7 +260,8 @@ struct ProfileView: View {
             UserListView(
                 title: userListType == .FOLLOWER ? "Fans@\(displayName)" : "Followings@\(displayName)",
                 userFetcher: { page, size in
-                    let ids = try await hproseInstance.getFollows(user: user, entry: userListType)
+                    let entry: UserContentType = userListType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                    let ids = try await hproseInstance.getFollows(user: user, entry: entry)
                     let startIndex = page * size
                     let endIndex = min(startIndex + size, ids.count)
                     guard startIndex < endIndex else { return [] }
@@ -290,16 +269,15 @@ struct ProfileView: View {
                 },
                 onFollowToggle: { user in
                     if let _ = try? await hproseInstance.toggleFollowing(
-                        userId: hproseInstance.appUser.mid,
                         followingId: user.mid
                     ) {
-                        // update follower count is done by backend.
+                        // Handle follow toggle success
                     }
-                },
-                onUserTap: { selectedUser in
-                    self.selectedUser = selectedUser
                 }
             )
+        }
+        .navigationDestination(isPresented: $showTweetList) {
+            bookmarksOrFavoritesListView()
         }
         .navigationDestination(isPresented: Binding(
             get: { selectedUser != nil },
@@ -307,30 +285,6 @@ struct ProfileView: View {
         )) {
             if let selectedUser = selectedUser {
                 ProfileView(user: selectedUser, onLogout: nil)
-            }
-        }
-        .navigationDestination(isPresented: $showTweetList) {
-            VStack(spacing: 0) {
-                Text(tweetListType == .BOOKMARKS ? LocalizedStringKey("Bookmarks") : LocalizedStringKey("Favorites"))
-                    .font(.headline)
-                    .bold()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal)
-                    .background(Color(.systemGray6))
-                bookmarksOrFavoritesListView()
-            }
-            .navigationTitle("")
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 8) {
-                        if let avatarUrl = user.avatar, !avatarUrl.isEmpty {
-                            Avatar(user: user, size: 24)
-                        }
-                        Text(user.username ?? user.name ?? "No One")
-                            .font(.headline)
-                    }
-                }
             }
         }
         .navigationDestination(isPresented: Binding(
@@ -344,92 +298,86 @@ struct ProfileView: View {
         .navigationDestination(isPresented: $showChat) {
             ChatScreen(receiptId: user.mid)
         }
-        .onDisappear {
-            // Pause all videos when ProfileView disappears
-            print("DEBUG: [ProfileView] View disappeared, pausing all videos")
-            pauseAllVideos()
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func showToastMessage(_ message: String, type: ToastView.ToastType) {
+        toastMessage = message
+        toastType = type
+        showToast = true
+        
+        // Auto-hide toast after 3 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            showToast = false
         }
     }
-
+    
+    private func refreshPinnedTweets() async {
+        do {
+            let pinnedTweetData = try await hproseInstance.getPinnedTweets(user: user)
+            var pinnedTweets: [Tweet] = []
+            var pinnedTweetIds: [String] = []
+            
+            // Extract tweets and IDs from the response
+            for tweetData in pinnedTweetData {
+                if let tweet = tweetData["tweet"] as? Tweet {
+                    pinnedTweets.append(tweet)
+                    pinnedTweetIds.append(tweet.mid)
+                }
+            }
+            
+            await MainActor.run {
+                self.pinnedTweetIds = Set(pinnedTweetIds)
+                self.pinnedTweets = pinnedTweets
+            }
+        } catch {
+            print("Failed to refresh pinned tweets: \(error)")
+        }
+    }
+    
     @ViewBuilder
     private func bookmarksOrFavoritesListView() -> some View {
-        // Add local state for bookmarks/favorites if not already present
-        let tweetsBinding = tweetListType == .BOOKMARKS ? $bookmarks : $favorites
-        TweetListView<TweetItemView>(
-            title: tweetListType == .BOOKMARKS ? NSLocalizedString("Bookmarks", comment: "Bookmarks list") : NSLocalizedString("Favorites", comment: "Favorites list"),
-            tweets: tweetsBinding,
-            tweetFetcher: { page, size, isFromCache in
-                // Don't merge here, let TweetListView handle it
-                return try await hproseInstance.getUserTweetsByType(
-                    user: user,
-                    type: tweetListType,
-                    pageNumber: page,
-                    pageSize: size
-                )
-            },
-            showTitle: true,
-            notifications: tweetListType == .BOOKMARKS ? [
-                TweetListNotification(
-                    name: .bookmarkAdded,
-                    key: "tweet",
-                    shouldAccept: { _ in true },
-                    action: { tweet in
-                        bookmarks.insert(tweet, at: 0)
-                    }
-                ),
-                TweetListNotification(
-                    name: .bookmarkRemoved,
-                    key: "tweetId",
-                    shouldAccept: { _ in true },
-                    action: { tweet in bookmarks.removeAll { $0.mid == tweet.mid } }
-                )
-            ] : [
-                TweetListNotification(
-                    name: .favoriteAdded,
-                    key: "tweet",
-                    shouldAccept: { _ in true },
-                    action: { tweet in
-                        favorites.insert(tweet, at: 0)
-                    }
-                ),
-                TweetListNotification(
-                    name: .favoriteRemoved,
-                    key: "tweetId",
-                    shouldAccept: { _ in true },
-                    action: { tweet in favorites.removeAll { $0.mid == tweet.mid } }
-                )
-            ],
-            rowView: { tweet in
-                TweetItemView(
-                    tweet: tweet,
-                    isPinned: false,
-                    isInProfile: false,
-                    onAvatarTap: { user in
-                        // Handle avatar tap - navigate to profile
-                    },
-                    onTap: { tweet in
-                        selectedTweet = tweet
-                    },
-                    onRemove: { tweetId in
-                        if tweetListType == .BOOKMARKS {
-                            bookmarks.removeAll { $0.mid == tweetId }
-                        } else {
-                            favorites.removeAll { $0.mid == tweetId }
-                        }
-                    }
-                )
-            }
-        )
+        if tweetListType == .BOOKMARKS {
+            TweetListView(
+                title: "Bookmarks",
+                tweets: .constant([]),
+                tweetFetcher: { page, size, _ in
+                    try await hproseInstance.getUserTweetsByType(user: user, type: .BOOKMARKS, pageNumber: page, pageSize: size)
+                },
+                rowView: { tweet in
+                    TweetItemView(
+                        tweet: tweet,
+                        onAvatarTap: { user in selectedUser = user },
+                        onTap: { tweet in selectedTweet = tweet }
+                    )
+                }
+            )
+        } else {
+            TweetListView(
+                title: "Favorites",
+                tweets: .constant([]),
+                tweetFetcher: { page, size, _ in
+                    try await hproseInstance.getUserTweetsByType(user: user, type: .FAVORITES, pageNumber: page, pageSize: size)
+                },
+                rowView: { tweet in
+                    TweetItemView(
+                        tweet: tweet,
+                        onAvatarTap: { user in selectedUser = user },
+                        onTap: { tweet in selectedTweet = tweet }
+                    )
+                }
+            )
+        }
     }
 }
 
-// MARK: - ProfileTweetsSection
-@available(iOS 16.0, *)
-
-// MARK: - Scroll Offset Preference Key
-private struct ScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
+enum UserListType {
+    case FOLLOWER
+    case FOLLOWING
 }
+
+enum TweetListType {
+    case BOOKMARKS
+    case FAVORITES
+} 
