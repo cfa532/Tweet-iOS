@@ -625,7 +625,7 @@ struct HLSVideoPlayerWithControls: View {
             if duration > 0 && currentTime >= duration - 0.5 && !hasNotifiedFinished {
                 hasNotifiedFinished = true
                 hasFinished = true // Mark video as finished
-                print("DEBUG: [VIDEO \(mid)] Video finished in HLSVideoPlayerWithControls")
+                print("DEBUG: [VIDEO \(mid)] Video finished in HLSVideoPlayerWithControls - duration: \(duration), currentTime: \(currentTime)")
                 self.resetVideoState()
                 self.onVideoFinished?()
             }
@@ -807,6 +807,8 @@ struct HLSVideoPlayerWithControls: View {
     }
     
     private func resetVideoState() {
+        print("DEBUG: [VIDEO \(mid)] resetVideoState called - disableAutoRestart: \(disableAutoRestart)")
+        
         // Reset all video state when video finishes
         isPlaying = false
         currentTime = 0

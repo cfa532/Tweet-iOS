@@ -22,8 +22,9 @@ struct MediaCell: View, Equatable {
     @State private var shouldLoadVideo: Bool
     @State private var onVideoFinished: (() -> Void)?
     let showMuteButton: Bool
+    @ObservedObject var videoManager: VideoManager
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -32,6 +33,7 @@ struct MediaCell: View, Equatable {
         self.onVideoFinished = onVideoFinished
         self.showMuteButton = showMuteButton
         self._isVisible = State(initialValue: isVisible)
+        self.videoManager = videoManager
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -71,6 +73,16 @@ struct MediaCell: View, Equatable {
                             showCustomControls: false,
                             disableAutoRestart: true,
                         )
+                        .onAppear {
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - play: \(play), isVisible: \(isVisible), autoPlay: \(play && isVisible)")
+                        }
+                        .onChange(of: play) { newPlayValue in
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] play changed to: \(newPlayValue), isVisible: \(isVisible), autoPlay: \(newPlayValue && isVisible)")
+                        }
+                        .onChange(of: isVisible) { newIsVisible in
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible), play: \(play), autoPlay: \(play && newIsVisible)")
+                        }
+
                         .environmentObject(MuteState.shared)
                         .onReceive(MuteState.shared.$isMuted) { isMuted in
                             print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
@@ -140,13 +152,18 @@ struct MediaCell: View, Equatable {
             // Auto-load videos when they become visible
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 shouldLoadVideo = true
-                // Log video player decision when cell appears
-                logVideoPlayerDecision()
+                // Update play state based on VideoManager
+                play = videoManager.shouldPlayVideo(for: attachment.mid)
             }
         }
         .task {
             // Set visibility to true when cell appears
             isVisible = true
+            // Update play state after visibility is set
+            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
+                play = newPlayState
+            }
         }
         .onDisappear {
             // Set visibility to false when cell disappears
@@ -160,13 +177,30 @@ struct MediaCell: View, Equatable {
             // Handle video visibility changes
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 if newValue {
-                    // Video became visible - ensure it's loaded
+                    // Video became visible - ensure it's loaded and update play state
                     shouldLoadVideo = true
-                    // Video \(attachment.mid) became visible
+                    let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
+                    if play != newPlayState {
+                        print("DEBUG: [MEDIA CELL \(attachment.mid)] Video became visible - updating play from \(play) to \(newPlayState)")
+                        play = newPlayState
+                    }
                 } else {
-                    // Video \(attachment.mid) became invisible
+                    // Video became invisible - pause playback
+                    if play {
+                        print("DEBUG: [MEDIA CELL \(attachment.mid)] Video became invisible - pausing playback")
+                        play = false
+                    }
                 }
-                // Video playback is now controlled by SimpleVideoPlayer's autoPlay parameter
+            }
+        }
+        .onChange(of: videoManager.currentVideoIndex) { _ in
+            // Update play state when VideoManager changes
+            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
+                if play != newPlayState {
+                    print("DEBUG: [MEDIA CELL \(attachment.mid)] VideoManager changed - updating play from \(play) to \(newPlayState)")
+                    play = newPlayState
+                }
             }
         }
 
@@ -220,14 +254,7 @@ struct MediaCell: View, Equatable {
         }
     }
     
-    private func logVideoPlayerDecision() {
-        let hasCachedPlayer = VideoCacheManager.shared.hasVideoPlayer(for: attachment.mid)
-        if shouldLoadVideo {
-            print("DEBUG: [MEDIA CELL] Creating video player for \(attachment.mid) - shouldLoadVideo: \(shouldLoadVideo), hasCachedPlayer: \(hasCachedPlayer)")
-        } else {
-            print("DEBUG: [MEDIA CELL] Showing placeholder for \(attachment.mid) - shouldLoadVideo: \(shouldLoadVideo), hasCachedPlayer: \(hasCachedPlayer)")
-        }
-    }
+
     
     // MARK: - Equatable
     static func == (lhs: MediaCell, rhs: MediaCell) -> Bool {
@@ -247,9 +274,7 @@ struct MuteButton: View {
     
     var body: some View {
         Button(action: {
-            print("DEBUG: [MUTE BUTTON] Tapped")
             muteState.toggleMute()
-            print("DEBUG: [MUTE BUTTON] Mute state after toggle: \(muteState.isMuted)")
         }) {
             Image(systemName: muteState.isMuted ? "speaker.slash" : "speaker.wave.2")
                 .font(.system(size: 14))
@@ -259,12 +284,7 @@ struct MuteButton: View {
                 .clipShape(Circle())
                 .contentShape(Circle())
         }
-        .onAppear {
-            print("DEBUG: [MUTE BUTTON] Appeared with mute state: \(muteState.isMuted)")
-        }
-        .onReceive(muteState.$isMuted) { isMuted in
-            print("DEBUG: [MUTE BUTTON] Mute state changed to: \(isMuted)")
-        }
+
     }
 }
 

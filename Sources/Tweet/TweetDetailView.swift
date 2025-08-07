@@ -110,7 +110,8 @@ struct TweetDetailView: View {
                             aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
                             play: index == selectedMediaIndex,
                             shouldLoadVideo:  index == selectedMediaIndex,
-                            showMuteButton: false
+                            showMuteButton: false,
+                            videoManager: VideoManager()
                         )
                         .environmentObject(MuteState.shared)
                         .onAppear {

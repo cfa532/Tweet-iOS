@@ -90,7 +90,8 @@ struct CommentDetailView: View {
                     ForEach(attachments.indices, id: \.self) { index in
                         MediaCell(
                             parentTweet: comment,
-                            attachmentIndex: index
+                            attachmentIndex: index,
+                            videoManager: VideoManager()
                         )
                         .tag(index)
                         .onTapGesture { showBrowser = true }
