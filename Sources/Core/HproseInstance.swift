@@ -57,7 +57,6 @@ final class HproseInstance: ObservableObject {
         client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
         return client
     }()
-    var hproseService: AnyObject?
     
     // MARK: - Helper Methods
     
@@ -107,7 +106,6 @@ final class HproseInstance: ObservableObject {
                     
                     HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                    hproseService = client.useService(HproseService.self) as AnyObject
                     
 //                    let providerIp = firstIp
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid),
@@ -115,7 +113,6 @@ final class HproseInstance: ObservableObject {
                         // Valid login user is found, use its provider IP as base.
                         HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
                         client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                        hproseService = client.useService(HproseService.self) as AnyObject
                         let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
                         await MainActor.run {
                             // Update the appUser to the fetched user with all properties
@@ -156,7 +153,7 @@ final class HproseInstance: ObservableObject {
             "pn": pageNumber,
             "ps": pageSize,
         ] as [String : Any]
-        guard let service = hproseService else {
+        guard let service = appUser.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
@@ -199,7 +196,7 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweet_feed"
     ) async throws -> [Tweet?] {
-        guard let service = hproseService else {
+        guard let service = appUser.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         let params = [
@@ -381,7 +378,7 @@ final class HproseInstance: ObservableObject {
         tweetId: String,
         authorId: String,
     ) async throws -> Tweet? {
-        guard let service = hproseService else {
+        guard let service = appUser.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         let entry = "get_tweet"
@@ -409,7 +406,7 @@ final class HproseInstance: ObservableObject {
     
     func getUserId(_ username: String) async throws -> String? {
         try await withRetry {
-            guard let service = hproseService else {
+            guard let service = appUser.hproseService else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
             }
             let entry = "get_userid"
@@ -546,7 +543,7 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "userid": user.mid,
         ]
-        guard var service = hproseService else {
+        guard var service = user.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         
@@ -941,7 +938,7 @@ final class HproseInstance: ObservableObject {
             "commentid": commentId,
             "appuserid": appUser.mid
         ]
-        guard let service = hproseService else {
+        guard let service = appUser.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
@@ -1589,7 +1586,7 @@ final class HproseInstance: ObservableObject {
                 "mid": mimeiId
             ]
             
-            if let response = hproseService?.runMApp("get_hosts", params, []) {
+            if let response = appUser.hproseService?.runMApp("get_hosts", params, []) {
                 if let ips = response as? [String] {
                     // Record success
                     blackList.recordSuccess(mimeiId)
@@ -1623,7 +1620,7 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "mid": mid
         ]
-        if let response = hproseService?.runMApp("get_provider", params, []) {
+        if let response = appUser.hproseService?.runMApp("get_provider", params, []) {
             return response as? String
         }
         return nil
