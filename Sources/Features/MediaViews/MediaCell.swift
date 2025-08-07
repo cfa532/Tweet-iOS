@@ -162,9 +162,9 @@ struct MediaCell: View, Equatable {
                 if newValue {
                     // Video became visible - ensure it's loaded
                     shouldLoadVideo = true
-                    print("DEBUG: [MEDIA CELL] Video \(attachment.mid) became visible")
+                    // Video \(attachment.mid) became visible
                 } else {
-                    print("DEBUG: [MEDIA CELL] Video \(attachment.mid) became invisible")
+                    // Video \(attachment.mid) became invisible
                 }
                 // Video playback is now controlled by SimpleVideoPlayer's autoPlay parameter
             }

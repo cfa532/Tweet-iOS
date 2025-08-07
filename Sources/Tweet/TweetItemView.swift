@@ -13,8 +13,6 @@ struct TweetItemView: View {
     @State private var showDetail = false
     @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
     @State private var originalTweet: Tweet?
-    @State private var refreshTimer: Timer?
-    @State private var periodicRefreshTimer: Timer?
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     var onRemove: ((String) -> Void)? = nil
@@ -200,53 +198,10 @@ struct TweetItemView: View {
                     return
                 }
             }
-            
-            // Start initial refresh timer (3 seconds)
-            refreshTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-                Task {
-                    do {
-                        if let refreshedTweet = try await hproseInstance.refreshTweet(
-                            tweetId: tweet.mid,
-                            authorId: tweet.authorId
-                        ) {
-                            // Update the tweet with refreshed data
-                            try await MainActor.run {
-                                try tweet.update(from: refreshedTweet)
-                            }
-                        }
-                    } catch {
-                        print("Error refreshing tweet: \(error)")
-                    }
-                }
-            }
-            
-            // Start periodic refresh timer (every 5 minutes)
-            periodicRefreshTimer = Timer.scheduledTimer(withTimeInterval: 300.0, repeats: true) { _ in
-                Task {
-                    do {
-                        if let refreshedTweet = try await hproseInstance.refreshTweet(
-                            tweetId: tweet.mid,
-                            authorId: tweet.authorId
-                        ) {
-                            // Update the tweet with refreshed data
-                            try await MainActor.run {
-                                try tweet.update(from: refreshedTweet)
-                            }
-                        }
-                    } catch {
-                        print("Error refreshing tweet: \(error)")
-                    }
-                }
-            }
         }
         .onDisappear {
             isVisible = false
             tweet.isVisible = false
-            // Cancel timer when view disappears
-            refreshTimer?.invalidate()
-            refreshTimer = nil
-            periodicRefreshTimer?.invalidate()
-            periodicRefreshTimer = nil
         }
     }
 }

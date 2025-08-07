@@ -219,10 +219,53 @@ class Tweet: Identifiable, Codable, ObservableObject {
             var validatedDict = dict
             
             // Convert timestamp from string to Date
-            if let timestampStr = dict["timestamp"] as? String,
-               let timestampMillis = Double(timestampStr) {
-                // Update the dictionary with the timestamp in milliseconds
-                validatedDict["timestamp"] = timestampMillis
+            if let timestampStr = dict["timestamp"] as? String {
+                
+                // Try different timestamp formats
+                var timestampMillis: Double?
+                
+                // First try: direct conversion (milliseconds since epoch)
+                if let millis = Double(timestampStr) {
+                    timestampMillis = millis
+                }
+                // Second try: seconds since epoch (convert to milliseconds)
+                // Only treat as seconds if the value is small (less than 1e10, which is year 2286)
+                else if let seconds = Double(timestampStr), seconds < 1e10 {
+                    timestampMillis = seconds * 1000
+                }
+                // Third try: ISO 8601 date string
+                else {
+                    let formatter = ISO8601DateFormatter()
+                    if let date = formatter.date(from: timestampStr) {
+                        timestampMillis = date.timeIntervalSince1970 * 1000
+                    }
+                }
+                
+                if let millis = timestampMillis {
+                    validatedDict["timestamp"] = millis
+                } else {
+                    // Use current time as fallback instead of epoch
+                    validatedDict["timestamp"] = Date().timeIntervalSince1970 * 1000
+                }
+            } else if let timestampNum = dict["timestamp"] as? Double {
+                // Server returns timestamp as double (in milliseconds)
+                if timestampNum > 0 {
+                    validatedDict["timestamp"] = timestampNum
+                } else {
+                    // Use current time as fallback
+                    validatedDict["timestamp"] = Date().timeIntervalSince1970 * 1000
+                }
+            } else if let timestampNum = dict["timestamp"] as? Int {
+                // Timestamp is an integer (in milliseconds)
+                if timestampNum > 0 {
+                    validatedDict["timestamp"] = Double(timestampNum)
+                } else {
+                    // Use current time as fallback
+                    validatedDict["timestamp"] = Date().timeIntervalSince1970 * 1000
+                }
+            } else {
+                // Use current time as fallback
+                validatedDict["timestamp"] = Date().timeIntervalSince1970 * 1000
             }
             
             // Convert dictionary to JSON data
@@ -233,6 +276,8 @@ class Tweet: Identifiable, Codable, ObservableObject {
             decoder.dateDecodingStrategy = .millisecondsSince1970
             
             let tempTweet = try decoder.decode(Tweet.self, from: jsonData)
+            
+
             
             // Update this instance with the new values
             if let content = tempTweet.content { self.content = content }
@@ -276,11 +321,56 @@ class Tweet: Identifiable, Codable, ObservableObject {
             // Create a new dictionary with validated fields and proper mapping
             var validatedDict = dict
             
+
+            
             // Convert timestamp from string to Date
-            if let timestampStr = dict["timestamp"] as? String,
-               let timestampMillis = Double(timestampStr) {
-                // Update the dictionary with the timestamp in milliseconds
-                validatedDict["timestamp"] = timestampMillis
+            if let timestampStr = dict["timestamp"] as? String {
+                
+                // Try different timestamp formats
+                var timestampMillis: Double?
+                
+                // First try: direct conversion (milliseconds since epoch)
+                if let millis = Double(timestampStr) {
+                    timestampMillis = millis
+                }
+                // Second try: seconds since epoch (convert to milliseconds)
+                // Only treat as seconds if the value is small (less than 1e10, which is year 2286)
+                else if let seconds = Double(timestampStr), seconds < 1e10 {
+                    timestampMillis = seconds * 1000
+                }
+                // Third try: ISO 8601 date string
+                else {
+                    let formatter = ISO8601DateFormatter()
+                    if let date = formatter.date(from: timestampStr) {
+                        timestampMillis = date.timeIntervalSince1970 * 1000
+                    }
+                }
+                
+                if let millis = timestampMillis {
+                    validatedDict["timestamp"] = millis
+                } else {
+                    // Use current time as fallback instead of epoch
+                    validatedDict["timestamp"] = Date().timeIntervalSince1970 * 1000
+                }
+            } else if let timestampNum = dict["timestamp"] as? Double {
+                // Server returns timestamp as double (in milliseconds)
+                if timestampNum > 0 {
+                    validatedDict["timestamp"] = timestampNum
+                } else {
+                    // Use current time as fallback
+                    validatedDict["timestamp"] = Date().timeIntervalSince1970 * 1000
+                }
+            } else if let timestampNum = dict["timestamp"] as? Int {
+                // Timestamp is an integer (in milliseconds)
+                if timestampNum > 0 {
+                    validatedDict["timestamp"] = Double(timestampNum)
+                } else {
+                    // Use current time as fallback
+                    validatedDict["timestamp"] = Date().timeIntervalSince1970 * 1000
+                }
+            } else {
+                // Use current time as fallback
+                validatedDict["timestamp"] = Date().timeIntervalSince1970 * 1000
             }
             
             // Convert dictionary to JSON data
@@ -291,6 +381,9 @@ class Tweet: Identifiable, Codable, ObservableObject {
             decoder.dateDecodingStrategy = .millisecondsSince1970
             
             let tweet = try decoder.decode(Tweet.self, from: jsonData)
+            
+
+            
             return getInstance(mid: tweet.mid, authorId: tweet.authorId, content: tweet.content,
                              timestamp: tweet.timestamp, title: tweet.title,
                              originalTweetId: tweet.originalTweetId, originalAuthorId: tweet.originalAuthorId,

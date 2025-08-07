@@ -78,22 +78,25 @@ extension TweetCacheManager {
                 if let cdTweets = try? self.context.fetch(request) {
                     var tweets: [Tweet?] = []
                     for cdTweet in cdTweets {
-                        if let tweetData = cdTweet.tweetData,
-                           let tweetDict = try? JSONSerialization.jsonObject(with: tweetData) as? [String: Any] {
-                            do {
-                                let tweet = try Tweet.from(dict: tweetDict)
-                                // Filter out private tweets if they don't belong to the current user
-                                if let currentUserId = currentUserId,
-                                   tweet.isPrivate == true && tweet.authorId != currentUserId {
-                                    tweets.append(nil)
-                                    continue
-                                }
-                                tweets.append(tweet)
-                            } catch {
-                                print("Error processing tweet: \(error)")
+                        do {
+                            let tweet = try Tweet.from(cdTweet: cdTweet)
+                            
+                            // Filter out tweets with invalid timestamps
+                            if tweet.timestamp.timeIntervalSince1970 <= 0 {
+                                print("ERROR: [TweetCacheManager] Found cached tweet with invalid timestamp: \(tweet.timestamp), skipping")
                                 tweets.append(nil)
+                                continue
                             }
-                        } else {
+                            
+                            // Filter out private tweets if they don't belong to the current user
+                            if let currentUserId = currentUserId,
+                               tweet.isPrivate == true && tweet.authorId != currentUserId {
+                                tweets.append(nil)
+                                continue
+                            }
+                            tweets.append(tweet)
+                        } catch {
+                            print("Error processing tweet: \(error)")
                             tweets.append(nil)
                         }
                     }
@@ -132,6 +135,12 @@ extension TweetCacheManager {
 
     /// Save a tweet to the cache. If tweet is nil, do nothing. To remove a tweet, use deleteTweet.
     func saveTweet(_ tweet: Tweet, userId: String) {
+        // Validate timestamp before caching
+        if tweet.timestamp.timeIntervalSince1970 <= 0 {
+            print("ERROR: [TweetCacheManager] Attempting to cache tweet with invalid timestamp: \(tweet.timestamp), skipping cache")
+            return
+        }
+        
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
@@ -146,9 +155,11 @@ extension TweetCacheManager {
             cdTweet.timestamp = tweet.timestamp
             cdTweet.timeCached = Date()
             
-            // Compress tweet data before saving
-            if let tweetDict = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(tweet)) as? [String: Any],
-               let tweetData = try? JSONSerialization.data(withJSONObject: tweetDict, options: .sortedKeys) {
+            // Save tweet data directly using JSONEncoder
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            
+            if let tweetData = try? encoder.encode(tweet) {
                 cdTweet.tweetData = tweetData
             }
             try? context.save()
@@ -162,6 +173,22 @@ extension TweetCacheManager {
             request.predicate = NSPredicate(format: "timeCached < %@", expirationDate as NSDate)
             if let expiredTweets = try? context.fetch(request) {
                 for tweet in expiredTweets {
+                    context.delete(tweet)
+                }
+                try? context.save()
+            }
+        }
+    }
+    
+    func deleteTweetsWithInvalidTimestamps() {
+        context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            // Find tweets with timestamps before 1970 (invalid dates)
+            let invalidDate = Date(timeIntervalSince1970: 0)
+            request.predicate = NSPredicate(format: "timestamp <= %@", invalidDate as NSDate)
+            if let invalidTweets = try? context.fetch(request) {
+                print("ERROR: [TweetCacheManager] Found \(invalidTweets.count) tweets with invalid timestamps, deleting them")
+                for tweet in invalidTweets {
                     context.delete(tweet)
                 }
                 try? context.save()
@@ -196,9 +223,10 @@ extension TweetCacheManager {
 // MARK: - Tweet <-> Core Data Conversion
 extension Tweet {
     static func from(cdTweet: CDTweet) throws -> Tweet {
-        if let tweetData = cdTweet.tweetData,
-           let tweetDict = try? JSONSerialization.jsonObject(with: tweetData) as? [String: Any] {
-            return try Tweet.from(dict: tweetDict)
+        if let tweetData = cdTweet.tweetData {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .millisecondsSince1970
+            return try decoder.decode(Tweet.self, from: tweetData)
         }
         
         throw NSError(domain: "TweetCacheManager", code: -1, 

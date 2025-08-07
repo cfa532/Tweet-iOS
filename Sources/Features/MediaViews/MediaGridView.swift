@@ -90,34 +90,26 @@ struct MediaGridView: View {
 
     private func startVideoPlayback() {
         let firstVideoIndex = findFirstVideoIndex()
-        print("DEBUG: [MediaGridView] startVideoPlayback - firstVideoIndex: \(firstVideoIndex), currentVideoIndex: \(currentVideoIndex)")
         
         if currentVideoIndex == -1 && firstVideoIndex != -1 {
             currentVideoIndex = firstVideoIndex
-            print("DEBUG: [MediaGridView] startVideoPlayback - set currentVideoIndex to: \(currentVideoIndex)")
             // Video playback is now controlled by visibility detection in MediaCell
-        } else if currentVideoIndex != -1 {
-            print("DEBUG: [MediaGridView] startVideoPlayback - currentVideoIndex already set to: \(currentVideoIndex)")
         }
     }
 
     private func stopVideoPlayback() {
-        print("DEBUG: [MediaGridView] stopVideoPlayback - setting currentVideoIndex to -1")
         // Video playback is now controlled by visibility detection in MediaCell
         currentVideoIndex = -1
     }
 
     private func onVideoFinished() {
         let nextIndex = findNextVideoIndex()
-        print("DEBUG: [MediaGridView] onVideoFinished - nextIndex: \(nextIndex)")
         
         if nextIndex != -1 {
             // Move to next video - playback controlled by visibility detection
             currentVideoIndex = nextIndex
-            print("DEBUG: [MediaGridView] onVideoFinished - moved to next video index: \(currentVideoIndex)")
         } else {
             // No more videos to play
-            print("DEBUG: [MediaGridView] onVideoFinished - no more videos, stopping playback")
             currentVideoIndex = -1
         }
     }
