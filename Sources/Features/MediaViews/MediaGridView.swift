@@ -50,6 +50,17 @@ struct MediaGridView: View {
         
         return shouldStart
     }
+    
+    private func shouldPlayVideo(for index: Int) -> Bool {
+        // A video should play if:
+        // 1. It's the current video index, OR
+        // 2. It's the first video and we haven't set a current video yet
+        let isFirstVideo = index == findFirstVideoIndex()
+        let isCurrentVideo = index == currentVideoIndex
+        let shouldStartFirstVideo = isFirstVideo && currentVideoIndex == -1 && shouldLoadVideo
+        
+        return isCurrentVideo || shouldStartFirstVideo
+    }
 
     private func getVideoIndices() -> [Int] {
         return attachments.enumerated().compactMap { index, attachment in
@@ -123,7 +134,7 @@ struct MediaGridView: View {
                         parentTweet: parentTweet,
                         attachmentIndex: 0,
                         aspectRatio: 1.0,
-                        play: currentVideoIndex == 0,
+                        play: shouldPlayVideo(for: 0),
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished
                     )
@@ -152,7 +163,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
+                                    play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -171,7 +182,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
+                                    play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -190,7 +201,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    play: currentVideoIndex == 0,
+                                    play: shouldPlayVideo(for: 0),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -203,7 +214,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 1,
-                                    play: currentVideoIndex == 1,
+                                    play: shouldPlayVideo(for: 1),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -217,7 +228,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    play: currentVideoIndex == 0,
+                                    play: shouldPlayVideo(for: 0),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -230,7 +241,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 1,
-                                    play: currentVideoIndex == 1,
+                                    play: shouldPlayVideo(for: 1),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -257,7 +268,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
+                                    play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -275,7 +286,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
+                                    play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -292,7 +303,7 @@ struct MediaGridView: View {
                             MediaCell(
                                 parentTweet: parentTweet,
                                 attachmentIndex: 0,
-                                play: currentVideoIndex == 0,
+                                play: shouldPlayVideo(for: 0),
                                 shouldLoadVideo: shouldLoadVideo,
                                 onVideoFinished: onVideoFinished
                             )
@@ -306,7 +317,7 @@ struct MediaGridView: View {
                                     MediaCell(
                                         parentTweet: parentTweet,
                                         attachmentIndex: idx,
-                                        play: currentVideoIndex == idx,
+                                        play: shouldPlayVideo(for: idx),
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished
                                     )
@@ -324,7 +335,7 @@ struct MediaGridView: View {
                             MediaCell(
                                 parentTweet: parentTweet,
                                 attachmentIndex: 0,
-                                play: currentVideoIndex == 0,
+                                play: shouldPlayVideo(for: 0),
                                 shouldLoadVideo: shouldLoadVideo,
                                 onVideoFinished: onVideoFinished
                             )
@@ -338,7 +349,7 @@ struct MediaGridView: View {
                                     MediaCell(
                                         parentTweet: parentTweet,
                                         attachmentIndex: idx,
-                                        play: currentVideoIndex == idx,
+                                        play: shouldPlayVideo(for: idx),
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished
                                     )
@@ -366,7 +377,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
+                                    play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -384,7 +395,7 @@ struct MediaGridView: View {
                                     MediaCell(
                                         parentTweet: parentTweet,
                                         attachmentIndex: idx,
-                                        play: currentVideoIndex == idx,
+                                        play: shouldPlayVideo(for: idx),
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished
                                     )
@@ -406,7 +417,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    play: currentVideoIndex == idx,
+                                    play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished
                                 )
@@ -427,7 +438,7 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
-                                            play: currentVideoIndex == idx,
+                                            play: shouldPlayVideo(for: idx),
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished
                                         )

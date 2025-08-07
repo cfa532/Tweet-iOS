@@ -23,7 +23,7 @@ struct MediaCell: View {
     @State private var onVideoFinished: (() -> Void)?
     let showMuteButton: Bool
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -31,6 +31,7 @@ struct MediaCell: View {
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
         self.showMuteButton = showMuteButton
+        self._isVisible = State(initialValue: isVisible)
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -136,10 +137,11 @@ struct MediaCell: View {
             // Refresh mute state from preferences when cell appears
             MuteState.shared.refreshFromPreferences()
             
-            // Set visibility for videos
+            // Set visibility to true when cell appears
+            isVisible = true
+            
+            // Auto-load videos when they become visible
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                isVisible = true
-                // Auto-load videos when they become visible
                 shouldLoadVideo = true
                 // Log video player decision when cell appears
                 logVideoPlayerDecision()
@@ -147,7 +149,6 @@ struct MediaCell: View {
         }
         .onDisappear {
             isVisible = false
-            // Video playback is now controlled by visibility detection in SimpleVideoPlayer
         }
         .onChange(of: isVisible) { newValue in
             if newValue && image == nil {
@@ -159,6 +160,9 @@ struct MediaCell: View {
                 if newValue {
                     // Video became visible - ensure it's loaded
                     shouldLoadVideo = true
+                    print("DEBUG: [MEDIA CELL] Video \(attachment.mid) became visible")
+                } else {
+                    print("DEBUG: [MEDIA CELL] Video \(attachment.mid) became invisible")
                 }
                 // Video playback is now controlled by SimpleVideoPlayer's autoPlay parameter
             }
