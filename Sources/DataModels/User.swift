@@ -32,17 +32,20 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     public var hproseService: AnyObject? {
         get {
             guard let baseUrl = baseUrl else { return nil }
-            if baseUrl == HproseInstance.shared.appUser.baseUrl {
-                return HproseInstance.shared.hproseService
-            } else if let cached = _hproseService {
+
+            if let cached = _hproseService {
                 return cached
             } else {
-                let client = HproseHttpClient()
-                client.timeout = 30000
-                client.uri = "\(baseUrl)/webapi/"
-                let service = client.useService(HproseService.self) as? AnyObject
-                _hproseService = service
-                return service
+                if baseUrl == HproseInstance.shared.appUser.baseUrl {
+                    return HproseInstance.shared._hproseService
+                } else {
+                    let client = HproseHttpClient()
+                    client.timeout = 30000
+                    client.uri = "\(baseUrl)/webapi/"
+                    let service = client.useService(HproseService.self) as? AnyObject
+                    _hproseService = service
+                    return service
+                }
             }
         }
     }
@@ -50,17 +53,20 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     public var uploadService: AnyObject? {
         get {
             guard let baseUrl = writableUrl else { return nil }
-            if baseUrl == HproseInstance.shared.appUser.baseUrl {
-                return HproseInstance.shared.hproseService
-            } else if let cached = _uploadService {
+
+            if let cached = _uploadService {
                 return cached
             } else {
-                let client = HproseHttpClient()
-                client.timeout = 30000
-                client.uri = "\(baseUrl)/webapi/"
-                let service = client.useService(HproseService.self) as? AnyObject
-                _uploadService = service
-                return service
+                if baseUrl == HproseInstance.shared.appUser.baseUrl {
+                    return HproseInstance.shared.appUser._hproseService
+                } else {
+                    let client = HproseHttpClient()
+                    client.timeout = 30000
+                    client.uri = "\(baseUrl)/webapi/"
+                    let service = client.useService(HproseService.self) as? AnyObject
+                    _uploadService = service
+                    return service
+                }
             }
         }
     }
