@@ -66,12 +66,11 @@ struct MediaCell: View, Equatable {
                             contentType: attachment.type,
                             cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showNativeControls: false,
                             onVideoTap: {
                                 showFullScreen = true
                             },
-                            showCustomControls: false,
                             disableAutoRestart: true,
+                            mode: .mediaCell
                         )
                         .onAppear {
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - play: \(play), isVisible: \(isVisible), autoPlay: \(play && isVisible)")

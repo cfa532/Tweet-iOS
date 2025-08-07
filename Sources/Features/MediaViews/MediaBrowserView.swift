@@ -267,7 +267,7 @@ struct MediaBrowserView: View {
     private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
         SimpleVideoPlayer(
             url: url,
-            mid: "\(attachment.mid)_fullscreen", // Use fullscreen cache key
+            mid: attachment.mid,
             autoPlay: index == currentIndex, // Only auto-play if this is the current video
             onMuteChanged: { _ in
                 // In full-screen mode, don't update global mute state
@@ -275,10 +275,7 @@ struct MediaBrowserView: View {
             },
             isVisible: index == currentIndex, // Only visible if this is the current video
             contentType: attachment.type,
-            cellAspectRatio: nil,
             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-            showNativeControls: true,
-            forceUnmuted: true, // Force unmuted in full-screen
             onVideoTap: {
                 // Show close button when video is tapped
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -286,8 +283,8 @@ struct MediaBrowserView: View {
                 }
                 resetControlsTimer() // Reset close button timer
             },
-            showCustomControls: true, // Enable custom controls in full-screen
-            forcePlay: index == currentIndex // Only force play if this is the current video
+            forcePlay: index == currentIndex, // Only force play if this is the current video
+            mode: .mediaBrowser
         )
         .environmentObject(MuteState.shared)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
