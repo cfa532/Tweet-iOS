@@ -346,12 +346,11 @@ struct HLSVideoPlayerWithControls: View {
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
     @State private var showControls = true
-    @State private var playerMuted: Bool = false
-    @State private var controlsTimer: Timer?
     @State private var hasNotifiedFinished = false
     @State private var hasFinished = false // Track if video has finished to prevent re-queuing
     @State private var localMuted: Bool = false // Local mute state for forceUnmuted mode
     @State private var isSettingUpPlayer = false // Flag to prevent mute state changes during setup
+    @State private var playerMuted: Bool = false
 
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
@@ -527,16 +526,11 @@ struct HLSVideoPlayerWithControls: View {
                         return
                     }
                     
-                    // Toggle controls
-                    withAnimation {
-                        showControls.toggle()
-                    }
-                    
-                    // Start timer to auto-hide controls after 3 seconds
-                    if showControls {
-                        startControlsTimer()
-                    } else {
-                        stopControlsTimer()
+                    // Handle tap to show/hide controls
+                    if showCustomControls {
+                        withAnimation {
+                            showControls.toggle()
+                        }
                     }
                     
                     // If player is paused and we tap, also resume playback
@@ -568,16 +562,13 @@ struct HLSVideoPlayerWithControls: View {
                 
                 // Start controls timer when video loads if custom controls are enabled
                 if showCustomControls && showControls {
-                    startControlsTimer()
+                    // Controls will stay visible until user taps
                 }
                 
                 // Do not resume or start playback here; let parent control via autoPlay
             }
             .onDisappear {
         
-                
-                // Stop controls timer
-                stopControlsTimer()
                 
                 // Pause video using cache, do not destroy instance
                 videoCache.pauseVideoPlayer(for: mid)
@@ -654,41 +645,40 @@ struct HLSVideoPlayerWithControls: View {
                 // For full-screen mode, start unmuted and use local state
                 cachedPlayer.isMuted = false
                 localMuted = false
-                playerMuted = false
             } else {
                 // For normal mode, use global mute state
                 cachedPlayer.isMuted = muteState.isMuted
-                playerMuted = muteState.isMuted
             }
             
             // Set up observers for the player
             setupPlayerObservers(cachedPlayer)
             
-            // Monitor player item status
-            self.monitorPlayerStatus(cachedPlayer)
-            
-            // Direct playback control based on current conditions
-            if autoPlay && isVisible {
-                if forcePlay {
-                    // Force play mode (for full-screen) - start this video and stop others
-                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Force play mode - starting playback")
-                    cachedPlayer.play()
-                    self.isPlaying = true
-                    pauseAllOtherVideos()
-                } else {
-                    // Normal auto-play mode - only play if visible
-                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Normal auto-play mode - starting playback")
-                    cachedPlayer.play()
-                    self.isPlaying = true
+            // Check if player is ready and start playback if conditions are met
+            if let playerItem = cachedPlayer.currentItem, playerItem.status == .readyToPlay {
+                self.isLoading = false
+                self.duration = playerItem.duration.seconds
+                
+                // Player is ready - check if we should start playback
+                if autoPlay && isVisible && !isPlaying {
+                    if forcePlay {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready - Force play mode - starting playback")
+                        cachedPlayer.play()
+                        self.isPlaying = true
+                        pauseAllOtherVideos()
+                    } else {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready - Normal auto-play mode - starting playback")
+                        cachedPlayer.play()
+                        self.isPlaying = true
+                    }
                 }
             } else {
-                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Not starting playback - autoPlay: \(autoPlay), isVisible: \(isVisible)")
-                self.isPlaying = false
+                // Player not ready yet, set loading state
+                self.isLoading = true
             }
             
             isSettingUpPlayer = false // Allow mute state changes after setup
         } else {
-            // Failed to get or create player for video mid: \(mid)
+            // Failed to get or create player
             errorMessage = "Failed to create video player"
             isLoading = false
             isSettingUpPlayer = false // Clear flag on error
@@ -696,20 +686,6 @@ struct HLSVideoPlayerWithControls: View {
     }
     
     private func setupPlayerObservers(_ player: AVPlayer) {
-        // Add periodic time observer for progress updates
-        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        player.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { time in
-            currentTime = time.seconds
-            
-            // Check if video has finished
-            if duration > 0 && currentTime >= duration - 0.5 && !hasNotifiedFinished {
-                hasNotifiedFinished = true
-                hasFinished = true // Mark video as finished
-                self.resetVideoState()
-                self.onVideoFinished?()
-            }
-        }
-        
         // Add notification observer for video finished
         if let playerItem = player.currentItem {
             NotificationCenter.default.addObserver(
@@ -717,11 +693,15 @@ struct HLSVideoPlayerWithControls: View {
                 object: playerItem,
                 queue: .main
             ) { _ in
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] AVPlayerItemDidPlayToEndTime notification received - hasNotifiedFinished: \(self.hasNotifiedFinished)")
                 if !self.hasNotifiedFinished {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Processing AVPlayerItemDidPlayToEndTime - marking as finished")
                     self.hasNotifiedFinished = true
                     self.hasFinished = true // Mark video as finished
                     self.resetVideoState()
                     self.onVideoFinished?()
+                } else {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Ignoring AVPlayerItemDidPlayToEndTime - already notified")
                 }
             }
         }
@@ -732,94 +712,6 @@ struct HLSVideoPlayerWithControls: View {
         if forcePlay {
             // Pause all other videos except this one when force play is enabled
             VideoCacheManager.shared.pauseAllVideosExcept(for: mid)
-        }
-    }
-    
-    private func monitorPlayerStatus(_ player: AVPlayer) {
-        // Monitor player item status using a timer
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-            guard let playerItem = player.currentItem else {
-                print("DEBUG: No player item available")
-                timer.invalidate()
-                return
-            }
-            
-            switch playerItem.status {
-            case .readyToPlay:
-                self.isLoading = false
-                self.duration = playerItem.duration.seconds
-                
-                // Player is ready - check if we should start playback
-                if autoPlay && isVisible && !isPlaying {
-                    if forcePlay {
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready - Force play mode - starting playback")
-                        player.play()
-                        self.isPlaying = true
-                        pauseAllOtherVideos()
-                    } else {
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready - Normal auto-play mode - starting playback")
-                        player.play()
-                        self.isPlaying = true
-                    }
-                }
-                
-                timer.invalidate()
-            case .failed:
-                print("DEBUG: \(isHLS ? "HLS" : "Regular") player item failed: \(playerItem.error?.localizedDescription ?? "Unknown error")")
-                if let error = playerItem.error as NSError? {
-                    print("DEBUG: Error domain: \(error.domain), code: \(error.code)")
-                    print("DEBUG: Error user info: \(error.userInfo)")
-                    
-                    // Provide specific error messages based on error codes
-                    switch (error.domain, error.code) {
-                    case ("CoreMediaErrorDomain", -12642):
-                        print("DEBUG: Playlist parse error - invalid HLS manifest format")
-                        self.errorMessage = isHLS ? "Invalid HLS playlist format" : "Invalid video format"
-                    case ("CoreMediaErrorDomain", -12643):
-                        print("DEBUG: Segment not found error")
-                        self.errorMessage = isHLS ? "HLS segment not found" : "Video segment not found"
-                    case ("CoreMediaErrorDomain", -12644):
-                        print("DEBUG: Segment duration error")
-                        self.errorMessage = isHLS ? "HLS segment duration error" : "Video duration error"
-                    case ("CoreMediaErrorDomain", -12645):
-                        print("DEBUG: Codec not supported error")
-                        self.errorMessage = "Video codec not supported by this device"
-                    case ("CoreMediaErrorDomain", -12646):
-                        print("DEBUG: Format not supported error")
-                        self.errorMessage = "Video format not supported by this device"
-                    case ("CoreMediaErrorDomain", -12647):
-                        print("DEBUG: Profile not supported error")
-                        self.errorMessage = "Video profile not supported by this device"
-                    case ("NSURLErrorDomain", 404):
-                        print("DEBUG: \(isHLS ? "HLS playlist" : "Video file") not found (404)")
-                        self.errorMessage = isHLS ? "HLS playlist not found" : "Video file not found"
-                    case ("NSURLErrorDomain", 403):
-                        print("DEBUG: \(isHLS ? "HLS playlist" : "Video file") access denied (403)")
-                        self.errorMessage = isHLS ? "HLS playlist access denied" : "Video file access denied"
-                    case ("NSURLErrorDomain", 500):
-                        print("DEBUG: \(isHLS ? "HLS server" : "Video server") error (500)")
-                        self.errorMessage = isHLS ? "HLS server error" : "Video server error"
-                    default:
-                        print("DEBUG: Unknown \(isHLS ? "HLS" : "video") error")
-                        // Check for common codec compatibility issues
-                        if error.localizedDescription.contains("codec") || 
-                           error.localizedDescription.contains("format") ||
-                           error.localizedDescription.contains("profile") ||
-                           error.localizedDescription.contains("hardware") {
-                            self.errorMessage = "Video codec not compatible with this device. Please try uploading a different video format."
-                        } else {
-                            self.errorMessage = "\(isHLS ? "HLS" : "Video") playback error: \(error.localizedDescription)"
-                        }
-                    }
-                }
-                self.isLoading = false
-                timer.invalidate()
-            case .unknown:
-//                print("DEBUG: HLS player item status is unknown")
-                break
-            @unknown default:
-                break
-            }
         }
     }
     
@@ -852,21 +744,6 @@ struct HLSVideoPlayerWithControls: View {
         return String(format: "%d:%02d", minutes, seconds)
     }
     
-    private func startControlsTimer() {
-        stopControlsTimer() // Cancel any existing timer
-        
-        controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            withAnimation {
-                showControls = false
-            }
-        }
-    }
-    
-    private func stopControlsTimer() {
-        controlsTimer?.invalidate()
-        controlsTimer = nil
-    }
-    
     private func resetVideoState() {
         // Reset all video state when video finishes
         isPlaying = false
@@ -891,11 +768,6 @@ struct HLSVideoPlayerWithControls: View {
             
             // Ensure player is paused after reset
             player.pause()
-        }
-        
-        // Start controls timer to auto-hide controls
-        if showCustomControls {
-            startControlsTimer()
         }
     }
     

@@ -195,10 +195,11 @@ struct MediaCell: View, Equatable {
                 }
             }
         }
-        .onChange(of: videoManager.currentVideoIndex) { _ in
+        .onChange(of: videoManager.currentVideoIndex) { newIndex in
             // Update play state when VideoManager changes
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
+                print("DEBUG: [MEDIA CELL \(attachment.mid)] VideoManager currentVideoIndex changed to \(newIndex) - current play: \(play), newPlayState: \(newPlayState), isVisible: \(isVisible)")
                 if play != newPlayState {
                     print("DEBUG: [MEDIA CELL \(attachment.mid)] VideoManager changed - updating play from \(play) to \(newPlayState)")
                     play = newPlayState

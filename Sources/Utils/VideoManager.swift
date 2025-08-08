@@ -42,10 +42,12 @@ class VideoManager: ObservableObject {
             currentVideoIndex = nextIndex
             print("DEBUG: [VideoManager] Video finished, moved to next video: \(nextIndex)")
         } else {
-            // All videos finished, restart from beginning
-            currentVideoIndex = 0
-            print("DEBUG: [VideoManager] All videos finished, restarting from beginning")
-            // Note: Each video resets itself when it finishes, so no need to reset them here
+            // All videos finished, stop sequential playback
+            print("DEBUG: [VideoManager] All videos finished, stopping sequential playback")
+            // Clear the state to stop any further playback
+            videoMids = []
+            currentVideoIndex = -1
+            isSequentialPlaybackEnabled = false
         }
     }
     
