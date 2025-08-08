@@ -83,6 +83,11 @@ struct MediaCell: View, Equatable {
                         .onChange(of: isVisible) { newIsVisible in
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible), play: \(play), autoPlay: \(play)")
                         }
+                        .onDisappear {
+                            // Pause video when cell becomes invisible
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] Cell disappeared - pausing video")
+                            VideoCacheManager.shared.pauseVideoPlayer(for: attachment.mid)
+                        }
 
                         .environmentObject(MuteState.shared)
                         .onReceive(MuteState.shared.$isMuted) { isMuted in
