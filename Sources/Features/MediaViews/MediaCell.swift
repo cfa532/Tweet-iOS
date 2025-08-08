@@ -17,16 +17,15 @@ struct MediaCell: View, Equatable {
     @State private var play: Bool
     @State private var image: UIImage?
     @State private var isLoading = false
-    // Removed showFullScreen state since we're not using fullscreen anymore
+    @State private var showFullScreen = false
     @State private var isVisible = false
     @State private var shouldLoadVideo: Bool
     @State private var onVideoFinished: (() -> Void)?
     let showMuteButton: Bool
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
-    let onVideoTap: (() -> Void)? // Custom video tap handler
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0, onVideoTap: (() -> Void)? = nil) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -37,7 +36,6 @@ struct MediaCell: View, Equatable {
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
         self.forceRefreshTrigger = forceRefreshTrigger
-        self.onVideoTap = onVideoTap
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -57,7 +55,92 @@ struct MediaCell: View, Equatable {
     var body: some View {
         Group {
             if let url = attachment.getUrl(baseUrl) {
-                mediaContentView(url: url)
+                switch attachment.type.lowercased() {
+                case "video", "hls_video":
+                    // Only create video player if we should load video
+                    if shouldLoadVideo {
+                        SimpleVideoPlayer(
+                            url: url,
+                            mid: attachment.mid,
+                            autoPlay: play,
+                            onVideoFinished: onVideoFinished,
+                            isVisible: isVisible,
+                            contentType: attachment.type,
+                            cellAspectRatio: CGFloat(aspectRatio),
+                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                            onVideoTap: {
+                                showFullScreen = true
+                            },
+                            disableAutoRestart: true,
+                            mode: .mediaCell
+                        )
+                        .onAppear {
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - play: \(play), isVisible: \(isVisible), autoPlay: \(play)")
+                        }
+                        .onChange(of: play) { newPlayValue in
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] play changed to: \(newPlayValue), isVisible: \(isVisible), autoPlay: \(newPlayValue)")
+                        }
+                        .onChange(of: isVisible) { newIsVisible in
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible), play: \(play), autoPlay: \(play)")
+                        }
+
+                        .environmentObject(MuteState.shared)
+                        .onReceive(MuteState.shared.$isMuted) { isMuted in
+                            print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
+                        }
+                        
+                        .overlay(
+                            // Mute button in bottom right corner (only if showMuteButton is true)
+                            Group {
+                                if showMuteButton {
+                                    VStack {
+                                        Spacer()
+                                        HStack {
+                                            Spacer()
+                                            MuteButton()
+                                                .padding(.trailing, 8)
+                                                .padding(.bottom, 8)
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                    } else {
+                        // Show placeholder for videos that haven't been loaded yet
+                        Color.black
+                            .aspectRatio(contentMode: .fill)
+                            .overlay(
+                                Image(systemName: "play.circle")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.white)
+                            )
+                            .onTapGesture {
+                                // Open full screen for video placeholders
+                                showFullScreen = true
+                            }
+                    }
+                case "audio":
+                    SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
+                        .environmentObject(MuteState.shared)
+                        .onTapGesture {
+                            handleTap()
+                        }
+                case "image":
+                    if let image = image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .clipped()
+                    } else if isLoading {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .scaleEffect(1.2)
+                    } else {
+                        Color.gray.opacity(0.3)
+                    }
+                default:
+                    EmptyView()
+                }
             } else {
                 EmptyView()
             }
@@ -151,135 +234,28 @@ struct MediaCell: View, Equatable {
             }
         }
 
-        // Removed fullScreenCover since we're not using fullscreen anymore
-    }
-    
-    @ViewBuilder
-    private func mediaContentView(url: URL) -> some View {
-        switch attachment.type.lowercased() {
-        case "video", "hls_video":
-            videoContentView(url: url)
-        case "audio":
-            audioContentView(url: url)
-        case "image":
-            imageContentView(url: url)
-        default:
-            EmptyView()
-        }
-    }
-    
-    @ViewBuilder
-    private func videoContentView(url: URL) -> some View {
-        if shouldLoadVideo {
-            loadedVideoView(url: url)
-        } else {
-            videoPlaceholderView(url: url)
-        }
-    }
-    
-    @ViewBuilder
-    private func loadedVideoView(url: URL) -> some View {
-        SimpleVideoPlayer(
-            url: url,
-            mid: attachment.mid,
-            autoPlay: play,
-            onVideoFinished: onVideoFinished,
-            isVisible: isVisible,
-            contentType: attachment.type,
-            cellAspectRatio: CGFloat(aspectRatio),
-            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-            onVideoTap: {
-                onVideoTap?()
-            },
-            disableAutoRestart: true,
-            mode: .mediaCell
-        )
-        .onAppear {
-            print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - play: \(play), isVisible: \(isVisible), autoPlay: \(play)")
-        }
-        .onChange(of: play) { newPlayValue in
-            print("DEBUG: [MEDIA CELL \(attachment.mid)] play changed to: \(newPlayValue), isVisible: \(isVisible), autoPlay: \(newPlayValue)")
-        }
-        .onChange(of: isVisible) { newIsVisible in
-            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible), play: \(play), autoPlay: \(play)")
-        }
-        .environmentObject(MuteState.shared)
-        .onReceive(MuteState.shared.$isMuted) { isMuted in
-            print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
-        }
-        .overlay(muteButtonOverlay)
-    }
-    
-    @ViewBuilder
-    private func videoPlaceholderView(url: URL) -> some View {
-        Color.black
-            .aspectRatio(contentMode: .fill)
-            .overlay(
-                Image(systemName: "play.circle")
-                    .font(.system(size: 40))
-                    .foregroundColor(.white)
+        .fullScreenCover(isPresented: $showFullScreen) {
+            MediaBrowserView(
+                tweet: parentTweet,
+                initialIndex: attachmentIndex
             )
-            .onTapGesture {
-                onVideoTap?()
-            }
-    }
-    
-    @ViewBuilder
-    private func audioContentView(url: URL) -> some View {
-        SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
-            .environmentObject(MuteState.shared)
-            .onTapGesture {
-                handleTap()
-            }
-    }
-    
-    @ViewBuilder
-    private func imageContentView(url: URL) -> some View {
-        if let image = image {
-            Image(uiImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .clipped()
-        } else if isLoading {
-            ProgressView()
-                .progressViewStyle(CircularProgressViewStyle())
-                .scaleEffect(1.2)
-        } else {
-            Color.gray.opacity(0.3)
-        }
-    }
-    
-    @ViewBuilder
-    private var muteButtonOverlay: some View {
-        Group {
-            if showMuteButton {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        MuteButton()
-                            .padding(.trailing, 8)
-                            .padding(.bottom, 8)
-                    }
-                }
-            }
         }
     }
     
     private func handleTap() {
         switch attachment.type.lowercased() {
         case "video", "hls_video":
-            // Use custom video tap handler if provided, otherwise do nothing
-            onVideoTap?()
+            // Open full screen for videos
+            showFullScreen = true
         case "audio":
             // Toggle audio playback
             play.toggle()
         case "image":
-            // Use custom video tap handler if provided, otherwise do nothing
-            onVideoTap?()
+            // Open full-screen for images
+            showFullScreen = true
         default:
-            // Use custom video tap handler if provided, otherwise do nothing
-            onVideoTap?()
+            // Open full-screen for other types
+            showFullScreen = true
         }
     }
     

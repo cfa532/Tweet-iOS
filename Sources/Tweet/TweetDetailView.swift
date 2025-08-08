@@ -5,6 +5,7 @@ import AVKit
 @available(iOS 16.0, *)
 struct TweetDetailView: View {
     @ObservedObject var tweet: Tweet
+    @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
     @State private var showLoginSheet = false
     @State private var pinnedTweets: [[String: Any]] = []
@@ -56,7 +57,12 @@ struct TweetDetailView: View {
         .background(Color(.systemBackground))
         .navigationTitle("Tweet")
         .navigationBarTitleDisplayMode(.inline)
-        // Removed fullScreenCover since we're using native controls in TabView
+        .fullScreenCover(isPresented: $showBrowser) {
+            MediaBrowserView(
+                tweet: displayTweet,
+                initialIndex: selectedMediaIndex
+            )
+        }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
@@ -103,13 +109,9 @@ struct TweetDetailView: View {
                             attachmentIndex: index,
                             aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
                             play: index == selectedMediaIndex,
-                            shouldLoadVideo: index == selectedMediaIndex,
+                            shouldLoadVideo:  index == selectedMediaIndex,
                             showMuteButton: false,
-                            videoManager: VideoManager(),
-                            onVideoTap: {
-                                // Show native controls by toggling play state
-                                // This will trigger the native video controls to appear
-                            }
+                            videoManager: VideoManager()
                         )
                         .environmentObject(MuteState.shared)
                         .onAppear {

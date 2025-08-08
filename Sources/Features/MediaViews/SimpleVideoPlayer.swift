@@ -51,7 +51,6 @@ struct SimpleVideoPlayer: View {
     var onTimeUpdate: ((Double) -> Void)? = nil
     var onMuteChanged: ((Bool) -> Void)? = nil
     var onVideoFinished: (() -> Void)? = nil
-    var onVideoLoadingChanged: ((Bool) -> Void)? = nil // Callback when video loading state changes
     let isVisible: Bool
     var contentType: String? = nil
     var cellAspectRatio: CGFloat? = nil
@@ -81,7 +80,6 @@ struct SimpleVideoPlayer: View {
         onTimeUpdate: ((Double) -> Void)? = nil,
         onMuteChanged: ((Bool) -> Void)? = nil,
         onVideoFinished: (() -> Void)? = nil,
-        onVideoLoadingChanged: ((Bool) -> Void)? = nil,
         isVisible: Bool = true,
         contentType: String? = nil,
         cellAspectRatio: CGFloat? = nil,
@@ -100,7 +98,6 @@ struct SimpleVideoPlayer: View {
         self.onTimeUpdate = onTimeUpdate
         self.onMuteChanged = onMuteChanged
         self.onVideoFinished = onVideoFinished
-        self.onVideoLoadingChanged = onVideoLoadingChanged
         self.isVisible = isVisible
         self.contentType = contentType
         self.cellAspectRatio = cellAspectRatio
@@ -163,7 +160,7 @@ struct SimpleVideoPlayer: View {
                             onVideoFinished: onVideoFinished,
                             onVideoTap: onVideoTap,
                             showCustomControls: false, // No custom controls in cells
-                            onVideoLoadingChanged: onVideoLoadingChanged,
+
                             forceUnmuted: false, // Use global mute state
                             disableAutoRestart: disableAutoRestart,
                             mode: mode
@@ -183,7 +180,7 @@ struct SimpleVideoPlayer: View {
                             onVideoFinished: onVideoFinished,
                             onVideoTap: onVideoTap,
                             showCustomControls: false,
-                            onVideoLoadingChanged: onVideoLoadingChanged,
+
                             forceUnmuted: false,
                             disableAutoRestart: disableAutoRestart,
                             mode: mode
@@ -203,7 +200,7 @@ struct SimpleVideoPlayer: View {
                         onVideoFinished: onVideoFinished,
                         onVideoTap: onVideoTap,
                         showCustomControls: false, // Use native controls only
-                        onVideoLoadingChanged: onVideoLoadingChanged,
+
                         forceUnmuted: true, // Force unmuted in browser
                         disableAutoRestart: false, // Enable auto-replay in full screen
                         mode: mode
@@ -226,7 +223,7 @@ struct SimpleVideoPlayer: View {
                                 onVideoFinished: onVideoFinished,
                                 onVideoTap: onVideoTap,
                                 showCustomControls: true,
-                                onVideoLoadingChanged: onVideoLoadingChanged,
+
                                 forceUnmuted: true,
                                 disableAutoRestart: disableAutoRestart,
                                 mode: mode
@@ -257,7 +254,7 @@ struct SimpleVideoPlayer: View {
                                 onVideoFinished: onVideoFinished,
                                 onVideoTap: onVideoTap,
                                 showCustomControls: true,
-                                onVideoLoadingChanged: onVideoLoadingChanged,
+
                                 forceUnmuted: true,
                                 disableAutoRestart: disableAutoRestart,
                                 mode: mode
@@ -289,7 +286,7 @@ struct SimpleVideoPlayer: View {
                                 onVideoFinished: onVideoFinished,
                                 onVideoTap: onVideoTap,
                                 showCustomControls: true,
-                                onVideoLoadingChanged: onVideoLoadingChanged,
+
                                 forceUnmuted: true,
                                 disableAutoRestart: disableAutoRestart,
                                 mode: mode
@@ -319,7 +316,7 @@ struct SimpleVideoPlayer: View {
                     onVideoFinished: onVideoFinished,
                     onVideoTap: onVideoTap,
                     showCustomControls: mode != .mediaCell,
-                    onVideoLoadingChanged: onVideoLoadingChanged,
+
                     forceUnmuted: mode != .mediaCell,
                     disableAutoRestart: disableAutoRestart,
                     mode: mode
@@ -342,7 +339,6 @@ struct HLSVideoPlayerWithControls: View {
     let onVideoFinished: (() -> Void)?
     let onVideoTap: (() -> Void)?
     let showCustomControls: Bool
-    let onVideoLoadingChanged: ((Bool) -> Void)?
 
     let forceUnmuted: Bool
     let disableAutoRestart: Bool
@@ -355,6 +351,7 @@ struct HLSVideoPlayerWithControls: View {
     @State private var isPlaying = false
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
+    @State private var showControls = true
     @State private var hasNotifiedFinished = false
     @State private var hasFinished = false // Track if video has finished to prevent re-queuing
     @State private var localMuted: Bool = false // Local mute state for forceUnmuted mode
@@ -366,7 +363,7 @@ struct HLSVideoPlayerWithControls: View {
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
     
-    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forceUnmuted: Bool, disableAutoRestart: Bool = false, isHLS: Bool = true, mode: SimpleVideoPlayer.Mode, onVideoLoadingChanged: ((Bool) -> Void)? = nil) {
+    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forceUnmuted: Bool, disableAutoRestart: Bool = false, isHLS: Bool = true, mode: SimpleVideoPlayer.Mode) {
         self.videoURL = videoURL
         self.mid = mid
         self.isVisible = isVisible
@@ -380,7 +377,6 @@ struct HLSVideoPlayerWithControls: View {
         self.disableAutoRestart = disableAutoRestart
         self.isHLS = isHLS
         self.mode = mode
-        self.onVideoLoadingChanged = onVideoLoadingChanged
         self._playerMuted = State(initialValue: isMuted)
         
 
@@ -394,18 +390,86 @@ struct HLSVideoPlayerWithControls: View {
                         .overlay(
                             // Transparent overlay to capture taps - but only when we need custom tap handling
                             Group {
-                                if showCustomControls {
-                                    // Only add overlay for custom controls mode
+                                if !showCustomControls && mode != .mediaBrowser {
+                                    // For MediaCell and other modes, capture taps for custom behavior
                                     Color.clear
                                         .contentShape(Rectangle())
                                         .onTapGesture {
                                             onVideoTap?()
                                         }
                                 }
-                                // For native controls mode, let the VideoPlayer handle taps
+                                // For MediaBrowserView (.mediaBrowser), no overlay - let native controls handle taps
                             }
                         )
-                        // Removed custom controls overlay since we're using native controls in TabView
+                        .overlay(
+                            // Custom controls overlay - only show if showCustomControls is true
+                            Group {
+                                if showControls && showCustomControls {
+                                    VStack {
+                                        Spacer()
+                                        HStack {
+                                            Button(action: togglePlayPause) {
+                                                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                                    .font(.title)
+                                                    .foregroundColor(.white)
+                                                    .background(Circle().fill(Color.black.opacity(0.5)))
+                                            }
+                                            
+                                            Spacer()
+                                            
+                                            // Mute/Unmute button
+                                            Button(action: {
+                                                if forceUnmuted {
+                                                    // Use local mute state for full-screen mode
+                                                    localMuted.toggle()
+                                                    videoCache.setMuteState(for: mid, isMuted: localMuted)
+                                                    playerMuted = localMuted
+                                                    // Local mute state changed (forceUnmuted mode)
+                                                } else {
+                                                    // Use global mute state for MediaCell
+                                                    muteState.toggleMute()
+                                                }
+                                            }) {
+                                                Image(systemName: (forceUnmuted ? localMuted : muteState.isMuted) ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                                    .font(.title2)
+                                                    .foregroundColor(.white)
+                                                    .background(Circle().fill(Color.black.opacity(0.5)))
+                                            }
+                                            
+                                            Spacer()
+                                            
+                                            Text(formatTime(currentTime))
+                                                .foregroundColor(.white)
+                                                .font(.caption)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(Color.black.opacity(0.5))
+                                                .cornerRadius(4)
+                                            
+                                            Text("/")
+                                                .foregroundColor(.white)
+                                                .font(.caption)
+                                            
+                                            Text(formatTime(duration))
+                                                .foregroundColor(.white)
+                                                .font(.caption)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(Color.black.opacity(0.5))
+                                                .cornerRadius(4)
+                                        }
+                                        .padding()
+                                    }
+                                    .background(
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [Color.black.opacity(0.7), Color.clear]),
+                                            startPoint: .bottom,
+                                            endPoint: .top
+                                        )
+                                    )
+                                }
+                            }
+                        )
                         .onReceive(player.publisher(for: \.isMuted)) { muted in
                             // Skip if we're in the middle of setting up the player
                             if isSettingUpPlayer {
@@ -457,9 +521,40 @@ struct HLSVideoPlayerWithControls: View {
                     }
                 }
             }
-            // Removed contentShape since we're using native controls
-            // Removed tap gesture handling since we're using native controls
-            // Removed long press gesture since we're using native controls
+            .contentShape(Rectangle()) // Make entire area tappable
+            .onTapGesture {
+                // Only handle tap if custom controls are enabled
+                if showCustomControls {
+                    // Check if video is at the end and restart if needed
+                    if duration > 0 && currentTime >= duration - 0.5 {
+                        resetVideoState()
+                        // Start playing again
+                        if let player = player {
+                            player.play()
+                            isPlaying = true
+                        }
+                        return
+                    }
+                    
+                    // Handle tap to show/hide controls
+                    if showCustomControls {
+                        withAnimation {
+                            showControls.toggle()
+                        }
+                    }
+                    
+                    // If player is paused and we tap, also resume playback
+                    if let player = player, player.rate == 0 {
+                        player.play()
+                        isPlaying = true
+                    }
+                }
+                // Note: onVideoTap is now handled by the transparent overlay when custom controls are disabled
+            }
+            .onLongPressGesture {
+                // Manual reload on long press
+                setupPlayer()
+            }
             .onAppear {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] View appeared - autoPlay: \(autoPlay), isVisible: \(isVisible), player exists: \(player != nil)")
                 
@@ -477,15 +572,16 @@ struct HLSVideoPlayerWithControls: View {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player already exists")
                 }
                 
-                // Removed controls timer since we're using native controls
+                // Start controls timer when video loads if custom controls are enabled
+                if showCustomControls && showControls {
+                    // Controls will stay visible until user taps
+                }
                 
                 // Do not resume or start playback here; let parent control via autoPlay
             }
             .onDisappear {
-                // Only pause video if not in fullscreen mode to prevent auto-close issue
-                if mode != .mediaBrowser {
-                    videoCache.pauseVideoPlayer(for: mid)
-                }
+                // Pause video using cache, do not destroy instance
+                videoCache.pauseVideoPlayer(for: mid)
                 
                 // Remove KVO observer for player item status
                 if hasKVOObserver, let observer = statusObserver, let player = player, let playerItem = player.currentItem {
@@ -512,14 +608,10 @@ struct HLSVideoPlayerWithControls: View {
                         }
                     }
                 } else {
-                    // Video became invisible - pause playback only if not in fullscreen mode
-                    if mode != .mediaBrowser {
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video became invisible - pausing playback")
-                        videoCache.pauseVideoPlayer(for: mid)
-                        isPlaying = false
-                    } else {
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video became invisible in fullscreen mode - keeping playback")
-                    }
+                    // Video became invisible - pause playback
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video became invisible - pausing playback")
+                    videoCache.pauseVideoPlayer(for: mid)
+                    isPlaying = false
                 }
             }
             .onChange(of: muteState.isMuted) { newMuteState in
@@ -563,9 +655,6 @@ struct HLSVideoPlayerWithControls: View {
         errorMessage = nil
         hasNotifiedFinished = false
         
-        // Notify that video is loading
-        onVideoLoadingChanged?(true)
-        
         // Try to get cached player first
         if let cachedPlayer = videoCache.getVideoPlayer(for: mid, url: videoURL, isHLS: isHLS) {
             self.player = cachedPlayer
@@ -588,9 +677,6 @@ struct HLSVideoPlayerWithControls: View {
                 self.isLoading = false
                 self.duration = playerItem.duration.seconds
                 
-                // Notify that video has finished loading
-                onVideoLoadingChanged?(false)
-                
                 // Player is ready - check if we should start playback
                 if autoPlay && !isPlaying {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready - starting playback (autoPlay: \(autoPlay), isVisible: \(isVisible))")
@@ -599,20 +685,17 @@ struct HLSVideoPlayerWithControls: View {
                 } else {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready but not starting playback - autoPlay: \(autoPlay), isPlaying: \(isPlaying), isVisible: \(isVisible)")
                 }
-                    } else {
-            // Player not ready yet, set loading state
-            self.isLoading = true
-        }
-        
-        isSettingUpPlayer = false // Allow mute state changes after setup
+            } else {
+                // Player not ready yet, set loading state
+                self.isLoading = true
+            }
+            
+            isSettingUpPlayer = false // Allow mute state changes after setup
         } else {
             // Failed to get or create player
             errorMessage = "Failed to create video player"
             isLoading = false
             isSettingUpPlayer = false // Clear flag on error
-            
-            // Notify that video loading failed
-            onVideoLoadingChanged?(false)
         }
     }
     
@@ -645,9 +728,6 @@ struct HLSVideoPlayerWithControls: View {
                         self.isLoading = false
                         self.duration = playerItem.duration.seconds
                         
-                        // Notify that video has finished loading
-                        self.onVideoLoadingChanged?(false)
-                        
                         // Player is now ready - check if we should start autoplay
                         if self.autoPlay && !self.isPlaying {
                             if let player = self.player {
@@ -662,9 +742,6 @@ struct HLSVideoPlayerWithControls: View {
                         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player item failed to load: \(playerItem.error?.localizedDescription ?? "Unknown error")")
                         self.errorMessage = "Failed to load video"
                         self.isLoading = false
-                        
-                        // Notify that video loading failed
-                        self.onVideoLoadingChanged?(false)
                     }
                 }
                 
@@ -698,7 +775,34 @@ struct HLSVideoPlayerWithControls: View {
     
 
     
-    // Removed unused methods since we're using native controls
+    private func togglePlayPause() {
+        guard let player = player else { return }
+        
+        // Check if video is at the end and reset if needed
+        if duration > 0 && currentTime >= duration - 0.5 {
+            resetVideoState()
+            return
+        }
+        
+        if isPlaying {
+            player.pause()
+        } else {
+            player.play()
+        }
+        isPlaying.toggle()
+    }
+    
+    private func seekTo(_ time: Double) {
+        guard let player = player else { return }
+        let cmTime = CMTime(seconds: time, preferredTimescale: 1)
+        player.seek(to: cmTime)
+    }
+    
+    private func formatTime(_ time: Double) -> String {
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
     
     private func resetVideoState() {
         // Reset all video state when video finishes
@@ -706,6 +810,7 @@ struct HLSVideoPlayerWithControls: View {
         currentTime = 0
         hasNotifiedFinished = false
         hasFinished = false // Reset finished flag when video is restarted
+        showControls = true // Show controls when video finishes
         
         // Always reset player to beginning to ensure it can play again
         // This ensures the video is ready when the sequence restarts
@@ -764,7 +869,6 @@ struct HLSDirectoryVideoPlayer: View {
     let onVideoFinished: (() -> Void)?
     let onVideoTap: (() -> Void)?
     let showCustomControls: Bool
-    let onVideoLoadingChanged: ((Bool) -> Void)?
 
     let forceUnmuted: Bool
     let disableAutoRestart: Bool
@@ -788,11 +892,11 @@ struct HLSDirectoryVideoPlayer: View {
                     onVideoFinished: onVideoFinished,
                     onVideoTap: onVideoTap,
                     showCustomControls: showCustomControls,
+
                     forceUnmuted: forceUnmuted,
                     disableAutoRestart: disableAutoRestart,
                     isHLS: isHLSMode,
-                    mode: mode,
-                    onVideoLoadingChanged: onVideoLoadingChanged
+                    mode: mode
                 )
             } else if loading {
                 ProgressView("Loading video...")

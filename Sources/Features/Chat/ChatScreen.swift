@@ -356,9 +356,9 @@ struct ChatScreen: View {
         
         // Process message in background
         Task.detached(priority: .background) {
+            var uploadedAttachments: [MimeiFileType]? = nil
+            
             do {
-                var uploadedAttachments: [MimeiFileType]? = nil
-                
                 // Upload attachment if present
                 if let attachment = currentAttachment, let photoData = currentAttachmentData {
                     print("[ChatScreen] Uploading attachment to IPFS in background...")
@@ -414,9 +414,6 @@ struct ChatScreen: View {
                 print("[ChatScreen] Error sending message in background: \(error)")
                 
                 // Handle network exceptions the same as backend failures
-                // Capture the error message before entering MainActor context
-                let errorMessage = error.localizedDescription
-                
                 await MainActor.run {
                     // Create a failed message with error details
                     let failedMessage = ChatMessage(
@@ -424,16 +421,16 @@ struct ChatScreen: View {
                         receiptId: receiptId,
                         chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
                         content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
-                        attachments: nil, // No attachments in error case
+                        attachments: uploadedAttachments,
                         success: false,
-                        errorMsg: errorMessage
+                        errorMsg: error.localizedDescription
                     )
                     
                     // Add failed message to UI and save to Core Data
                     messages.append(failedMessage)
                     chatRepository.addMessagesToCoreData([failedMessage])
                     
-                    print("[ChatScreen] Message failed to send in background (network error): \(errorMessage)")
+                    print("[ChatScreen] Message failed to send in background (network error): \(error.localizedDescription)")
                 }
             }
         }

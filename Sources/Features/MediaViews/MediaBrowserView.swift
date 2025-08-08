@@ -23,8 +23,6 @@ struct MediaBrowserView: View {
     @State private var dragOffset = CGSize.zero
     @State private var isDragging = false
     @State private var previousIndex: Int = -1 // Track previous index for video management
-    @State private var isVideoLoading = false // Track if video is loading to prevent premature close
-    @State private var hasBeenOpenForAWhile = false // Track if fullscreen has been open long enough to prevent premature close
 
 
     private var attachments: [MimeiFileType] {
@@ -67,26 +65,6 @@ struct MediaBrowserView: View {
             .indexViewStyle(.page(backgroundDisplayMode: .always))
             .onChange(of: currentIndex) { newIndex in
                 print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
-                
-                // Handle video switching in fullscreen mode
-                if let previousAttachment = attachments[safe: previousIndex],
-                   isVideoAttachment(previousAttachment) {
-                    // Pause the previous video
-                    if let player = VideoCacheManager.shared.getVideoPlayer(for: previousAttachment.mid, url: previousAttachment.getUrl(baseUrl)!, isHLS: true) {
-                        player.pause()
-                        print("DEBUG: [MediaBrowserView] Paused previous video: \(previousAttachment.mid)")
-                    }
-                }
-                
-                if let newAttachment = attachments[safe: newIndex],
-                   isVideoAttachment(newAttachment) {
-                    // Start playing the new video
-                    if let player = VideoCacheManager.shared.getVideoPlayer(for: newAttachment.mid, url: newAttachment.getUrl(baseUrl)!, isHLS: true) {
-                        player.play()
-                        print("DEBUG: [MediaBrowserView] Started playing new video: \(newAttachment.mid)")
-                    }
-                }
-                
                 previousIndex = newIndex
             }
             
@@ -94,14 +72,7 @@ struct MediaBrowserView: View {
             if showControls {
                 VStack {
                     HStack {
-                        Button(action: { 
-                            // Only dismiss if video is not loading AND fullscreen has been open for a while
-                            if !isVideoLoading || !hasBeenOpenForAWhile {
-                                dismiss()
-                            } else {
-                                print("DEBUG: [MediaBrowserView] Preventing close button dismiss - video is still loading and fullscreen has been open")
-                            }
-                        }) {
+                        Button(action: { dismiss() }) {
                             Image(systemName: "xmark")
                                 .font(.title2)
                                 .foregroundColor(.white)
@@ -109,7 +80,6 @@ struct MediaBrowserView: View {
                                 .background(Color.black.opacity(0.5))
                                 .clipShape(Circle())
                         }
-                        .disabled(isVideoLoading && hasBeenOpenForAWhile) // Only disable button while video is loading AND fullscreen has been open for a while
                         Spacer()
                     }
                     Spacer()
@@ -134,18 +104,7 @@ struct MediaBrowserView: View {
                 .onEnded { value in
                     if value.translation.height > 100 || value.velocity.height > 500 {
                         // Dismiss if dragged down far enough or with enough velocity
-                        // But only if video is not loading AND fullscreen has been open for a while
-                        if !isVideoLoading || !hasBeenOpenForAWhile {
-                            dismiss()
-                        } else {
-                            print("DEBUG: [MediaBrowserView] Preventing dismiss - video is still loading and fullscreen has been open")
-                            // Reset position with animation
-                            withAnimation(.spring()) {
-                                dragOffset = .zero
-                            }
-                            isDragging = false
-                            resetControlsTimer()
-                        }
+                        dismiss()
                     } else {
                         // Reset position with animation
                         withAnimation(.spring()) {
@@ -172,26 +131,14 @@ struct MediaBrowserView: View {
             // Initialize previous index
             previousIndex = currentIndex
             
-            // Pause all videos in MediaCells to prevent audio overlap
-            pauseAllMediaCellVideos()
-            
-            // Allow fullscreen to stay open for at least 1 second before checking loading state
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                hasBeenOpenForAWhile = true
-                print("DEBUG: [MediaBrowserView] Fullscreen has been open for a while - enabling loading state checks")
-            }
-            
             // Start playing the initial video if it's a video
             if let initialAttachment = attachments[safe: currentIndex],
                isVideoAttachment(initialAttachment) {
                 print("DEBUG: [MediaBrowserView] Starting initial video with mid: \(initialAttachment.mid)")
                 
-                // Add a small delay to ensure the video player is properly initialized
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    if let player = VideoCacheManager.shared.getVideoPlayer(for: initialAttachment.mid, url: initialAttachment.getUrl(baseUrl)!, isHLS: true) {
-                        player.play()
-                        print("DEBUG: [MediaBrowserView] Started playing initial video for mid: \(initialAttachment.mid)")
-                    }
+                if let player = VideoCacheManager.shared.getVideoPlayer(for: initialAttachment.mid, url: initialAttachment.getUrl(baseUrl)!, isHLS: true) {
+                    player.play()
+                    print("DEBUG: [MediaBrowserView] Started playing initial video for mid: \(initialAttachment.mid)")
                 }
             }
         }
@@ -200,10 +147,9 @@ struct MediaBrowserView: View {
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
             
-            // Resume MediaCell videos when exiting fullscreen
-            resumeMediaCellVideos()
-            
-            print("DEBUG: [MediaBrowserView] Exiting full-screen - resuming MediaCell videos")
+            // Don't pause videos when exiting full-screen - let them continue playing in MediaCell
+            // The shared video player instance will maintain the current playback state
+            print("DEBUG: [MediaBrowserView] Exiting full-screen - preserving video playback state")
         }
     }
     
@@ -262,45 +208,6 @@ struct MediaBrowserView: View {
         return attachment.type.lowercased() == "image"
     }
     
-    private func handleVideoLoadingState(_ isLoading: Bool) {
-        // Only set loading state if fullscreen has been open for a while
-        // This prevents premature dismissal during initial load
-        if hasBeenOpenForAWhile {
-            isVideoLoading = isLoading
-            print("DEBUG: [MediaBrowserView] Video loading state changed to: \(isLoading) (fullscreen has been open)")
-        } else {
-            print("DEBUG: [MediaBrowserView] Ignoring video loading state change to: \(isLoading) (fullscreen not open long enough)")
-        }
-    }
-    
-    private func pauseAllMediaCellVideos() {
-        // Pause all videos in the current tweet's MediaCells to prevent audio overlap
-        for attachment in attachments {
-            if isVideoAttachment(attachment) {
-                VideoCacheManager.shared.pauseVideoPlayer(for: attachment.mid)
-                print("DEBUG: [MediaBrowserView] Paused MediaCell video: \(attachment.mid)")
-            }
-        }
-    }
-    
-    private func resumeMediaCellVideos() {
-        // Resume MediaCell videos when exiting fullscreen
-        // Only resume the current video if it was playing in fullscreen
-        if let currentAttachment = attachments[safe: currentIndex],
-           isVideoAttachment(currentAttachment) {
-            // The current video will continue playing from where it left off in fullscreen
-            print("DEBUG: [MediaBrowserView] Current video will continue in MediaCell: \(currentAttachment.mid)")
-        }
-        
-        // For other videos, they will resume based on their visibility state in MediaCells
-        for (index, attachment) in attachments.enumerated() {
-            if isVideoAttachment(attachment) && index != currentIndex {
-                // These videos will be managed by their respective MediaCells
-                print("DEBUG: [MediaBrowserView] Video \(attachment.mid) will be managed by MediaCell")
-            }
-        }
-    }
-    
     @ViewBuilder
     private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
         SimpleVideoPlayer(
@@ -310,10 +217,6 @@ struct MediaBrowserView: View {
             onMuteChanged: { _ in
                 // In full-screen mode, don't update global mute state
                 // Full-screen videos should have independent audio control
-            },
-            onVideoLoadingChanged: { isLoading in
-                // Update loading state to prevent premature fullscreen close
-                handleVideoLoadingState(isLoading)
             },
             isVisible: index == currentIndex, // Only visible if this is the current video
             contentType: attachment.type,
@@ -325,7 +228,7 @@ struct MediaBrowserView: View {
                 }
                 resetControlsTimer() // Reset close button timer
             },
-            disableAutoRestart: false, // Enable auto-restart in fullscreen mode
+
             mode: .mediaBrowser
         )
         .environmentObject(MuteState.shared)
