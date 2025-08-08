@@ -112,7 +112,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppDidBecomeActive() {
-        print("[AppDelegate] App did become active - posting notification to restore video state")
+        print("[AppDelegate] App did become active - restoring video players and posting notification")
+        
+        // Restore video players to fix black screen issue
+        VideoCacheManager.shared.restoreVideoPlayers()
+        
+        // Post notification to restore video state
         NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
     }
     
@@ -122,6 +127,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppWillEnterForeground() {
-        print("[AppDelegate] App will enter foreground")
+        print("[AppDelegate] App will enter foreground - restoring videos after idle period")
+        
+        // Restore videos after idle period to fix black screen issue
+        VideoCacheManager.shared.handleVideoRestorationAfterIdle()
     }
 } 

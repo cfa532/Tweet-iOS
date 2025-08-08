@@ -219,6 +219,9 @@ struct MediaCell: View, Equatable {
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Restore video state when app becomes active
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                // Force refresh video layer to fix black screen issue
+                VideoCacheManager.shared.forceRefreshVideoLayer(for: attachment.mid)
+                
                 // Ensure video is loaded
                 shouldLoadVideo = true
                 
