@@ -410,18 +410,19 @@ struct HLSVideoPlayerWithControls: View {
                                             
                                             // Mute/Unmute button
                                             Button(action: {
-                                                if forceUnmuted {
-                                                    // Use local mute state for full-screen mode
+                                                if forceUnmuted && mode == .mediaBrowser {
+                                                    // Use local mute state for full-screen mode only
                                                     localMuted.toggle()
                                                     videoCache.setMuteState(for: mid, isMuted: localMuted)
                                                     playerMuted = localMuted
-                                                    // Local mute state changed (forceUnmuted mode)
+                                                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Full screen mute state toggled to: \(localMuted)")
                                                 } else {
-                                                    // Use global mute state for MediaCell
+                                                    // Use global mute state for MediaCell and other modes
                                                     muteState.toggleMute()
+                                                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Global mute state toggled to: \(muteState.isMuted)")
                                                 }
                                             }) {
-                                                Image(systemName: (forceUnmuted ? localMuted : muteState.isMuted) ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                                Image(systemName: (forceUnmuted && mode == .mediaBrowser ? localMuted : muteState.isMuted) ? "speaker.slash.fill" : "speaker.wave.2.fill")
                                                     .font(.title2)
                                                     .foregroundColor(.white)
                                                     .background(Circle().fill(Color.black.opacity(0.5)))
@@ -522,10 +523,26 @@ struct HLSVideoPlayerWithControls: View {
                     // Check if video is at the end and restart if needed
                     if duration > 0 && currentTime >= duration - 0.5 {
                         resetVideoState()
-                        // Start playing again
-                        if let player = player {
-                            player.play()
-                            isPlaying = true
+                        // For auto-replay mode, start playing after reset
+                        if !disableAutoRestart && mode == .mediaBrowser {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                // Double-check that we're still in full screen mode before auto-replaying
+                                if self.mode == .mediaBrowser && !self.disableAutoRestart {
+                                    if let player = self.player {
+                                        player.play()
+                                        self.isPlaying = true
+                                        print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Tap auto-replay started")
+                                    }
+                                } else {
+                                    print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Tap auto-replay cancelled - no longer in full screen mode")
+                                }
+                            }
+                        } else {
+                            // Manual restart for non-auto-replay modes
+                            if let player = player {
+                                player.play()
+                                isPlaying = true
+                            }
                         }
                         return
                     }
@@ -550,13 +567,20 @@ struct HLSVideoPlayerWithControls: View {
                 setupPlayer()
             }
             .onAppear {
-                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] View appeared - autoPlay: \(autoPlay), isVisible: \(isVisible), player exists: \(player != nil)")
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] View appeared - autoPlay: \(autoPlay), isVisible: \(isVisible), player exists: \(player != nil), mode: \(mode)")
                 
-                // Reset finished state when video appears in a new tweet
+                // Reset finished state when video appears in a new context
                 // This allows the same video to be re-queued when it appears in multiple tweets
                 if hasFinished {
                     hasFinished = false
                     hasNotifiedFinished = false
+                }
+                
+                // Reset auto-replay state when switching from full screen to preview mode
+                // This prevents auto-replay from persisting in preview grid
+                if mode != .mediaBrowser && !disableAutoRestart {
+                    // We're not in full screen mode, so disable auto-replay
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Switching from full screen to preview - disabling auto-replay")
                 }
                 
                 if player == nil {
@@ -564,6 +588,17 @@ struct HLSVideoPlayerWithControls: View {
                     setupPlayer()
                 } else {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player already exists")
+                    // Ensure mute state is correct for the current mode
+                    if mode == .mediaBrowser && forceUnmuted {
+                        // Full screen mode - use local mute state
+                        player?.isMuted = localMuted
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] onAppear in full screen - setting mute to local state: \(localMuted)")
+                    } else {
+                        // Preview mode - use global mute state
+                        player?.isMuted = muteState.isMuted
+                        playerMuted = muteState.isMuted
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] onAppear in preview - setting mute to global state: \(muteState.isMuted)")
+                    }
                 }
                 
                 // Start controls timer when video loads if custom controls are enabled
@@ -595,6 +630,20 @@ struct HLSVideoPlayerWithControls: View {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video became visible - reloading video layer")
                     VideoCacheManager.shared.forceRefreshVideoLayer(for: mid)
                     
+                    // Ensure mute state is correct when video becomes visible
+                    if let player = player {
+                        if mode == .mediaBrowser && forceUnmuted {
+                            // Full screen mode - use local mute state
+                            player.isMuted = localMuted
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video became visible in full screen - setting mute to local state: \(localMuted)")
+                        } else {
+                            // Preview mode - use global mute state
+                            player.isMuted = muteState.isMuted
+                            playerMuted = muteState.isMuted
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video became visible in preview - setting mute to global state: \(muteState.isMuted)")
+                        }
+                    }
+                    
                     // Video became visible - start playback if autoPlay is enabled
                     if autoPlay && !isPlaying {
                         if let player = player {
@@ -614,10 +663,14 @@ struct HLSVideoPlayerWithControls: View {
             }
             .onChange(of: muteState.isMuted) { newMuteState in
                 // Update player mute state when global mute state changes
-                // Only update if not in forceUnmuted mode
-                if !forceUnmuted {
+                // Only update if not in forceUnmuted mode (full screen mode)
+                if !forceUnmuted && mode != .mediaBrowser {
                     videoCache.setMuteState(for: mid, isMuted: newMuteState)
                     playerMuted = newMuteState
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Global mute state changed to: \(newMuteState) (not in full screen)")
+                } else if forceUnmuted && mode == .mediaBrowser {
+                    // In full screen mode, don't sync with global mute state
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Ignoring global mute state change in full screen mode")
                 }
             }
             .onChange(of: autoPlay) { newAutoPlay in
@@ -644,6 +697,33 @@ struct HLSVideoPlayerWithControls: View {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Not starting playback - newAutoPlay: \(newAutoPlay), isPlaying: \(isPlaying)")
                 }
             }
+            .onChange(of: mode) { newMode in
+                // Handle mode changes (e.g., from full screen to preview)
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Mode changed from \(mode) to \(newMode)")
+                
+                // If switching from full screen to preview mode, ensure auto-replay is disabled
+                if mode == .mediaBrowser && newMode != .mediaBrowser {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Switching from full screen to preview - ensuring auto-replay is disabled")
+                    // The disableAutoRestart parameter should already be set correctly by the parent view
+                    // But we can add additional safety here if needed
+                }
+                
+                // Handle mute state changes when switching modes
+                if let player = player {
+                    if newMode == .mediaBrowser {
+                        // Switching to full screen mode - use local mute state
+                        if forceUnmuted {
+                            player.isMuted = localMuted
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Mode changed to full screen - setting mute to local state: \(localMuted)")
+                        }
+                    } else {
+                        // Switching to preview mode - use global mute state
+                        player.isMuted = muteState.isMuted
+                        playerMuted = muteState.isMuted
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Mode changed to preview - setting mute to global state: \(muteState.isMuted)")
+                    }
+                }
+            }
         }
     }
     
@@ -657,14 +737,18 @@ struct HLSVideoPlayerWithControls: View {
         if let cachedPlayer = videoCache.getVideoPlayer(for: mid, url: videoURL, isHLS: isHLS) {
             self.player = cachedPlayer
             
-            // Set initial mute state
-            if forceUnmuted {
+            // Set initial mute state based on current mode
+            if forceUnmuted && mode == .mediaBrowser {
                 // For full-screen mode, start unmuted and use local state
                 cachedPlayer.isMuted = false
                 localMuted = false
+                playerMuted = false
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] setupPlayer in full screen - setting mute to false")
             } else {
                 // For normal mode, use global mute state
                 cachedPlayer.isMuted = muteState.isMuted
+                playerMuted = muteState.isMuted
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] setupPlayer in preview - setting mute to global state: \(muteState.isMuted)")
             }
             
             // Set up observers for the player
@@ -712,6 +796,26 @@ struct HLSVideoPlayerWithControls: View {
                     self.hasFinished = true // Mark video as finished
                     self.resetVideoState()
                     self.onVideoFinished?()
+                    
+                    // Auto-replay logic for full screen mode only
+                    if !self.disableAutoRestart && self.mode == .mediaBrowser {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Auto-replaying video in full screen mode")
+                        // Add a small delay to ensure the reset is complete
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            // Double-check that we're still in full screen mode before auto-replaying
+                            if self.mode == .mediaBrowser && !self.disableAutoRestart {
+                                if let player = self.player {
+                                    player.play()
+                                    self.isPlaying = true
+                                    print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Auto-replay started")
+                                }
+                            } else {
+                                print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Auto-replay cancelled - no longer in full screen mode")
+                            }
+                        }
+                    } else {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Not auto-replaying - disableAutoRestart: \(self.disableAutoRestart), mode: \(self.mode)")
+                    }
                 } else {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Ignoring AVPlayerItemDidPlayToEndTime - already notified")
                 }
@@ -779,6 +883,19 @@ struct HLSVideoPlayerWithControls: View {
         // Check if video is at the end and reset if needed
         if duration > 0 && currentTime >= duration - 0.5 {
             resetVideoState()
+            // For auto-replay mode, start playing after reset
+            if !disableAutoRestart && mode == .mediaBrowser {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    // Double-check that we're still in full screen mode before auto-replaying
+                    if self.mode == .mediaBrowser && !self.disableAutoRestart {
+                        player.play()
+                        self.isPlaying = true
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Manual auto-replay started")
+                    } else {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Manual auto-replay cancelled - no longer in full screen mode")
+                    }
+                }
+            }
             return
         }
         
@@ -824,8 +941,10 @@ struct HLSVideoPlayerWithControls: View {
                 player.isMuted = muteState.isMuted
             }
             
-            // Ensure player is paused after reset
-            player.pause()
+            // Only pause player if auto-replay is disabled
+            if disableAutoRestart {
+                player.pause()
+            }
         }
     }
     
