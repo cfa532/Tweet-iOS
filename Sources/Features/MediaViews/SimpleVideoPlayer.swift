@@ -350,6 +350,8 @@ struct HLSVideoPlayerWithControls: View {
     @State private var localMuted: Bool = false // Local mute state for forceUnmuted mode
     @State private var isSettingUpPlayer = false // Flag to prevent mute state changes during setup
     @State private var playerMuted: Bool = false
+    @State private var hasKVOObserver: Bool = false
+    @State private var statusObserver: PlayerStatusObserver?
 
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
@@ -545,18 +547,20 @@ struct HLSVideoPlayerWithControls: View {
                 setupPlayer()
             }
             .onAppear {
-        
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] View appeared - autoPlay: \(autoPlay), isVisible: \(isVisible), player exists: \(player != nil)")
                 
                 // Reset finished state when video appears in a new tweet
                 // This allows the same video to be re-queued when it appears in multiple tweets
                 if hasFinished {
-            
                     hasFinished = false
                     hasNotifiedFinished = false
                 }
                 
                 if player == nil {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player is nil, calling setupPlayer()")
                     setupPlayer()
+                } else {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player already exists")
                 }
                 
                 // Start controls timer when video loads if custom controls are enabled
@@ -567,10 +571,15 @@ struct HLSVideoPlayerWithControls: View {
                 // Do not resume or start playback here; let parent control via autoPlay
             }
             .onDisappear {
-        
-                
                 // Pause video using cache, do not destroy instance
                 videoCache.pauseVideoPlayer(for: mid)
+                
+                // Remove KVO observer for player item status
+                if hasKVOObserver, let observer = statusObserver, let player = player, let playerItem = player.currentItem {
+                    playerItem.removeObserver(observer, forKeyPath: "status")
+                    statusObserver = nil
+                    hasKVOObserver = false
+                }
                 
                 // Do NOT call cleanupObservers() - keep the instance alive
                 // Only remove notification observers, keep the player instance
@@ -609,13 +618,13 @@ struct HLSVideoPlayerWithControls: View {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] autoPlay changed to: \(newAutoPlay), isVisible: \(isVisible), isPlaying: \(isPlaying), player exists: \(player != nil)")
                 if newAutoPlay && !isPlaying {
                     // AutoPlay was enabled and video is not playing - start playback
-                    // Note: We don't check isVisible here because it might change shortly after
                     if let player = player {
                         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Starting playback - autoPlay: \(newAutoPlay), isVisible: \(isVisible)")
                         player.play()
                         isPlaying = true
                     } else {
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Cannot start playback - player is nil")
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Cannot start playback - player is nil, will try setupPlayer()")
+                        setupPlayer()
                     }
                 } else if !newAutoPlay && isPlaying {
                     // AutoPlay was disabled and video is playing - pause playback
@@ -624,6 +633,8 @@ struct HLSVideoPlayerWithControls: View {
                         player.pause()
                         isPlaying = false
                     }
+                } else {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Not starting playback - newAutoPlay: \(newAutoPlay), isPlaying: \(isPlaying)")
                 }
             }
         }
@@ -658,17 +669,12 @@ struct HLSVideoPlayerWithControls: View {
                 self.duration = playerItem.duration.seconds
                 
                 // Player is ready - check if we should start playback
-                if autoPlay && isVisible && !isPlaying {
-                    if forcePlay {
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready - Force play mode - starting playback")
-                        cachedPlayer.play()
-                        self.isPlaying = true
-                        pauseAllOtherVideos()
-                    } else {
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready - Normal auto-play mode - starting playback")
-                        cachedPlayer.play()
-                        self.isPlaying = true
-                    }
+                if autoPlay && !isPlaying {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready - starting playback (autoPlay: \(autoPlay), isVisible: \(isVisible))")
+                    cachedPlayer.play()
+                    self.isPlaying = true
+                } else {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready but not starting playback - autoPlay: \(autoPlay), isPlaying: \(isPlaying), isVisible: \(isVisible)")
                 }
             } else {
                 // Player not ready yet, set loading state
@@ -703,16 +709,62 @@ struct HLSVideoPlayerWithControls: View {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Ignoring AVPlayerItemDidPlayToEndTime - already notified")
                 }
             }
+            
+            // Add KVO observer for player item status to handle autoplay when ready
+            if !hasKVOObserver {
+                let observer = PlayerStatusObserver(mid: mid) { status in
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player item status changed to: \(status.rawValue) - autoPlay: \(self.autoPlay), isPlaying: \(self.isPlaying)")
+                    
+                    if status == .readyToPlay {
+                        self.isLoading = false
+                        self.duration = playerItem.duration.seconds
+                        
+                        // Player is now ready - check if we should start autoplay
+                        if self.autoPlay && !self.isPlaying {
+                            if let player = self.player {
+                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready via KVO - starting playback")
+                                player.play()
+                                self.isPlaying = true
+                            }
+                        } else {
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready via KVO but not starting playback - autoPlay: \(self.autoPlay), isPlaying: \(self.isPlaying)")
+                        }
+                    } else if status == .failed {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player item failed to load: \(playerItem.error?.localizedDescription ?? "Unknown error")")
+                        self.errorMessage = "Failed to load video"
+                        self.isLoading = false
+                    }
+                }
+                
+                playerItem.addObserver(observer, forKeyPath: "status", options: [.new], context: nil)
+                statusObserver = observer
+                hasKVOObserver = true
+            }
         }
     }
     
-    /// Pause all other videos when force play is enabled
-    private func pauseAllOtherVideos() {
-        if forcePlay {
-            // Pause all other videos except this one when force play is enabled
-            VideoCacheManager.shared.pauseAllVideosExcept(for: mid)
+    /// Player status observer class for KVO
+    private class PlayerStatusObserver: NSObject {
+        private let mid: String
+        private let onStatusChanged: (AVPlayerItem.Status) -> Void
+        
+        init(mid: String, onStatusChanged: @escaping (AVPlayerItem.Status) -> Void) {
+            self.mid = mid
+            self.onStatusChanged = onStatusChanged
+            super.init()
+        }
+        
+        override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+            if keyPath == "status", let playerItem = object as? AVPlayerItem {
+                DispatchQueue.main.async {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid)] Player item status changed to: \(playerItem.status.rawValue)")
+                    self.onStatusChanged(playerItem.status)
+                }
+            }
         }
     }
+    
+
     
     private func togglePlayPause() {
         guard let player = player else { return }

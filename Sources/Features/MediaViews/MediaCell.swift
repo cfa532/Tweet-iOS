@@ -62,7 +62,7 @@ struct MediaCell: View, Equatable {
                         SimpleVideoPlayer(
                             url: url,
                             mid: attachment.mid,
-                            autoPlay: play && isVisible,
+                            autoPlay: play,
                             onVideoFinished: onVideoFinished,
                             isVisible: isVisible,
                             contentType: attachment.type,
@@ -75,13 +75,13 @@ struct MediaCell: View, Equatable {
                             mode: .mediaCell
                         )
                         .onAppear {
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - play: \(play), isVisible: \(isVisible), autoPlay: \(play && isVisible)")
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - play: \(play), isVisible: \(isVisible), autoPlay: \(play)")
                         }
                         .onChange(of: play) { newPlayValue in
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] play changed to: \(newPlayValue), isVisible: \(isVisible), autoPlay: \(newPlayValue && isVisible)")
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] play changed to: \(newPlayValue), isVisible: \(isVisible), autoPlay: \(newPlayValue)")
                         }
                         .onChange(of: isVisible) { newIsVisible in
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible), play: \(play), autoPlay: \(play && newIsVisible)")
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible), play: \(play), autoPlay: \(play)")
                         }
 
                         .environmentObject(MuteState.shared)

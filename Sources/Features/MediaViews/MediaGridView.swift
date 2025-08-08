@@ -530,6 +530,8 @@ struct MediaGridView: View {
                     print("DEBUG: [MediaGridView] Setup single video playback for \(videoMids[0])")
                     // Reset the single video to beginning
                     VideoCacheManager.shared.resetVideoPlayer(for: videoMids[0])
+                    // Force refresh cell to update play state
+                    forceRefreshTrigger += 1
                 }
             }
             .onChange(of: isVisible) { newVisibility in
