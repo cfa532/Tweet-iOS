@@ -472,13 +472,16 @@ struct HLSVideoPlayerWithControls: View {
                                 playerMuted = muted
                                 
                                 if forceUnmuted {
-                                    // Update local mute state for full-screen mode
+                                    // Update local mute state for full-screen mode only
+                                    // Don't sync with global mute state in fullscreen
                                     localMuted = muted
+                                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Fullscreen mute state changed to: \(muted) (local only)")
                                 } else {
                                     // For MediaCell videos, sync with global mute state when user interacts with native controls
                                     // Only update if this is a user-initiated change, not a programmatic one
                                     if muteState.isMuted != muted {
                                         muteState.setMuted(muted)
+                                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Global mute state synced to: \(muted)")
                                     }
                                 }
                             }

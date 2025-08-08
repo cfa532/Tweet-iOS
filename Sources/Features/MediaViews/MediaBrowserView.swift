@@ -16,7 +16,7 @@ struct MediaBrowserView: View {
     @State private var showVideoPlayer = false
     @State private var play = false
     @State private var isVisible = true
-    @State private var isMuted: Bool = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
+    @State private var originalMuteState: Bool = false // Store original mute state when entering fullscreen
     @State private var imageStates: [Int: ImageState] = [:]
     @State private var showControls = true
     @State private var controlsTimer: Timer?
@@ -128,6 +128,10 @@ struct MediaBrowserView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
             
+            // Store original mute state when entering fullscreen
+            originalMuteState = MuteState.shared.isMuted
+            print("DEBUG: [MediaBrowserView] Stored original mute state: \(originalMuteState)")
+            
             // Initialize previous index
             previousIndex = currentIndex
             
@@ -146,6 +150,12 @@ struct MediaBrowserView: View {
             isVisible = false
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
+            
+            // Restore original mute state when exiting fullscreen
+            if MuteState.shared.isMuted != originalMuteState {
+                MuteState.shared.setMuted(originalMuteState)
+                print("DEBUG: [MediaBrowserView] Restored original mute state: \(originalMuteState)")
+            }
             
             // Don't pause videos when exiting full-screen - let them continue playing in MediaCell
             // The shared video player instance will maintain the current playback state
