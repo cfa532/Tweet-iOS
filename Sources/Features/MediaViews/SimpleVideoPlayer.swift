@@ -587,8 +587,21 @@ struct HLSVideoPlayerWithControls: View {
                 NotificationCenter.default.removeObserver(self)
             }
             .onChange(of: isVisible) { newVisibility in
-                // Pause video when it becomes invisible
-                if !newVisibility {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] isVisible changed to: \(newVisibility), autoPlay: \(autoPlay), isPlaying: \(isPlaying)")
+                if newVisibility {
+                    // Video became visible - start playback if autoPlay is enabled
+                    if autoPlay && !isPlaying {
+                        if let player = player {
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video became visible - starting playback")
+                            player.play()
+                            isPlaying = true
+                        } else {
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video became visible but player is nil")
+                        }
+                    }
+                } else {
+                    // Video became invisible - pause playback
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video became invisible - pausing playback")
                     videoCache.pauseVideoPlayer(for: mid)
                     isPlaying = false
                 }
@@ -603,15 +616,21 @@ struct HLSVideoPlayerWithControls: View {
             }
             .onChange(of: autoPlay) { newAutoPlay in
                 // Handle autoPlay parameter changes
-                if newAutoPlay && isVisible && !isPlaying {
-                    // AutoPlay was enabled and video is visible but not playing - start playback
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] autoPlay changed to: \(newAutoPlay), isVisible: \(isVisible), isPlaying: \(isPlaying), player exists: \(player != nil)")
+                if newAutoPlay && !isPlaying {
+                    // AutoPlay was enabled and video is not playing - start playback
+                    // Note: We don't check isVisible here because it might change shortly after
                     if let player = player {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Starting playback - autoPlay: \(newAutoPlay), isVisible: \(isVisible)")
                         player.play()
                         isPlaying = true
+                    } else {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Cannot start playback - player is nil")
                     }
                 } else if !newAutoPlay && isPlaying {
                     // AutoPlay was disabled and video is playing - pause playback
                     if let player = player {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Pausing playback - autoPlay: \(newAutoPlay)")
                         player.pause()
                         isPlaying = false
                     }
@@ -621,8 +640,6 @@ struct HLSVideoPlayerWithControls: View {
     }
     
     private func setupPlayer() {
-
-        
         isSettingUpPlayer = true // Prevent mute state changes during setup
         isLoading = true
         errorMessage = nil
@@ -630,7 +647,6 @@ struct HLSVideoPlayerWithControls: View {
         
         // Try to get cached player first
         if let cachedPlayer = videoCache.getVideoPlayer(for: mid, url: videoURL, isHLS: isHLS) {
-
             self.player = cachedPlayer
             
             // Set initial mute state
@@ -639,7 +655,6 @@ struct HLSVideoPlayerWithControls: View {
                 cachedPlayer.isMuted = false
                 localMuted = false
                 playerMuted = false
-                // Fullscreen video - muted: false
             } else {
                 // For normal mode, use global mute state
                 cachedPlayer.isMuted = muteState.isMuted
@@ -652,11 +667,26 @@ struct HLSVideoPlayerWithControls: View {
             // Monitor player item status
             self.monitorPlayerStatus(cachedPlayer)
             
-            // Handle auto-play logic
-            handleAutoPlay(cachedPlayer)
+            // Direct playback control based on current conditions
+            if autoPlay && isVisible {
+                if forcePlay {
+                    // Force play mode (for full-screen) - start this video and stop others
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Force play mode - starting playback")
+                    cachedPlayer.play()
+                    self.isPlaying = true
+                    pauseAllOtherVideos()
+                } else {
+                    // Normal auto-play mode - only play if visible
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Normal auto-play mode - starting playback")
+                    cachedPlayer.play()
+                    self.isPlaying = true
+                }
+            } else {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Not starting playback - autoPlay: \(autoPlay), isVisible: \(isVisible)")
+                self.isPlaying = false
+            }
             
             isSettingUpPlayer = false // Allow mute state changes after setup
-            // Player setup complete
         } else {
             // Failed to get or create player for video mid: \(mid)
             errorMessage = "Failed to create video player"
@@ -697,26 +727,6 @@ struct HLSVideoPlayerWithControls: View {
         }
     }
     
-    private func handleAutoPlay(_ player: AVPlayer) {
-        // Only play if autoPlay is true and video is visible
-        if autoPlay && isVisible {
-            if self.forcePlay {
-                // Force play mode (for full-screen) - start this video and stop others
-                player.play()
-                self.isPlaying = true
-                
-                // Pause all other videos when force play is enabled
-                pauseAllOtherVideos()
-            } else {
-                // Normal auto-play mode - only play if visible
-                player.play()
-                self.isPlaying = true
-            }
-        } else {
-            self.isPlaying = false
-        }
-    }
-    
     /// Pause all other videos when force play is enabled
     private func pauseAllOtherVideos() {
         if forcePlay {
@@ -739,8 +749,19 @@ struct HLSVideoPlayerWithControls: View {
                 self.isLoading = false
                 self.duration = playerItem.duration.seconds
                 
-                // Handle auto-play when player is ready
-                self.handleAutoPlay(player)
+                // Player is ready - check if we should start playback
+                if autoPlay && isVisible && !isPlaying {
+                    if forcePlay {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready - Force play mode - starting playback")
+                        player.play()
+                        self.isPlaying = true
+                        pauseAllOtherVideos()
+                    } else {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Player ready - Normal auto-play mode - starting playback")
+                        player.play()
+                        self.isPlaying = true
+                    }
+                }
                 
                 timer.invalidate()
             case .failed:
@@ -854,20 +875,22 @@ struct HLSVideoPlayerWithControls: View {
         hasFinished = false // Reset finished flag when video is restarted
         showControls = true // Show controls when video finishes
         
-        // Only reset player to beginning if auto-restart is not disabled
-        if !disableAutoRestart {
-            // Reset player to beginning using cache
-            videoCache.resetVideoPlayer(for: mid)
-            
-            // Update local player reference if needed
-            if let player = player {
-                // Preserve the mute state when resetting
-                if forceUnmuted {
-                    player.isMuted = localMuted
-                } else {
-                    player.isMuted = muteState.isMuted
-                }
+        // Always reset player to beginning to ensure it can play again
+        // This ensures the video is ready when the sequence restarts
+        videoCache.resetVideoPlayer(for: mid)
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video finished - reset to beginning")
+        
+        // Update local player reference if needed
+        if let player = player {
+            // Preserve the mute state when resetting
+            if forceUnmuted {
+                player.isMuted = localMuted
+            } else {
+                player.isMuted = muteState.isMuted
             }
+            
+            // Ensure player is paused after reset
+            player.pause()
         }
         
         // Start controls timer to auto-hide controls

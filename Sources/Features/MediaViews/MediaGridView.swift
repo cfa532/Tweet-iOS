@@ -15,6 +15,8 @@ struct MediaGridView: View {
     let onItemTap: ((Int) -> Void)?
     @State private var shouldLoadVideo = true
     @State private var videoLoadTimer: Timer?
+    @State private var isVisible = false
+    @State private var forceRefreshTrigger = 0
     @StateObject private var videoManager = VideoManager()
     
     init(parentTweet: Tweet, attachments: [MimeiFileType], onItemTap: ((Int) -> Void)? = nil) {
@@ -86,7 +88,8 @@ struct MediaGridView: View {
                         play: shouldPlayVideo(for: 0),
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
-                        videoManager: videoManager
+                        videoManager: videoManager,
+                        forceRefreshTrigger: forceRefreshTrigger
                     )
                     .environmentObject(MuteState.shared)
                     .frame(width: gridWidth, height: gridHeight)
@@ -116,7 +119,8 @@ struct MediaGridView: View {
                                     play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
@@ -136,7 +140,8 @@ struct MediaGridView: View {
                                     play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
@@ -156,7 +161,8 @@ struct MediaGridView: View {
                                     play: shouldPlayVideo(for: 0),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
@@ -170,7 +176,8 @@ struct MediaGridView: View {
                                     play: shouldPlayVideo(for: 1),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
@@ -185,7 +192,8 @@ struct MediaGridView: View {
                                     play: shouldPlayVideo(for: 0),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
@@ -199,7 +207,8 @@ struct MediaGridView: View {
                                     play: shouldPlayVideo(for: 1),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
@@ -227,7 +236,8 @@ struct MediaGridView: View {
                                     play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/3 - 1, height: gridHeight)
@@ -246,7 +256,8 @@ struct MediaGridView: View {
                                     play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/3 - 1)
@@ -264,7 +275,8 @@ struct MediaGridView: View {
                                 play: shouldPlayVideo(for: 0),
                                 shouldLoadVideo: shouldLoadVideo,
                                 onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                forceRefreshTrigger: forceRefreshTrigger
                             )
                             .environmentObject(MuteState.shared)
                             .frame(width: gridWidth/2 - 1, height: gridHeight)
@@ -279,7 +291,8 @@ struct MediaGridView: View {
                                         play: shouldPlayVideo(for: idx),
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                     )
                                     .environmentObject(MuteState.shared)
                                     .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
@@ -298,7 +311,8 @@ struct MediaGridView: View {
                                 play: shouldPlayVideo(for: 0),
                                 shouldLoadVideo: shouldLoadVideo,
                                 onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                forceRefreshTrigger: forceRefreshTrigger
                             )
                             .environmentObject(MuteState.shared)
                             .frame(width: gridWidth, height: gridHeight/2 - 1)
@@ -313,7 +327,8 @@ struct MediaGridView: View {
                                         play: shouldPlayVideo(for: idx),
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                     )
                                     .environmentObject(MuteState.shared)
                                     .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
@@ -342,7 +357,8 @@ struct MediaGridView: View {
                                     play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .aspectRatio(cellAspect, contentMode: .fill)
@@ -361,7 +377,8 @@ struct MediaGridView: View {
                                         play: shouldPlayVideo(for: idx),
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                     )
                                     .environmentObject(MuteState.shared)
                                     .aspectRatio(cellAspect, contentMode: .fill)
@@ -384,7 +401,8 @@ struct MediaGridView: View {
                                     play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
@@ -406,7 +424,8 @@ struct MediaGridView: View {
                                             play: shouldPlayVideo(for: idx),
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
@@ -434,6 +453,9 @@ struct MediaGridView: View {
             .frame(width: gridWidth, height: gridHeight)
             .clipped()
             .onAppear {
+                // Mark the grid as visible
+                isVisible = true
+                
                 // Start video loading timer if this grid contains videos
                 let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
                 
@@ -441,17 +463,47 @@ struct MediaGridView: View {
                     // Use a shorter delay for faster video loading
                     videoLoadTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { _ in
                         shouldLoadVideo = true
-                        // Video playback is now managed by VideoManager
+                        
+                        // Setup video playback for any videos in this grid
+                        let videoMids = attachments.enumerated().compactMap { index, attachment in
+                            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                                return attachment.mid
+                            }
+                            return nil
+                        }
+                        
+                        if !videoMids.isEmpty {
+                            print("DEBUG: [MediaGridView] Grid appeared with \(videoMids.count) videos - RESETTING to first video")
+                            // Always stop any existing playback first
+                            videoManager.stopSequentialPlayback()
+                            // Setup playback starting with the first video in sequence
+                            videoManager.setupSequentialPlayback(for: videoMids)
+                            // CRITICAL: Force reset to first video to ensure sequence starts from beginning
+                            videoManager.forceReset()
+                            // Reset all video players to beginning
+                            for mid in videoMids {
+                                VideoCacheManager.shared.resetVideoPlayer(for: mid)
+                            }
+                            print("DEBUG: [MediaGridView] RESET COMPLETE - Starting sequence with first video: \(videoMids[0]) at index 0")
+                            // Force refresh all cells to update their play states
+                            forceRefreshTrigger += 1
+                        }
                     }
                 }
             }
             .onDisappear {
+                // Mark the grid as not visible
+                isVisible = false
+                
                 videoLoadTimer?.invalidate()
                 videoLoadTimer = nil
                 shouldLoadVideo = false
                 videoManager.stopSequentialPlayback()
             }
             .onAppear {
+                // Mark the grid as visible
+                isVisible = true
+                
                 // Setup sequential playback for videos
                 let videoMids = attachments.enumerated().compactMap { index, attachment in
                     if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
@@ -460,14 +512,57 @@ struct MediaGridView: View {
                     return nil
                 }
                 
+                // Always stop any existing playback first to handle reuse scenarios
+                videoManager.stopSequentialPlayback()
+                
                 if videoMids.count > 1 {
                     videoManager.setupSequentialPlayback(for: videoMids)
+                    print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
+                    // Reset all video players to beginning
+                    for mid in videoMids {
+                        VideoCacheManager.shared.resetVideoPlayer(for: mid)
+                    }
                 } else if videoMids.count == 1 {
                     // For single videos, set up the video MID but don't enable sequential playback
                     videoManager.videoMids = videoMids
                     videoManager.isSequentialPlaybackEnabled = false
                     videoManager.currentVideoIndex = 0
                     print("DEBUG: [MediaGridView] Setup single video playback for \(videoMids[0])")
+                    // Reset the single video to beginning
+                    VideoCacheManager.shared.resetVideoPlayer(for: videoMids[0])
+                }
+            }
+            .onChange(of: isVisible) { newVisibility in
+                // Handle visibility changes
+                if newVisibility {
+                    // Grid became visible - start video playback for any videos
+                    let videoMids = attachments.enumerated().compactMap { index, attachment in
+                        if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                            return attachment.mid
+                        }
+                        return nil
+                    }
+                    
+                    if !videoMids.isEmpty {
+                        print("DEBUG: [MediaGridView] Grid became visible with \(videoMids.count) videos - RESETTING to first video")
+                        // Always stop any existing playback first
+                        videoManager.stopSequentialPlayback()
+                        // Setup playback starting with the first video in sequence
+                        videoManager.setupSequentialPlayback(for: videoMids)
+                        // CRITICAL: Force reset to first video to ensure sequence starts from beginning
+                        videoManager.forceReset()
+                        // Reset all video players to beginning
+                        for mid in videoMids {
+                            VideoCacheManager.shared.resetVideoPlayer(for: mid)
+                        }
+                        print("DEBUG: [MediaGridView] RESET COMPLETE - Starting sequence with first video: \(videoMids[0]) at index 0")
+                        // Force refresh all cells to update their play states
+                        forceRefreshTrigger += 1
+                    }
+                } else {
+                    // Grid became invisible - stop video playback
+                    print("DEBUG: [MediaGridView] Grid became invisible - stopping playback")
+                    videoManager.stopSequentialPlayback()
                 }
             }
         }

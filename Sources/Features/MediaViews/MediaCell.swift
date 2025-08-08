@@ -22,9 +22,10 @@ struct MediaCell: View, Equatable {
     @State private var shouldLoadVideo: Bool
     @State private var onVideoFinished: (() -> Void)?
     let showMuteButton: Bool
+    let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -34,6 +35,7 @@ struct MediaCell: View, Equatable {
         self.showMuteButton = showMuteButton
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
+        self.forceRefreshTrigger = forceRefreshTrigger
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -145,6 +147,9 @@ struct MediaCell: View, Equatable {
         }
         .onAppear(perform: loadImage)
         .onAppear {
+            // Set visibility to true immediately when cell appears
+            isVisible = true
+            
             // Refresh mute state from preferences when cell appears
             MuteState.shared.refreshFromPreferences()
             
@@ -156,8 +161,6 @@ struct MediaCell: View, Equatable {
             }
         }
         .task {
-            // Set visibility to true when cell appears
-            isVisible = true
             // Update play state after visibility is set
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
@@ -198,6 +201,16 @@ struct MediaCell: View, Equatable {
                 let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
                 if play != newPlayState {
                     print("DEBUG: [MEDIA CELL \(attachment.mid)] VideoManager changed - updating play from \(play) to \(newPlayState)")
+                    play = newPlayState
+                }
+            }
+        }
+        .onChange(of: forceRefreshTrigger) { _ in
+            // Force refresh play state when grid becomes visible
+            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
+                if play != newPlayState {
+                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Force refresh triggered - updating play from \(play) to \(newPlayState)")
                     play = newPlayState
                 }
             }
