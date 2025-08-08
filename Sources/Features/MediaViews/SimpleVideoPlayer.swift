@@ -151,20 +151,21 @@ struct SimpleVideoPlayer: View {
                         let overflow = videoHeight - cellHeight
                         let pad = needsVerticalPadding && overflow > 0 ? overflow / 2 : 0
                         ZStack {
-                            HLSDirectoryVideoPlayer(
-                                baseURL: url,
-                                mid: cacheKey,
-                                isVisible: isVisible,
-                                isMuted: muteState.isMuted, // Use global mute state
-                                autoPlay: autoPlay,
-                                onMuteChanged: onMuteChanged,
-                                onVideoFinished: onVideoFinished,
-                                onVideoTap: onVideoTap,
-                                showCustomControls: false, // No custom controls in cells
-                                forcePlay: false, // Don't force play in cells
-                                forceUnmuted: false, // Use global mute state
-                                disableAutoRestart: disableAutoRestart
-                            )
+                                                    HLSDirectoryVideoPlayer(
+                            baseURL: url,
+                            mid: cacheKey,
+                            isVisible: isVisible,
+                            isMuted: muteState.isMuted, // Use global mute state
+                            autoPlay: autoPlay,
+                            onMuteChanged: onMuteChanged,
+                            onVideoFinished: onVideoFinished,
+                            onVideoTap: onVideoTap,
+                            showCustomControls: false, // No custom controls in cells
+                            forcePlay: false, // Don't force play in cells
+                            forceUnmuted: false, // Use global mute state
+                            disableAutoRestart: disableAutoRestart,
+                            mode: mode
+                        )
                             .offset(y: -pad)    // align the video vertically in the middle
                             .aspectRatio(videoAR, contentMode: .fill)
                         }
@@ -182,13 +183,14 @@ struct SimpleVideoPlayer: View {
                             showCustomControls: false,
                             forcePlay: false,
                             forceUnmuted: false,
-                            disableAutoRestart: disableAutoRestart
+                            disableAutoRestart: disableAutoRestart,
+                            mode: mode
                         )
                         .aspectRatio(videoAR, contentMode: .fit)
                     }
                     
                 case .mediaBrowser:
-                    // MediaBrowser mode: fullscreen browser with custom controls
+                    // MediaBrowser mode: fullscreen browser with native controls only
                     HLSDirectoryVideoPlayer(
                         baseURL: url,
                         mid: cacheKey,
@@ -198,10 +200,11 @@ struct SimpleVideoPlayer: View {
                         onMuteChanged: onMuteChanged,
                         onVideoFinished: onVideoFinished,
                         onVideoTap: onVideoTap,
-                        showCustomControls: true, // Show custom controls
+                        showCustomControls: false, // Use native controls only
                         forcePlay: forcePlay, // Use forcePlay parameter
                         forceUnmuted: true, // Force unmuted in browser
-                        disableAutoRestart: false // Enable auto-replay in full screen
+                        disableAutoRestart: false, // Enable auto-replay in full screen
+                        mode: mode
                     )
                     .aspectRatio(videoAR, contentMode: .fit)
                     .frame(maxWidth: screenWidth, maxHeight: screenHeight)
@@ -223,7 +226,8 @@ struct SimpleVideoPlayer: View {
                                 showCustomControls: true,
                                 forcePlay: true, // Always force play in fullscreen
                                 forceUnmuted: true,
-                                disableAutoRestart: disableAutoRestart
+                                disableAutoRestart: disableAutoRestart,
+                                mode: mode
                             )
                             .aspectRatio(videoAR, contentMode: .fit)
                             .frame(maxWidth: screenWidth, maxHeight: screenHeight)
@@ -253,7 +257,8 @@ struct SimpleVideoPlayer: View {
                                 showCustomControls: true,
                                 forcePlay: true,
                                 forceUnmuted: true,
-                                disableAutoRestart: disableAutoRestart
+                                disableAutoRestart: disableAutoRestart,
+                                mode: mode
                             )
                             .aspectRatio(videoAR, contentMode: .fit)
                             .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2)
@@ -284,7 +289,8 @@ struct SimpleVideoPlayer: View {
                                 showCustomControls: true,
                                 forcePlay: true,
                                 forceUnmuted: true,
-                                disableAutoRestart: disableAutoRestart
+                                disableAutoRestart: disableAutoRestart,
+                                mode: mode
                             )
                             .aspectRatio(1.0, contentMode: .fit)
                             .frame(maxWidth: screenWidth, maxHeight: screenHeight)
@@ -313,7 +319,8 @@ struct SimpleVideoPlayer: View {
                     showCustomControls: mode != .mediaCell,
                     forcePlay: mode == .fullscreen,
                     forceUnmuted: mode != .mediaCell,
-                    disableAutoRestart: disableAutoRestart
+                    disableAutoRestart: disableAutoRestart,
+                    mode: mode
                 )
                 .aspectRatio(16.0/9.0, contentMode: .fit)
                 .frame(maxWidth: screenWidth, maxHeight: screenHeight)
@@ -337,6 +344,7 @@ struct HLSVideoPlayerWithControls: View {
     let forceUnmuted: Bool
     let disableAutoRestart: Bool
     let isHLS: Bool // Whether this is an HLS video or regular video
+    let mode: SimpleVideoPlayer.Mode
     
     @State private var player: AVPlayer?
     @State private var isLoading = true
@@ -356,7 +364,7 @@ struct HLSVideoPlayerWithControls: View {
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
     
-    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool, disableAutoRestart: Bool = false, isHLS: Bool = true) {
+    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool, disableAutoRestart: Bool = false, isHLS: Bool = true, mode: SimpleVideoPlayer.Mode) {
         self.videoURL = videoURL
         self.mid = mid
         self.isVisible = isVisible
@@ -370,6 +378,7 @@ struct HLSVideoPlayerWithControls: View {
         self.forceUnmuted = forceUnmuted
         self.disableAutoRestart = disableAutoRestart
         self.isHLS = isHLS
+        self.mode = mode
         self._playerMuted = State(initialValue: isMuted)
         
 
@@ -381,15 +390,17 @@ struct HLSVideoPlayerWithControls: View {
                 if let player = player {
                     VideoPlayer(player: player)
                         .overlay(
-                            // Transparent overlay to capture taps when custom controls are disabled
+                            // Transparent overlay to capture taps - but only when we need custom tap handling
                             Group {
-                                if !showCustomControls {
+                                if !showCustomControls && mode != .mediaBrowser {
+                                    // For MediaCell and other modes, capture taps for custom behavior
                                     Color.clear
                                         .contentShape(Rectangle())
                                         .onTapGesture {
                                             onVideoTap?()
                                         }
                                 }
+                                // For MediaBrowserView (.mediaBrowser), no overlay - let native controls handle taps
                             }
                         )
                         .overlay(
@@ -863,6 +874,7 @@ struct HLSDirectoryVideoPlayer: View {
     let forcePlay: Bool
     let forceUnmuted: Bool
     let disableAutoRestart: Bool
+    let mode: SimpleVideoPlayer.Mode
     @State private var playlistURL: URL? = nil
     @State private var error: String? = nil
     @State private var loading = true
@@ -885,7 +897,8 @@ struct HLSDirectoryVideoPlayer: View {
                     forcePlay: forcePlay,
                     forceUnmuted: forceUnmuted,
                     disableAutoRestart: disableAutoRestart,
-                    isHLS: isHLSMode
+                    isHLS: isHLSMode,
+                    mode: mode
                 )
             } else if loading {
                 ProgressView("Loading video...")
