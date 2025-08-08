@@ -110,16 +110,7 @@ struct SimpleVideoPlayer: View {
         self.mode = mode
     }
     
-    // Use different cache key based on mode to isolate different use cases
-    private var cacheKey: String {
-        switch mode {
-        case .mediaCell, .mediaBrowser:
-            // Use same cache key for both modes to share video player instance
-            return mid
-        case .fullscreen:
-            return "\(mid)_fullscreen"
-        }
-    }
+
     
     // Determine if video is portrait or landscape
     private var isVideoPortrait: Bool {
@@ -152,7 +143,7 @@ struct SimpleVideoPlayer: View {
                         ZStack {
                                                     HLSDirectoryVideoPlayer(
                             baseURL: url,
-                            mid: cacheKey,
+                            mid: mid,
                             isVisible: isVisible,
                             isMuted: muteState.isMuted, // Use global mute state
                             autoPlay: autoPlay,
@@ -172,7 +163,7 @@ struct SimpleVideoPlayer: View {
                         // Fallback when no cellAspectRatio is available
                         HLSDirectoryVideoPlayer(
                             baseURL: url,
-                            mid: cacheKey,
+                            mid: mid,
                             isVisible: isVisible,
                             isMuted: muteState.isMuted,
                             autoPlay: autoPlay,
@@ -192,7 +183,7 @@ struct SimpleVideoPlayer: View {
                     // MediaBrowser mode: fullscreen browser with native controls only
                     HLSDirectoryVideoPlayer(
                         baseURL: url,
-                        mid: cacheKey,
+                        mid: mid,
                         isVisible: isVisible,
                         isMuted: false, // Always unmuted in browser
                         autoPlay: autoPlay,
@@ -215,7 +206,7 @@ struct SimpleVideoPlayer: View {
                         ZStack {
                             HLSDirectoryVideoPlayer(
                                 baseURL: url,
-                                mid: cacheKey,
+                                mid: mid,
                                 isVisible: isVisible,
                                 isMuted: false, // Always unmuted in fullscreen
                                 autoPlay: autoPlay,
@@ -246,7 +237,7 @@ struct SimpleVideoPlayer: View {
                         ZStack {
                             HLSDirectoryVideoPlayer(
                                 baseURL: url,
-                                mid: cacheKey,
+                                mid: mid,
                                 isVisible: isVisible,
                                 isMuted: false,
                                 autoPlay: autoPlay,
@@ -278,7 +269,7 @@ struct SimpleVideoPlayer: View {
                         ZStack {
                             HLSDirectoryVideoPlayer(
                                 baseURL: url,
-                                mid: cacheKey,
+                                mid: mid,
                                 isVisible: isVisible,
                                 isMuted: false,
                                 autoPlay: autoPlay,
@@ -308,7 +299,7 @@ struct SimpleVideoPlayer: View {
                 // Fallback when no aspect ratio is available
                 HLSDirectoryVideoPlayer(
                     baseURL: url,
-                    mid: cacheKey,
+                    mid: mid,
                     isVisible: isVisible,
                     isMuted: mode == .mediaCell ? muteState.isMuted : false,
                     autoPlay: autoPlay,
