@@ -591,6 +591,10 @@ struct HLSVideoPlayerWithControls: View {
             .onChange(of: isVisible) { newVisibility in
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] isVisible changed to: \(newVisibility), autoPlay: \(autoPlay), isPlaying: \(isPlaying)")
                 if newVisibility {
+                    // Video became visible - reload video layer to fix black screen issues
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Video became visible - reloading video layer")
+                    VideoCacheManager.shared.forceRefreshVideoLayer(for: mid)
+                    
                     // Video became visible - start playback if autoPlay is enabled
                     if autoPlay && !isPlaying {
                         if let player = player {
