@@ -369,10 +369,10 @@ struct VideoTimeRemainingLabel: View {
             if isVisible {
                 Text(formatTimeRemaining())
                     .font(.caption)
-                    .foregroundColor(.white)
+                    .foregroundColor(.white.opacity(0.8))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.6))
+                    .background(Color.black.opacity(0.4))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                     .transition(.opacity)
             }
