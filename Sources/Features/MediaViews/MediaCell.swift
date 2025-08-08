@@ -113,7 +113,7 @@ struct MediaCell: View, Equatable {
                                 VStack {
                                     Spacer()
                                     HStack {
-                                        // Time remaining label in bottom left corner
+                                        // Video time remaining label in bottom left corner
                                         if play && isVisible {
                                             VideoTimeRemainingLabel(mid: attachment.mid)
                                                 .padding(.leading, 8)
@@ -358,10 +358,10 @@ struct MuteButton: View {
 // MARK: - VideoTimeRemainingLabel
 struct VideoTimeRemainingLabel: View {
     let mid: String
+    @State private var isVisible = true
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
     @State private var timeObserver: Any?
-    @State private var isVisible = true
     @State private var hideTimer: Timer?
     
     var body: some View {
@@ -388,24 +388,19 @@ struct VideoTimeRemainingLabel: View {
     }
     
     private func setupTimeObserver() {
-        // Try to get the player from cache
         guard let player = VideoCacheManager.shared.getCachedPlayer(for: mid) else {
-            print("DEBUG: [VIDEO TIME LABEL \(mid)] No cached player found")
             return
         }
         
         // Get duration
         if let durationTime = player.currentItem?.duration {
             duration = durationTime.seconds
-            print("DEBUG: [VIDEO TIME LABEL \(mid)] Duration: \(duration)")
         }
         
         // Add time observer
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { time in
             currentTime = time.seconds
         }
-        
-        print("DEBUG: [VIDEO TIME LABEL \(mid)] Time observer setup complete")
     }
     
     private func removeTimeObserver() {
@@ -414,7 +409,6 @@ struct VideoTimeRemainingLabel: View {
                 player.removeTimeObserver(observer)
             }
             timeObserver = nil
-            print("DEBUG: [VIDEO TIME LABEL \(mid)] Time observer removed")
         }
     }
     
@@ -437,9 +431,15 @@ struct VideoTimeRemainingLabel: View {
     
     private func formatTimeRemaining() -> String {
         let remaining = max(0, duration - currentTime)
-        let minutes = Int(remaining) / 60
+        let hours = Int(remaining) / 3600
+        let minutes = (Int(remaining) % 3600) / 60
         let seconds = Int(remaining) % 60
-        return String(format: "%d:%02d", minutes, seconds)
+        
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            return String(format: "%d:%02d", minutes, seconds)
+        }
     }
 }
 
