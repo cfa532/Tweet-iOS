@@ -413,6 +413,10 @@ struct ChatScreen: View {
             } catch {
                 print("[ChatScreen] Error sending message in background: \(error)")
                 
+                // Capture the error message and attachments before entering MainActor
+                let errorMessage = error.localizedDescription
+                let capturedAttachments = uploadedAttachments
+                
                 // Handle network exceptions the same as backend failures
                 await MainActor.run {
                     // Create a failed message with error details
@@ -421,16 +425,16 @@ struct ChatScreen: View {
                         receiptId: receiptId,
                         chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
                         content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
-                        attachments: uploadedAttachments,
+                        attachments: capturedAttachments,
                         success: false,
-                        errorMsg: error.localizedDescription
+                        errorMsg: errorMessage
                     )
                     
                     // Add failed message to UI and save to Core Data
                     messages.append(failedMessage)
                     chatRepository.addMessagesToCoreData([failedMessage])
                     
-                    print("[ChatScreen] Message failed to send in background (network error): \(error.localizedDescription)")
+                    print("[ChatScreen] Message failed to send in background (network error): \(errorMessage)")
                 }
             }
         }

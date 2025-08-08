@@ -239,34 +239,9 @@ struct ChatImageViewWithPlaceholder: View {
     var body: some View {
         Group {
             if let url = attachment.getUrl(baseUrl) {
-                WebImage(url: url)
-                    .placeholder {
-                        if let placeholderImage = getCachedPlaceholder() {
-                            Image(uiImage: placeholderImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                        } else {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                        }
-                    }
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
-                    .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 1.0, 0.8)), contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .onTapGesture {
-                        showFullScreen = true
-                    }
+                chatImageView(url: url)
             } else {
-                // Fallback if no URL
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(.systemGray6))
-                    .frame(width: 100, height: 100)
-                    .overlay(
-                        Image(systemName: "photo")
-                            .foregroundColor(.gray)
-                    )
+                chatImageFallback
             }
         }
         .sheet(isPresented: $showFullScreen) {
@@ -278,6 +253,52 @@ struct ChatImageViewWithPlaceholder: View {
                 )
             }
         }
+    }
+    
+    @ViewBuilder
+    private func chatImageView(url: URL) -> some View {
+        let aspectRatio = CGFloat(max(attachment.aspectRatio ?? 1.0, 0.8))
+        let maxWidth = UIScreen.main.bounds.width * 0.7
+        
+        WebImage(url: url, options: [.progressiveLoad])
+            .onSuccess { image, data, cacheType in
+                // Image loaded successfully
+            }
+            .onFailure { error in
+                // Handle error state
+            }
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .frame(maxWidth: maxWidth)
+            .aspectRatio(aspectRatio, contentMode: .fit)
+            .overlay(
+                Group {
+                    if let placeholderImage = getCachedPlaceholder() {
+                        Image(uiImage: placeholderImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .foregroundColor(.gray)
+                    } else {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                    }
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .onTapGesture {
+                showFullScreen = true
+            }
+    }
+    
+    @ViewBuilder
+    private var chatImageFallback: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color(.systemGray6))
+            .frame(width: 100, height: 100)
+            .overlay(
+                Image(systemName: "photo")
+                    .foregroundColor(.gray)
+            )
     }
     
     private func getCachedPlaceholder() -> UIImage? {
