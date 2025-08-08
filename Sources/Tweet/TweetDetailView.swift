@@ -114,10 +114,6 @@ struct TweetDetailView: View {
                             videoManager: VideoManager()
                         )
                         .environmentObject(MuteState.shared)
-                        .onAppear {
-                            // Unmute videos in tweet detail screen
-                            MuteState.shared.setMuted(false)
-                        }
                         .tag(index)
                     }
                 }

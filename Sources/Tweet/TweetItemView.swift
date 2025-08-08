@@ -67,10 +67,6 @@ struct TweetItemView: View {
                             TweetItemHeaderView(tweet: originalTweet)
                             TweetMenu(tweet: tweet, isPinned: isPinned)
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            onTap?(tweet)
-                        }
                         
                         TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, onItemTap: { idx in
                             selectedEmbeddedMediaIndex = idx
@@ -89,10 +85,6 @@ struct TweetItemView: View {
                             TweetMenu(tweet: tweet, isPinned: isPinned)
                         }
                         .padding(.top, -8)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            onTap?(tweet)
-                        }
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, onItemTap: { idx in
                             selectedMediaIndex = idx
                             showBrowser = true
@@ -109,14 +101,6 @@ struct TweetItemView: View {
                         )
                         .cornerRadius(6)
                         .padding(.leading, -16)
-                        .onTapGesture {
-                            // Handle media taps in embedded original tweet
-                            if let attachments = originalTweet.attachments, !attachments.isEmpty {
-                                // This will be handled by the MediaGridView's onItemTap
-                            } else {
-                                onTap?(originalTweet)
-                            }
-                        }
                         
                         if !hideActions {
                             TweetActionButtonsView(tweet: tweet)
@@ -151,10 +135,6 @@ struct TweetItemView: View {
                         showBrowser = true
                     })
                         .padding(.top, -12)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            onTap?(tweet)
-                        }
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)
@@ -167,6 +147,10 @@ struct TweetItemView: View {
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap?(tweet)
         }
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
