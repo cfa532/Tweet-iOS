@@ -24,19 +24,7 @@ struct ZoomableImageView: View {
                 Color.black
                 
                 if let imageURL = imageURL {
-                    WebImage(url: imageURL)
-                        .placeholder {
-                            if let placeholderImage = placeholderImage {
-                                Image(uiImage: placeholderImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: contentMode)
-                                    .foregroundColor(.gray)
-                            } else {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(1.5)
-                            }
-                        }
+                    WebImage(url: imageURL, options: [.progressiveLoad])
                         .onSuccess { image, data, cacheType in
                             isImageLoaded = true
                         }
@@ -45,6 +33,22 @@ struct ZoomableImageView: View {
                         }
                         .resizable()
                         .aspectRatio(contentMode: contentMode)
+                        .overlay(
+                            Group {
+                                if !isImageLoaded {
+                                    if let placeholderImage = placeholderImage {
+                                        Image(uiImage: placeholderImage)
+                                            .resizable()
+                                            .aspectRatio(contentMode: contentMode)
+                                            .foregroundColor(.gray)
+                                    } else {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            .scaleEffect(1.5)
+                                    }
+                                }
+                            }
+                        )
                         .scaleEffect(scale)
                         .offset(offset)
                         .gesture(
