@@ -116,6 +116,21 @@ class VideoCacheManager: ObservableObject {
         }
     }
     
+    /// Pause all video players except the specified one (for full-screen mode)
+    func pauseAllVideosExcept(_ videoMid: String) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        
+        print("DEBUG: [VIDEO CACHE] Pausing all videos except: \(videoMid)")
+        for (mid, cachedPlayer) in videoCache {
+            if mid != videoMid {
+                print("DEBUG: [VIDEO CACHE] Pausing video: \(mid)")
+                cachedPlayer.player.pause()
+                cachedPlayer.lastAccessed = Date()
+            }
+        }
+    }
+    
 
     
 

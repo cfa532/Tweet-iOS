@@ -8,6 +8,23 @@
 import SwiftUI
 import AVFoundation
 
+// Global video visibility manager
+class VideoVisibilityManager: ObservableObject {
+    static let shared = VideoVisibilityManager()
+    
+    private init() {}
+    
+    func videoEnteredFullScreen(_ videoMid: String) {
+        print("DEBUG: [VIDEO VISIBILITY] Video \(videoMid) entered full-screen - pausing all other videos")
+        VideoCacheManager.shared.pauseAllVideosExcept(videoMid)
+    }
+    
+    func videoExitedFullScreen(_ videoMid: String) {
+        print("DEBUG: [VIDEO VISIBILITY] Video \(videoMid) exited full-screen")
+        // Videos will resume playing when they become visible again
+    }
+}
+
 // MARK: - MediaCell
 struct MediaCell: View, Equatable {
     let parentTweet: Tweet
@@ -83,11 +100,7 @@ struct MediaCell: View, Equatable {
                         .onChange(of: isVisible) { newIsVisible in
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible), play: \(play), autoPlay: \(play)")
                         }
-                        .onDisappear {
-                            // Pause video when cell becomes invisible
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] Cell disappeared - pausing video")
-                            VideoCacheManager.shared.pauseVideoPlayer(for: attachment.mid)
-                        }
+
 
                         .environmentObject(MuteState.shared)
                         .onReceive(MuteState.shared.$isMuted) { isMuted in
@@ -245,6 +258,16 @@ struct MediaCell: View, Equatable {
                 initialIndex: attachmentIndex
             )
         }
+        .onChange(of: showFullScreen) { newValue in
+            if newValue {
+                // Video is going into full-screen mode
+                VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
+            } else {
+                // Video is exiting full-screen mode
+                VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)
+            }
+        }
+
     }
     
     private func handleTap() {
