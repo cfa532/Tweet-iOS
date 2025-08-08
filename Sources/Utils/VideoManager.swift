@@ -9,10 +9,22 @@ class VideoManager: ObservableObject {
     init() {}
     
     func setupSequentialPlayback(for mids: [String]) {
+        // Check if this is a new sequence or the same sequence
+        let isNewSequence = videoMids != mids && !videoMids.isEmpty
+        
         videoMids = mids
         currentVideoIndex = 0 // Always start with first video
         isSequentialPlaybackEnabled = mids.count > 1
-        print("DEBUG: [VideoManager] Setup sequential playback for \(mids.count) videos - starting at index 0")
+        
+        if isNewSequence {
+            print("DEBUG: [VideoManager] Setup NEW sequential playback for \(mids.count) videos - starting at index 0")
+            // Only reset videos if this is a completely new sequence (not the first time)
+            for mid in mids {
+                VideoCacheManager.shared.resetVideoPlayer(for: mid)
+            }
+        } else {
+            print("DEBUG: [VideoManager] Setup \(videoMids.isEmpty ? "FIRST TIME" : "EXISTING") sequential playback for \(mids.count) videos - starting at index 0")
+        }
     }
     
     func stopSequentialPlayback() {

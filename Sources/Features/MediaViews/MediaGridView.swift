@@ -473,18 +473,11 @@ struct MediaGridView: View {
                         }
                         
                         if !videoMids.isEmpty {
-                            print("DEBUG: [MediaGridView] Grid appeared with \(videoMids.count) videos - RESETTING to first video")
+                            print("DEBUG: [MediaGridView] Grid appeared with \(videoMids.count) videos - setting up playback")
                             // Always stop any existing playback first
                             videoManager.stopSequentialPlayback()
                             // Setup playback starting with the first video in sequence
                             videoManager.setupSequentialPlayback(for: videoMids)
-                            // CRITICAL: Force reset to first video to ensure sequence starts from beginning
-                            videoManager.forceReset()
-                            // Reset all video players to beginning
-                            for mid in videoMids {
-                                VideoCacheManager.shared.resetVideoPlayer(for: mid)
-                            }
-                            print("DEBUG: [MediaGridView] RESET COMPLETE - Starting sequence with first video: \(videoMids[0]) at index 0")
                             // Force refresh all cells to update their play states
                             forceRefreshTrigger += 1
                         }
@@ -518,18 +511,20 @@ struct MediaGridView: View {
                 if videoMids.count > 1 {
                     videoManager.setupSequentialPlayback(for: videoMids)
                     print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
-                    // Reset all video players to beginning
-                    for mid in videoMids {
-                        VideoCacheManager.shared.resetVideoPlayer(for: mid)
-                    }
                 } else if videoMids.count == 1 {
                     // For single videos, set up the video MID but don't enable sequential playback
+                    let wasEmpty = videoManager.videoMids.isEmpty
+                    let isNewSequence = videoManager.videoMids != videoMids && !wasEmpty
                     videoManager.videoMids = videoMids
                     videoManager.isSequentialPlaybackEnabled = false
                     videoManager.currentVideoIndex = 0
-                    print("DEBUG: [MediaGridView] Setup single video playback for \(videoMids[0])")
-                    // Reset the single video to beginning
-                    VideoCacheManager.shared.resetVideoPlayer(for: videoMids[0])
+                    
+                    if isNewSequence {
+                        print("DEBUG: [MediaGridView] Setup NEW single video playback for \(videoMids[0])")
+                        VideoCacheManager.shared.resetVideoPlayer(for: videoMids[0])
+                    } else {
+                        print("DEBUG: [MediaGridView] Setup \(wasEmpty ? "FIRST TIME" : "EXISTING") single video playback for \(videoMids[0])")
+                    }
                 }
             }
             .onChange(of: isVisible) { newVisibility in
@@ -544,18 +539,11 @@ struct MediaGridView: View {
                     }
                     
                     if !videoMids.isEmpty {
-                        print("DEBUG: [MediaGridView] Grid became visible with \(videoMids.count) videos - RESETTING to first video")
+                        print("DEBUG: [MediaGridView] Grid became visible with \(videoMids.count) videos - starting playback")
                         // Always stop any existing playback first
                         videoManager.stopSequentialPlayback()
                         // Setup playback starting with the first video in sequence
                         videoManager.setupSequentialPlayback(for: videoMids)
-                        // CRITICAL: Force reset to first video to ensure sequence starts from beginning
-                        videoManager.forceReset()
-                        // Reset all video players to beginning
-                        for mid in videoMids {
-                            VideoCacheManager.shared.resetVideoPlayer(for: mid)
-                        }
-                        print("DEBUG: [MediaGridView] RESET COMPLETE - Starting sequence with first video: \(videoMids[0]) at index 0")
                         // Force refresh all cells to update their play states
                         forceRefreshTrigger += 1
                     }
