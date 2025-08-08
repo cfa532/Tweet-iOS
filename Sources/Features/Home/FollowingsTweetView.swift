@@ -69,28 +69,10 @@ struct FollowingsTweetView: View {
                 }
             )
             .onDisappear {
-                // Pause all videos when FollowingsTweetView disappears
-                print("DEBUG: [FollowingsTweetView] View disappeared, pausing all videos")
-                pauseAllVideos()
+                print("DEBUG: [FollowingsTweetView] View disappeared")
             }
         }
     }
     
-    /// Pause all videos in the tweets list
-    private func pauseAllVideos() {
-        print("DEBUG: [FollowingsTweetView] Pausing all videos in tweets list")
-        
-        // Pause all videos in tweets
-        for tweet in viewModel.tweets {
-            if let attachments = tweet.attachments {
-                for attachment in attachments {
-                    if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                        let mid = attachment.mid
-                        print("DEBUG: [FollowingsTweetView] Pausing video with mid: \(mid)")
-                        VideoCacheManager.shared.pauseVideoPlayer(for: mid)
-                    }
-                }
-            }
-        }
-    }
+
 }

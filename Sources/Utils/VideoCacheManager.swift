@@ -116,31 +116,9 @@ class VideoCacheManager: ObservableObject {
         }
     }
     
-    /// Pause all videos except the specified one (useful for force play scenarios)
-    func pauseAllVideosExcept(for videoMid: String) {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        
-        for (mid, cachedPlayer) in videoCache {
-            if mid != videoMid {
-                print("DEBUG: [VIDEO CACHE] Pausing other video with mid: \(mid)")
-                cachedPlayer.player.pause()
-                cachedPlayer.lastAccessed = Date()
-            }
-        }
-    }
+
     
-    /// Pause all videos in cache (useful for app lifecycle management)
-    func pauseAllVideos() {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        
-        for (mid, cachedPlayer) in videoCache {
-            print("DEBUG: [VIDEO CACHE] Pausing player for video mid: \(mid)")
-            cachedPlayer.player.pause()
-            cachedPlayer.lastAccessed = Date()
-        }
-    }
+
     
     /// Set mute state for a video player
     func setMuteState(for videoMid: String, isMuted: Bool) {

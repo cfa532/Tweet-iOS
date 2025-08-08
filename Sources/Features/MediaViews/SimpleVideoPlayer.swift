@@ -59,7 +59,7 @@ struct SimpleVideoPlayer: View {
     var forceUnmuted: Bool = false // Force unmuted state (for full-screen mode)
     var onVideoTap: (() -> Void)? = nil // Callback when video is tapped
     var showCustomControls: Bool = true // Whether to show custom video controls
-    var forcePlay: Bool = false // Force play regardless of video manager (for full-screen)
+
     var disableAutoRestart: Bool = false // Disable auto-restart when video finishes
     
     // New unified mode parameter
@@ -88,7 +88,7 @@ struct SimpleVideoPlayer: View {
         forceUnmuted: Bool = false,
         onVideoTap: (() -> Void)? = nil,
         showCustomControls: Bool = true,
-        forcePlay: Bool = false,
+
         disableAutoRestart: Bool = false,
         mode: Mode = .mediaCell
     ) {
@@ -106,7 +106,6 @@ struct SimpleVideoPlayer: View {
         self.forceUnmuted = forceUnmuted
         self.onVideoTap = onVideoTap
         self.showCustomControls = showCustomControls
-        self.forcePlay = forcePlay
         self.disableAutoRestart = disableAutoRestart
         self.mode = mode
     }
@@ -161,7 +160,7 @@ struct SimpleVideoPlayer: View {
                             onVideoFinished: onVideoFinished,
                             onVideoTap: onVideoTap,
                             showCustomControls: false, // No custom controls in cells
-                            forcePlay: false, // Don't force play in cells
+
                             forceUnmuted: false, // Use global mute state
                             disableAutoRestart: disableAutoRestart,
                             mode: mode
@@ -181,7 +180,7 @@ struct SimpleVideoPlayer: View {
                             onVideoFinished: onVideoFinished,
                             onVideoTap: onVideoTap,
                             showCustomControls: false,
-                            forcePlay: false,
+
                             forceUnmuted: false,
                             disableAutoRestart: disableAutoRestart,
                             mode: mode
@@ -201,7 +200,7 @@ struct SimpleVideoPlayer: View {
                         onVideoFinished: onVideoFinished,
                         onVideoTap: onVideoTap,
                         showCustomControls: false, // Use native controls only
-                        forcePlay: forcePlay, // Use forcePlay parameter
+
                         forceUnmuted: true, // Force unmuted in browser
                         disableAutoRestart: false, // Enable auto-replay in full screen
                         mode: mode
@@ -224,7 +223,7 @@ struct SimpleVideoPlayer: View {
                                 onVideoFinished: onVideoFinished,
                                 onVideoTap: onVideoTap,
                                 showCustomControls: true,
-                                forcePlay: true, // Always force play in fullscreen
+
                                 forceUnmuted: true,
                                 disableAutoRestart: disableAutoRestart,
                                 mode: mode
@@ -255,7 +254,7 @@ struct SimpleVideoPlayer: View {
                                 onVideoFinished: onVideoFinished,
                                 onVideoTap: onVideoTap,
                                 showCustomControls: true,
-                                forcePlay: true,
+
                                 forceUnmuted: true,
                                 disableAutoRestart: disableAutoRestart,
                                 mode: mode
@@ -287,7 +286,7 @@ struct SimpleVideoPlayer: View {
                                 onVideoFinished: onVideoFinished,
                                 onVideoTap: onVideoTap,
                                 showCustomControls: true,
-                                forcePlay: true,
+
                                 forceUnmuted: true,
                                 disableAutoRestart: disableAutoRestart,
                                 mode: mode
@@ -317,7 +316,7 @@ struct SimpleVideoPlayer: View {
                     onVideoFinished: onVideoFinished,
                     onVideoTap: onVideoTap,
                     showCustomControls: mode != .mediaCell,
-                    forcePlay: mode == .fullscreen,
+
                     forceUnmuted: mode != .mediaCell,
                     disableAutoRestart: disableAutoRestart,
                     mode: mode
@@ -340,7 +339,7 @@ struct HLSVideoPlayerWithControls: View {
     let onVideoFinished: (() -> Void)?
     let onVideoTap: (() -> Void)?
     let showCustomControls: Bool
-    let forcePlay: Bool
+
     let forceUnmuted: Bool
     let disableAutoRestart: Bool
     let isHLS: Bool // Whether this is an HLS video or regular video
@@ -364,7 +363,7 @@ struct HLSVideoPlayerWithControls: View {
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
     
-    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forcePlay: Bool, forceUnmuted: Bool, disableAutoRestart: Bool = false, isHLS: Bool = true, mode: SimpleVideoPlayer.Mode) {
+    init(videoURL: URL, mid: String, isVisible: Bool, isMuted: Bool, autoPlay: Bool, onMuteChanged: ((Bool) -> Void)?, onVideoFinished: (() -> Void)?, onVideoTap: (() -> Void)?, showCustomControls: Bool, forceUnmuted: Bool, disableAutoRestart: Bool = false, isHLS: Bool = true, mode: SimpleVideoPlayer.Mode) {
         self.videoURL = videoURL
         self.mid = mid
         self.isVisible = isVisible
@@ -374,7 +373,6 @@ struct HLSVideoPlayerWithControls: View {
         self.onVideoFinished = onVideoFinished
         self.onVideoTap = onVideoTap
         self.showCustomControls = showCustomControls
-        self.forcePlay = forcePlay
         self.forceUnmuted = forceUnmuted
         self.disableAutoRestart = disableAutoRestart
         self.isHLS = isHLS
@@ -871,7 +869,7 @@ struct HLSDirectoryVideoPlayer: View {
     let onVideoFinished: (() -> Void)?
     let onVideoTap: (() -> Void)?
     let showCustomControls: Bool
-    let forcePlay: Bool
+
     let forceUnmuted: Bool
     let disableAutoRestart: Bool
     let mode: SimpleVideoPlayer.Mode
@@ -894,7 +892,7 @@ struct HLSDirectoryVideoPlayer: View {
                     onVideoFinished: onVideoFinished,
                     onVideoTap: onVideoTap,
                     showCustomControls: showCustomControls,
-                    forcePlay: forcePlay,
+
                     forceUnmuted: forceUnmuted,
                     disableAutoRestart: disableAutoRestart,
                     isHLS: isHLSMode,

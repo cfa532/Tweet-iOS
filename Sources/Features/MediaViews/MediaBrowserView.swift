@@ -228,7 +228,7 @@ struct MediaBrowserView: View {
                 }
                 resetControlsTimer() // Reset close button timer
             },
-            forcePlay: index == currentIndex, // Only force play if this is the current video
+
             mode: .mediaBrowser
         )
         .environmentObject(MuteState.shared)

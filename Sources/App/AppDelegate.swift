@@ -107,8 +107,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppWillResignActive() {
-        print("[AppDelegate] App will resign active - pausing all videos")
-        VideoCacheManager.shared.pauseAllVideos()
+        print("[AppDelegate] App will resign active")
     }
     
     @objc private func handleAppDidBecomeActive() {
@@ -122,8 +121,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppDidEnterBackground() {
-        print("[AppDelegate] App did enter background - pausing all videos")
-        VideoCacheManager.shared.pauseAllVideos()
+        print("[AppDelegate] App did enter background")
     }
     
     @objc private func handleAppWillEnterForeground() {

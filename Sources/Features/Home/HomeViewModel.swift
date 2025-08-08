@@ -118,9 +118,7 @@ struct HomeView: View {
                 }
                 onNavigationVisibilityChanged?(true)
                 
-                // Pause all videos when HomeView disappears
-                print("DEBUG: [HomeView] View disappeared, pausing all videos")
-                pauseAllVideos()
+                print("DEBUG: [HomeView] View disappeared")
             }
         }
         
@@ -165,13 +163,7 @@ struct HomeView: View {
         previousScrollOffset = offset
     }
     
-    /// Pause all videos when HomeView disappears
-    private func pauseAllVideos() {
-        print("DEBUG: [HomeView] Pausing all videos")
-        
-        // Note: The actual video cleanup should be handled by FollowingsTweetView and RecommendedTweetView
-        // This function serves as a fallback and logs the event
-    }
+
 }
 
 // MARK: - Preview

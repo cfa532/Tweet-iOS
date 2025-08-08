@@ -164,27 +164,9 @@ struct ProfileTweetsSection<Header: View>: View {
             viewModel.tweets.removeAll()
         }
         .onDisappear {
-            // Pause all videos when ProfileTweetsSection disappears
-            print("DEBUG: [ProfileTweetsSection] Section disappeared, pausing all videos")
-            pauseAllVideos()
+            print("DEBUG: [ProfileTweetsSection] Section disappeared")
         }
     }
     
-    /// Pause all videos in the tweets list
-    private func pauseAllVideos() {
-        print("DEBUG: [ProfileTweetsSection] Pausing all videos in tweets list")
-        
-        // Pause all videos in regular tweets
-        for tweet in viewModel.tweets {
-            if let attachments = tweet.attachments {
-                for attachment in attachments {
-                    if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                        let mid = attachment.mid
-                        print("DEBUG: [ProfileTweetsSection] Pausing video with mid: \(mid)")
-                        VideoCacheManager.shared.pauseVideoPlayer(for: mid)
-                    }
-                }
-            }
-        }
-    }
+
 } 
