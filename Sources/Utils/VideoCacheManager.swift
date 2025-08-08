@@ -155,6 +155,19 @@ class VideoCacheManager: ObservableObject {
         return videoCache[videoMid] != nil
     }
     
+    /// Get a cached video player without creating a new one
+    func getCachedPlayer(for videoMid: String) -> AVPlayer? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        
+        if let cachedPlayer = videoCache[videoMid] {
+            cachedPlayer.lastAccessed = Date()
+            return cachedPlayer.player
+        }
+        
+        return nil
+    }
+    
     /// Remove a specific video from cache (only when explicitly needed)
     func removeVideoPlayer(for videoMid: String) {
         cacheLock.lock()

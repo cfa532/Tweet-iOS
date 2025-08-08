@@ -108,13 +108,22 @@ struct MediaCell: View, Equatable {
                         }
                         
                         .overlay(
-                            // Mute button in bottom right corner (only if showMuteButton is true)
+                            // Video controls overlay
                             Group {
-                                if showMuteButton {
-                                    VStack {
+                                VStack {
+                                    Spacer()
+                                    HStack {
+                                        // Time remaining label in bottom left corner
+                                        if play && isVisible {
+                                            VideoTimeRemainingLabel(mid: attachment.mid)
+                                                .padding(.leading, 8)
+                                                .padding(.bottom, 8)
+                                        }
+                                        
                                         Spacer()
-                                        HStack {
-                                            Spacer()
+                                        
+                                        // Mute button in bottom right corner (only if showMuteButton is true)
+                                        if showMuteButton {
                                             MuteButton()
                                                 .padding(.trailing, 8)
                                                 .padding(.bottom, 8)
@@ -346,57 +355,91 @@ struct MuteButton: View {
     }
 }
 
-// MARK: - VideoTimeLabel
-struct VideoTimeLabel: View {
+// MARK: - VideoTimeRemainingLabel
+struct VideoTimeRemainingLabel: View {
     let mid: String
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
     @State private var timeObserver: Any?
+    @State private var isVisible = true
+    @State private var hideTimer: Timer?
     
     var body: some View {
-        Text(formatTimeRemaining())
-            .font(.caption)
-            .foregroundColor(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.black.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .onAppear {
-                setupTimeObserver()
+        Group {
+            if isVisible {
+                Text(formatTimeRemaining())
+                    .font(.caption)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.6))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .transition(.opacity)
             }
-            .onDisappear {
-                removeTimeObserver()
-            }
+        }
+        .onAppear {
+            setupTimeObserver()
+            startHideTimer()
+        }
+        .onDisappear {
+            removeTimeObserver()
+            stopHideTimer()
+        }
     }
     
     private func setupTimeObserver() {
-        guard let player = VideoCacheManager.shared.getVideoPlayer(for: mid, url: URL(string: "placeholder")!, isHLS: true) else {
+        // Try to get the player from cache
+        guard let player = VideoCacheManager.shared.getCachedPlayer(for: mid) else {
+            print("DEBUG: [VIDEO TIME LABEL \(mid)] No cached player found")
             return
         }
         
         // Get duration
         if let durationTime = player.currentItem?.duration {
             duration = durationTime.seconds
+            print("DEBUG: [VIDEO TIME LABEL \(mid)] Duration: \(duration)")
         }
         
         // Add time observer
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { time in
             currentTime = time.seconds
         }
+        
+        print("DEBUG: [VIDEO TIME LABEL \(mid)] Time observer setup complete")
     }
     
     private func removeTimeObserver() {
         if let observer = timeObserver {
-            VideoCacheManager.shared.getVideoPlayer(for: mid, url: URL(string: "placeholder")!, isHLS: true)?.removeTimeObserver(observer)
+            if let player = VideoCacheManager.shared.getCachedPlayer(for: mid) {
+                player.removeTimeObserver(observer)
+            }
             timeObserver = nil
+            print("DEBUG: [VIDEO TIME LABEL \(mid)] Time observer removed")
         }
+    }
+    
+    private func startHideTimer() {
+        // Cancel any existing timer
+        stopHideTimer()
+        
+        // Start new timer to hide after 3 seconds
+        hideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isVisible = false
+            }
+        }
+    }
+    
+    private func stopHideTimer() {
+        hideTimer?.invalidate()
+        hideTimer = nil
     }
     
     private func formatTimeRemaining() -> String {
         let remaining = max(0, duration - currentTime)
         let minutes = Int(remaining) / 60
         let seconds = Int(remaining) % 60
-        return String(format: "-%d:%02d", minutes, seconds)
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 
