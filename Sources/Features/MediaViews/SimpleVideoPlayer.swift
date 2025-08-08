@@ -114,10 +114,9 @@ struct SimpleVideoPlayer: View {
     // Use different cache key based on mode to isolate different use cases
     private var cacheKey: String {
         switch mode {
-        case .mediaCell:
+        case .mediaCell, .mediaBrowser:
+            // Use same cache key for both modes to share video player instance
             return mid
-        case .mediaBrowser:
-            return "\(mid)_browser"
         case .fullscreen:
             return "\(mid)_fullscreen"
         }
@@ -202,7 +201,7 @@ struct SimpleVideoPlayer: View {
                         showCustomControls: true, // Show custom controls
                         forcePlay: forcePlay, // Use forcePlay parameter
                         forceUnmuted: true, // Force unmuted in browser
-                        disableAutoRestart: disableAutoRestart
+                        disableAutoRestart: false // Enable auto-replay in full screen
                     )
                     .aspectRatio(videoAR, contentMode: .fit)
                     .frame(maxWidth: screenWidth, maxHeight: screenHeight)

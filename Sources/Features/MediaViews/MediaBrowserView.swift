@@ -52,10 +52,6 @@ struct MediaBrowserView: View {
                         if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
                             // Create video player for all video attachments, but only play the current one
                             videoView(for: attachment, url: url, index: index)
-                                .onAppear {
-                                    print("DEBUG: [MediaBrowserView] Video view appeared for index: \(index), currentIndex: \(currentIndex)")
-                                    handleVideoVisibilityChange(newIndex: index, oldIndex: previousIndex)
-                                }
                         } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
                             audioView(for: attachment, url: url, index: index)
                         } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
@@ -69,7 +65,6 @@ struct MediaBrowserView: View {
             .indexViewStyle(.page(backgroundDisplayMode: .always))
             .onChange(of: currentIndex) { newIndex in
                 print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
-                handleVideoVisibilityChange(newIndex: newIndex, oldIndex: previousIndex)
                 previousIndex = newIndex
             }
             
@@ -136,18 +131,14 @@ struct MediaBrowserView: View {
             // Initialize previous index
             previousIndex = currentIndex
             
-            // Start playing the initial video
+            // Start playing the initial video if it's a video
             if let initialAttachment = attachments[safe: currentIndex],
                isVideoAttachment(initialAttachment) {
-                let fullscreenMid = "\(initialAttachment.mid)_fullscreen"
-                print("DEBUG: [MediaBrowserView] Starting initial video with mid: \(fullscreenMid)")
+                print("DEBUG: [MediaBrowserView] Starting initial video with mid: \(initialAttachment.mid)")
                 
-                // Pause all other videos and start playing the initial one
-                VideoCacheManager.shared.pauseAllVideosExcept(for: fullscreenMid)
-                
-                if let player = VideoCacheManager.shared.getVideoPlayer(for: fullscreenMid, url: initialAttachment.getUrl(baseUrl)!, isHLS: true) {
+                if let player = VideoCacheManager.shared.getVideoPlayer(for: initialAttachment.mid, url: initialAttachment.getUrl(baseUrl)!, isHLS: true) {
                     player.play()
-                    print("DEBUG: [MediaBrowserView] Started playing initial video for mid: \(fullscreenMid)")
+                    print("DEBUG: [MediaBrowserView] Started playing initial video for mid: \(initialAttachment.mid)")
                 }
             }
         }
@@ -156,43 +147,13 @@ struct MediaBrowserView: View {
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
             
-            // Pause all videos when exiting full-screen
-            pauseAllVideos()
+            // Don't pause videos when exiting full-screen - let them continue playing in MediaCell
+            // The shared video player instance will maintain the current playback state
+            print("DEBUG: [MediaBrowserView] Exiting full-screen - preserving video playback state")
         }
     }
     
-    /// Handle video visibility changes when swiping between pages
-    private func handleVideoVisibilityChange(newIndex: Int, oldIndex: Int) {
-        print("DEBUG: [MediaBrowserView] Handling video visibility change: \(oldIndex) -> \(newIndex)")
-        
-        // Pause the previous video if it was a video
-        if oldIndex >= 0 && oldIndex < attachments.count {
-            let oldAttachment = attachments[oldIndex]
-            if isVideoAttachment(oldAttachment) {
-                let oldFullscreenMid = "\(oldAttachment.mid)_fullscreen"
-                print("DEBUG: [MediaBrowserView] Pausing previous video with mid: \(oldFullscreenMid)")
-                VideoCacheManager.shared.pauseVideoPlayer(for: oldFullscreenMid)
-            }
-        }
-        
-        // Start playing the new video if it's a video
-        if newIndex >= 0 && newIndex < attachments.count {
-            let newAttachment = attachments[newIndex]
-            if isVideoAttachment(newAttachment), let url = newAttachment.getUrl(baseUrl) {
-                let newFullscreenMid = "\(newAttachment.mid)_fullscreen"
-                print("DEBUG: [MediaBrowserView] Starting new video with mid: \(newFullscreenMid)")
-                
-                // Pause all other videos and start playing the new one
-                VideoCacheManager.shared.pauseAllVideosExcept(for: newFullscreenMid)
-                
-                // Get or create the video player and start playing
-                if let player = VideoCacheManager.shared.getVideoPlayer(for: newFullscreenMid, url: url, isHLS: true) {
-                    player.play()
-                    print("DEBUG: [MediaBrowserView] Started playing video for mid: \(newFullscreenMid)")
-                }
-            }
-        }
-    }
+
     
     private func startControlsTimer() {
         controlsTimer?.invalidate()
@@ -245,22 +206,6 @@ struct MediaBrowserView: View {
     
     private func isImageAttachment(_ attachment: MimeiFileType) -> Bool {
         return attachment.type.lowercased() == "image"
-    }
-    
-    /// Pause all videos when exiting full-screen mode
-    private func pauseAllVideos() {
-        print("DEBUG: [MediaBrowserView] Pausing all videos when exiting full-screen")
-        
-        // Pause all video attachments in this tweet
-        for attachment in attachments {
-            if isVideoAttachment(attachment) {
-                let fullscreenMid = "\(attachment.mid)_fullscreen"
-                print("DEBUG: [MediaBrowserView] Pausing fullscreen video with mid: \(fullscreenMid)")
-                
-                // Pause the fullscreen video (keep it in memory for potential quick return)
-                VideoCacheManager.shared.pauseVideoPlayer(for: fullscreenMid)
-            }
-        }
     }
     
     @ViewBuilder
