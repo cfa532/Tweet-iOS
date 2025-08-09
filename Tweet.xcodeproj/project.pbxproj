@@ -62,6 +62,11 @@
 		469A99622DEF318C00954049 /* TweetModel.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 469A99602DEF318C00954049 /* TweetModel.xcdatamodeld */; };
 		469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469CF0EF2E27FEC000FBCDB8 /* AppDelegate.swift */; };
 		469CF0F22E27FED700FBCDB8 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469CF0F12E27FED700FBCDB8 /* OrientationManager.swift */; };
+		46B03D752E47350A000E08DF /* DetailVideoContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D702E47350A000E08DF /* DetailVideoContext.swift */; };
+		46B03D762E47350A000E08DF /* FullscreenVideoContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D712E47350A000E08DF /* FullscreenVideoContext.swift */; };
+		46B03D772E47350A000E08DF /* MuteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D732E47350A000E08DF /* MuteState.swift */; };
+		46B03D782E47350A000E08DF /* VideoAssetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D742E47350A000E08DF /* VideoAssetCache.swift */; };
+		46B03D792E47350A000E08DF /* GridVideoContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D722E47350A000E08DF /* GridVideoContext.swift */; };
 		46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */; };
 		46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */; };
 		46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */; };
@@ -157,6 +162,11 @@
 		469A99612DEF318C00954049 /* TweetModel.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = TweetModel.xcdatamodel; sourceTree = "<group>"; };
 		469CF0EF2E27FEC000FBCDB8 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		469CF0F12E27FED700FBCDB8 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
+		46B03D702E47350A000E08DF /* DetailVideoContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailVideoContext.swift; sourceTree = "<group>"; };
+		46B03D712E47350A000E08DF /* FullscreenVideoContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullscreenVideoContext.swift; sourceTree = "<group>"; };
+		46B03D722E47350A000E08DF /* GridVideoContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridVideoContext.swift; sourceTree = "<group>"; };
+		46B03D732E47350A000E08DF /* MuteState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteState.swift; sourceTree = "<group>"; };
+		46B03D742E47350A000E08DF /* VideoAssetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoAssetCache.swift; sourceTree = "<group>"; };
 		46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSVideoProcessor.swift; sourceTree = "<group>"; };
 		46B1F59B2E07DA7D00B3CE6C /* FFmpegWrapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FFmpegWrapper.h; sourceTree = "<group>"; };
 		46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = FFmpegWrapper.c; sourceTree = "<group>"; };
@@ -373,6 +383,11 @@
 		4629FB172DFFE9FB00588941 /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				46B03D702E47350A000E08DF /* DetailVideoContext.swift */,
+				46B03D712E47350A000E08DF /* FullscreenVideoContext.swift */,
+				46B03D722E47350A000E08DF /* GridVideoContext.swift */,
+				46B03D732E47350A000E08DF /* MuteState.swift */,
+				46B03D742E47350A000E08DF /* VideoAssetCache.swift */,
 				461438262E44DCCB002D1B22 /* VideoManager.swift */,
 				468CF2232E39CC7C00D49038 /* AppHeaderView.swift */,
 				468CF2242E39CC7C00D49038 /* TabButton.swift */,
@@ -570,9 +585,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -611,6 +630,11 @@
 				1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */,
 				46F3BFCC2DFB06F500059F18 /* SimpleVideoPlayer.swift in Sources */,
 				46E5B3592DE005EC00AEF31F /* ThumbnailView.swift in Sources */,
+				46B03D752E47350A000E08DF /* DetailVideoContext.swift in Sources */,
+				46B03D762E47350A000E08DF /* FullscreenVideoContext.swift in Sources */,
+				46B03D772E47350A000E08DF /* MuteState.swift in Sources */,
+				46B03D782E47350A000E08DF /* VideoAssetCache.swift in Sources */,
+				46B03D792E47350A000E08DF /* GridVideoContext.swift in Sources */,
 				460680EA2E16303100D9D15A /* Constants.swift in Sources */,
 				46E5B3472DDC0CFB00AEF31F /* Avatar.swift in Sources */,
 				4674940F2DF2C4D60082FAC6 /* CommentListView.swift in Sources */,
