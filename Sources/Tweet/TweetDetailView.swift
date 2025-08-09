@@ -16,6 +16,11 @@ struct DetailMediaCell: View {
     @ObservedObject var videoManager: VideoManager
     let onImageTap: () -> Void
     
+    // Local mute state management for detail view
+    @State private var originalMuteState: Bool = false
+    @State private var hasSavedOriginalState: Bool = false
+    @State private var unmuteTimer: Timer? = nil
+    
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: VideoManager, onImageTap: @escaping () -> Void) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
@@ -130,9 +135,19 @@ struct DetailMediaCell: View {
             if attachment.type.lowercased() == "image" && image == nil {
                 loadImage()
             }
+            
+            // Handle mute state for videos in detail view - delay 1s before unmuting
+            if (attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video") && !hasSavedOriginalState {
+                setupDetailViewMuteState()
+            }
         }
         .onDisappear {
             isVisible = false
+            
+            // Restore original mute state when leaving detail view
+            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                restoreOriginalMuteState()
+            }
         }
     }
     
@@ -153,6 +168,36 @@ struct DetailMediaCell: View {
                     self.loading = false
                 }
             }
+        }
+    }
+    
+    // MARK: - Mute State Management for Detail View
+    
+    private func setupDetailViewMuteState() {
+        // Save the original global mute state
+        originalMuteState = MuteState.shared.isMuted
+        hasSavedOriginalState = true
+        
+        print("DEBUG: [DETAIL MEDIA CELL \(attachment.mid)] Saved original mute state: \(originalMuteState)")
+        print("DEBUG: [DETAIL MEDIA CELL \(attachment.mid)] Delaying 1 second before unmuting...")
+        
+        // Delay 1 second before unmuting the video in detail view
+        unmuteTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { _ in
+            MuteState.shared.setMuted(false)
+            print("DEBUG: [DETAIL MEDIA CELL \(attachment.mid)] Detail view unmuted after 1 second delay")
+        }
+    }
+    
+    private func restoreOriginalMuteState() {
+        // Cancel any pending timer
+        unmuteTimer?.invalidate()
+        unmuteTimer = nil
+        
+        // Restore the original mute state if we had saved it
+        if hasSavedOriginalState {
+            MuteState.shared.setMuted(originalMuteState)
+            print("DEBUG: [DETAIL MEDIA CELL \(attachment.mid)] Restored original mute state: \(originalMuteState)")
+            hasSavedOriginalState = false
         }
     }
 }
