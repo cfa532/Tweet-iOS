@@ -220,30 +220,30 @@ struct MediaBrowserView: View {
     
     @ViewBuilder
     private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
-        SimpleVideoPlayer(
-            url: url,
-            mid: attachment.mid,
-            autoPlay: index == currentIndex, // Only auto-play if this is the current video
-            onMuteChanged: { _ in
-                // In full-screen mode, don't update global mute state
-                // Full-screen videos should have independent audio control
-            },
-            isVisible: index == currentIndex, // Only visible if this is the current video
-            contentType: attachment.type,
-            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-            onVideoTap: {
-                // Show close button when video is tapped
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showControls = true
-                }
-                resetControlsTimer() // Reset close button timer
-            },
-
-            mode: .mediaBrowser
-        )
-        .environmentObject(MuteState.shared)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
+//        SimpleVideoPlayer(
+//            url: url,
+//            mid: attachment.mid,
+//            autoPlay: index == currentIndex, // Only auto-play if this is the current video
+//            onMuteChanged: { _ in
+//                // In full-screen mode, don't update global mute state
+//                // Full-screen videos should have independent audio control
+//            },
+//            isVisible: index == currentIndex, // Only visible if this is the current video
+//            contentType: attachment.type,
+//            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
+//            onVideoTap: {
+//                // Show close button when video is tapped
+//                withAnimation(.easeInOut(duration: 0.2)) {
+//                    showControls = true
+//                }
+//                resetControlsTimer() // Reset close button timer
+//            },
+//
+//            mode: .mediaBrowser
+//        )
+//        .environmentObject(MuteState.shared)
+//        .frame(maxWidth: .infinity, maxHeight: .infinity)
+//        .clipped()
     }
     
 

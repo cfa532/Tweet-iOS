@@ -80,17 +80,15 @@ struct MediaGridView: View {
             ZStack {
                 switch attachments.count {
                 case 1:
-                    MediaCell(
+                    NewMediaCell(
                         parentTweet: parentTweet,
                         attachmentIndex: 0,
                         aspectRatio: 1.0,
-                        play: shouldPlayVideo(for: 0),
-                        shouldLoadVideo: shouldLoadVideo,
-                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
-                        forceRefreshTrigger: forceRefreshTrigger
+                        autoplay: true,  // Simple: always autoplay for single media
+                        autoReplay: false,
+                        mute: true,
+                        onTap: { onItemTap?(0) }
                     )
-                    .environmentObject(MuteState.shared)
                     .frame(width: gridWidth, height: gridHeight)
                     .aspectRatio(contentMode: .fill)
                     .clipped()
@@ -601,84 +599,19 @@ struct MediaGridView: View {
     }
 }
 
-// MARK: - Zoomable View
-struct ZoomableView<Content: View>: View {
-    let content: Content
-    @Binding var scale: CGFloat
-    @State private var lastScale: CGFloat = 1.0
-    @State private var offset: CGSize = .zero
-    @State private var lastOffset: CGSize = .zero
-    
-    init(scale: Binding<CGFloat>, @ViewBuilder content: () -> Content) {
-        self._scale = scale
-        self.content = content()
-    }
-    
-    var body: some View {
-        GeometryReader { geometry in
-            content
-                .scaleEffect(scale)
-                .offset(offset)
-                .gesture(
-                    SimultaneousGesture(
-                        MagnificationGesture()
-                            .onChanged { value in
-                                let delta = value / lastScale
-                                lastScale = value
-                                scale = min(max(scale * delta, 1), 4)
-                            }
-                            .onEnded { _ in
-                                lastScale = 1.0
-                            },
-                        DragGesture()
-                            .onChanged { value in
-                                if scale > 1 {
-                                    let newOffset = CGSize(
-                                        width: lastOffset.width + value.translation.width,
-                                        height: lastOffset.height + value.translation.height
-                                    )
-                                    // Limit the offset based on scale
-                                    let maxOffset = (scale - 1) * geometry.size.width / 2
-                                    offset = CGSize(
-                                        width: min(max(newOffset.width, -maxOffset), maxOffset),
-                                        height: min(max(newOffset.height, -maxOffset), maxOffset)
-                                    )
-                                }
-                            }
-                            .onEnded { _ in
-                                lastOffset = offset
-                            }
-                    )
-                )
-                .onTapGesture(count: 2) {
-                    withAnimation {
-                        if scale > 1 {
-                            scale = 1
-                            offset = .zero
-                            lastOffset = .zero
-                        } else {
-                            scale = 2
-                        }
-                    }
-                }
-                .allowsHitTesting(scale > 1) // Only allow zoom gestures when zoomed in
-        }
-    }
-}
-
 // MARK: - MediaGridViewModel
 struct MediaGridViewModel {
     static func aspectRatio(for attachments: [MimeiFileType]) -> CGFloat {
         switch attachments.count {
         case 1:
             if let ar = attachments[0].aspectRatio, ar > 0 {
-                if ar < 0.9 {
-                    return 0.9 // Portrait aspect ratio
+                if ar < 1 {
+                    return 1 // Portrait aspect ratio
                 } else {
                     return CGFloat(ar) // Use actual aspect ratio for landscape
                 }
             } else {
-                return 1.0 // Square when no aspect ratio is available
+                return 1.618
             }
         case 2:
             let ar0 = attachments[0].aspectRatio ?? 1

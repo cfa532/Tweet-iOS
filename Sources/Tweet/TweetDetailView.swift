@@ -53,47 +53,11 @@ struct DetailMediaCell: View {
                     if shouldLoadVideo {
                         SimpleVideoPlayer(
                             url: url,
-                            mid: attachment.mid,
-                            autoPlay: play,
-                            onVideoFinished: nil,
-                            isVisible: isVisible,
-                            contentType: attachment.type,
-                            cellAspectRatio: CGFloat(aspectRatio),
-                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            onVideoTap: {
-                                // Handle tap to show/hide native controls
-                                print("DEBUG: [DETAIL MEDIA CELL] Video tapped - native controls should handle")
-                            },
-                            showCustomControls: false, // Enable native VideoPlayer controls
-                            disableAutoRestart: true,
-                            mode: .mediaBrowser // Use mediaBrowser mode to enable native controls
+                            autoplay: play,
+                            autoReplay: false, // Use mediaBrowser mode to enable native controls
+                            mute: false
                         )
-                        .environmentObject(MuteState.shared)
-                        .overlay(
-                            // Video controls overlay (timer and mute button)
-                            Group {
-                                VStack {
-                                    Spacer()
-                                    HStack {
-                                        // Video time remaining label in bottom left corner
-                                        if play && isVisible {
-                                            VideoTimeRemainingLabel(mid: attachment.mid)
-                                                .padding(.leading, 8)
-                                                .padding(.bottom, 8)
-                                        }
-                                        
-                                        Spacer()
-                                        
-                                        // Mute button in bottom right corner (only if showMuteButton is true)
-                                        if showMuteButton {
-                                            MuteButton()
-                                                .padding(.trailing, 8)
-                                                .padding(.bottom, 8)
-                                        }
-                                    }
-                                }
-                            }
-                        )
+
                     } else {
                         // Show placeholder for videos that haven't been loaded yet
                         Color.black
@@ -254,7 +218,7 @@ struct TweetDetailView: View {
                 setupInitialData()
             }
         }
-        .detectScroll()
+//        .detectScroll()
         .background(Color(.systemBackground))
         .navigationTitle("Tweet")
         .navigationBarTitleDisplayMode(.inline)

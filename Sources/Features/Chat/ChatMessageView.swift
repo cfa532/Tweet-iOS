@@ -319,37 +319,37 @@ struct ChatVideoPlayer: View {
     var body: some View {
         Group {
             if let url = attachment.getUrl(baseUrl) {
-                SimpleVideoPlayer(
-                    url: url,
-                    mid: attachment.mid,
-                    isVisible: true,
-                    cellAspectRatio: CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)),
-                    videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-                    showNativeControls: false,
-                    onVideoTap: {
-                        showFullScreen = true
-                    },
-                    showCustomControls: false,
-                    disableAutoRestart: true
-                )
-                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
-                .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)), contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .environmentObject(MuteState.shared)
-                .fullScreenCover(isPresented: $showFullScreen) {
-                    // Create a temporary tweet-like structure for the video
-                    let tempTweet = Tweet(
-                        mid: "chat_video_\(attachment.mid)",
-                        authorId: "chat_author",
-                        content: "",
-                        attachments: [attachment]
-                    )
-                    
-                    MediaBrowserView(
-                        tweet: tempTweet,
-                        initialIndex: 0
-                    )
-                }
+//                SimpleVideoPlayer(
+//                    url: url,
+//                    mid: attachment.mid,
+//                    isVisible: true,
+//                    cellAspectRatio: CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)),
+//                    videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
+//                    showNativeControls: false,
+//                    onVideoTap: {
+//                        showFullScreen = true
+//                    },
+//                    showCustomControls: false,
+//                    disableAutoRestart: true
+//                )
+//                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+//                .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)), contentMode: .fit)
+//                .clipShape(RoundedRectangle(cornerRadius: 8))
+//                .environmentObject(MuteState.shared)
+//                .fullScreenCover(isPresented: $showFullScreen) {
+//                    // Create a temporary tweet-like structure for the video
+//                    let tempTweet = Tweet(
+//                        mid: "chat_video_\(attachment.mid)",
+//                        authorId: "chat_author",
+//                        content: "",
+//                        attachments: [attachment]
+//                    )
+//                    
+//                    MediaBrowserView(
+//                        tweet: tempTweet,
+//                        initialIndex: 0
+//                    )
+//                }
             } else {
                 // Fallback if no URL
                 RoundedRectangle(cornerRadius: 8)

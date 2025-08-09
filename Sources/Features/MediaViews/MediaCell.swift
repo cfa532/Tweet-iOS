@@ -73,79 +73,68 @@ struct MediaCell: View, Equatable {
         Group {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
-                case "video", "hls_video":
-                    // Only create video player if we should load video
-                    if shouldLoadVideo {
-                        SimpleVideoPlayer(
-                            url: url,
-                            mid: attachment.mid,
-                            autoPlay: play,
-                            onVideoFinished: onVideoFinished,
-                            isVisible: isVisible,
-                            contentType: attachment.type,
-                            cellAspectRatio: CGFloat(aspectRatio),
-                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            onVideoTap: {
-                                showFullScreen = true
-                            },
-                            disableAutoRestart: true,
-                            mode: .mediaCell
-                        )
-                        .onAppear {
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - play: \(play), isVisible: \(isVisible), autoPlay: \(play)")
-                        }
-                        .onChange(of: play) { newPlayValue in
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] play changed to: \(newPlayValue), isVisible: \(isVisible), autoPlay: \(newPlayValue)")
-                        }
-                        .onChange(of: isVisible) { newIsVisible in
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible), play: \(play), autoPlay: \(play)")
-                        }
-
-
-                        .environmentObject(MuteState.shared)
-                        .onReceive(MuteState.shared.$isMuted) { isMuted in
-                            print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
-                        }
-                        
-                        .overlay(
-                            // Video controls overlay
-                            Group {
-                                VStack {
-                                    Spacer()
-                                    HStack {
-                                        // Video time remaining label in bottom left corner
-                                        if play && isVisible {
-                                            VideoTimeRemainingLabel(mid: attachment.mid)
-                                                .padding(.leading, 8)
-                                                .padding(.bottom, 8)
-                                        }
-                                        
-                                        Spacer()
-                                        
-                                        // Mute button in bottom right corner (only if showMuteButton is true)
-                                        if showMuteButton {
-                                            MuteButton()
-                                                .padding(.trailing, 8)
-                                                .padding(.bottom, 8)
-                                        }
-                                    }
-                                }
-                            }
-                        )
-                    } else {
-                        // Show placeholder for videos that haven't been loaded yet
-                        Color.black
-                            .aspectRatio(contentMode: .fill)
-                            .overlay(
-                                Image(systemName: "play.circle")
-                                    .font(.system(size: 40))
-                                    .foregroundColor(.white)
-                            )
-                            .onTapGesture {
-                                // Open full screen for video placeholders
-                                showFullScreen = true
-                            }
-                    }
+//                case "video", "hls_video":
+//                    // Only create video player if we should load video
+//                    if shouldLoadVideo {
+//                        SimpleVideoPlayer(
+//                            url: url,
+//                            mid: attachment.mid,
+//                            autoPlay: play,
+//                            onVideoFinished: onVideoFinished,
+//                            isVisible: isVisible,
+//                            contentType: attachment.type,
+//                            cellAspectRatio: CGFloat(aspectRatio),
+//                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+//                            onVideoTap: {
+//                                showFullScreen = true
+//                            },
+//                            disableAutoRestart: true,
+//                            mode: .mediaCell
+//                        )
+//                        .environmentObject(MuteState.shared)
+//                        .onReceive(MuteState.shared.$isMuted) { isMuted in
+//                            print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
+//                        }
+//                        
+//                        .overlay(
+//                            // Video controls overlay
+//                            Group {
+//                                VStack {
+//                                    Spacer()
+//                                    HStack {
+//                                        // Video time remaining label in bottom left corner
+//                                        if play && isVisible {
+//                                            VideoTimeRemainingLabel(mid: attachment.mid)
+//                                                .padding(.leading, 8)
+//                                                .padding(.bottom, 8)
+//                                        }
+//                                        
+//                                        Spacer()
+//                                        
+//                                        // Mute button in bottom right corner (only if showMuteButton is true)
+//                                        if showMuteButton {
+//                                            MuteButton()
+//                                                .padding(.trailing, 8)
+//                                                .padding(.bottom, 8)
+//                                        }
+//                                    }
+//                                }
+//                            }
+//                        )
+//                    } else {
+//                        // Show placeholder for videos that haven't been loaded yet
+//                        Color.black
+//                            .aspectRatio(contentMode: .fill)
+//                            .overlay(
+//                                Image(systemName: "play.circle")
+//                                    .font(.system(size: 40))
+//                                    .foregroundColor(.white)
+//                            )
+//                            .onTapGesture {
+//                                // Open full screen for video placeholders
+//                                showFullScreen = true
+//                            }
+//                    }
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
                         .environmentObject(MuteState.shared)
