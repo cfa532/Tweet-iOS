@@ -1,6 +1,162 @@
 import SwiftUI
 import AVKit
 
+// Custom MediaCell for TweetDetailView that shows native video controls instead of going full-screen
+@available(iOS 16.0, *)
+struct DetailMediaCell: View {
+    @ObservedObject var parentTweet: Tweet
+    let attachmentIndex: Int
+    let aspectRatio: Float
+    @State private var play: Bool
+    let shouldLoadVideo: Bool
+    @State private var isVisible: Bool = false
+    @State private var image: UIImage?
+    @State private var loading = false
+    let showMuteButton: Bool
+    @ObservedObject var videoManager: VideoManager
+    let onImageTap: () -> Void
+    
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: VideoManager, onImageTap: @escaping () -> Void) {
+        self.parentTweet = parentTweet
+        self.attachmentIndex = attachmentIndex
+        self.aspectRatio = aspectRatio
+        self._play = State(initialValue: play)
+        self.shouldLoadVideo = shouldLoadVideo
+        self.showMuteButton = showMuteButton
+        self.videoManager = videoManager
+        self.onImageTap = onImageTap
+    }
+    
+    private var attachment: MimeiFileType {
+        guard let attachments = parentTweet.attachments,
+              attachmentIndex >= 0 && attachmentIndex < attachments.count else {
+            return MimeiFileType(mid: "", type: "unknown")
+        }
+        return attachments[attachmentIndex]
+    }
+    
+    private var baseUrl: URL {
+        return parentTweet.author?.baseUrl ?? HproseInstance.baseUrl
+    }
+    
+    var body: some View {
+        Group {
+            if let url = attachment.getUrl(baseUrl) {
+                switch attachment.type.lowercased() {
+                case "video", "hls_video":
+                    // Show video with native controls (no tap override)
+                    if shouldLoadVideo {
+                        SimpleVideoPlayer(
+                            url: url,
+                            mid: attachment.mid,
+                            autoPlay: play,
+                            onVideoFinished: nil,
+                            isVisible: isVisible,
+                            contentType: attachment.type,
+                            cellAspectRatio: CGFloat(aspectRatio),
+                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                            onVideoTap: {
+                                // Handle tap to show/hide native controls
+                                print("DEBUG: [DETAIL MEDIA CELL] Video tapped - native controls should handle")
+                            },
+                            showCustomControls: false, // Enable native VideoPlayer controls
+                            disableAutoRestart: true,
+                            mode: .mediaBrowser // Use mediaBrowser mode to enable native controls
+                        )
+                        .environmentObject(MuteState.shared)
+                        .overlay(
+                            // Video controls overlay (timer and mute button)
+                            Group {
+                                VStack {
+                                    Spacer()
+                                    HStack {
+                                        // Video time remaining label in bottom left corner
+                                        if play && isVisible {
+                                            VideoTimeRemainingLabel(mid: attachment.mid)
+                                                .padding(.leading, 8)
+                                                .padding(.bottom, 8)
+                                        }
+                                        
+                                        Spacer()
+                                        
+                                        // Mute button in bottom right corner (only if showMuteButton is true)
+                                        if showMuteButton {
+                                            MuteButton()
+                                                .padding(.trailing, 8)
+                                                .padding(.bottom, 8)
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                    } else {
+                        // Show placeholder for videos that haven't been loaded yet
+                        Color.black
+                            .overlay(
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(1.5)
+                            )
+                    }
+                case "image":
+                    // Images still go to full-screen when tapped
+                    Group {
+                        if let image = image {
+                            Image(uiImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .clipped()
+                        } else if loading {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .background(Color.gray.opacity(0.2))
+                        } else {
+                            Color.gray.opacity(0.2)
+                        }
+                    }
+                    .onTapGesture {
+                        onImageTap()
+                    }
+                default:
+                    Color.gray.opacity(0.2)
+                }
+            } else {
+                Color.gray.opacity(0.2)
+            }
+        }
+        .onAppear {
+            isVisible = true
+            if attachment.type.lowercased() == "image" && image == nil {
+                loadImage()
+            }
+        }
+        .onDisappear {
+            isVisible = false
+        }
+    }
+    
+    private func loadImage() {
+        guard let url = attachment.getUrl(baseUrl) else { return }
+        
+        loading = true
+        
+        Task {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                await MainActor.run {
+                    self.image = UIImage(data: data)
+                    self.loading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.loading = false
+                }
+            }
+        }
+    }
+}
+
 @MainActor
 @available(iOS 16.0, *)
 struct TweetDetailView: View {
@@ -104,14 +260,18 @@ struct TweetDetailView: View {
                 let aspect = aspectRatio(for: attachments[selectedMediaIndex], at: selectedMediaIndex)
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
-                        MediaCell(
+                        DetailMediaCell(
                             parentTweet: displayTweet,
                             attachmentIndex: index,
                             aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
                             play: index == selectedMediaIndex,
                             shouldLoadVideo:  index == selectedMediaIndex,
                             showMuteButton: true,
-                            videoManager: VideoManager()
+                            videoManager: VideoManager(),
+                            onImageTap: {
+                                selectedMediaIndex = index
+                                showBrowser = true
+                            }
                         )
                         .environmentObject(MuteState.shared)
                         .tag(index)

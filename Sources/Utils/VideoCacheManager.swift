@@ -343,19 +343,21 @@ class VideoCacheManager: ObservableObject {
             return false
         }
         
-        // Check if video has video tracks (not just audio)
-        let hasVideoTracks: Bool
-        if #available(iOS 16.0, *) {
-            // For iOS 16+, use the newer approach with available tracks
-            hasVideoTracks = playerItem.asset.tracks.contains { track in
-                track.mediaType == .video
-            }
-        } else {
-            hasVideoTracks = playerItem.asset.tracks(withMediaType: .video).count > 0
-        }
+        // Get timing information first
         let currentTime = player.currentTime().seconds
         let duration = playerItem.duration.seconds
         let isPlaying = player.rate > 0
+        
+        // Check if video has video tracks (not just audio)
+        let hasVideoTracks: Bool
+        if #available(iOS 16.0, *) {
+            // For iOS 16+, we'll use a different approach since tracks is deprecated
+            // and load(.tracks) is async, but this is a synchronous health check.
+            // We'll check if the asset has duration and the player has visual content
+            hasVideoTracks = duration > 0 && playerItem.presentationSize.width > 0
+        } else {
+            hasVideoTracks = playerItem.asset.tracks(withMediaType: .video).count > 0
+        }
         
         print("DEBUG: [VIDEO CACHE] Health check for \(videoMid) - hasVideo: \(hasVideoTracks), time: \(currentTime), duration: \(duration), playing: \(isPlaying)")
         
