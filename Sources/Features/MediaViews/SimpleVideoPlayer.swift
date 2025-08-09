@@ -144,6 +144,8 @@ struct SimpleVideoPlayer: View {
     @State private var player: AVPlayer?
     @State private var isLoading = true
     @State private var hasFinishedPlaying = false
+    @State private var loadFailed = false
+    @State private var retryCount = 0
     @ObservedObject private var muteState = MuteState.shared
     @State private var instanceId = UUID().uuidString.prefix(8)
     
@@ -276,9 +278,17 @@ struct SimpleVideoPlayer: View {
         }
         .onChange(of: isVisible) { visible in
             // Handle visibility changes
-            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Visibility changed to: \(visible), autoPlay: \(autoPlay), player exists: \(player != nil), isLoading: \(isLoading)")
-            checkPlaybackConditions(autoPlay: autoPlay, isVisible: visible)
-            if !visible {
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Visibility changed to: \(visible), autoPlay: \(autoPlay), player exists: \(player != nil), isLoading: \(isLoading), loadFailed: \(loadFailed)")
+            
+            if visible {
+                // If video failed to load and becomes visible again, retry
+                if loadFailed && retryCount < 3 {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video reappeared after failure - retrying load")
+                    retryLoad()
+                } else {
+                    checkPlaybackConditions(autoPlay: autoPlay, isVisible: visible)
+                }
+            } else {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Became invisible - pausing playback")
                 player?.pause()
             }
@@ -323,6 +333,10 @@ struct SimpleVideoPlayer: View {
                         .onTapGesture {
                             onVideoTap?()
                         }
+                        .onLongPressGesture {
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press detected - reloading video")
+                            retryLoad()
+                        }
                 } else {
                     VideoPlayer(player: player, videoOverlay: {
                         // Custom overlay that captures taps
@@ -331,6 +345,10 @@ struct SimpleVideoPlayer: View {
                             .onTapGesture {
                                 onVideoTap?()
                             }
+                            .onLongPressGesture {
+                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press detected - reloading video")
+                                retryLoad()
+                            }
                     })
                     .clipped()
                 }
@@ -338,7 +356,36 @@ struct SimpleVideoPlayer: View {
                 ProgressView("Loading video...")
                     .frame(maxWidth: .infinity, maxHeight: 200)
                     .background(Color.black.opacity(0.1))
-                } else {
+            } else if loadFailed {
+                Color.black.opacity(0.1)
+                    .overlay(
+                        VStack(spacing: 12) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 30))
+                                .foregroundColor(.white)
+                            
+                            Text("Failed to load video")
+                                .foregroundColor(.white)
+                                .font(.caption)
+                            
+                            if retryCount < 3 {
+                                Button("Retry") {
+                                    retryLoad()
+                                }
+                                .foregroundColor(.blue)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(Color.white.opacity(0.2))
+                                .cornerRadius(8)
+                            }
+                        }
+                    )
+                    .onTapGesture {
+                        if retryCount < 3 {
+                            retryLoad()
+                        }
+                    }
+            } else {
                 Color.black
                     .overlay(
                         Image(systemName: "play.circle")
@@ -351,57 +398,112 @@ struct SimpleVideoPlayer: View {
     
     private func setupPlayer() {
         Task {
-            // Step 1: Resolve HLS if needed
-            let resolvedURL = await resolveHLSURL(url)
-            
-            // Step 2: Get shared asset
-            let sharedAsset = await SharedAssetCache.shared.getAsset(for: resolvedURL)
-            
-            // Step 3: Create player
-            let playerItem = AVPlayerItem(asset: sharedAsset)
-            let newPlayer = AVPlayer(playerItem: playerItem)
-            
-            await MainActor.run {
-                // Configure player for context
-                newPlayer.isMuted = forceUnmuted ? false : muteState.isMuted
+            do {
+                // Step 1: Resolve HLS if needed
+                let resolvedURL = await resolveHLSURL(url)
                 
-                                // Set up video finished observer
-                NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemDidPlayToEndTime,
-                    object: playerItem,
-                    queue: .main
-                ) { _ in
-                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video finished playing - disableAutoRestart: \(disableAutoRestart)")
+                // Step 2: Get shared asset
+                let sharedAsset = await SharedAssetCache.shared.getAsset(for: resolvedURL)
+                
+                // Step 3: Create player
+                let playerItem = AVPlayerItem(asset: sharedAsset)
+                let newPlayer = AVPlayer(playerItem: playerItem)
+            
+                            await MainActor.run {
+                    // Configure player for context
+                    newPlayer.isMuted = forceUnmuted ? false : muteState.isMuted
                     
-                    if !disableAutoRestart {
-                        // Auto-restart immediately for fullscreen/detail contexts
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Auto-restarting video immediately")
-                        newPlayer.seek(to: .zero) { finished in
-                            if finished {
-                                newPlayer.play()
+                    // Set up video finished observer
+                    NotificationCenter.default.addObserver(
+                        forName: .AVPlayerItemDidPlayToEndTime,
+                        object: playerItem,
+                        queue: .main
+                    ) { _ in
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video finished playing - disableAutoRestart: \(disableAutoRestart)")
+                        
+                        if !disableAutoRestart {
+                            // Auto-restart immediately for fullscreen/detail contexts
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Auto-restarting video immediately")
+                            newPlayer.seek(to: .zero) { finished in
+                                if finished {
+                                    newPlayer.play()
+                                }
+                            }
+                        } else {
+                            // For MediaCell, just mark as finished for manual restart on reappearance
+                            self.hasFinishedPlaying = true
+                        }
+                        
+                        // Call the external callback if provided
+                        if let onVideoFinished = onVideoFinished {
+                            onVideoFinished()
+                        }
+                    }
+                    
+                    // Set up error observer
+                    NotificationCenter.default.addObserver(
+                        forName: .AVPlayerItemFailedToPlayToEndTime,
+                        object: playerItem,
+                        queue: .main
+                    ) { notification in
+                        let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video failed to play to end - \(error?.localizedDescription ?? "unknown error")")
+                        self.handleLoadFailure()
+                    }
+                    
+                    // Monitor player item status for load failures
+                    Task {
+                        // Give the player a moment to start loading
+                        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                        
+                        await MainActor.run {
+                            if playerItem.status == .failed {
+                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player item failed to load: \(playerItem.error?.localizedDescription ?? "unknown error")")
+                                self.handleLoadFailure()
                             }
                         }
-                    } else {
-                        // For MediaCell, just mark as finished for manual restart on reappearance
-                        self.hasFinishedPlaying = true
                     }
                     
-                    // Call the external callback if provided
-                    if let onVideoFinished = onVideoFinished {
-                        onVideoFinished()
-                    }
+                    self.player = newPlayer
+                    self.isLoading = false
+                    self.loadFailed = false
+                    self.retryCount = 0
+                    
+                    // Start playback if needed
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player ready - checking playback conditions")
+                    checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+                    
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Created player using shared asset cache")
                 }
-                
-                self.player = newPlayer
-                        self.isLoading = false
-                
-                // Start playback if needed
-                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player ready - checking playback conditions")
-                checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
-                
-                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Created player using shared asset cache")
+            } catch {
+                await MainActor.run {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Failed to setup player: \(error.localizedDescription)")
+                    self.handleLoadFailure()
+                }
             }
         }
+    }
+    
+    private func handleLoadFailure() {
+        loadFailed = true
+        isLoading = false
+        player = nil
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Load failed, retry count: \(retryCount)")
+    }
+    
+    private func retryLoad() {
+        guard retryCount < 3 else {
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Max retry attempts reached")
+            return
+        }
+        
+        retryCount += 1
+        loadFailed = false
+        isLoading = true
+        hasFinishedPlaying = false
+        
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Retrying load, attempt \(retryCount)")
+        setupPlayer()
     }
     
     /// Resolve HLS URL if needed
