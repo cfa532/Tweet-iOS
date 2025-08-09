@@ -1063,7 +1063,15 @@ struct HLSDirectoryVideoPlayer: View {
                 }
                 
                 loading = false
-                if let url = await getHLSPlaylistURL(baseURL: baseURL) {
+                // Run HLS resolution on background queue to avoid blocking main thread
+                let url = await withTaskGroup(of: URL?.self) { group in
+                    group.addTask {
+                        await self.getHLSPlaylistURL(baseURL: baseURL)
+                    }
+                    return await group.first { _ in true } ?? nil
+                }
+                
+                if let url = url {
                     // Cancel timeout since we succeeded
                     loadingTimeout?.cancel()
                     await MainActor.run {
@@ -1113,12 +1121,23 @@ struct HLSDirectoryVideoPlayer: View {
     private func urlExists(_ url: URL) async -> Bool {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
+        request.timeoutInterval = 2.0 // Shorter timeout to prevent blocking
+        request.cachePolicy = .useProtocolCachePolicy
+        
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            // Use a background URLSession configuration to avoid blocking main thread
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 2.0
+            config.timeoutIntervalForResource = 3.0
+            let session = URLSession(configuration: config)
+            
+            let (_, response) = try await session.data(for: request)
             if let httpResponse = response as? HTTPURLResponse {
                 return httpResponse.statusCode == 200
             }
-        } catch {}
+        } catch {
+            print("DEBUG: [HLS PLAYER \(mid)] URL check failed for \(url.lastPathComponent): \(error.localizedDescription)")
+        }
         return false
     }
 } 

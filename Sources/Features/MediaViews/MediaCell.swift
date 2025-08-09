@@ -180,10 +180,10 @@ struct MediaCell: View, Equatable {
             // Refresh mute state from preferences when cell appears
             MuteState.shared.refreshFromPreferences()
             
-            // Auto-load videos when they become visible
+            // Defer video loading to avoid blocking UI during list loading
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                shouldLoadVideo = true
-                // Update play state based on VideoManager
+                // Don't load videos immediately - wait for shouldLoadVideo to be set by parent
+                // This prevents blocking the main thread during tweet list loading
                 play = videoManager.shouldPlayVideo(for: attachment.mid)
             }
         }
@@ -206,12 +206,13 @@ struct MediaCell: View, Equatable {
             // Handle video visibility changes
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 if newValue {
-                    // Video became visible - ensure it's loaded and update play state
-                    shouldLoadVideo = true
-                    let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
-                    if play != newPlayState {
-                        print("DEBUG: [MEDIA CELL \(attachment.mid)] Video became visible - updating play from \(play) to \(newPlayState)")
-                        play = newPlayState
+                    // Video became visible - only load if parent allows it (prevents UI blocking)
+                    if shouldLoadVideo {
+                        let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
+                        if play != newPlayState {
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] Video became visible - updating play from \(play) to \(newPlayState)")
+                            play = newPlayState
+                        }
                     }
                 } else {
                     // Video became invisible - pause playback
