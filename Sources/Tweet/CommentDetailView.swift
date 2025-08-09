@@ -91,8 +91,9 @@ struct CommentDetailView: View {
                         DetailMediaCell(
                             parentTweet: comment,
                             attachmentIndex: index,
+                            aspectRatio: Float(attachments[index].aspectRatio ?? 1.0),
+                            isSelected: index == selectedMediaIndex,
                             showMuteButton: true,
-                            videoManager: VideoManager(),
                             onImageTap: {
                                 selectedMediaIndex = index
                                 showBrowser = true
