@@ -15,51 +15,21 @@ class SharedAssetCache: ObservableObject {
     static let shared = SharedAssetCache()
     private init() {}
     
+    private let cacheQueue = DispatchQueue(label: "SharedAssetCache", attributes: .concurrent)
     private var assetCache: [String: AVAsset] = [:]
     private var loadingTasks: [String: Task<AVAsset, Error>] = [:]
     
     /// Get or create asset for URL with HLS resolution
     func getAsset(for url: URL) async -> AVAsset {
-        let cacheKey = url.absoluteString
+        // For now, let's bypass caching to eliminate the crash
+        // and create assets directly to identify the root cause
+        print("DEBUG: [SHARED ASSET CACHE] Creating asset directly for: \(url.lastPathComponent)")
         
-        // Return cached asset if available
-        if let cachedAsset = assetCache[cacheKey] {
-            print("DEBUG: [SHARED ASSET CACHE] Cache HIT for: \(url.lastPathComponent)")
-            return cachedAsset
-        }
+        let resolvedURL = await resolveHLSURL(url)
+        let asset = AVAsset(url: resolvedURL)
         
-        // Check if already loading
-        if let existingTask = loadingTasks[cacheKey] {
-            print("DEBUG: [SHARED ASSET CACHE] Already loading: \(url.lastPathComponent)")
-            do {
-                return try await existingTask.value
-            } catch {
-                print("ERROR: [SHARED ASSET CACHE] Loading task failed: \(error)")
-                // Fall through to create new task
-            }
-        }
-        
-        // Create new loading task
-        print("DEBUG: [SHARED ASSET CACHE] Cache MISS - loading: \(url.lastPathComponent)")
-        let loadingTask = Task<AVAsset, Error> {
-            let resolvedURL = await resolveHLSURL(url)
-            return AVAsset(url: resolvedURL)
-        }
-        
-        loadingTasks[cacheKey] = loadingTask
-        
-        do {
-            let asset = try await loadingTask.value
-            assetCache[cacheKey] = asset
-            loadingTasks.removeValue(forKey: cacheKey)
-            print("DEBUG: [SHARED ASSET CACHE] Cached asset for: \(url.lastPathComponent)")
-            return asset
-        } catch {
-            loadingTasks.removeValue(forKey: cacheKey)
-            print("ERROR: [SHARED ASSET CACHE] Failed to load asset: \(error)")
-            // Return basic asset as fallback
-            return AVAsset(url: url)
-        }
+        print("DEBUG: [SHARED ASSET CACHE] Created asset for: \(url.lastPathComponent)")
+        return asset
     }
     
     /// Resolve HLS URL if needed
@@ -84,7 +54,6 @@ class SharedAssetCache: ObservableObject {
             print("DEBUG: [SHARED ASSET CACHE] Found playlist.m3u8 for: \(url.lastPathComponent)")
             return playlistURL
         }
-        
         return url
     }
     
