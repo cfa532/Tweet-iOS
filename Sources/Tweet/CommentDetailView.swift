@@ -88,14 +88,17 @@ struct CommentDetailView: View {
                 let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
-                        MediaCell(
+                        DetailMediaCell(
                             parentTweet: comment,
                             attachmentIndex: index,
                             showMuteButton: true,
-                            videoManager: VideoManager()
+                            videoManager: VideoManager(),
+                            onImageTap: {
+                                selectedMediaIndex = index
+                                showBrowser = true
+                            }
                         )
                         .tag(index)
-                        .onTapGesture { showBrowser = true }
                     }
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
