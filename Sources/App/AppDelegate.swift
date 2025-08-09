@@ -128,10 +128,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppWillEnterForeground() {
-        print("[AppDelegate] App will enter foreground - preparing for restoration")
+        print("[AppDelegate] App will enter foreground - pre-restoring videos")
         
-        // Just prepare - let didBecomeActive handle the actual restoration
-        // This avoids duplicate restoration calls
+        // Restore immediately when foreground is detected for faster visual recovery
+        VideoCacheManager.shared.immediateRestoreVideoPlayers()
+        
+        // Also handle any idle period restoration
         VideoCacheManager.shared.handleVideoRestorationAfterIdle()
     }
 } 

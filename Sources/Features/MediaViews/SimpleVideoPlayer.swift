@@ -350,6 +350,7 @@ struct HLSVideoPlayerWithControls: View {
     @State private var playerMuted: Bool = false
     @State private var hasKVOObserver: Bool = false
     @State private var statusObserver: PlayerStatusObserver?
+    @State private var videoPlayerKey: UUID = UUID() // Key to force VideoPlayer recreation
 
     @StateObject private var muteState = MuteState.shared
     @StateObject private var videoCache = VideoCacheManager.shared
@@ -378,6 +379,7 @@ struct HLSVideoPlayerWithControls: View {
             ZStack {
                 if let player = player {
                     VideoPlayer(player: player)
+                        .id(videoPlayerKey) // Force recreation when key changes
                         .overlay(
                             // Transparent overlay to capture taps - but only when we need custom tap handling
                             Group {
@@ -607,6 +609,15 @@ struct HLSVideoPlayerWithControls: View {
                 }
                 
                 // Do not resume or start playback here; let parent control via autoPlay
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RecreateVideoPlayer"))) { notification in
+                if let userInfo = notification.userInfo,
+                   let videoMid = userInfo["videoMid"] as? String,
+                   videoMid == mid {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Received recreation request - regenerating VideoPlayer")
+                    // Force VideoPlayer recreation by changing the key
+                    videoPlayerKey = UUID()
+                }
             }
             .onDisappear {
                 // Pause video using cache, do not destroy instance

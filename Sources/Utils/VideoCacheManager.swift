@@ -19,9 +19,9 @@ class VideoCacheManager: ObservableObject {
     // Maximum number of cached videos to keep in memory
     private let maxCacheSize = Constants.VIDEO_CACHE_POOL_SIZE
     
-    // Performance optimization: prevent duplicate restoration calls
-    private var lastRestorationTime: Date = Date.distantPast
-    private let restorationCooldown: TimeInterval = 0.5 // 500ms cooldown
+    // Track individual video restoration to prevent per-video duplicates
+    private var videoRestorationTimestamps: [String: Date] = [:]
+    private let perVideoRestorationCooldown: TimeInterval = 0.1 // 100ms per video
     
     private init() {
         // Set up memory warning observer to clean up cache when system needs memory
@@ -275,6 +275,9 @@ class VideoCacheManager: ObservableObject {
         // Use enhanced restoration techniques
         restorePlayerLayer(cachedPlayer: cachedPlayer, mid: videoMid)
         cachedPlayer.lastAccessed = Date()
+        
+        // Health check temporarily disabled to prevent freezing
+        // TODO: Re-implement health check without deadlocks
     }
     
     /// Prepare video players for background transition (reduces black screen duration)
@@ -298,40 +301,120 @@ class VideoCacheManager: ObservableObject {
         }
     }
     
+    /// Check if a video player's layer is healthy (has visual content) - LOCK-FREE VERSION
+    private func checkVideoLayerHealthUnsafe(for videoMid: String) -> Bool {
+        // This method assumes cacheLock is already held by caller
+        guard let cachedPlayer = videoCache[videoMid] else {
+            print("DEBUG: [VIDEO CACHE] No cached player for health check: \(videoMid)")
+            return false
+        }
+        
+        let player = cachedPlayer.player
+        
+        // Check if player has content and is ready
+        guard let playerItem = player.currentItem,
+              playerItem.status == .readyToPlay else {
+            print("DEBUG: [VIDEO CACHE] Player not ready for health check: \(videoMid)")
+            return false
+        }
+        
+        // Check if video has video tracks (not just audio)
+        let hasVideoTracks = playerItem.asset.tracks(withMediaType: .video).count > 0
+        let currentTime = player.currentTime().seconds
+        let duration = playerItem.duration.seconds
+        let isPlaying = player.rate > 0
+        
+        print("DEBUG: [VIDEO CACHE] Health check for \(videoMid) - hasVideo: \(hasVideoTracks), time: \(currentTime), duration: \(duration), playing: \(isPlaying)")
+        
+        return hasVideoTracks && duration > 0
+    }
+    
+    /// Check if a video player's layer is healthy (has visual content)
+    func checkVideoLayerHealth(for videoMid: String) -> Bool {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return checkVideoLayerHealthUnsafe(for: videoMid)
+    }
+    
+    /// Nuclear option: Force recreation of VideoPlayer view for a specific video
+    func recreateVideoPlayerView(for videoMid: String) {
+        print("DEBUG: [VIDEO CACHE] Nuclear option - recreating VideoPlayer view for \(videoMid)")
+        
+        // Post notification to trigger VideoPlayer recreation
+        NotificationCenter.default.post(
+            name: NSNotification.Name("RecreateVideoPlayer"),
+            object: nil,
+            userInfo: ["videoMid": videoMid]
+        )
+    }
+    
     /// Enhanced immediate restoration for faster recovery from background
     func immediateRestoreVideoPlayers() {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        // Performance optimization: prevent duplicate calls
-        let now = Date()
-        if now.timeIntervalSince(lastRestorationTime) < restorationCooldown {
-            print("DEBUG: [VIDEO CACHE] Skipping restoration - too soon since last call")
-            return
-        }
-        lastRestorationTime = now
-        
         print("DEBUG: [VIDEO CACHE] Immediate video player restoration initiated")
+        let now = Date()
         
         for (mid, cachedPlayer) in videoCache {
+            // Check per-video cooldown to prevent excessive restoration of individual videos
+            if let lastRestoration = videoRestorationTimestamps[mid],
+               now.timeIntervalSince(lastRestoration) < perVideoRestorationCooldown {
+                print("DEBUG: [VIDEO CACHE] Skipping restoration for \(mid) - too recent")
+                continue
+            }
+            
+            videoRestorationTimestamps[mid] = now
+            
             // Use preserved state for faster restoration
             let player = cachedPlayer.player
             
             if let preservedTime = cachedPlayer.preservedTime {
+                print("DEBUG: [VIDEO CACHE] Restoring \(mid) with preserved state - time: \(preservedTime.seconds)")
                 // Immediate restoration using preserved state
                 player.seek(to: preservedTime, toleranceBefore: .zero, toleranceAfter: .zero) { completed in
                     if completed, cachedPlayer.wasPlayingBeforeBackground {
                         DispatchQueue.main.async {
                             player.play()
+                            print("DEBUG: [VIDEO CACHE] Resumed playback for \(mid)")
                         }
                     }
                 }
             } else {
+                print("DEBUG: [VIDEO CACHE] Restoring \(mid) with fallback method")
                 // Fallback to standard restoration
                 restorePlayerLayer(cachedPlayer: cachedPlayer, mid: mid)
             }
             
             cachedPlayer.lastAccessed = Date()
+        }
+        
+        // Comprehensive health check temporarily disabled to prevent freezing
+        // TODO: Re-implement without deadlocks
+    }
+    
+    /// Check all cached videos and recreate those with broken layers
+    private func checkAndRecreateUnhealthyVideos() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        
+        print("DEBUG: [VIDEO CACHE] Checking all cached videos for layer health")
+        
+        var unhealthyVideos: [String] = []
+        
+        for (mid, _) in videoCache {
+            let isHealthy = checkVideoLayerHealthUnsafe(for: mid) // Use lock-free version
+            if !isHealthy {
+                print("DEBUG: [VIDEO CACHE] Found unhealthy video \(mid) - will schedule recreation")
+                unhealthyVideos.append(mid)
+            }
+        }
+        
+        // Schedule recreations outside the lock to prevent deadlock
+        for mid in unhealthyVideos {
+            DispatchQueue.main.async {
+                self.recreateVideoPlayerView(for: mid)
+            }
         }
     }
     

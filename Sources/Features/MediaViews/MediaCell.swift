@@ -248,6 +248,9 @@ struct MediaCell: View, Equatable {
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
                 print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - enhanced restoration")
                 
+                // Simplified player state check to prevent deadlocks
+                print("DEBUG: [MEDIA CELL \(attachment.mid)] Player state check simplified for stability")
+                
                 // Immediate enhanced refresh to minimize black screen
                 VideoCacheManager.shared.forceRefreshVideoLayer(for: attachment.mid)
                 
@@ -257,11 +260,14 @@ struct MediaCell: View, Equatable {
                 // Force a view refresh by briefly toggling a state
                 let currentPlay = play
                 play = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { // Increased delay slightly
                     // Update play state based on visibility and VideoManager
                     let newPlayState = isVisible && videoManager.shouldPlayVideo(for: attachment.mid)
                     play = newPlayState
                     print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - updated play from \(currentPlay) to \(newPlayState) (isVisible: \(isVisible))")
+                    
+                    // Post-restoration verification simplified to prevent deadlocks
+                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Post-restoration completed")
                 }
             }
         }
