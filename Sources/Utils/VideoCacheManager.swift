@@ -344,7 +344,15 @@ class VideoCacheManager: ObservableObject {
         }
         
         // Check if video has video tracks (not just audio)
-        let hasVideoTracks = playerItem.asset.tracks(withMediaType: .video).count > 0
+        let hasVideoTracks: Bool
+        if #available(iOS 16.0, *) {
+            // For iOS 16+, use the newer approach with available tracks
+            hasVideoTracks = playerItem.asset.tracks.contains { track in
+                track.mediaType == .video
+            }
+        } else {
+            hasVideoTracks = playerItem.asset.tracks(withMediaType: .video).count > 0
+        }
         let currentTime = player.currentTime().seconds
         let duration = playerItem.duration.seconds
         let isPlaying = player.rate > 0
