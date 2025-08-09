@@ -22,6 +22,7 @@ class DetailVideoContext: ObservableObject {
     // Selection-based autoplay state
     private var selectedVideoMids: Set<String> = []
     private var hasAutoPlayed: Set<String> = []
+    private var pendingAutoplay: Set<String> = [] // Videos waiting to autoplay when ready
     
     // Local mute state (independent from global)
     @Published var localMuteStates: [String: Bool] = [:]
@@ -164,6 +165,7 @@ class DetailVideoContext: ObservableObject {
         // Clear state
         selectedVideoMids.removeAll()
         hasAutoPlayed.removeAll()
+        pendingAutoplay.removeAll()
         localMuteStates.removeAll()
         
         // Remove app lifecycle observers
@@ -180,16 +182,19 @@ class DetailVideoContext: ObservableObject {
     /// Start playback for a video
     private func startPlayback(for videoMid: String) {
         guard let player = players[videoMid] else {
-            print("DEBUG: [DETAIL VIDEO CONTEXT] No player found for playback: \(videoMid)")
+            print("DEBUG: [DETAIL VIDEO CONTEXT] No player found for playback: \(videoMid) - adding to pending autoplay")
+            pendingAutoplay.insert(videoMid)
             return
         }
         
         guard player.status == .readyToPlay || player.currentItem?.status == .readyToPlay else {
-            print("DEBUG: [DETAIL VIDEO CONTEXT] Player not ready for playback: \(videoMid)")
+            print("DEBUG: [DETAIL VIDEO CONTEXT] Player not ready for playback: \(videoMid) - adding to pending autoplay")
+            pendingAutoplay.insert(videoMid)
             return
         }
         
         player.play()
+        pendingAutoplay.remove(videoMid) // Remove from pending since we started playback
         print("DEBUG: [DETAIL VIDEO CONTEXT] Started playback for: \(videoMid)")
     }
     
@@ -213,8 +218,12 @@ class DetailVideoContext: ObservableObject {
                 switch status {
                 case .readyToPlay:
                     print("DEBUG: [DETAIL VIDEO CONTEXT] Player ready for: \(videoMid)")
-                    // If this video is selected and should autoplay, start playback
-                    if self.selectedVideoMids.contains(videoMid) && !self.hasAutoPlayed.contains(videoMid) {
+                    // If this video has pending autoplay, start playback
+                    if self.pendingAutoplay.contains(videoMid) {
+                        self.startPlayback(for: videoMid)
+                    }
+                    // Or if this video is selected and should autoplay, start playback
+                    else if self.selectedVideoMids.contains(videoMid) && !self.hasAutoPlayed.contains(videoMid) {
                         self.hasAutoPlayed.insert(videoMid)
                         self.startPlayback(for: videoMid)
                     }
@@ -297,6 +306,7 @@ extension DetailVideoContext {
         
         selectedVideoMids.remove(videoMid)
         hasAutoPlayed.remove(videoMid)
+        pendingAutoplay.remove(videoMid)
         localMuteStates.removeValue(forKey: videoMid)
     }
     

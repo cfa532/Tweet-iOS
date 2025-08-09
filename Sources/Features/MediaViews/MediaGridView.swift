@@ -19,6 +19,8 @@ struct MediaGridView: View {
     @State private var forceRefreshTrigger = 0
     @StateObject private var videoManager = VideoManager()
     
+
+    
     init(parentTweet: Tweet, attachments: [MimeiFileType], onItemTap: ((Int) -> Void)? = nil) {
         self.parentTweet = parentTweet
         self.attachments = attachments

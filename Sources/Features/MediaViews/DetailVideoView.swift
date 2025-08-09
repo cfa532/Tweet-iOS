@@ -42,10 +42,6 @@ struct DetailVideoView: View {
                             }
                         }
                     )
-                    .onChange(of: isSelected) { newIsSelected in
-                        // Handle selection changes from TabView
-                        context.setVideoSelected(videoMid, isSelected: newIsSelected)
-                    }
                     .onReceive(player.publisher(for: \.currentItem?.status)) { status in
                         DispatchQueue.main.async {
                             isLoading = (status != .readyToPlay)
@@ -66,14 +62,18 @@ struct DetailVideoView: View {
         .task {
             // Create player when view appears
             await createPlayer()
-        }
-        .onAppear {
-            // Set initial selection state
-            context.setVideoSelected(videoMid, isSelected: isSelected)
+            // Set initial selection state after player is created
+            await MainActor.run {
+                context.setVideoSelected(videoMid, isSelected: isSelected)
+            }
         }
         .onDisappear {
             // Clean up when view disappears
             context.setVideoSelected(videoMid, isSelected: false)
+        }
+        .onChange(of: isSelected) { newIsSelected in
+            // Handle selection changes from TabView
+            context.setVideoSelected(videoMid, isSelected: newIsSelected)
         }
     }
     
