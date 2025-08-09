@@ -159,6 +159,31 @@ class VideoCacheManager: ObservableObject {
         return videoCache[videoMid] != nil
     }
     
+    /// Get cached playlist URL for HLS videos
+    func getCachedPlaylistURL(for videoMid: String) -> (url: URL?, isHLS: Bool)? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        
+        if let cachedPlayer = videoCache[videoMid] {
+            cachedPlayer.lastAccessed = Date()
+            return (cachedPlayer.resolvedPlaylistURL, cachedPlayer.isHLSMode)
+        }
+        return nil
+    }
+    
+    /// Set cached playlist URL for HLS videos
+    func setCachedPlaylistURL(for videoMid: String, playlistURL: URL?, isHLS: Bool) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        
+        if let cachedPlayer = videoCache[videoMid] {
+            cachedPlayer.resolvedPlaylistURL = playlistURL
+            cachedPlayer.isHLSMode = isHLS
+            cachedPlayer.lastAccessed = Date()
+            print("DEBUG: [VIDEO CACHE] Cached playlist URL for \(videoMid): \(playlistURL?.absoluteString ?? "nil"), isHLS: \(isHLS)")
+        }
+    }
+    
     /// Get a cached video player without creating a new one
     func getCachedPlayer(for videoMid: String) -> AVPlayer? {
         cacheLock.lock()
@@ -483,6 +508,8 @@ class CachedVideoPlayer {
     var lastAccessed: Date
     var preservedTime: CMTime? = nil
     var wasPlayingBeforeBackground: Bool = false
+    var resolvedPlaylistURL: URL? = nil // Cache resolved HLS playlist URL
+    var isHLSMode: Bool = true // Remember if this is HLS or regular video
     
     init(player: AVPlayer, videoMid: String, url: URL) {
         self.player = player
@@ -491,5 +518,7 @@ class CachedVideoPlayer {
         self.lastAccessed = Date()
         self.preservedTime = nil
         self.wasPlayingBeforeBackground = false
+        self.resolvedPlaylistURL = nil
+        self.isHLSMode = true
     }
 } 

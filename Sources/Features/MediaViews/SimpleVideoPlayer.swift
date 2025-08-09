@@ -1006,6 +1006,7 @@ struct HLSDirectoryVideoPlayer: View {
     @State private var loading = true
     @State private var didRetry = false // Track if we've retried once
     @State private var isHLSMode = true // Track if we're in HLS mode or fallback mode
+    @State private var loadingTimeout: Task<Void, Never>? = nil // Timeout task
 
     var body: some View {
         Group {
@@ -1035,22 +1036,65 @@ struct HLSDirectoryVideoPlayer: View {
         }
         .task {
             if playlistURL == nil && loading {
+                print("DEBUG: [HLS PLAYER \(mid)] Starting playlist resolution for mode: \(mode)")
+                
+                // Check if we have a cached playlist URL first
+                if let cached = VideoCacheManager.shared.getCachedPlaylistURL(for: mid) {
+                    print("DEBUG: [HLS PLAYER \(mid)] Using cached playlist URL")
+                    playlistURL = cached.url ?? baseURL
+                    isHLSMode = cached.isHLS
+                    loading = false
+                    return
+                }
+                
+                // Start loading timeout
+                loadingTimeout = Task {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+                    if !Task.isCancelled && playlistURL == nil && loading {
+                        print("DEBUG: [HLS PLAYER \(mid)] Loading timeout - falling back to regular video")
+                        await MainActor.run {
+                            playlistURL = baseURL
+                            isHLSMode = false
+                            loading = false
+                            // Cache the fallback result
+                            VideoCacheManager.shared.setCachedPlaylistURL(for: mid, playlistURL: baseURL, isHLS: false)
+                        }
+                    }
+                }
+                
                 loading = false
                 if let url = await getHLSPlaylistURL(baseURL: baseURL) {
-                    playlistURL = url
-                    isHLSMode = true
+                    // Cancel timeout since we succeeded
+                    loadingTimeout?.cancel()
+                    await MainActor.run {
+                        playlistURL = url
+                        isHLSMode = true
+                        print("DEBUG: [HLS PLAYER \(mid)] Successfully resolved HLS playlist")
+                        // Cache the successful result
+                        VideoCacheManager.shared.setCachedPlaylistURL(for: mid, playlistURL: url, isHLS: true)
+                    }
                 } else if !didRetry {
                     // Retry once after a short delay
                     didRetry = true
-                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                    print("DEBUG: [HLS PLAYER \(mid)] First attempt failed, retrying...")
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second
                     loading = true
                 } else {
                     // HLS failed, try as regular video
-                    print("DEBUG: [VIDEO \(mid)] HLS playlist not found, trying as regular video")
-                    playlistURL = baseURL
-                    isHLSMode = false
+                    loadingTimeout?.cancel()
+                    print("DEBUG: [HLS PLAYER \(mid)] HLS playlist not found, trying as regular video")
+                    await MainActor.run {
+                        playlistURL = baseURL
+                        isHLSMode = false
+                        // Cache the fallback result
+                        VideoCacheManager.shared.setCachedPlaylistURL(for: mid, playlistURL: baseURL, isHLS: false)
+                    }
                 }
             }
+        }
+        .onDisappear {
+            // Cancel loading timeout when view disappears
+            loadingTimeout?.cancel()
         }
     }
 
