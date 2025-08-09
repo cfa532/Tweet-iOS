@@ -504,8 +504,8 @@ struct MediaGridView: View {
                 let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
                 
                 if hasVideos {
-                    // Use a longer delay to avoid blocking UI during initial load
-                    videoLoadTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { _ in
+                    // Balanced delay - enough to let UI settle without feeling slow
+                    videoLoadTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
                         shouldLoadVideo = true
                         
                         // Setup video playback for any videos in this grid
