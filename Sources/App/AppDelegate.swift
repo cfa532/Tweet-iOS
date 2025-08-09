@@ -113,8 +113,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppDidBecomeActive() {
         print("[AppDelegate] App did become active - restoring video players and posting notification")
         
-        // Use immediate restoration for faster recovery
-        VideoCacheManager.shared.immediateRestoreVideoPlayers()
+        // Video restoration is now handled by individual video contexts (DetailVideoContext, FullscreenVideoContext, GridVideoContext)
         
         // Post notification to restore video state
         NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
@@ -123,17 +122,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppDidEnterBackground() {
         print("[AppDelegate] App did enter background - preparing video players")
         
-        // Prepare video players for background transition
-        VideoCacheManager.shared.prepareForBackground()
+        // Video background handling is now managed by individual video contexts
     }
     
     @objc private func handleAppWillEnterForeground() {
         print("[AppDelegate] App will enter foreground - pre-restoring videos")
         
-        // Restore immediately when foreground is detected for faster visual recovery
-        VideoCacheManager.shared.immediateRestoreVideoPlayers()
-        
-        // Also handle any idle period restoration
-        VideoCacheManager.shared.handleVideoRestorationAfterIdle()
+        // Video foreground restoration is now handled by individual video contexts
     }
 } 

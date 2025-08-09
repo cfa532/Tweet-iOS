@@ -24,7 +24,7 @@ struct TweetItemView: View {
     private func mediaGrid(for tweet: Tweet) -> some View {
         Group {
             if let attachments = tweet.attachments, !attachments.isEmpty {
-                MediaGridView(
+                NewMediaGridView(
                     parentTweet: tweet,
                     attachments: attachments,
                     onItemTap: { idx in

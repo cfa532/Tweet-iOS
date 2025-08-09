@@ -69,6 +69,8 @@ struct NewMediaGridView: View {
             aspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
             onVideoFinished: { handleVideoFinished(attachment.mid) },
             onTap: { onItemTap?(0) },
+            shouldLoadVideo: true,
+            showMuteButton: true,
             context: gridVideoContext
         )
         .frame(width: width, height: height)
@@ -78,18 +80,20 @@ struct NewMediaGridView: View {
     private func twoMediaLayout(width: CGFloat, height: CGFloat) -> some View {
         let isFirstPortrait = (attachments[0].aspectRatio ?? 1.0) < 1.0
         
-        if isFirstPortrait {
-            // Portrait layout: vertical stack
-            VStack(spacing: 2) {
-                ForEach(0..<2, id: \.self) { index in
-                    createMediaView(index: index, width: width, height: height/2 - 1)
+        return Group {
+            if isFirstPortrait {
+                // Portrait layout: vertical stack
+                VStack(spacing: 2) {
+                    ForEach(0..<2, id: \.self) { index in
+                        createMediaView(index: index, width: width, height: height/2 - 1)
+                    }
                 }
-            }
-        } else {
-            // Landscape layout: horizontal stack
-            HStack(spacing: 2) {
-                ForEach(0..<2, id: \.self) { index in
-                    createMediaView(index: index, width: width/2 - 1, height: height)
+            } else {
+                // Landscape layout: horizontal stack
+                HStack(spacing: 2) {
+                    ForEach(0..<2, id: \.self) { index in
+                        createMediaView(index: index, width: width/2 - 1, height: height)
+                    }
                 }
             }
         }
@@ -98,25 +102,27 @@ struct NewMediaGridView: View {
     private func threeMediaLayout(width: CGFloat, height: CGFloat) -> some View {
         let isFirstPortrait = (attachments[0].aspectRatio ?? 1.0) < 1.0
         
-        if isFirstPortrait {
-            // Portrait first: left column tall, right column two stacked
-            HStack(spacing: 2) {
-                createMediaView(index: 0, width: width/2 - 1, height: height)
-                
-                VStack(spacing: 2) {
-                    ForEach(1..<3, id: \.self) { index in
-                        createMediaView(index: index, width: width/2 - 1, height: height/2 - 1)
+        return Group {
+            if isFirstPortrait {
+                // Portrait first: left column tall, right column two stacked
+                HStack(spacing: 2) {
+                    createMediaView(index: 0, width: width/2 - 1, height: height)
+                    
+                    VStack(spacing: 2) {
+                        ForEach(1..<3, id: \.self) { index in
+                            createMediaView(index: index, width: width/2 - 1, height: height/2 - 1)
+                        }
                     }
                 }
-            }
-        } else {
-            // Landscape first: top row wide, bottom row two images
-            VStack(spacing: 2) {
-                createMediaView(index: 0, width: width, height: height * 0.618) // Golden ratio
-                
-                HStack(spacing: 2) {
-                    ForEach(1..<3, id: \.self) { index in
-                        createMediaView(index: index, width: width/2 - 1, height: height * 0.382 - 1)
+            } else {
+                // Landscape first: top row wide, bottom row two images
+                VStack(spacing: 2) {
+                    createMediaView(index: 0, width: width, height: height * 0.618) // Golden ratio
+                    
+                    HStack(spacing: 2) {
+                        ForEach(1..<3, id: \.self) { index in
+                            createMediaView(index: index, width: width/2 - 1, height: height * 0.382 - 1)
+                        }
                     }
                 }
             }
@@ -172,9 +178,11 @@ struct NewMediaGridView: View {
         GridMediaView(
             attachment: attachments[index],
             parentTweet: parentTweet,
-            aspectRatio: width / height,
+            aspectRatio: CGFloat(attachments[index].aspectRatio ?? 1.0),
             onVideoFinished: { handleVideoFinished(attachments[index].mid) },
             onTap: { onItemTap?(index) },
+            shouldLoadVideo: true,
+            showMuteButton: true,
             context: gridVideoContext
         )
         .frame(width: width, height: height)

@@ -179,14 +179,44 @@ class VideoAssetCache {
     
     /// Resolve HLS playlist URL if needed
     private func resolveHLSPlaylist(_ url: URL) async throws -> URL {
-        // For now, return the original URL as HLS resolution is complex
-        // In a real implementation, you would:
-        // 1. Fetch the m3u8 playlist
-        // 2. Parse it to get the best quality stream URL
-        // 3. Return the resolved stream URL
-        
         print("DEBUG: [VIDEO ASSET CACHE] HLS URL resolution for: \(url)")
+        
+        // Check for master.m3u8 first (multi-resolution), then playlist.m3u8 (single resolution)
+        let masterURL = url.appendingPathComponent("master.m3u8")
+        let playlistURL = url.appendingPathComponent("playlist.m3u8")
+        
+        // Check if master.m3u8 exists
+        if await urlExists(masterURL) {
+            print("DEBUG: [VIDEO ASSET CACHE] Found master.m3u8 for: \(url)")
+            return masterURL
+        }
+        
+        // Check if playlist.m3u8 exists
+        if await urlExists(playlistURL) {
+            print("DEBUG: [VIDEO ASSET CACHE] Found playlist.m3u8 for: \(url)")
+            return playlistURL
+        }
+        
+        // If neither exists, assume the original URL is correct
+        print("DEBUG: [VIDEO ASSET CACHE] No HLS playlist found, using original URL: \(url)")
         return url
+    }
+    
+    /// Check if a URL exists by making a HEAD request
+    private func urlExists(_ url: URL) async -> Bool {
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "HEAD"
+            request.timeoutInterval = 5.0
+            
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                return httpResponse.statusCode == 200
+            }
+            return false
+        } catch {
+            return false
+        }
     }
     
     /// Extract video metadata (duration, aspect ratio, etc.)

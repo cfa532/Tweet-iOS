@@ -200,7 +200,7 @@ struct DetailMediaView: View {
     }
 }
 
-// MARK: - DetailMuteButton (Independent mute button for detail views)
+// MARK: - DetailMuteButton (No-op for detail views)
 
 /// Independent mute button for detail view videos
 struct DetailMuteButton: View {
@@ -241,6 +241,112 @@ struct DetailVideoView_Previews: PreviewProvider {
             context: context
         )
         .frame(height: 200)
+        .previewLayout(.sizeThatFits)
+    }
+}
+#endif
+
+// MARK: - FullscreenVideoView
+
+/// SwiftUI video view for fullscreen media browser
+/// Uses FullscreenVideoContext for independent player management
+struct FullscreenVideoView: View {
+    let videoMid: String
+    let url: URL
+    let contentType: String
+    let isCurrentVideo: Bool
+    let context: FullscreenVideoContext
+    
+    @State private var player: AVPlayer?
+    @State private var isLoading = true
+    
+    var body: some View {
+        ZStack {
+            if let player = player {
+                VideoPlayer(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .onAppear {
+                        print("DEBUG: [FULLSCREEN VIDEO VIEW] Video view appeared for: \(videoMid)")
+                    }
+                    .onDisappear {
+                        print("DEBUG: [FULLSCREEN VIDEO VIEW] Video view disappeared for: \(videoMid)")
+                    }
+                    .onChange(of: isCurrentVideo) { newValue in
+                        print("DEBUG: [FULLSCREEN VIDEO VIEW] isCurrentVideo changed to \(newValue) for: \(videoMid)")
+                        if newValue {
+                            context.setCurrentVideo(videoMid)
+                        }
+                    }
+            } else if isLoading {
+                // Loading spinner
+                ProgressView()
+                    .scaleEffect(1.5)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+            } else {
+                // Error state
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 50))
+                        .foregroundColor(.white)
+                    
+                    Text("Video Unavailable")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Text("Unable to load video content")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+            }
+        }
+        .task {
+            await createPlayer()
+        }
+    }
+    
+    @MainActor
+    private func createPlayer() async {
+        print("DEBUG: [FULLSCREEN VIDEO VIEW] Creating player for: \(videoMid)")
+        
+        do {
+            let newPlayer = await context.getPlayer(for: videoMid, url: url, contentType: contentType)
+            self.player = newPlayer
+            self.isLoading = false
+            
+            // If this is the current video, notify the context
+            if isCurrentVideo {
+                context.setCurrentVideo(videoMid)
+            }
+            
+            print("DEBUG: [FULLSCREEN VIDEO VIEW] Player created successfully for: \(videoMid)")
+        } catch {
+            print("DEBUG: [FULLSCREEN VIDEO VIEW] Failed to create player for: \(videoMid), error: \(error)")
+            self.isLoading = false
+        }
+    }
+}
+
+// MARK: - FullscreenVideoView Preview
+
+#if DEBUG
+struct FullscreenVideoView_Previews: PreviewProvider {
+    static var previews: some View {
+        let context = FullscreenVideoContext()
+        
+        FullscreenVideoView(
+            videoMid: "test-video-123",
+            url: URL(string: "http://example.com/test-video")!,
+            contentType: "hls",
+            isCurrentVideo: true,
+            context: context
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
         .previewLayout(.sizeThatFits)
     }
 }

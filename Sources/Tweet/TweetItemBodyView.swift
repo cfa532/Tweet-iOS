@@ -47,9 +47,7 @@ struct TweetItemBodyView: View {
                 }
             }
             if let attachments = tweet.attachments, !attachments.isEmpty {
-                let aspect = MediaGridViewModel.aspectRatio(for: attachments)
-                MediaGridView(parentTweet: tweet, attachments: attachments, onItemTap: onItemTap)
-                    .aspectRatio(aspect, contentMode: .fit)
+                NewMediaGridView(parentTweet: tweet, attachments: attachments, onItemTap: onItemTap)
                     .frame(maxWidth: .infinity)
                     .clipped()
                     .cornerRadius(8)

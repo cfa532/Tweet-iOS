@@ -47,6 +47,9 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    // MARK: - Global Mute State
+    @Published var isMuted: Bool = true // Default to muted
+    
     private var appId: String = Constants.GUEST_ID      // placeholder mimei id
     var preferenceHelper: PreferenceHelper?
     
@@ -72,6 +75,12 @@ final class HproseInstance: ObservableObject {
         // Clear cached users during initialization to ensure fresh data
         TweetCacheManager.shared.clearAllUsers()
         print("DEBUG: Cleared all user cache during app initialization")
+        
+        // Initialize global mute state from preferences
+        await MainActor.run {
+            isMuted = preferenceHelper?.getSpeakerMute() ?? true // Default to muted
+            print("DEBUG: [HPROSE] Initialized global mute state: \(isMuted)")
+        }
         
         await MainActor.run {
             _appUser = User.getInstance(mid: preferenceHelper?.getUserId() ?? Constants.GUEST_ID)
@@ -141,6 +150,30 @@ final class HproseInstance: ObservableObject {
             }
         }
         throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize app entry with any URL"])
+    }
+    
+    // MARK: - Global Mute State Management
+    
+    /// Toggle the global mute state for all videos and audio
+    @MainActor
+    func toggleMute() {
+        setMuted(!isMuted)
+    }
+    
+    /// Set the global mute state for all videos and audio
+    @MainActor
+    func setMuted(_ muted: Bool) {
+        isMuted = muted
+        preferenceHelper?.setSpeakerMute(muted)
+        print("DEBUG: [HPROSE] Global mute state set to: \(muted)")
+    }
+    
+    /// Refresh mute state from stored preferences
+    @MainActor
+    func refreshMuteFromPreferences() {
+        let storedMuteState = preferenceHelper?.getSpeakerMute() ?? true
+        isMuted = storedMuteState
+        print("DEBUG: [HPROSE] Refreshed mute state from preferences: \(storedMuteState)")
     }
     
     func fetchComments(

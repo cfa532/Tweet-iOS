@@ -313,29 +313,29 @@ struct ChatVideoPlayer: View {
     let isFromCurrentUser: Bool
     
     @State private var showFullScreen = false
+    @StateObject private var gridVideoContext = GridVideoContext()
     
     private let baseUrl = HproseInstance.baseUrl
     
     var body: some View {
         Group {
             if let url = attachment.getUrl(baseUrl) {
-                SimpleVideoPlayer(
+                GridVideoView(
                     url: url,
-                    mid: attachment.mid,
-                    isVisible: true,
-                    cellAspectRatio: CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)),
-                    videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-                    showNativeControls: false,
+                    videoMid: attachment.mid,
+                    contentType: attachment.type,
+                    aspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
                     onVideoTap: {
                         showFullScreen = true
                     },
-                    showCustomControls: false,
-                    disableAutoRestart: true
+                    context: gridVideoContext
                 )
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
                 .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-                .environmentObject(MuteState.shared)
+                .onReceive(MuteState.shared.$isMuted) { isMuted in
+                    gridVideoContext.updateMuteState(isMuted)
+                }
                 .fullScreenCover(isPresented: $showFullScreen) {
                     // Create a temporary tweet-like structure for the video
                     let tempTweet = Tweet(

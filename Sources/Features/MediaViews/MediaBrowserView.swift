@@ -23,6 +23,9 @@ struct MediaBrowserView: View {
     @State private var dragOffset = CGSize.zero
     @State private var isDragging = false
     @State private var previousIndex: Int = -1 // Track previous index for video management
+    
+    // New video architecture
+    @StateObject private var fullscreenVideoContext = FullscreenVideoContext()
 
 
     private var attachments: [MimeiFileType] {
@@ -135,16 +138,7 @@ struct MediaBrowserView: View {
             // Initialize previous index
             previousIndex = currentIndex
             
-            // Start playing the initial video if it's a video
-            if let initialAttachment = attachments[safe: currentIndex],
-               isVideoAttachment(initialAttachment) {
-                print("DEBUG: [MediaBrowserView] Starting initial video with mid: \(initialAttachment.mid)")
-                
-                if let player = VideoCacheManager.shared.getVideoPlayer(for: initialAttachment.mid, url: initialAttachment.getUrl(baseUrl)!, isHLS: true) {
-                    player.play()
-                    print("DEBUG: [MediaBrowserView] Started playing initial video for mid: \(initialAttachment.mid)")
-                }
-            }
+            // Video auto-play is now handled by FullscreenVideoContext
         }
         .onDisappear {
             isVisible = false
@@ -220,30 +214,22 @@ struct MediaBrowserView: View {
     
     @ViewBuilder
     private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
-        SimpleVideoPlayer(
+        FullscreenVideoView(
+            videoMid: attachment.mid,
             url: url,
-            mid: attachment.mid,
-            autoPlay: index == currentIndex, // Only auto-play if this is the current video
-            onMuteChanged: { _ in
-                // In full-screen mode, don't update global mute state
-                // Full-screen videos should have independent audio control
-            },
-            isVisible: index == currentIndex, // Only visible if this is the current video
             contentType: attachment.type,
-            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-            onVideoTap: {
-                // Show close button when video is tapped
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showControls = true
-                }
-                resetControlsTimer() // Reset close button timer
-            },
-
-            mode: .mediaBrowser
+            isCurrentVideo: index == currentIndex,
+            context: fullscreenVideoContext
         )
-        .environmentObject(MuteState.shared)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .onTapGesture {
+            // Show close button when video is tapped
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showControls = true
+            }
+            resetControlsTimer() // Reset close button timer
+        }
     }
     
 

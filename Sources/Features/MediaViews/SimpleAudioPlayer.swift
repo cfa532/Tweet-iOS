@@ -9,7 +9,7 @@ struct SimpleAudioPlayer: View {
     @State private var isPlaying: Bool = false
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
-    @StateObject private var muteState = MuteState.shared
+    @ObservedObject private var hproseInstance = HproseInstance.shared
     private let preferenceHelper = PreferenceHelper()
     
     var body: some View {
@@ -69,7 +69,7 @@ struct SimpleAudioPlayer: View {
                 
                 // Mute/Unmute button
                 Button(action: toggleMute) {
-                    Image(systemName: muteState.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    Image(systemName: hproseInstance.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                         .foregroundColor(.themeSecondaryText)
                         .padding(.leading, 8)
                 }
@@ -135,9 +135,9 @@ struct SimpleAudioPlayer: View {
     }
     
     private func toggleMute() {
-        print("DEBUG: [AUDIO PLAYER] Toggling mute state from: \(muteState.isMuted)")
-        muteState.toggleMute()
-        print("DEBUG: [AUDIO PLAYER] Mute state toggled to: \(muteState.isMuted)")
+        print("DEBUG: [AUDIO PLAYER] Toggling mute state from: \(hproseInstance.isMuted)")
+        hproseInstance.toggleMute()
+        print("DEBUG: [AUDIO PLAYER] Mute state toggled to: \(hproseInstance.isMuted)")
     }
     
     private func formatTime(_ time: Double) -> String {

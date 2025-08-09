@@ -137,7 +137,7 @@ struct TweetDetailView: View {
                 ProfileView(user: selectedUser, onLogout: nil)
             }
         }
-        .navigationDestination(isPresented: Binding(
+        .navigationDestination(isPresented: Binding<Bool>(
             get: { selectedComment != nil },
             set: { if !$0 { selectedComment = nil } }
         )) {
@@ -145,7 +145,6 @@ struct TweetDetailView: View {
                 TweetDetailView(tweet: selectedComment)
             }
         }
-        .environmentObject(MuteState.shared)
     }
     
     private var mediaSection: some View {

@@ -182,17 +182,21 @@ struct GridMediaView: View {
     let aspectRatio: CGFloat
     let onVideoFinished: (() -> Void)?
     let onTap: (() -> Void)?
+    let shouldLoadVideo: Bool // Control video loading for performance
+    let showMuteButton: Bool // Whether to show mute button overlay
     
     @ObservedObject var context: GridVideoContext // Injected context
     @State private var image: UIImage?
     @State private var loading: Bool = false
     
-    init(attachment: MimeiFileType, parentTweet: Tweet, aspectRatio: CGFloat, onVideoFinished: (() -> Void)? = nil, onTap: (() -> Void)? = nil, context: GridVideoContext) {
+    init(attachment: MimeiFileType, parentTweet: Tweet, aspectRatio: CGFloat, onVideoFinished: (() -> Void)? = nil, onTap: (() -> Void)? = nil, shouldLoadVideo: Bool = true, showMuteButton: Bool = true, context: GridVideoContext) {
         self.attachment = attachment
         self.parentTweet = parentTweet
         self.aspectRatio = aspectRatio
         self.onVideoFinished = onVideoFinished
         self.onTap = onTap
+        self.shouldLoadVideo = shouldLoadVideo
+        self.showMuteButton = showMuteButton
         self.context = context
     }
     
@@ -205,15 +209,56 @@ struct GridMediaView: View {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
-                    GridVideoView(
-                        url: url,
-                        videoMid: attachment.mid,
-                        contentType: attachment.type,
-                        aspectRatio: aspectRatio,
-                        onVideoFinished: onVideoFinished,
-                        onVideoTap: onTap,
-                        context: context
-                    )
+                    if shouldLoadVideo {
+                        GridVideoView(
+                            url: url,
+                            videoMid: attachment.mid,
+                            contentType: attachment.type,
+                            aspectRatio: aspectRatio,
+                            onVideoFinished: onVideoFinished,
+                            onVideoTap: onTap,
+                            context: context
+                        )
+                        .overlay(
+                            // Video controls overlay
+                            VStack {
+                                Spacer()
+                                HStack {
+                                    Spacer()
+                                    
+                                    // Mute button in bottom right corner
+                                    if showMuteButton {
+                                        Button(action: {
+                                            MuteState.shared.toggleMute()
+                                        }) {
+                                            Image(systemName: context.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                                .font(.system(size: 16))
+                                                .foregroundColor(.white)
+                                                .background(
+                                                    Circle()
+                                                        .fill(Color.black.opacity(0.6))
+                                                        .frame(width: 30, height: 30)
+                                                )
+                                        }
+                                        .padding(.trailing, 8)
+                                        .padding(.bottom, 8)
+                                    }
+                                }
+                            }
+                        )
+                    } else {
+                        // Show placeholder for videos that haven't been loaded yet
+                        Color.black
+                            .aspectRatio(aspectRatio, contentMode: .fit)
+                            .overlay(
+                                Image(systemName: "play.circle")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.white)
+                            )
+                            .onTapGesture {
+                                onTap?()
+                            }
+                    }
                     
                 case "image":
                     Group {

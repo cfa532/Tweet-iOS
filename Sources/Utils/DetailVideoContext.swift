@@ -13,6 +13,7 @@ import SwiftUI
 
 /// Independent video playback context for detail views
 /// Uses shared VideoAssetCache but maintains its own player instances and state
+@MainActor
 class DetailVideoContext: ObservableObject {
     
     // Player management
@@ -57,6 +58,14 @@ class DetailVideoContext: ObservableObject {
         
         // Configure player
         player.automaticallyWaitsToMinimizeStalling = true
+        
+        // IMPORTANT: Prevent old system interference by ensuring we control this player
+        // Add a delay to ensure asset is fully loaded before any interference
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            if player.currentItem?.status != .readyToPlay {
+                print("DEBUG: [DETAIL VIDEO CONTEXT] Player not immediately ready, will wait for status change")
+            }
+        }
         
         // Set initial mute state (default to false for detail views)
         let isLocalMuted = localMuteStates[videoMid] ?? false
@@ -106,8 +115,10 @@ class DetailVideoContext: ObservableObject {
         }
     }
     
+    /// Detail videos are always unmuted - no mute controls needed
+    /// This ensures detail videos play with sound regardless of global mute state
+    
     /// Toggle mute state for a specific video (local mute, doesn't affect global)
-    @MainActor
     func toggleMute(for videoMid: String) {
         guard let player = players[videoMid] else {
             print("DEBUG: [DETAIL VIDEO CONTEXT] No player found for mute toggle: \(videoMid)")
@@ -122,7 +133,6 @@ class DetailVideoContext: ObservableObject {
     }
     
     /// Set mute state for a specific video
-    @MainActor
     func setMute(for videoMid: String, isMuted: Bool) {
         guard let player = players[videoMid] else {
             print("DEBUG: [DETAIL VIDEO CONTEXT] No player found for mute set: \(videoMid)")
@@ -308,6 +318,264 @@ extension DetailVideoContext {
         hasAutoPlayed.remove(videoMid)
         pendingAutoplay.remove(videoMid)
         localMuteStates.removeValue(forKey: videoMid)
+    }
+    
+    /// Check if a video is currently playing
+    func isPlaying(_ videoMid: String) -> Bool {
+        guard let player = players[videoMid] else { return false }
+        return player.rate > 0
+    }
+    
+    /// Get current playback time for a video
+    func getCurrentTime(for videoMid: String) -> TimeInterval {
+        guard let player = players[videoMid] else { return 0 }
+        return player.currentTime().seconds
+    }
+    
+    /// Get duration for a video
+    func getDuration(for videoMid: String) -> TimeInterval {
+        guard let player = players[videoMid],
+              let item = player.currentItem else { return 0 }
+        return item.duration.seconds
+    }
+}
+
+// MARK: - FullscreenVideoContext
+
+/// Independent video playback context for fullscreen media browser
+/// Optimized for fullscreen viewing with tabview navigation and native controls
+class FullscreenVideoContext: ObservableObject {
+    
+    // Player management
+    private var players: [String: AVPlayer] = [:]
+    private var playerObservers: [String: NSKeyValueObservation] = [:]
+    
+    // Fullscreen-specific state
+    private var currentVideoMid: String?
+    private var hasAutoPlayed: Set<String> = []
+    
+    // All videos are unmuted in fullscreen (independent from global mute)
+    private let isUnmuted = true
+    
+    // App lifecycle management
+    private var didEnterBackgroundObserver: NSObjectProtocol?
+    private var willEnterForegroundObserver: NSObjectProtocol?
+    
+    init() {
+        setupAppLifecycleObservers()
+    }
+    
+    deinit {
+        cleanupSync()
+    }
+    
+    /// Get or create an independent AVPlayer for fullscreen viewing
+    func getPlayer(for videoMid: String, url: URL, contentType: String) async -> AVPlayer? {
+        // Check if we already have a player for this video
+        if let existingPlayer = players[videoMid] {
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Returning existing player for: \(videoMid)")
+            return existingPlayer
+        }
+        
+        print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Creating new player for: \(videoMid)")
+        
+        // Get video asset from shared cache
+        let asset = await VideoAssetCache.shared.getAsset(for: videoMid, originalURL: url, contentType: contentType)
+        
+        // Create player with the resolved asset
+        let playerItem = asset.createPlayerItem()
+        let player = AVPlayer(playerItem: playerItem)
+        
+        // Configure for fullscreen playback
+        player.isMuted = false // Always unmuted in fullscreen
+        player.allowsExternalPlayback = true
+        
+        // Store player
+        players[videoMid] = player
+        
+        // Set up observer for player status
+        setupPlayerObserver(for: player, videoMid: videoMid)
+        
+        print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Created new player for: \(videoMid), muted: false")
+        return player
+    }
+    
+    /// Set the current video (TabView selection changed)
+    func setCurrentVideo(_ videoMid: String) {
+        let previousVideo = currentVideoMid
+        currentVideoMid = videoMid
+        
+        print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Current video changed from \(previousVideo ?? "none") to \(videoMid)")
+        
+        // Pause previous video
+        if let prevMid = previousVideo, let prevPlayer = players[prevMid] {
+            prevPlayer.pause()
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Paused previous video: \(prevMid)")
+        }
+        
+        // Start current video if it exists and ready
+        if let currentPlayer = players[videoMid] {
+            if currentPlayer.currentItem?.status == .readyToPlay {
+                startPlayback(for: videoMid)
+            } else {
+                print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Player not ready, will autoplay when ready: \(videoMid)")
+            }
+        }
+    }
+    
+    /// Start playback for the current video
+    private func startPlayback(for videoMid: String) {
+        guard let player = players[videoMid],
+              videoMid == currentVideoMid else { return }
+        
+        // Check if we've already auto-played this video
+        if hasAutoPlayed.contains(videoMid) {
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Video already auto-played, skipping: \(videoMid)")
+            return
+        }
+        
+        print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Starting playback for: \(videoMid)")
+        player.play()
+        hasAutoPlayed.insert(videoMid)
+    }
+    
+    /// Set up player status observer
+    private func setupPlayerObserver(for player: AVPlayer, videoMid: String) {
+        let observer = player.observe(\.currentItem?.status) { [weak self] observedPlayer, _ in
+            DispatchQueue.main.async {
+                self?.handlePlayerStatusChange(player: observedPlayer, videoMid: videoMid)
+            }
+        }
+        playerObservers[videoMid] = observer
+    }
+    
+    /// Handle player status changes
+    private func handlePlayerStatusChange(player: AVPlayer, videoMid: String) {
+        guard let status = player.currentItem?.status else { return }
+        
+        switch status {
+        case .readyToPlay:
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Player ready for: \(videoMid)")
+            // If this is the current video, start playback
+            if videoMid == currentVideoMid {
+                startPlayback(for: videoMid)
+            }
+        case .failed:
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Player failed for: \(videoMid)")
+        case .unknown:
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Player status unknown for: \(videoMid)")
+        @unknown default:
+            break
+        }
+    }
+    
+    /// Toggle play/pause for current video
+    func togglePlayPause() {
+        guard let currentMid = currentVideoMid,
+              let player = players[currentMid] else { return }
+        
+        if player.rate > 0 {
+            player.pause()
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Paused: \(currentMid)")
+        } else {
+            player.play()
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Resumed: \(currentMid)")
+        }
+    }
+    
+    /// Clean up all players and observers
+    private func cleanupSync() {
+        print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Cleaning up all players")
+        
+        // Remove observers
+        for observer in playerObservers.values {
+            observer.invalidate()
+        }
+        playerObservers.removeAll()
+        
+        // Stop and remove players
+        for (mid, player) in players {
+            player.pause()
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Cleaned up player for: \(mid)")
+        }
+        players.removeAll()
+        
+        // Clear state
+        currentVideoMid = nil
+        hasAutoPlayed.removeAll()
+        
+        // Remove app lifecycle observers
+        if let observer = didEnterBackgroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+            didEnterBackgroundObserver = nil
+        }
+        if let observer = willEnterForegroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+            willEnterForegroundObserver = nil
+        }
+    }
+    
+    /// Set up app lifecycle observers
+    private func setupAppLifecycleObservers() {
+        didEnterBackgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppDidEnterBackground()
+        }
+        
+        willEnterForegroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppWillEnterForeground()
+        }
+    }
+    
+    /// Handle app entering background
+    private func handleAppDidEnterBackground() {
+        print("DEBUG: [FULLSCREEN VIDEO CONTEXT] App entering background - pausing all videos")
+        for (mid, player) in players {
+            player.pause()
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Paused video for background: \(mid)")
+        }
+    }
+    
+    /// Handle app entering foreground
+    private func handleAppWillEnterForeground() {
+        print("DEBUG: [FULLSCREEN VIDEO CONTEXT] App entering foreground - checking video restoration")
+        // Resume current video if it was playing
+        if let currentMid = currentVideoMid, let currentPlayer = players[currentMid] {
+            // Force a refresh by seeking to current position
+            let currentTime = currentPlayer.currentTime()
+            currentPlayer.seek(to: currentTime)
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Refreshed player layer for: \(currentMid)")
+        }
+    }
+}
+
+// MARK: - FullscreenVideoContext Extensions
+
+extension FullscreenVideoContext {
+    /// Remove a specific video player (when no longer needed)
+    func removePlayer(for videoMid: String) {
+        if let observer = playerObservers.removeValue(forKey: videoMid) {
+            observer.invalidate()
+        }
+        
+        if let player = players.removeValue(forKey: videoMid) {
+            player.pause()
+            print("DEBUG: [FULLSCREEN VIDEO CONTEXT] Removed player for: \(videoMid)")
+        }
+        
+        hasAutoPlayed.remove(videoMid)
+        
+        // Clear current if it was this video
+        if currentVideoMid == videoMid {
+            currentVideoMid = nil
+        }
     }
     
     /// Check if a video is currently playing
