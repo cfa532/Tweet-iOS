@@ -85,6 +85,7 @@ struct MediaCell: View, Equatable {
                             contentType: attachment.type,
                             cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                            showNativeControls: false, // Disable native controls to allow fullscreen tap
                             onVideoTap: {
                                 showFullScreen = true
                             },

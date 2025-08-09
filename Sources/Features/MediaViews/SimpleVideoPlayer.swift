@@ -317,11 +317,23 @@ struct SimpleVideoPlayer: View {
     private func videoPlayerView() -> some View {
         Group {
                     if let player = player {
-                VideoPlayer(player: player)
+                if showNativeControls {
+                    VideoPlayer(player: player)
+                        .clipped()
+                        .onTapGesture {
+                            onVideoTap?()
+                        }
+                } else {
+                    VideoPlayer(player: player, videoOverlay: {
+                        // Custom overlay that captures taps
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                onVideoTap?()
+                            }
+                    })
                     .clipped()
-                    .onTapGesture {
-                        onVideoTap?()
-                    }
+                }
             } else if isLoading {
                 ProgressView("Loading video...")
                     .frame(maxWidth: .infinity, maxHeight: 200)
