@@ -113,6 +113,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
+                                    aspectRatio: Float((gridWidth/2 - 1) / gridHeight),
                                     play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -133,6 +134,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
+                                    aspectRatio: Float(gridWidth / (gridHeight/2 - 1)),
                                     play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -153,6 +155,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
+                                    aspectRatio: Float((gridWidth * 1/3 - 1) / gridHeight),
                                     play: shouldPlayVideo(for: 0),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -167,6 +170,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 1,
+                                    aspectRatio: Float((gridWidth * 2/3 - 1) / gridHeight),
                                     play: shouldPlayVideo(for: 1),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -182,6 +186,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
+                                    aspectRatio: Float((gridWidth * 2/3 - 1) / gridHeight),
                                     play: shouldPlayVideo(for: 0),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -196,6 +201,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 1,
+                                    aspectRatio: Float((gridWidth * 1/3 - 1) / gridHeight),
                                     play: shouldPlayVideo(for: 1),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -230,6 +236,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
+                                    aspectRatio: Float((gridWidth * 0.618 - 1) / gridHeight),
                                     play: shouldPlayVideo(for: 0),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -247,6 +254,7 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
+                                            aspectRatio: Float((gridWidth * 0.382 - 1) / (gridHeight/2 - 1)),
                                             play: shouldPlayVideo(for: idx),
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
@@ -267,6 +275,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
+                                    aspectRatio: Float(gridWidth / (gridHeight * 0.618 - 1)),
                                     play: shouldPlayVideo(for: 0),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -284,6 +293,7 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
+                                            aspectRatio: Float((gridWidth/2 - 1) / (gridHeight * 0.382 - 1)),
                                             play: shouldPlayVideo(for: idx),
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
@@ -303,6 +313,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
+                                    aspectRatio: Float((gridWidth/2 - 1) / gridHeight),
                                     play: shouldPlayVideo(for: 0),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -318,6 +329,7 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
+                                            aspectRatio: Float((gridWidth/2 - 1) / (gridHeight/2 - 1)),
                                             play: shouldPlayVideo(for: idx),
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
@@ -337,6 +349,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
+                                    aspectRatio: Float(gridWidth / (gridHeight/2 - 1)),
                                     play: shouldPlayVideo(for: 0),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -352,6 +365,7 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
+                                            aspectRatio: Float((gridWidth/2 - 1) / (gridHeight/2 - 1)),
                                             play: shouldPlayVideo(for: idx),
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
@@ -422,6 +436,7 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
+                                    aspectRatio: Float((gridWidth / 2 - 1) / (gridHeight / 2 - 1)),
                                     play: shouldPlayVideo(for: idx),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
@@ -443,6 +458,7 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
+                                            aspectRatio: Float((gridWidth / 2 - 1) / (gridHeight / 2 - 1)),
                                             play: shouldPlayVideo(for: idx),
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,

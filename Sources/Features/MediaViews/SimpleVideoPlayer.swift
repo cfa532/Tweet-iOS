@@ -145,30 +145,111 @@ struct SimpleVideoPlayer: View {
     @State private var isLoading = true
     @ObservedObject private var muteState = MuteState.shared
     
+    // MARK: Computed Properties
+    private var isVideoPortrait: Bool {
+        guard let ar = videoAspectRatio else { return false }
+        return ar < 1.0
+    }
+    
+    private var isVideoLandscape: Bool {
+        guard let ar = videoAspectRatio else { return false }
+        return ar > 1.0
+    }
+    
     var body: some View {
-        Group {
-            if let player = player {
-                VideoPlayer(player: player)
-                    .aspectRatio(contentMode: mode == .mediaCell ? .fill : .fit)
-                    .clipped()
-                    .onTapGesture {
-                        onVideoTap?()
+        GeometryReader { geometry in
+            let screenWidth = geometry.size.width
+            let screenHeight = geometry.size.height
+            
+            if let videoAR = videoAspectRatio, videoAR > 0 {
+                switch mode {
+                case .mediaCell:
+                    // MediaCell mode: use cell aspect ratio and normal behavior
+                    if let cellAR = cellAspectRatio {
+                        let cellWidth = geometry.size.width
+                        let cellHeight = cellWidth / cellAR
+                        let needsVerticalPadding = videoAR < cellAR
+                        let videoHeight = cellWidth / videoAR
+                        let overflow = videoHeight - cellHeight
+                        let pad = needsVerticalPadding && overflow > 0 ? overflow / 2 : 0
+                        ZStack {
+                            videoPlayerView()
+                                .offset(y: -pad)    // align the video vertically in the middle
+                                .aspectRatio(videoAR, contentMode: .fill)
+                        }
+                    } else {
+                        // Fallback when no cellAspectRatio is available
+                        videoPlayerView()
+                            .aspectRatio(videoAR, contentMode: .fit)
                     }
-            } else if isLoading {
-                ProgressView("Loading video...")
-                    .frame(maxWidth: .infinity, maxHeight: mode == .mediaCell ? .infinity : 200)
-                    .background(Color.black.opacity(0.1))
+                    
+                case .mediaBrowser:
+                    // MediaBrowser mode: fullscreen browser with native controls only
+                    videoPlayerView()
+                        .aspectRatio(videoAR, contentMode: .fit)
+                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                    
+                case .fullscreen:
+                    // Fullscreen mode: direct fullscreen with orientation handling
+                    if isVideoPortrait {
+                        // Portrait video: fit on full screen
+                        ZStack {
+                            videoPlayerView()
+                                .aspectRatio(videoAR, contentMode: .fit)
+                                .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                        }
+                        .onAppear {
+                            // Lock screen orientation to portrait and keep screen on
+                            // OrientationManager.shared.lockToPortrait()
+                            UIApplication.shared.isIdleTimerDisabled = true
+                        }
+                        .onDisappear {
+                            // Re-enable screen rotation and allow screen to sleep
+                            // OrientationManager.shared.unlockOrientation()
+                            UIApplication.shared.isIdleTimerDisabled = false
+                        }
+                    } else if isVideoLandscape {
+                        // Landscape video: rotate -90 degrees to fit on portrait device
+                        ZStack {
+                            videoPlayerView()
+                                .aspectRatio(videoAR, contentMode: .fit)
+                                .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2)
+                                .rotationEffect(.degrees(-90))
+                                .scaleEffect(screenHeight / screenWidth)
+                                .background(Color.black)
+                        }
+                        .onAppear {
+                            // OrientationManager.shared.lockToPortrait()
+                            UIApplication.shared.isIdleTimerDisabled = true
+                        }
+                        .onDisappear {
+                            // OrientationManager.shared.unlockOrientation()
+                            UIApplication.shared.isIdleTimerDisabled = false
+                        }
+                    } else {
+                        // Square video: fit on full screen
+                        ZStack {
+                            videoPlayerView()
+                                .aspectRatio(1.0, contentMode: .fit)
+                                .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                        }
+                        .onAppear {
+                            // OrientationManager.shared.lockToPortrait()
+                            UIApplication.shared.isIdleTimerDisabled = true
+                        }
+                        .onDisappear {
+                            // OrientationManager.shared.unlockOrientation()
+                            UIApplication.shared.isIdleTimerDisabled = false
+                        }
+                    }
+                }
             } else {
-                Color.black
-                    .overlay(
-                        Image(systemName: "play.circle")
-                            .font(.system(size: 40))
-                            .foregroundColor(.white)
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: mode == .mediaCell ? .infinity : 200)
+                // Fallback when no aspect ratio is available
+                videoPlayerView()
+                    .aspectRatio(16.0/9.0, contentMode: .fit)
+                    .frame(maxWidth: screenWidth, maxHeight: screenHeight)
             }
         }
-        .frame(maxWidth: .infinity)
         .onAppear {
             if player == nil {
                 setupPlayer()
@@ -185,6 +266,30 @@ struct SimpleVideoPlayer: View {
     }
     
     // MARK: Private Methods
+    @ViewBuilder
+    private func videoPlayerView() -> some View {
+        Group {
+            if let player = player {
+                VideoPlayer(player: player)
+                    .clipped()
+                    .onTapGesture {
+                        onVideoTap?()
+                    }
+            } else if isLoading {
+                ProgressView("Loading video...")
+                    .frame(maxWidth: .infinity, maxHeight: 200)
+                    .background(Color.black.opacity(0.1))
+            } else {
+                Color.black
+                    .overlay(
+                        Image(systemName: "play.circle")
+                            .font(.system(size: 40))
+                            .foregroundColor(.white)
+                    )
+            }
+        }
+    }
+    
     private func setupPlayer() {
         Task {
             // Step 1: Resolve HLS if needed

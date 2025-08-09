@@ -83,6 +83,7 @@ struct MediaCell: View, Equatable {
                             autoPlay: play,
                             onVideoFinished: onVideoFinished,
                             contentType: attachment.type,
+                            cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                             onVideoTap: {
                                 showFullScreen = true
