@@ -371,8 +371,20 @@ struct SimpleVideoPlayer: View {
                     object: playerItem,
                     queue: .main
                 ) { _ in
-                    self.hasFinishedPlaying = true
-                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video finished playing")
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video finished playing - disableAutoRestart: \(disableAutoRestart)")
+                    
+                    if !disableAutoRestart {
+                        // Auto-restart immediately for fullscreen/detail contexts
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Auto-restarting video immediately")
+                        newPlayer.seek(to: .zero) { finished in
+                            if finished {
+                                newPlayer.play()
+                            }
+                        }
+                    } else {
+                        // For MediaCell, just mark as finished for manual restart on reappearance
+                        self.hasFinishedPlaying = true
+                    }
                     
                     // Call the external callback if provided
                     if let onVideoFinished = onVideoFinished {
