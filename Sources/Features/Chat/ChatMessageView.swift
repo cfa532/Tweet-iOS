@@ -329,7 +329,6 @@ struct ChatVideoPlayer: View {
                     onVideoTap: {
                         showFullScreen = true
                     },
-                    showCustomControls: false,
                     disableAutoRestart: true
                 )
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)

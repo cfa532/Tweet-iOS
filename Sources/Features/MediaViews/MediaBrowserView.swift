@@ -224,10 +224,6 @@ struct MediaBrowserView: View {
             url: url,
             mid: attachment.mid,
             autoPlay: index == currentIndex, // Only auto-play if this is the current video
-            onMuteChanged: { _ in
-                // In full-screen mode, don't update global mute state
-                // Full-screen videos should have independent audio control
-            },
             isVisible: index == currentIndex, // Only visible if this is the current video
             contentType: attachment.type,
             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),

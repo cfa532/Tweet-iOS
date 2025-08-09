@@ -62,6 +62,9 @@
 		469A99622DEF318C00954049 /* TweetModel.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 469A99602DEF318C00954049 /* TweetModel.xcdatamodeld */; };
 		469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469CF0EF2E27FEC000FBCDB8 /* AppDelegate.swift */; };
 		469CF0F22E27FED700FBCDB8 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469CF0F12E27FED700FBCDB8 /* OrientationManager.swift */; };
+		46B03D7F2E474E21000E08DF /* ContextualVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D7E2E474E21000E08DF /* ContextualVideoPlayer.swift */; };
+		46B03D812E474E63000E08DF /* VideoAssetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D802E474E63000E08DF /* VideoAssetCache.swift */; };
+		46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */; };
 		46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */; };
 		46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */; };
 		46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */; };
@@ -157,6 +160,9 @@
 		469A99612DEF318C00954049 /* TweetModel.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = TweetModel.xcdatamodel; sourceTree = "<group>"; };
 		469CF0EF2E27FEC000FBCDB8 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		469CF0F12E27FED700FBCDB8 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
+		46B03D7E2E474E21000E08DF /* ContextualVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextualVideoPlayer.swift; sourceTree = "<group>"; };
+		46B03D802E474E63000E08DF /* VideoAssetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoAssetCache.swift; sourceTree = "<group>"; };
+		46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingletonVideoManagers.swift; sourceTree = "<group>"; };
 		46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSVideoProcessor.swift; sourceTree = "<group>"; };
 		46B1F59B2E07DA7D00B3CE6C /* FFmpegWrapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FFmpegWrapper.h; sourceTree = "<group>"; };
 		46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = FFmpegWrapper.c; sourceTree = "<group>"; };
@@ -373,6 +379,8 @@
 		4629FB172DFFE9FB00588941 /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */,
+				46B03D802E474E63000E08DF /* VideoAssetCache.swift */,
 				461438262E44DCCB002D1B22 /* VideoManager.swift */,
 				468CF2232E39CC7C00D49038 /* AppHeaderView.swift */,
 				468CF2242E39CC7C00D49038 /* TabButton.swift */,
@@ -416,6 +424,7 @@
 		469A994E2DEBF89B00954049 /* MediaViews */ = {
 			isa = PBXGroup;
 			children = (
+				46B03D7E2E474E21000E08DF /* ContextualVideoPlayer.swift */,
 				461438242E4042E1002D1B22 /* ZoomableImageView.swift */,
 				468384A02DFE9EAB0079ECC5 /* MediaBrowserView.swift */,
 				46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */,
@@ -570,9 +579,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -587,6 +600,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
+				46B03D812E474E63000E08DF /* VideoAssetCache.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
 				468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */,
 				4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */,
@@ -619,9 +633,11 @@
 				461438232E403EAB002D1B22 /* ChatMessageView.swift in Sources */,
 				461438252E4042E1002D1B22 /* ZoomableImageView.swift in Sources */,
 				468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */,
+				46B03D7F2E474E21000E08DF /* ContextualVideoPlayer.swift in Sources */,
 				46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */,
 				4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */,
 				4614381D2E3F69AD002D1B22 /* CoreDataManager.swift in Sources */,
+				46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */,
 				461438192E3EEE2D002D1B22 /* MimeiId.swift in Sources */,
 				469CF0F22E27FED700FBCDB8 /* OrientationManager.swift in Sources */,

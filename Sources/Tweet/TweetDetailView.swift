@@ -60,11 +60,12 @@ struct DetailMediaCell: View {
                             contentType: attachment.type,
                             cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                            showNativeControls: true,
+                            forceUnmuted: true, // Always unmuted in detail view
                             onVideoTap: {
                                 // Handle tap to show/hide native controls
                                 print("DEBUG: [DETAIL MEDIA CELL] Video tapped - native controls should handle")
                             },
-                            showCustomControls: false, // Enable native VideoPlayer controls
                             disableAutoRestart: true,
                             mode: .mediaBrowser // Use mediaBrowser mode to enable native controls
                         )
@@ -254,7 +255,7 @@ struct TweetDetailView: View {
                 setupInitialData()
             }
         }
-        .detectScroll()
+//        .detectScroll()
         .background(Color(.systemBackground))
         .navigationTitle("Tweet")
         .navigationBarTitleDisplayMode(.inline)

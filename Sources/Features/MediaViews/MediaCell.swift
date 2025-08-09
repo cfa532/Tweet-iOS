@@ -100,8 +100,6 @@ struct MediaCell: View, Equatable {
                         .onChange(of: isVisible) { newIsVisible in
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible), play: \(play), autoPlay: \(play)")
                         }
-
-
                         .environmentObject(MuteState.shared)
                         .onReceive(MuteState.shared.$isMuted) { isMuted in
                             print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
