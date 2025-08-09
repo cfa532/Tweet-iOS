@@ -66,8 +66,6 @@ struct MediaGridView: View {
         
         return shouldPlay
     }
-    
-
 
     private func onVideoFinished() {
         videoManager.onVideoFinished()

@@ -246,17 +246,22 @@ struct MediaCell: View, Equatable {
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Restore video state when app becomes active
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                // Force refresh video layer to fix black screen issue
+                print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - enhanced restoration")
+                
+                // Immediate enhanced refresh to minimize black screen
                 VideoCacheManager.shared.forceRefreshVideoLayer(for: attachment.mid)
                 
                 // Ensure video is loaded
                 shouldLoadVideo = true
                 
-                // Update play state based on visibility and VideoManager
-                let newPlayState = isVisible && videoManager.shouldPlayVideo(for: attachment.mid)
-                if play != newPlayState {
-                    print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - updating play from \(play) to \(newPlayState) (isVisible: \(isVisible))")
+                // Force a view refresh by briefly toggling a state
+                let currentPlay = play
+                play = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                    // Update play state based on visibility and VideoManager
+                    let newPlayState = isVisible && videoManager.shouldPlayVideo(for: attachment.mid)
                     play = newPlayState
+                    print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - updated play from \(currentPlay) to \(newPlayState) (isVisible: \(isVisible))")
                 }
             }
         }

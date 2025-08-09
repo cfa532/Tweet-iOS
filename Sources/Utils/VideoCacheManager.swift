@@ -19,6 +19,10 @@ class VideoCacheManager: ObservableObject {
     // Maximum number of cached videos to keep in memory
     private let maxCacheSize = Constants.VIDEO_CACHE_POOL_SIZE
     
+    // Performance optimization: prevent duplicate restoration calls
+    private var lastRestorationTime: Date = Date.distantPast
+    private let restorationCooldown: TimeInterval = 0.5 // 500ms cooldown
+    
     private init() {
         // Set up memory warning observer to clean up cache when system needs memory
         NotificationCenter.default.addObserver(
@@ -221,13 +225,38 @@ class VideoCacheManager: ObservableObject {
         print("DEBUG: [VIDEO CACHE] Restoring video players after app became active")
         
         for (mid, cachedPlayer) in videoCache {
-            // Force the player layer to refresh by seeking to current time
-            let currentTime = cachedPlayer.player.currentTime()
-            cachedPlayer.player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                // This forces the video layer to redraw
-                print("DEBUG: [VIDEO CACHE] Restored video layer for mid: \(mid)")
-            }
+            // Multiple strategies to minimize black screen duration
+            restorePlayerLayer(cachedPlayer: cachedPlayer, mid: mid)
             cachedPlayer.lastAccessed = Date()
+        }
+    }
+    
+    /// Enhanced player layer restoration with multiple techniques
+    private func restorePlayerLayer(cachedPlayer: CachedVideoPlayer, mid: String) {
+        let player = cachedPlayer.player
+        let currentTime = player.currentTime()
+        let wasPlaying = player.rate > 0
+        
+        // Strategy 1: Immediate micro-seek to force layer refresh
+        player.seek(to: currentTime, toleranceBefore: CMTime(value: 1, timescale: 600), toleranceAfter: CMTime(value: 1, timescale: 600)) { [weak player] completed in
+            guard let player = player, completed else { return }
+            
+            // Strategy 2: Brief pause-play cycle to reinitialize layer
+            if wasPlaying {
+                player.pause()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                    player.play()
+                }
+            }
+            
+            print("DEBUG: [VIDEO CACHE] Enhanced restoration completed for mid: \(mid)")
+        }
+        
+        // Strategy 3: Force immediate layer update by changing a player property
+        let currentVolume = player.volume
+        player.volume = currentVolume == 1.0 ? 0.99 : 1.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+            player.volume = currentVolume
         }
     }
     
@@ -243,22 +272,67 @@ class VideoCacheManager: ObservableObject {
         
         print("DEBUG: [VIDEO CACHE] Force refreshing video layer for mid: \(videoMid)")
         
-        // More aggressive restoration for severe black screen cases
-        let currentTime = cachedPlayer.player.currentTime()
-        
-        // First, pause the player
-        cachedPlayer.player.pause()
-        
-        // Then seek to current time with zero tolerance to force layer refresh
-        cachedPlayer.player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-            // Resume playback if it was playing before
-            if cachedPlayer.player.rate != 0 {
-                cachedPlayer.player.play()
-            }
-            print("DEBUG: [VIDEO CACHE] Force refreshed video layer for mid: \(videoMid)")
-        }
-        
+        // Use enhanced restoration techniques
+        restorePlayerLayer(cachedPlayer: cachedPlayer, mid: videoMid)
         cachedPlayer.lastAccessed = Date()
+    }
+    
+    /// Prepare video players for background transition (reduces black screen duration)
+    func prepareForBackground() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        
+        print("DEBUG: [VIDEO CACHE] Preparing video players for background transition")
+        
+        for (mid, cachedPlayer) in videoCache {
+            // Store current state for faster restoration
+            let player = cachedPlayer.player
+            let currentTime = player.currentTime()
+            let wasPlaying = player.rate > 0
+            
+            // Store state in the cached player for quick restoration
+            cachedPlayer.preservedTime = currentTime
+            cachedPlayer.wasPlayingBeforeBackground = wasPlaying
+            
+            print("DEBUG: [VIDEO CACHE] Prepared player \(mid) - time: \(currentTime.seconds), playing: \(wasPlaying)")
+        }
+    }
+    
+    /// Enhanced immediate restoration for faster recovery from background
+    func immediateRestoreVideoPlayers() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        
+        // Performance optimization: prevent duplicate calls
+        let now = Date()
+        if now.timeIntervalSince(lastRestorationTime) < restorationCooldown {
+            print("DEBUG: [VIDEO CACHE] Skipping restoration - too soon since last call")
+            return
+        }
+        lastRestorationTime = now
+        
+        print("DEBUG: [VIDEO CACHE] Immediate video player restoration initiated")
+        
+        for (mid, cachedPlayer) in videoCache {
+            // Use preserved state for faster restoration
+            let player = cachedPlayer.player
+            
+            if let preservedTime = cachedPlayer.preservedTime {
+                // Immediate restoration using preserved state
+                player.seek(to: preservedTime, toleranceBefore: .zero, toleranceAfter: .zero) { completed in
+                    if completed, cachedPlayer.wasPlayingBeforeBackground {
+                        DispatchQueue.main.async {
+                            player.play()
+                        }
+                    }
+                }
+            } else {
+                // Fallback to standard restoration
+                restorePlayerLayer(cachedPlayer: cachedPlayer, mid: mid)
+            }
+            
+            cachedPlayer.lastAccessed = Date()
+        }
     }
     
     /// Handle video restoration after app has been idle (fixes black screen from long idle periods)
@@ -324,11 +398,15 @@ class CachedVideoPlayer {
     let videoMid: String
     let url: URL
     var lastAccessed: Date
+    var preservedTime: CMTime? = nil
+    var wasPlayingBeforeBackground: Bool = false
     
     init(player: AVPlayer, videoMid: String, url: URL) {
         self.player = player
         self.videoMid = videoMid
         self.url = url
         self.lastAccessed = Date()
+        self.preservedTime = nil
+        self.wasPlayingBeforeBackground = false
     }
 } 

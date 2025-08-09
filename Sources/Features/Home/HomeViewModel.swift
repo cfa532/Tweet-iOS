@@ -162,8 +162,6 @@ struct HomeView: View {
         
         previousScrollOffset = offset
     }
-    
-
 }
 
 // MARK: - Preview

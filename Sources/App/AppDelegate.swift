@@ -113,21 +113,25 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppDidBecomeActive() {
         print("[AppDelegate] App did become active - restoring video players and posting notification")
         
-        // Restore video players to fix black screen issue
-        VideoCacheManager.shared.restoreVideoPlayers()
+        // Use immediate restoration for faster recovery
+        VideoCacheManager.shared.immediateRestoreVideoPlayers()
         
         // Post notification to restore video state
         NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
     }
     
     @objc private func handleAppDidEnterBackground() {
-        print("[AppDelegate] App did enter background")
+        print("[AppDelegate] App did enter background - preparing video players")
+        
+        // Prepare video players for background transition
+        VideoCacheManager.shared.prepareForBackground()
     }
     
     @objc private func handleAppWillEnterForeground() {
-        print("[AppDelegate] App will enter foreground - restoring videos after idle period")
+        print("[AppDelegate] App will enter foreground - preparing for restoration")
         
-        // Restore videos after idle period to fix black screen issue
+        // Just prepare - let didBecomeActive handle the actual restoration
+        // This avoids duplicate restoration calls
         VideoCacheManager.shared.handleVideoRestorationAfterIdle()
     }
 } 
