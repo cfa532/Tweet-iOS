@@ -91,6 +91,7 @@ struct CommentDetailView: View {
                         MediaCell(
                             parentTweet: comment,
                             attachmentIndex: index,
+                            showMuteButton: true,
                             videoManager: VideoManager()
                         )
                         .tag(index)
