@@ -2,7 +2,7 @@
 //  SimpleVideoPlayer.swift
 //  Tweet
 //
-//  Clean video player implementation with asset sharing
+//  Consolidated video player with asset sharing
 //
 
 import SwiftUI
@@ -145,13 +145,16 @@ class MuteState: ObservableObject {
     }
 }
 
-// MARK: - Simple Video Player
+// MARK: - Unified Simple Video Player
 struct SimpleVideoPlayer: View {
+    // MARK: Required Parameters
     let url: URL
     let mid: String
+    let isVisible: Bool
+    
+    // MARK: Optional Parameters
     var autoPlay: Bool = true
     var onVideoFinished: (() -> Void)? = nil
-    let isVisible: Bool
     var contentType: String? = nil
     var cellAspectRatio: CGFloat? = nil
     var videoAspectRatio: CGFloat? = nil
@@ -160,42 +163,15 @@ struct SimpleVideoPlayer: View {
     var onVideoTap: (() -> Void)? = nil // Callback when video is tapped
     var disableAutoRestart: Bool = false // Disable auto-restart when video finishes
     
-    // Unified mode parameter
+    // MARK: Mode
     enum Mode {
         case mediaCell // Normal cell in feed/grid
-        case mediaBrowser // In MediaBrowserView (fullscreen browser)
+        case mediaBrowser // In MediaBrowserView (fullscreen browser)  
         case fullscreen // Direct fullscreen mode
     }
     var mode: Mode = .mediaCell
     
-    @EnvironmentObject var muteState: MuteState
-    
-    var body: some View {
-        HLSDirectoryVideoPlayer(
-            baseURL: url,
-            mid: mid,
-            isVisible: isVisible,
-            isMuted: forceUnmuted ? false : muteState.isMuted,
-            autoPlay: autoPlay,
-            onVideoFinished: onVideoFinished,
-            onVideoTap: onVideoTap,
-            forceUnmuted: forceUnmuted,
-            disableAutoRestart: disableAutoRestart,
-            mode: mode
-        )
-    }
-}
-
-// MARK: - Clean Video Player
-struct CleanVideoPlayer: View {
-    let url: URL
-    let mid: String
-    let autoPlay: Bool
-    let forceUnmuted: Bool
-    let mode: SimpleVideoPlayer.Mode
-    let onVideoFinished: (() -> Void)?
-    let onVideoTap: (() -> Void)?
-    
+    // MARK: State
     @State private var player: AVPlayer?
     @State private var isLoading = true
     @ObservedObject private var muteState = MuteState.shared
@@ -204,11 +180,15 @@ struct CleanVideoPlayer: View {
         Group {
             if let player = player {
                 VideoPlayer(player: player)
+                    .aspectRatio(contentMode: mode == .mediaCell ? .fill : .fit)
+                    .clipped()
                     .onTapGesture {
                         onVideoTap?()
                     }
             } else if isLoading {
                 ProgressView("Loading video...")
+                    .frame(maxWidth: .infinity, maxHeight: mode == .mediaCell ? .infinity : 200)
+                    .background(Color.black.opacity(0.1))
             } else {
                 Color.black
                     .overlay(
@@ -216,8 +196,10 @@ struct CleanVideoPlayer: View {
                             .font(.system(size: 40))
                             .foregroundColor(.white)
                     )
+                    .frame(maxWidth: .infinity, maxHeight: mode == .mediaCell ? .infinity : 200)
             }
         }
+        .frame(maxWidth: .infinity)
         .onAppear {
             if player == nil {
                 setupPlayer()
@@ -233,9 +215,16 @@ struct CleanVideoPlayer: View {
         }
     }
     
+    // MARK: Private Methods
     private func setupPlayer() {
         Task {
-            let sharedAsset = await SharedAssetCache.shared.getAsset(for: url)
+            // Step 1: Resolve HLS if needed
+            let resolvedURL = await resolveHLSURL(url)
+            
+            // Step 2: Get shared asset
+            let sharedAsset = await SharedAssetCache.shared.getAsset(for: resolvedURL)
+            
+            // Step 3: Create player
             let playerItem = AVPlayerItem(asset: sharedAsset)
             let newPlayer = AVPlayer(playerItem: playerItem)
             
@@ -262,78 +251,23 @@ struct CleanVideoPlayer: View {
                     newPlayer.play()
                 }
                 
-                print("DEBUG: [CLEAN VIDEO PLAYER \(mid)] Created player using shared asset cache")
-            }
-        }
-    }
-}
-
-// MARK: - HLS Directory Video Player
-struct HLSDirectoryVideoPlayer: View {
-    let baseURL: URL
-    let mid: String
-    let isVisible: Bool
-    let isMuted: Bool
-    let autoPlay: Bool
-    let onVideoFinished: (() -> Void)?
-    let onVideoTap: (() -> Void)?
-    let forceUnmuted: Bool
-    let disableAutoRestart: Bool
-    let mode: SimpleVideoPlayer.Mode
-    
-    @State private var playlistURL: URL? = nil
-    @State private var loading = true
-    
-    var body: some View {
-        Group {
-            if let playlistURL = playlistURL {
-                CleanVideoPlayer(
-                    url: playlistURL,
-                    mid: mid,
-                    autoPlay: autoPlay,
-                    forceUnmuted: forceUnmuted,
-                    mode: mode,
-                    onVideoFinished: onVideoFinished,
-                    onVideoTap: onVideoTap
-                )
-            } else if loading {
-                ProgressView("Loading video...")
-            } else {
-                Color.clear
-            }
-        }
-        .task {
-            if playlistURL == nil && loading {
-                loading = false
-                // Run HLS resolution
-                let url = await getHLSPlaylistURL(baseURL: baseURL)
-                
-                if let url = url {
-                    await MainActor.run {
-                        playlistURL = url
-                        print("DEBUG: [HLS PLAYER \(mid)] Successfully resolved HLS playlist")
-                    }
-                } else {
-                    await MainActor.run {
-                        playlistURL = baseURL // Fallback to original URL
-                        print("DEBUG: [HLS PLAYER \(mid)] Using fallback URL")
-                    }
-                }
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Created player using shared asset cache")
             }
         }
     }
     
-    private func getHLSPlaylistURL(baseURL: URL) async -> URL? {
-        let urlString = baseURL.absoluteString
+    /// Resolve HLS URL if needed
+    private func resolveHLSURL(_ url: URL) async -> URL {
+        let urlString = url.absoluteString
         
         // If it's already a direct video file, return as-is
         if urlString.hasSuffix(".mp4") || urlString.hasSuffix(".m3u8") {
-            return baseURL
+            return url
         }
         
         // Try to find HLS playlist files
-        let masterURL = baseURL.appendingPathComponent("master.m3u8")
-        let playlistURL = baseURL.appendingPathComponent("playlist.m3u8")
+        let masterURL = url.appendingPathComponent("master.m3u8")
+        let playlistURL = url.appendingPathComponent("playlist.m3u8")
         
         // Check master.m3u8 first
         if await urlExists(masterURL) {
@@ -346,9 +280,10 @@ struct HLSDirectoryVideoPlayer: View {
         }
         
         // Fallback to original URL
-        return baseURL
+        return url
     }
     
+    /// Check if URL exists
     private func urlExists(_ url: URL) async -> Bool {
         do {
             var request = URLRequest(url: url)

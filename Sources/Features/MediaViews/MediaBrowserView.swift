@@ -223,8 +223,8 @@ struct MediaBrowserView: View {
         SimpleVideoPlayer(
             url: url,
             mid: attachment.mid,
-            autoPlay: index == currentIndex, // Only auto-play if this is the current video
             isVisible: index == currentIndex, // Only visible if this is the current video
+            autoPlay: index == currentIndex, // Only auto-play if this is the current video
             contentType: attachment.type,
             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
             onVideoTap: {

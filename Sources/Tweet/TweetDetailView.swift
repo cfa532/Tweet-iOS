@@ -54,11 +54,10 @@ struct DetailMediaCell: View {
                         SimpleVideoPlayer(
                             url: url,
                             mid: attachment.mid,
+                            isVisible: isVisible,
                             autoPlay: play,
                             onVideoFinished: nil,
-                            isVisible: isVisible,
                             contentType: attachment.type,
-                            cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                             showNativeControls: true,
                             forceUnmuted: true, // Always unmuted in detail view

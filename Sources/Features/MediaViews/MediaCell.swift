@@ -79,11 +79,10 @@ struct MediaCell: View, Equatable {
                         SimpleVideoPlayer(
                             url: url,
                             mid: attachment.mid,
+                            isVisible: isVisible,
                             autoPlay: play,
                             onVideoFinished: onVideoFinished,
-                            isVisible: isVisible,
                             contentType: attachment.type,
-                            cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                             onVideoTap: {
                                 showFullScreen = true
@@ -104,7 +103,6 @@ struct MediaCell: View, Equatable {
                         .onReceive(MuteState.shared.$isMuted) { isMuted in
                             print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
                         }
-                        
                         .overlay(
                             // Video controls overlay
                             Group {

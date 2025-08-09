@@ -46,6 +46,7 @@ struct TweetItemBodyView: View {
                     }
                 }
             }
+            // MediaGrid to show attachment previews.
             if let attachments = tweet.attachments, !attachments.isEmpty {
                 let aspect = MediaGridViewModel.aspectRatio(for: attachments)
                 MediaGridView(parentTweet: tweet, attachments: attachments, onItemTap: onItemTap)

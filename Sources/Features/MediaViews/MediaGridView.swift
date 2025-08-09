@@ -24,17 +24,17 @@ struct MediaGridView: View {
         self.attachments = attachments
         self.onItemTap = onItemTap
     }
-
+    
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
         guard let ar = attachment.aspectRatio, ar > 0 else { return false }
         return ar < 1.0
     }
-
+    
     private func isLandscape(_ attachment: MimeiFileType) -> Bool {
         guard let ar = attachment.aspectRatio, ar > 0 else { return false }
         return ar > 1.0
     }
-
+    
     private func shouldAutostart(for index: Int) -> Bool {
         // Only autostart if the grid has been visible for 0.3 seconds
         guard shouldLoadVideo else { return false }
@@ -66,16 +66,16 @@ struct MediaGridView: View {
         
         return shouldPlay
     }
-
+    
     private func onVideoFinished() {
         videoManager.onVideoFinished()
     }
-
+    
     var body: some View {
-                GeometryReader { geometry in
-            let gridWidth: CGFloat = max(geometry.size.width, 1)
-            let aspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-            let gridHeight = max(gridWidth / aspectRatio, 1)
+        GeometryReader { geometry in
+            let gridWidth: CGFloat = geometry.size.width
+            let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
+            let gridHeight = gridWidth / gridAspectRatio
             
             ZStack {
                 switch attachments.count {
@@ -83,7 +83,7 @@ struct MediaGridView: View {
                     MediaCell(
                         parentTweet: parentTweet,
                         attachmentIndex: 0,
-                        aspectRatio: 1.0,
+                        aspectRatio: Float(gridAspectRatio),
                         play: shouldPlayVideo(for: 0),
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
@@ -92,14 +92,12 @@ struct MediaGridView: View {
                     )
                     .environmentObject(MuteState.shared)
                     .frame(width: gridWidth, height: gridHeight)
-                    .aspectRatio(contentMode: .fill)
                     .clipped()
-                    .contentShape(Rectangle())
                     .onTapGesture {
                         onItemTap?(0)
                     }
                     // identify MediaCell border
-                   // .border(Color.red, width: 1)
+                     .border(Color.red, width: 1)
                     
                 case 2:
                     let ar0 = attachments[0].aspectRatio ?? 1
@@ -123,7 +121,6 @@ struct MediaGridView: View {
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(idx) }
@@ -144,7 +141,6 @@ struct MediaGridView: View {
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
-                                .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(idx) }
@@ -165,7 +161,6 @@ struct MediaGridView: View {
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(0) }
@@ -180,7 +175,6 @@ struct MediaGridView: View {
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(1) }
@@ -196,7 +190,6 @@ struct MediaGridView: View {
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(0) }
@@ -211,7 +204,6 @@ struct MediaGridView: View {
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
-                                .aspectRatio(contentMode: .fill)
                                 .clipped()
                                 .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(1) }
@@ -224,164 +216,156 @@ struct MediaGridView: View {
                     if attachments.count < 3 {
                         EmptyView()
                     } else {
-                    
-                    let ar0 = attachments[0].aspectRatio ?? 1
-                    let ar1 = attachments[1].aspectRatio ?? 1
-                    let ar2 = attachments[2].aspectRatio ?? 1
-                    let allPortrait = ar0 < 1 && ar1 < 1 && ar2 < 1
-                    let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1
-                    
-                    if allPortrait {
-                        // All portrait: square grid, first item takes 61.8% of left side, other two divide right part vertically
-                        HStack(spacing: 2) {
-                            // First item: 61.8% of width (golden ratio)
-                            MediaCell(
-                                parentTweet: parentTweet,
-                                attachmentIndex: 0,
-                                play: shouldPlayVideo(for: 0),
-                                shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                                videoManager: videoManager,
-                                forceRefreshTrigger: forceRefreshTrigger
-                            )
-                            .environmentObject(MuteState.shared)
-                            .frame(width: gridWidth * 0.618 - 1, height: gridHeight)
-                            .clipped()
-                            .contentShape(Rectangle())
-                            .onTapGesture { onItemTap?(0) }
-                            
-                            // Right side: remaining 38.2% divided vertically
-                            VStack(spacing: 2) {
-                                ForEach(1..<3) { idx in
-                                    MediaCell(
-                                        parentTweet: parentTweet,
-                                        attachmentIndex: idx,
-                                        play: shouldPlayVideo(for: idx),
-                                        shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                                        videoManager: videoManager,
-                                        forceRefreshTrigger: forceRefreshTrigger
-                                    )
-                                    .environmentObject(MuteState.shared)
-                                    .frame(width: gridWidth * 0.382 - 1, height: gridHeight/2 - 1)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { onItemTap?(idx) }
-                                }
-                            }
-                        }
-                    } else if allLandscape {
-                        // All landscape: square grid, first item takes 61.8% of top portion, other two divide lower part horizontally
-                        VStack(spacing: 2) {
-                            // First item: 61.8% of height (golden ratio)
-                            MediaCell(
-                                parentTweet: parentTweet,
-                                attachmentIndex: 0,
-                                play: shouldPlayVideo(for: 0),
-                                shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                                videoManager: videoManager,
-                                forceRefreshTrigger: forceRefreshTrigger
-                            )
-                            .environmentObject(MuteState.shared)
-                            .frame(width: gridWidth, height: gridHeight * 0.618 - 1)
-                            .clipped()
-                            .contentShape(Rectangle())
-                            .onTapGesture { onItemTap?(0) }
-                            
-                            // Bottom part: remaining 38.2% divided horizontally
+                        
+                        let ar0 = attachments[0].aspectRatio ?? 1
+                        let ar1 = attachments[1].aspectRatio ?? 1
+                        let ar2 = attachments[2].aspectRatio ?? 1
+                        let allPortrait = ar0 < 1 && ar1 < 1 && ar2 < 1
+                        let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1
+                        
+                        if allPortrait {
+                            // All portrait: square grid, first item takes 61.8% of left side, other two divide right part vertically
                             HStack(spacing: 2) {
-                                ForEach(1..<3) { idx in
-                                    MediaCell(
-                                        parentTweet: parentTweet,
-                                        attachmentIndex: idx,
-                                        play: shouldPlayVideo(for: idx),
-                                        shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                                        videoManager: videoManager,
-                                        forceRefreshTrigger: forceRefreshTrigger
-                                    )
-                                    .environmentObject(MuteState.shared)
-                                    .frame(width: gridWidth/2 - 1, height: gridHeight * 0.382 - 1)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { onItemTap?(idx) }
-                                }
-                            }
-                        }
-                    } else if ar0 < 1 {
-                        // First is portrait: left column tall, right column two stacked
-                        HStack(spacing: 2) {
-                            MediaCell(
-                                parentTweet: parentTweet,
-                                attachmentIndex: 0,
-                                play: shouldPlayVideo(for: 0),
-                                shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                forceRefreshTrigger: forceRefreshTrigger
-                            )
-                            .environmentObject(MuteState.shared)
-                            .frame(width: gridWidth/2 - 1, height: gridHeight)
-                            .clipped()
-                            .contentShape(Rectangle())
-                            .onTapGesture { onItemTap?(0) }
-                            VStack(spacing: 2) {
-                                ForEach(1..<3) { idx in
-                                    MediaCell(
-                                        parentTweet: parentTweet,
-                                        attachmentIndex: idx,
-                                        play: shouldPlayVideo(for: idx),
-                                        shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
+                                // First item: 61.8% of width (golden ratio)
+                                MediaCell(
+                                    parentTweet: parentTweet,
+                                    attachmentIndex: 0,
+                                    play: shouldPlayVideo(for: 0),
+                                    shouldLoadVideo: shouldLoadVideo,
+                                    onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
-                                    )
-                                    .environmentObject(MuteState.shared)
-                                    .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { onItemTap?(idx) }
+                                )
+                                .environmentObject(MuteState.shared)
+                                .frame(width: gridWidth * 0.618 - 1, height: gridHeight)
+                                .clipped()
+                                .onTapGesture { onItemTap?(0) }
+                                
+                                // Right side: remaining 38.2% divided vertically
+                                VStack(spacing: 2) {
+                                    ForEach(1..<3) { idx in
+                                        MediaCell(
+                                            parentTweet: parentTweet,
+                                            attachmentIndex: idx,
+                                            play: shouldPlayVideo(for: idx),
+                                            shouldLoadVideo: shouldLoadVideo,
+                                            onVideoFinished: onVideoFinished,
+                                            videoManager: videoManager,
+                                            forceRefreshTrigger: forceRefreshTrigger
+                                        )
+                                        .environmentObject(MuteState.shared)
+                                        .frame(width: gridWidth * 0.382 - 1, height: gridHeight/2 - 1)
+                                        .clipped()
+                                        .onTapGesture { onItemTap?(idx) }
+                                    }
                                 }
                             }
-                        }
-                    } else {
-                        // First is landscape: top row wide, bottom row two images
-                        VStack(spacing: 2) {
-                            MediaCell(
-                                parentTweet: parentTweet,
-                                attachmentIndex: 0,
-                                play: shouldPlayVideo(for: 0),
-                                shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                forceRefreshTrigger: forceRefreshTrigger
-                            )
-                            .environmentObject(MuteState.shared)
-                            .frame(width: gridWidth, height: gridHeight/2 - 1)
-                            .clipped()
-                            .contentShape(Rectangle())
-                            .onTapGesture { onItemTap?(0) }
-                            HStack(spacing: 2) {
-                                ForEach(1..<3) { idx in
-                                    MediaCell(
-                                        parentTweet: parentTweet,
-                                        attachmentIndex: idx,
-                                        play: shouldPlayVideo(for: idx),
-                                        shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
+                        } else if allLandscape {
+                            // All landscape: square grid, first item takes 61.8% of top portion, other two divide lower part horizontally
+                            VStack(spacing: 2) {
+                                // First item: 61.8% of height (golden ratio)
+                                MediaCell(
+                                    parentTweet: parentTweet,
+                                    attachmentIndex: 0,
+                                    play: shouldPlayVideo(for: 0),
+                                    shouldLoadVideo: shouldLoadVideo,
+                                    onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
-                                    )
-                                    .environmentObject(MuteState.shared)
-                                    .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
-                                    .clipped()
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { onItemTap?(idx) }
+                                )
+                                .environmentObject(MuteState.shared)
+                                .frame(width: gridWidth, height: gridHeight * 0.618 - 1)
+                                .clipped()
+                                .onTapGesture { onItemTap?(0) }
+                                
+                                // Bottom part: remaining 38.2% divided horizontally
+                                HStack(spacing: 2) {
+                                    ForEach(1..<3) { idx in
+                                        MediaCell(
+                                            parentTweet: parentTweet,
+                                            attachmentIndex: idx,
+                                            play: shouldPlayVideo(for: idx),
+                                            shouldLoadVideo: shouldLoadVideo,
+                                            onVideoFinished: onVideoFinished,
+                                            videoManager: videoManager,
+                                            forceRefreshTrigger: forceRefreshTrigger
+                                        )
+                                        .environmentObject(MuteState.shared)
+                                        .frame(width: gridWidth/2 - 1, height: gridHeight * 0.382 - 1)
+                                        .clipped()
+                                        .onTapGesture { onItemTap?(idx) }
+                                    }
+                                }
+                            }
+                        } else if ar0 < 1 {
+                            // First is portrait: left column tall, right column two stacked
+                            HStack(spacing: 2) {
+                                MediaCell(
+                                    parentTweet: parentTweet,
+                                    attachmentIndex: 0,
+                                    play: shouldPlayVideo(for: 0),
+                                    shouldLoadVideo: shouldLoadVideo,
+                                    onVideoFinished: onVideoFinished,
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
+                                )
+                                .environmentObject(MuteState.shared)
+                                .frame(width: gridWidth/2 - 1, height: gridHeight)
+                                .clipped()
+                                .onTapGesture { onItemTap?(0) }
+                                VStack(spacing: 2) {
+                                    ForEach(1..<3) { idx in
+                                        MediaCell(
+                                            parentTweet: parentTweet,
+                                            attachmentIndex: idx,
+                                            play: shouldPlayVideo(for: idx),
+                                            shouldLoadVideo: shouldLoadVideo,
+                                            onVideoFinished: onVideoFinished,
+                                            videoManager: videoManager,
+                                            forceRefreshTrigger: forceRefreshTrigger
+                                        )
+                                        .environmentObject(MuteState.shared)
+                                        .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                                        .clipped()
+                                        .onTapGesture { onItemTap?(idx) }
+                                    }
+                                }
+                            }
+                        } else {
+                            // First is landscape: top row wide, bottom row two images
+                            VStack(spacing: 2) {
+                                MediaCell(
+                                    parentTweet: parentTweet,
+                                    attachmentIndex: 0,
+                                    play: shouldPlayVideo(for: 0),
+                                    shouldLoadVideo: shouldLoadVideo,
+                                    onVideoFinished: onVideoFinished,
+                                    videoManager: videoManager,
+                                    forceRefreshTrigger: forceRefreshTrigger
+                                )
+                                .environmentObject(MuteState.shared)
+                                .frame(width: gridWidth, height: gridHeight/2 - 1)
+                                .clipped()
+                                .onTapGesture { onItemTap?(0) }
+                                HStack(spacing: 2) {
+                                    ForEach(1..<3) { idx in
+                                        MediaCell(
+                                            parentTweet: parentTweet,
+                                            attachmentIndex: idx,
+                                            play: shouldPlayVideo(for: idx),
+                                            shouldLoadVideo: shouldLoadVideo,
+                                            onVideoFinished: onVideoFinished,
+                                            videoManager: videoManager,
+                                            forceRefreshTrigger: forceRefreshTrigger
+                                        )
+                                        .environmentObject(MuteState.shared)
+                                        .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                                        .clipped()
+                                        .onTapGesture { onItemTap?(idx) }
+                                    }
                                 }
                             }
                         }
-                    }
                     }
                     
                 case 4:
@@ -405,10 +389,8 @@ struct MediaGridView: View {
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
-                                .aspectRatio(cellAspect, contentMode: .fill)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                 .clipped()
-                                .contentShape(Rectangle())
                                 .onTapGesture { onItemTap?(idx) }
                             }
                         }
@@ -421,14 +403,12 @@ struct MediaGridView: View {
                                         play: shouldPlayVideo(for: idx),
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                        videoManager: videoManager,
+                                        forceRefreshTrigger: forceRefreshTrigger
                                     )
                                     .environmentObject(MuteState.shared)
-                                    .aspectRatio(cellAspect, contentMode: .fill)
                                     .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                     .clipped()
-                                    .contentShape(Rectangle())
                                     .onTapGesture { onItemTap?(idx) }
                                 }
                             }
@@ -450,9 +430,7 @@ struct MediaGridView: View {
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                .aspectRatio(contentMode: .fill)
                                 .clipped()
-                                .contentShape(Rectangle())
                                 .onTapGesture {
                                     onItemTap?(idx)
                                 }
@@ -468,14 +446,12 @@ struct MediaGridView: View {
                                             play: shouldPlayVideo(for: idx),
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                            videoManager: videoManager,
+                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                        .aspectRatio(contentMode: .fill)
                                         .clipped()
-                                        .contentShape(Rectangle())
                                         .onTapGesture {
                                             onItemTap?(idx)
                                         }
@@ -678,7 +654,7 @@ struct MediaGridViewModel {
                     return CGFloat(ar) // Use actual aspect ratio for landscape
                 }
             } else {
-                return 1.0 // Square when no aspect ratio is available
+                return 1.618 // Square when no aspect ratio is available
             }
         case 2:
             let ar0 = attachments[0].aspectRatio ?? 1

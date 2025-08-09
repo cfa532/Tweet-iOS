@@ -323,7 +323,6 @@ struct ChatVideoPlayer: View {
                     url: url,
                     mid: attachment.mid,
                     isVisible: true,
-                    cellAspectRatio: CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)),
                     videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
                     showNativeControls: false,
                     onVideoTap: {
