@@ -18,10 +18,7 @@ class VideoManager: ObservableObject {
         
         if isNewSequence {
             print("DEBUG: [VideoManager] Setup NEW sequential playback for \(mids.count) videos - starting at index 0")
-            // Only reset videos if this is a completely new sequence (not the first time)
-            for mid in mids {
-                VideoCacheManager.shared.resetVideoPlayer(for: mid)
-            }
+            // New sequence - no need to reset players since we use independent instances
         } else {
             print("DEBUG: [VideoManager] Setup \(videoMids.isEmpty ? "FIRST TIME" : "EXISTING") sequential playback for \(mids.count) videos - starting at index 0")
         }

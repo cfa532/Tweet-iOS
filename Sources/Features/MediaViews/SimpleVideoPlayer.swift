@@ -135,7 +135,7 @@ struct SimpleVideoPlayer: View {
     // MARK: Mode
     enum Mode {
         case mediaCell // Normal cell in feed/grid
-        case mediaBrowser // In MediaBrowserView (fullscreen browser)  
+        case mediaBrowser // In MediaBrowserView (fullscreen browser)
         case fullscreen // Direct fullscreen mode
     }
     var mode: Mode = .mediaCell
@@ -143,7 +143,9 @@ struct SimpleVideoPlayer: View {
     // MARK: State
     @State private var player: AVPlayer?
     @State private var isLoading = true
+    @State private var hasFinishedPlaying = false
     @ObservedObject private var muteState = MuteState.shared
+    @State private var instanceId = UUID().uuidString.prefix(8)
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -155,7 +157,7 @@ struct SimpleVideoPlayer: View {
         guard let ar = videoAspectRatio else { return false }
         return ar > 1.0
     }
-    
+
     var body: some View {
         GeometryReader { geometry in
             let screenWidth = geometry.size.width
@@ -174,20 +176,20 @@ struct SimpleVideoPlayer: View {
                         let pad = needsVerticalPadding && overflow > 0 ? overflow / 2 : 0
                         ZStack {
                             videoPlayerView()
-                                .offset(y: -pad)    // align the video vertically in the middle
-                                .aspectRatio(videoAR, contentMode: .fill)
+                            .offset(y: -pad)    // align the video vertically in the middle
+                            .aspectRatio(videoAR, contentMode: .fill)
                         }
                     } else {
                         // Fallback when no cellAspectRatio is available
                         videoPlayerView()
-                            .aspectRatio(videoAR, contentMode: .fit)
+                        .aspectRatio(videoAR, contentMode: .fit)
                     }
                     
                 case .mediaBrowser:
                     // MediaBrowser mode: fullscreen browser with native controls only
                     videoPlayerView()
-                        .aspectRatio(videoAR, contentMode: .fit)
-                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                    .aspectRatio(videoAR, contentMode: .fit)
+                    .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                     
                 case .fullscreen:
                     // Fullscreen mode: direct fullscreen with orientation handling
@@ -195,8 +197,8 @@ struct SimpleVideoPlayer: View {
                         // Portrait video: fit on full screen
                         ZStack {
                             videoPlayerView()
-                                .aspectRatio(videoAR, contentMode: .fit)
-                                .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                            .aspectRatio(videoAR, contentMode: .fit)
+                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                         }
                         .onAppear {
                             // Lock screen orientation to portrait and keep screen on
@@ -212,11 +214,11 @@ struct SimpleVideoPlayer: View {
                         // Landscape video: rotate -90 degrees to fit on portrait device
                         ZStack {
                             videoPlayerView()
-                                .aspectRatio(videoAR, contentMode: .fit)
-                                .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2)
-                                .rotationEffect(.degrees(-90))
-                                .scaleEffect(screenHeight / screenWidth)
-                                .background(Color.black)
+                            .aspectRatio(videoAR, contentMode: .fit)
+                            .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2)
+                            .rotationEffect(.degrees(-90))
+                            .scaleEffect(screenHeight / screenWidth)
+                            .background(Color.black)
                         }
                         .onAppear {
                             // OrientationManager.shared.lockToPortrait()
@@ -230,8 +232,8 @@ struct SimpleVideoPlayer: View {
                         // Square video: fit on full screen
                         ZStack {
                             videoPlayerView()
-                                .aspectRatio(1.0, contentMode: .fit)
-                                .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                            .aspectRatio(1.0, contentMode: .fit)
+                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                         }
                         .onAppear {
                             // OrientationManager.shared.lockToPortrait()
@@ -246,16 +248,16 @@ struct SimpleVideoPlayer: View {
             } else {
                 // Fallback when no aspect ratio is available
                 videoPlayerView()
-                    .aspectRatio(16.0/9.0, contentMode: .fit)
-                    .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                .aspectRatio(16.0/9.0, contentMode: .fit)
+                .frame(maxWidth: screenWidth, maxHeight: screenHeight)
             }
         }
         .onAppear {
             if player == nil {
                 setupPlayer()
+                }
             }
-        }
-        .onDisappear {
+            .onDisappear {
             player?.pause()
         }
         .onChange(of: muteState.isMuted) { newMuteState in
@@ -263,13 +265,58 @@ struct SimpleVideoPlayer: View {
                 player?.isMuted = newMuteState
             }
         }
+        .onChange(of: autoPlay) { shouldAutoPlay in
+            // Handle autoPlay state changes
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] AutoPlay changed to: \(shouldAutoPlay), isVisible: \(isVisible), player exists: \(player != nil), isLoading: \(isLoading)")
+            checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
+            if !shouldAutoPlay {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] AutoPlay changed to false - pausing playback")
+                player?.pause()
+            }
+        }
+        .onChange(of: isVisible) { visible in
+            // Handle visibility changes
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Visibility changed to: \(visible), autoPlay: \(autoPlay), player exists: \(player != nil), isLoading: \(isLoading)")
+            checkPlaybackConditions(autoPlay: autoPlay, isVisible: visible)
+            if !visible {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Became invisible - pausing playback")
+                player?.pause()
+            }
+        }
+        .onChange(of: player) { newPlayer in
+            // When player becomes available, check if we should autoplay
+            if newPlayer != nil {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player became available - checking playback conditions")
+                checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+            }
+        }
     }
     
     // MARK: Private Methods
+    private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
+        // Check if all conditions are met for autoplay
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Checking conditions - autoPlay: \(autoPlay), isVisible: \(isVisible), player exists: \(player != nil), isLoading: \(isLoading), hasFinished: \(hasFinishedPlaying)")
+        
+        if autoPlay && isVisible && player != nil && !isLoading {
+            if hasFinishedPlaying {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Restarting finished video")
+                // Reset to beginning and play
+                player?.seek(to: .zero)
+                hasFinishedPlaying = false
+                player?.play()
+            } else {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] All conditions met - starting playback")
+                player?.play()
+            }
+        } else {
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Conditions not met - autoPlay: \(autoPlay), isVisible: \(isVisible), player exists: \(player != nil), isLoading: \(isLoading)")
+        }
+    }
+    
     @ViewBuilder
     private func videoPlayerView() -> some View {
         Group {
-            if let player = player {
+                    if let player = player {
                 VideoPlayer(player: player)
                     .clipped()
                     .onTapGesture {
@@ -279,7 +326,7 @@ struct SimpleVideoPlayer: View {
                 ProgressView("Loading video...")
                     .frame(maxWidth: .infinity, maxHeight: 200)
                     .background(Color.black.opacity(0.1))
-            } else {
+                } else {
                 Color.black
                     .overlay(
                         Image(systemName: "play.circle")
@@ -306,24 +353,27 @@ struct SimpleVideoPlayer: View {
                 // Configure player for context
                 newPlayer.isMuted = forceUnmuted ? false : muteState.isMuted
                 
-                // Set up video finished observer
-                if !forceUnmuted, let onVideoFinished = onVideoFinished {
-                    NotificationCenter.default.addObserver(
-                        forName: .AVPlayerItemDidPlayToEndTime,
-                        object: playerItem,
-                        queue: .main
-                    ) { _ in
+                                // Set up video finished observer
+                NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime,
+                    object: playerItem,
+                    queue: .main
+                ) { _ in
+                    self.hasFinishedPlaying = true
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video finished playing")
+                    
+                    // Call the external callback if provided
+                    if let onVideoFinished = onVideoFinished {
                         onVideoFinished()
                     }
                 }
                 
                 self.player = newPlayer
-                self.isLoading = false
+                        self.isLoading = false
                 
                 // Start playback if needed
-                if autoPlay {
-                    newPlayer.play()
-                }
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player ready - checking playback conditions")
+                checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
                 
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Created player using shared asset cache")
             }
@@ -369,4 +419,4 @@ struct SimpleVideoPlayer: View {
             return false
         }
     }
-}
+} 

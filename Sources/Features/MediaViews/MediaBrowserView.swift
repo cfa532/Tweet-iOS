@@ -227,14 +227,16 @@ struct MediaBrowserView: View {
             autoPlay: index == currentIndex, // Only auto-play if this is the current video
             contentType: attachment.type,
             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
+            forceUnmuted: true, // Always unmuted in fullscreen
             onVideoTap: {
-                // Show close button when video is tapped
+                // Native controls will be shown by VideoPlayer automatically
+                // Also show our close button overlay
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showControls = true
                 }
                 resetControlsTimer() // Reset close button timer
             },
-
+            disableAutoRestart: false, // Enable auto-replay in fullscreen
             mode: .mediaBrowser
         )
         .environmentObject(MuteState.shared)

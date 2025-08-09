@@ -55,17 +55,17 @@ struct DetailMediaCell: View {
                             url: url,
                             mid: attachment.mid,
                             isVisible: isVisible,
-                            autoPlay: play,
+                            autoPlay: true, // Always auto-play in detail view
                             onVideoFinished: nil,
                             contentType: attachment.type,
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                             showNativeControls: true,
                             forceUnmuted: true, // Always unmuted in detail view
                             onVideoTap: {
-                                // Handle tap to show/hide native controls
+                                // Native controls will be shown by VideoPlayer automatically
                                 print("DEBUG: [DETAIL MEDIA CELL] Video tapped - native controls should handle")
                             },
-                            disableAutoRestart: true,
+                            disableAutoRestart: false, // Enable auto-replay in detail view
                             mode: .mediaBrowser // Use mediaBrowser mode to enable native controls
                         )
                         .environmentObject(MuteState.shared)
