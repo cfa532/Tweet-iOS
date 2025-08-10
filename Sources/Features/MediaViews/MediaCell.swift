@@ -39,8 +39,9 @@ struct MediaCell: View, Equatable {
     let showMuteButton: Bool
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
+    let onItemTap: ((Int) -> Void)?
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0, onItemTap: ((Int) -> Void)? = nil) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -50,6 +51,7 @@ struct MediaCell: View, Equatable {
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
         self.forceRefreshTrigger = forceRefreshTrigger
+        self.onItemTap = onItemTap
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -156,12 +158,21 @@ struct MediaCell: View, Equatable {
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .clipped()
+                            .onTapGesture {
+                                handleTap()
+                            }
                     } else if isLoading {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle())
                             .scaleEffect(1.2)
+                            .onTapGesture {
+                                handleTap()
+                            }
                     } else {
                         Color.gray.opacity(0.3)
+                            .onTapGesture {
+                                handleTap()
+                            }
                     }
                 default:
                     EmptyView()
@@ -215,6 +226,13 @@ struct MediaCell: View, Equatable {
     }
     
     private func handleTap() {
+        // If onItemTap is provided, use it (for retweets and other external tap handling)
+        if let onItemTap = onItemTap {
+            onItemTap(attachmentIndex)
+            return
+        }
+        
+        // Otherwise, use internal full screen logic
         switch attachment.type.lowercased() {
         case "video", "hls_video":
             // Open full screen for videos

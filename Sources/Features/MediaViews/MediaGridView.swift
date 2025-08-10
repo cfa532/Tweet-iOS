@@ -87,11 +87,13 @@ struct MediaGridView: View {
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
                         videoManager: videoManager,
-                        forceRefreshTrigger: forceRefreshTrigger
+                        forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                     )
                     .environmentObject(MuteState.shared)
                     .frame(width: gridWidth, height: gridHeight)
-                    .clipped()
+                    .clipped().contentShape(Rectangle())
+                    .contentShape(Rectangle())
                     // identify MediaCell border
                     //  .border(Color.red, width: 1)
                     
@@ -113,11 +115,12 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                             }
                         }
@@ -132,11 +135,12 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                             }
                         }
@@ -152,11 +156,12 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                                 MediaCell(
                                     parentTweet: parentTweet,
@@ -166,11 +171,12 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                             } else {
                                 MediaCell(
@@ -181,11 +187,12 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                                 MediaCell(
                                     parentTweet: parentTweet,
@@ -195,11 +202,12 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                             }
                         }
@@ -229,11 +237,13 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 0.618 - 1, height: gridHeight)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
+                                .contentShape(Rectangle())
                                 
                                 // Right side: remaining 38.2% divided vertically
                                 VStack(spacing: 2) {
@@ -246,11 +256,13 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger
+                                            forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth * 0.382 - 1, height: gridHeight/2 - 1)
-                                        .clipped()
+                                        .clipped().contentShape(Rectangle())
+                                        .contentShape(Rectangle())
                                     }
                                 }
                             }
@@ -266,11 +278,13 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight * 0.618 - 1)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
+                                .contentShape(Rectangle())
                                 
                                 // Bottom part: remaining 38.2% divided horizontally
                                 HStack(spacing: 2) {
@@ -283,11 +297,13 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger
+                                            forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth/2 - 1, height: gridHeight * 0.382 - 1)
-                                        .clipped()
+                                        .clipped().contentShape(Rectangle())
+                                        .contentShape(Rectangle())
                                     }
                                 }
                             }
@@ -302,11 +318,13 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
+                                .contentShape(Rectangle())
                                 VStack(spacing: 2) {
                                     ForEach(1..<3) { idx in
                                         MediaCell(
@@ -317,11 +335,12 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger
+                                            forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
-                                        .clipped()
+                                        .clipped().contentShape(Rectangle())
                                     }
                                 }
                             }
@@ -336,11 +355,12 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
                                 HStack(spacing: 2) {
                                     ForEach(1..<3) { idx in
                                         MediaCell(
@@ -351,11 +371,12 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger
+                                            forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
-                                        .clipped()
+                                        .clipped().contentShape(Rectangle())
                                     }
                                 }
                             }
@@ -380,11 +401,12 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
                             }
                         }
                         HStack(spacing: 2) {
@@ -397,11 +419,12 @@ struct MediaGridView: View {
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished,
                                         videoManager: videoManager,
-                                        forceRefreshTrigger: forceRefreshTrigger
+                                        forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                     )
                                     .environmentObject(MuteState.shared)
                                     .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
-                                    .clipped()
+                                    .clipped().contentShape(Rectangle())
                                 }
                             }
                         }
@@ -419,11 +442,12 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                .clipped()
+                                .clipped().contentShape(Rectangle())
                             }
                         }
                         HStack(spacing: 2) {
@@ -438,11 +462,12 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger
+                                            forceRefreshTrigger: forceRefreshTrigger,
+                        onItemTap: onItemTap
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
-                                        .clipped()
+                                        .clipped().contentShape(Rectangle())
 
                                         
                                         if idx == 3 && attachments.count > 4 {
@@ -460,7 +485,7 @@ struct MediaGridView: View {
                 }
             }
             .frame(width: gridWidth, height: gridHeight)
-            .clipped()
+            .clipped().contentShape(Rectangle())
             .onAppear {
                 // Mark the grid as visible
                 isVisible = true
