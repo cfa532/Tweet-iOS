@@ -15,7 +15,11 @@ struct CommentItemView: View {
     var onAvatarTap: ((User) -> Void)? = nil
     var onTap: ((Tweet) -> Void)? = nil
     var commentsVM: CommentsViewModel? = nil
+    var backgroundColor: Color = Color(.systemBackground)
     @State private var showDetail = false
+    @State private var isVisible = false
+    @State private var showBrowser = false
+    @State private var selectedMediaIndex = 0
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
@@ -36,19 +40,44 @@ struct CommentItemView: View {
                     CommentMenu(comment: comment, parentTweet: parentTweet)
                 }
                 .contentShape(Rectangle())
-                .onTapGesture { showDetail = true }
+                .onTapGesture { onTap?(comment) }
                 .padding(.top, -8)
                 
-                TweetItemBodyView(tweet: comment, enableTap: false)
-                    .contentShape(Rectangle())
-                    .onTapGesture { onTap?(comment) }
-                    .padding(.top, -12)
+                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible, onItemTap: { idx in
+                    selectedMediaIndex = idx
+                    showBrowser = true
+                })
+                .padding(.top, -12)
+                
                 TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
                     .padding(.top, 8)
             }
         }
         .padding()
-        .background(Color(.systemBackground))
+        .padding(.horizontal, -4)
+        .background(backgroundColor)
+        .if(backgroundColor != Color(.systemBackground)) { view in
+            view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap?(comment)
+        }
+        .fullScreenCover(isPresented: $showBrowser) {
+            MediaBrowserView(
+                tweet: comment,
+                initialIndex: selectedMediaIndex
+            )
+        }
+        .task {
+            isVisible = true
+            comment.isVisible = true
+        }
+        .onDisappear {
+            isVisible = false
+            comment.isVisible = false
+        }
+        .environmentObject(MuteState.shared)
     }
 }
 
