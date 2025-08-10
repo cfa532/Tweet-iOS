@@ -63,16 +63,18 @@ struct TweetItemView: View {
                                 .foregroundColor(.secondary)
                         }
                         .padding(.top, -8)
+                        
                         HStack(alignment: .top) {
                             TweetItemHeaderView(tweet: originalTweet)
                             TweetMenu(tweet: tweet, isPinned: isPinned)
+                                .padding(.top, -8)
                         }
                         
                         TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, onItemTap: { idx in
                             selectedEmbeddedMediaIndex = idx
                             showEmbeddedBrowser = true
                         })
-                            .padding(.top, -12)
+                        .padding(.top, -12)
                         
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
@@ -89,7 +91,7 @@ struct TweetItemView: View {
                             selectedMediaIndex = idx
                             showBrowser = true
                         })
-                            .padding(.top, -12)
+                        .padding(.top, -12)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
                         TweetItemView(
@@ -134,7 +136,7 @@ struct TweetItemView: View {
                         selectedMediaIndex = idx
                         showBrowser = true
                     })
-                        .padding(.top, -12)
+                    .padding(.top, -12)
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)

@@ -30,20 +30,24 @@ class DetailVideoManager: ObservableObject {
         currentVideoMid = mid
         
         Task {
-            let sharedAsset = await SharedAssetCache.shared.getAsset(for: url)
-            let playerItem = AVPlayerItem(asset: sharedAsset)
-            let newPlayer = AVPlayer(playerItem: playerItem)
-            
-            await MainActor.run {
-                newPlayer.isMuted = false // Always unmuted in detail
-                self.currentPlayer = newPlayer
+            do {
+                let sharedAsset = try await SharedAssetCache.shared.getAsset(for: url)
+                let playerItem = AVPlayerItem(asset: sharedAsset)
+                let newPlayer = AVPlayer(playerItem: playerItem)
                 
-                if autoPlay {
-                    newPlayer.play()
-                    self.isPlaying = true
+                await MainActor.run {
+                    newPlayer.isMuted = false // Always unmuted in detail
+                    self.currentPlayer = newPlayer
+                    
+                    if autoPlay {
+                        newPlayer.play()
+                        self.isPlaying = true
+                    }
+                    
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Set current video: \(mid)")
                 }
-                
-                print("DEBUG: [DETAIL VIDEO MANAGER] Set current video: \(mid)")
+            } catch {
+                print("DEBUG: [DETAIL VIDEO MANAGER] Failed to load video: \(error)")
             }
         }
     }
@@ -92,20 +96,24 @@ class FullscreenVideoManager: ObservableObject {
         currentVideoMid = mid
         
         Task {
-            let sharedAsset = await SharedAssetCache.shared.getAsset(for: url)
-            let playerItem = AVPlayerItem(asset: sharedAsset)
-            let newPlayer = AVPlayer(playerItem: playerItem)
-            
-            await MainActor.run {
-                newPlayer.isMuted = false // Always unmuted in fullscreen
-                self.currentPlayer = newPlayer
+            do {
+                let sharedAsset = try await SharedAssetCache.shared.getAsset(for: url)
+                let playerItem = AVPlayerItem(asset: sharedAsset)
+                let newPlayer = AVPlayer(playerItem: playerItem)
                 
-                if autoPlay {
-                    newPlayer.play()
-                    self.isPlaying = true
+                await MainActor.run {
+                    newPlayer.isMuted = false // Always unmuted in fullscreen
+                    self.currentPlayer = newPlayer
+                    
+                    if autoPlay {
+                        newPlayer.play()
+                        self.isPlaying = true
+                    }
+                    
+                    print("DEBUG: [FULLSCREEN VIDEO MANAGER] Set current video: \(mid)")
                 }
-                
-                print("DEBUG: [FULLSCREEN VIDEO MANAGER] Set current video: \(mid)")
+            } catch {
+                print("DEBUG: [FULLSCREEN VIDEO MANAGER] Failed to load video: \(error)")
             }
         }
     }

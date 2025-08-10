@@ -62,6 +62,7 @@ struct TweetMenu: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
+    @State private var isPressed = false
 
     init(tweet: Tweet, isPinned: Bool) {
         self.tweet = tweet
@@ -120,10 +121,26 @@ struct TweetMenu: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .foregroundColor(.secondary)
-                    .padding(.trailing, 4)
-                    .padding(.vertical, 12)
+                    .foregroundColor(isPressed ? .primary : .secondary)
+                    .font(.system(size: 16, weight: .medium))
+                    .frame(width: 44, height: 44) // Minimum 44x44 tap target for accessibility
                     .contentShape(Rectangle())
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isPressed ? Color.secondary.opacity(0.2) : Color.clear)
+                    )
+                    .scaleEffect(isPressed ? 0.95 : 1.0)
+                    .animation(.easeInOut(duration: 0.1), value: isPressed)
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.1)) {
+                            isPressed = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            isPressed = false
+                        }
+                    }
+                    .accessibilityLabel("Tweet options")
+                    .accessibilityHint("Double tap to open tweet menu")
             }
             if showToast {
                 VStack {

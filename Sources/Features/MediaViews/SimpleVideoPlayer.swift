@@ -10,26 +10,106 @@ import AVKit
 import AVFoundation
 
 // MARK: - Asset Sharing System
-/// Shared asset cache to avoid duplicate network requests
+/// Shared asset cache to avoid duplicate network requests and provide immediate cached content
 class SharedAssetCache: ObservableObject {
     static let shared = SharedAssetCache()
     private init() {}
     
     private let cacheQueue = DispatchQueue(label: "SharedAssetCache", attributes: .concurrent)
     private var assetCache: [String: AVAsset] = [:]
+    private var playerCache: [String: AVPlayer] = [:]
     private var loadingTasks: [String: Task<AVAsset, Error>] = [:]
+    private var cacheTimestamps: [String: Date] = [:]
+    
+    /// Get cached player immediately if available, or create new one
+    func getCachedPlayer(for url: URL) -> AVPlayer? {
+        let cacheKey = url.absoluteString
+        return cacheQueue.sync {
+            return playerCache[cacheKey]
+        }
+    }
     
     /// Get or create asset for URL with HLS resolution
-    func getAsset(for url: URL) async -> AVAsset {
-        // For now, let's bypass caching to eliminate the crash
-        // and create assets directly to identify the root cause
-        print("DEBUG: [SHARED ASSET CACHE] Creating asset directly for: \(url.lastPathComponent)")
+    func getAsset(for url: URL) async throws -> AVAsset {
+        let cacheKey = url.absoluteString
         
-        let resolvedURL = await resolveHLSURL(url)
-        let asset = AVAsset(url: resolvedURL)
+        // Check if we have a cached asset
+        if let cachedAsset = cacheQueue.sync(execute: { assetCache[cacheKey] }) {
+            print("DEBUG: [SHARED ASSET CACHE] Using cached asset for: \(url.lastPathComponent)")
+            return cachedAsset
+        }
         
-        print("DEBUG: [SHARED ASSET CACHE] Created asset for: \(url.lastPathComponent)")
-        return asset
+        // Check if there's already a loading task
+        if let existingTask = cacheQueue.sync(execute: { loadingTasks[cacheKey] }) {
+            print("DEBUG: [SHARED ASSET CACHE] Waiting for existing loading task for: \(url.lastPathComponent)")
+            do {
+                return try await existingTask.value
+            } catch {
+                print("DEBUG: [SHARED ASSET CACHE] Error waiting for existing task: \(error)")
+                // Fall through to create new task
+            }
+        }
+        
+        // Create new loading task
+        let task = Task<AVAsset, Error> {
+            print("DEBUG: [SHARED ASSET CACHE] Creating new asset for: \(url.lastPathComponent)")
+            let resolvedURL = await resolveHLSURL(url)
+            let asset = AVAsset(url: resolvedURL)
+            
+            // Cache the asset
+            await MainActor.run {
+                self.assetCache[cacheKey] = asset
+                self.cacheTimestamps[cacheKey] = Date()
+                self.loadingTasks.removeValue(forKey: cacheKey)
+            }
+            
+            print("DEBUG: [SHARED ASSET CACHE] Cached asset for: \(url.lastPathComponent)")
+            return asset
+        }
+        
+        // Store the task
+        await MainActor.run {
+            self.loadingTasks[cacheKey] = task
+        }
+        
+        do {
+            return try await task.value
+        } catch {
+            print("DEBUG: [SHARED ASSET CACHE] Error creating asset: \(error)")
+            // Remove failed task
+            await MainActor.run {
+                self.loadingTasks.removeValue(forKey: cacheKey)
+            }
+            throw error
+        }
+    }
+    
+    /// Cache a player instance for immediate reuse
+    func cachePlayer(_ player: AVPlayer, for url: URL) async {
+        let cacheKey = url.absoluteString
+        await MainActor.run {
+            self.playerCache[cacheKey] = player
+            print("DEBUG: [SHARED ASSET CACHE] Cached player for: \(url.lastPathComponent)")
+        }
+    }
+    
+    /// Get cached player or create new one with asset
+    func getOrCreatePlayer(for url: URL) async throws -> AVPlayer {
+        // Try to get cached player first
+        if let cachedPlayer = getCachedPlayer(for: url) {
+            print("DEBUG: [SHARED ASSET CACHE] Using cached player for: \(url.lastPathComponent)")
+            return cachedPlayer
+        }
+        
+        // Create new player with asset
+        let asset = try await getAsset(for: url)
+        let playerItem = AVPlayerItem(asset: asset)
+        let player = AVPlayer(playerItem: playerItem)
+        
+        // Cache the player for future use
+        await cachePlayer(player, for: url)
+        
+        return player
     }
     
     /// Resolve HLS URL if needed
@@ -72,10 +152,43 @@ class SharedAssetCache: ObservableObject {
     
     /// Clear cache
     func clearCache() {
-        assetCache.removeAll()
-        loadingTasks.values.forEach { $0.cancel() }
-        loadingTasks.removeAll()
+        Task { @MainActor in
+            self.assetCache.removeAll()
+            self.playerCache.removeAll()
+            self.cacheTimestamps.removeAll()
+            self.loadingTasks.values.forEach { $0.cancel() }
+            self.loadingTasks.removeAll()
+        }
         print("DEBUG: [SHARED ASSET CACHE] Cache cleared")
+    }
+    
+    /// Preload video for immediate display
+    func preloadVideo(for url: URL) {
+        Task {
+            do {
+                _ = try await getOrCreatePlayer(for: url)
+            } catch {
+                print("DEBUG: [SHARED ASSET CACHE] Error preloading video: \(error)")
+            }
+        }
+    }
+    
+    /// Preload asset only (for background loading)
+    func preloadAsset(for url: URL) {
+        Task {
+            do {
+                _ = try await getAsset(for: url)
+            } catch {
+                print("DEBUG: [SHARED ASSET CACHE] Error preloading asset: \(error)")
+            }
+        }
+    }
+    
+    /// Get cache statistics
+    func getCacheStats() -> (assetCount: Int, playerCount: Int) {
+        return cacheQueue.sync {
+            return (assetCache.count, playerCache.count)
+        }
     }
 }
 
@@ -286,10 +399,10 @@ struct SimpleVideoPlayer: View {
                 if loadFailed && retryCount < 3 {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video reappeared after failure - retrying load")
                     retryLoad()
-                } else {
+                                                } else {
                     checkPlaybackConditions(autoPlay: autoPlay, isVisible: visible)
                 }
-            } else {
+                                } else {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Became invisible - pausing playback")
                 player?.pause()
             }
@@ -312,7 +425,7 @@ struct SimpleVideoPlayer: View {
             // App returning from background - restore state if needed
             if wasPlayingBeforeBackground && isVisible && autoPlay {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App returning from background - restoring playback")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     // Small delay to ensure UI is ready
                     checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
                 }
@@ -345,19 +458,19 @@ struct SimpleVideoPlayer: View {
                 player?.seek(to: .zero)
                 hasFinishedPlaying = false
                 player?.play()
-            } else {
+                } else {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] All conditions met - starting playback")
                 player?.play()
             }
-        } else {
+                        } else {
             print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Conditions not met - autoPlay: \(autoPlay), isVisible: \(isVisible), player exists: \(player != nil), isLoading: \(isLoading)")
-        }
-    }
-    
+                        }
+                    }
+                    
     @ViewBuilder
     private func videoPlayerView() -> some View {
         Group {
-                    if let player = player {
+                        if let player = player {
                 if showNativeControls {
                     VideoPlayer(player: player)
                         .clipped()
@@ -367,7 +480,7 @@ struct SimpleVideoPlayer: View {
                         .onLongPressGesture {
                             print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press detected - reloading video")
                             retryLoad()
-                        }
+                    }
                 } else {
                     VideoPlayer(player: player, videoOverlay: {
                         // Custom overlay that captures taps
@@ -415,8 +528,8 @@ struct SimpleVideoPlayer: View {
                         if retryCount < 3 {
                             retryLoad()
                         }
-                    }
-            } else {
+                        }
+                    } else {
                 Color.black
                     .overlay(
                         Image(systemName: "play.circle")
@@ -429,27 +542,43 @@ struct SimpleVideoPlayer: View {
     
     private func setupPlayer() {
         Task {
-            do {
-                // Step 1: Resolve HLS if needed
-                let resolvedURL = await resolveHLSURL(url)
+                // Step 1: Try to get cached player immediately
+                if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: url) {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Using cached player immediately")
+                    await MainActor.run {
+            self.player = cachedPlayer
+                self.isLoading = false
+                        self.loadFailed = false
+                        self.retryCount = 0
+                        
+                        // Start playback if needed
+                        checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+                    }
+                    return
+                }
                 
-                // Step 2: Get shared asset
-                let sharedAsset = await SharedAssetCache.shared.getAsset(for: resolvedURL)
-                
-                // Step 3: Create player
-                let playerItem = AVPlayerItem(asset: sharedAsset)
-                let newPlayer = AVPlayer(playerItem: playerItem)
+                // Step 2: Get or create player with asset
+                let newPlayer: AVPlayer
+                do {
+                    newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url)
+                } catch {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Failed to get or create player: \(error)")
+                    await MainActor.run {
+                        self.handleLoadFailure()
+                    }
+                    return
+                }
             
-                            await MainActor.run {
+                await MainActor.run {
                     // Configure player for context
                     newPlayer.isMuted = forceUnmuted ? false : muteState.isMuted
                     
                     // Set up video finished observer
-                    NotificationCenter.default.addObserver(
-                        forName: .AVPlayerItemDidPlayToEndTime,
-                        object: playerItem,
-                        queue: .main
-                    ) { _ in
+            NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                        object: newPlayer.currentItem,
+                queue: .main
+            ) { _ in
                         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video finished playing - disableAutoRestart: \(disableAutoRestart)")
                         
                         if !disableAutoRestart {
@@ -458,9 +587,9 @@ struct SimpleVideoPlayer: View {
                             newPlayer.seek(to: .zero) { finished in
                                 if finished {
                                     newPlayer.play()
-                                }
                             }
-                        } else {
+                        }
+                    } else {
                             // For MediaCell, just mark as finished for manual restart on reappearance
                             self.hasFinishedPlaying = true
                         }
@@ -474,7 +603,7 @@ struct SimpleVideoPlayer: View {
                     // Set up error observer
                     NotificationCenter.default.addObserver(
                         forName: .AVPlayerItemFailedToPlayToEndTime,
-                        object: playerItem,
+                        object: newPlayer.currentItem,
                         queue: .main
                     ) { notification in
                         let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
@@ -488,7 +617,7 @@ struct SimpleVideoPlayer: View {
                         try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
                         
                         await MainActor.run {
-                            if playerItem.status == .failed {
+                            if let playerItem = newPlayer.currentItem, playerItem.status == .failed {
                                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player item failed to load: \(playerItem.error?.localizedDescription ?? "unknown error")")
                                 self.handleLoadFailure()
                             }
@@ -506,12 +635,6 @@ struct SimpleVideoPlayer: View {
                     
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Created player using shared asset cache")
                 }
-            } catch {
-                await MainActor.run {
-                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Failed to setup player: \(error.localizedDescription)")
-                    self.handleLoadFailure()
-                }
-            }
         }
     }
     
@@ -567,13 +690,13 @@ struct SimpleVideoPlayer: View {
     /// Check if URL exists
     private func urlExists(_ url: URL) async -> Bool {
         do {
-            var request = URLRequest(url: url)
-            request.httpMethod = "HEAD"
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
             request.timeoutInterval = 3.0
             let (_, response) = try await URLSession.shared.data(for: request)
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {
-            return false
+        return false
         }
     }
 } 
