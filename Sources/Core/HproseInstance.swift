@@ -89,8 +89,12 @@ final class HproseInstance: ObservableObject {
         
         TweetCacheManager.shared.deleteExpiredTweets()
         
-        // Recover any pending uploads
-        await recoverPendingUploads()
+        // Recover any pending uploads with a delay to ensure app is fully started
+        Task.detached(priority: .background) {
+            // Wait for 30 seconds to ensure app is fully initialized
+            try? await Task.sleep(nanoseconds: 30_000_000_000) // 3 seconds
+            await self.recoverPendingUploads()
+        }
     }
     
     private func initAppEntry() async throws {
