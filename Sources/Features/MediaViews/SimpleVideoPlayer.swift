@@ -87,7 +87,7 @@ class SharedAssetCache: ObservableObject {
     /// Cache a player instance for immediate reuse
     func cachePlayer(_ player: AVPlayer, for url: URL) async {
         let cacheKey = url.absoluteString
-        await MainActor.run {
+        _ = await MainActor.run { () -> Void in
             self.playerCache[cacheKey] = player
             print("DEBUG: [SHARED ASSET CACHE] Cached player for: \(url.lastPathComponent)")
         }
@@ -142,7 +142,7 @@ class SharedAssetCache: ObservableObject {
         do {
             var request = URLRequest(url: url)
             request.httpMethod = "HEAD"
-            request.timeoutInterval = 3.0
+            request.timeoutInterval = 15.0
             let (_, response) = try await URLSession.shared.data(for: request)
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {
@@ -236,6 +236,7 @@ struct SimpleVideoPlayer: View {
     
     // MARK: Optional Parameters
     var autoPlay: Bool = true
+    var videoManager: VideoManager? = nil // Optional VideoManager for reactive playback
     var onVideoFinished: (() -> Void)? = nil
     var contentType: String? = nil
     var cellAspectRatio: CGFloat? = nil
@@ -272,6 +273,14 @@ struct SimpleVideoPlayer: View {
     private var isVideoLandscape: Bool {
         guard let ar = videoAspectRatio else { return false }
         return ar > 1.0
+    }
+    
+    // Reactive autoPlay state - use VideoManager if available, otherwise use static autoPlay
+    private var currentAutoPlay: Bool {
+        if let videoManager = videoManager {
+            return videoManager.shouldPlayVideo(for: mid)
+        }
+        return autoPlay
     }
 
     var body: some View {
@@ -381,8 +390,8 @@ struct SimpleVideoPlayer: View {
                 player?.isMuted = newMuteState
             }
         }
-        .onChange(of: autoPlay) { shouldAutoPlay in
-            // Handle autoPlay state changes
+        .onChange(of: currentAutoPlay) { shouldAutoPlay in
+            // Handle autoPlay state changes (reactive to VideoManager)
             print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] AutoPlay changed to: \(shouldAutoPlay), isVisible: \(isVisible), player exists: \(player != nil), isLoading: \(isLoading)")
             checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
             if !shouldAutoPlay {
@@ -392,17 +401,17 @@ struct SimpleVideoPlayer: View {
         }
         .onChange(of: isVisible) { visible in
             // Handle visibility changes
-            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Visibility changed to: \(visible), autoPlay: \(autoPlay), player exists: \(player != nil), isLoading: \(isLoading), loadFailed: \(loadFailed)")
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Visibility changed to: \(visible), autoPlay: \(currentAutoPlay), player exists: \(player != nil), isLoading: \(isLoading), loadFailed: \(loadFailed)")
             
             if visible {
                 // If video failed to load and becomes visible again, retry
                 if loadFailed && retryCount < 3 {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video reappeared after failure - retrying load")
                     retryLoad()
-                                                } else {
-                    checkPlaybackConditions(autoPlay: autoPlay, isVisible: visible)
+                } else {
+                    checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: visible)
                 }
-                                } else {
+            } else {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Became invisible - pausing playback")
                 player?.pause()
             }
@@ -411,7 +420,7 @@ struct SimpleVideoPlayer: View {
             // When player becomes available, check if we should autoplay
             if newPlayer != nil {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player became available - checking playback conditions")
-                checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -423,23 +432,23 @@ struct SimpleVideoPlayer: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             // App returning from background - restore state if needed
-            if wasPlayingBeforeBackground && isVisible && autoPlay {
+            if wasPlayingBeforeBackground && isVisible && currentAutoPlay {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App returning from background - restoring playback")
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     // Small delay to ensure UI is ready
-                    checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+                    checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
                 }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             // Additional restoration when app becomes active
-            if wasPlayingBeforeBackground && isVisible && autoPlay {
+            if wasPlayingBeforeBackground && isVisible && currentAutoPlay {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App became active - ensuring playback restoration")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                     // Slightly longer delay for more reliable restoration
                     if let player = player, player.rate == 0 {
                         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player was paused after background - restarting")
-                        checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+                        checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
                     }
                 }
             }
@@ -552,7 +561,7 @@ struct SimpleVideoPlayer: View {
                         self.retryCount = 0
                         
                         // Start playback if needed
-                        checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+                        checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
                     }
                     return
                 }
@@ -631,7 +640,7 @@ struct SimpleVideoPlayer: View {
                     
                     // Start playback if needed
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player ready - checking playback conditions")
-                    checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+                    checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
                     
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Created player using shared asset cache")
                 }
@@ -692,7 +701,7 @@ struct SimpleVideoPlayer: View {
         do {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
-            request.timeoutInterval = 3.0
+            request.timeoutInterval = 15.0
             let (_, response) = try await URLSession.shared.data(for: request)
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {

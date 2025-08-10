@@ -158,7 +158,7 @@ class VideoAssetCache: ObservableObject {
         do {
             var request = URLRequest(url: url)
             request.httpMethod = "HEAD"
-            request.timeoutInterval = 3.0
+            request.timeoutInterval = 15.0
             let (_, response) = try await URLSession.shared.data(for: request)
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {

@@ -15,8 +15,7 @@ class VideoVisibilityManager: ObservableObject {
     private init() {}
     
     func videoEnteredFullScreen(_ videoMid: String) {
-        print("DEBUG: [VIDEO VISIBILITY] Video \(videoMid) entered full-screen - pausing all other videos")
-        VideoCacheManager.shared.pauseAllVideosExcept(videoMid)
+        print("DEBUG: [VIDEO VISIBILITY] Video \(videoMid) entered full-screen - pausing handled by SimpleVideoPlayer")
     }
     
     func videoExitedFullScreen(_ videoMid: String) {
@@ -31,7 +30,6 @@ struct MediaCell: View, Equatable {
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
     
-    @State private var play: Bool
     @State private var image: UIImage?
     @State private var isLoading = false
     @State private var showFullScreen = false
@@ -42,11 +40,10 @@ struct MediaCell: View, Equatable {
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
-        self._play = State(initialValue: play)
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
         self.showMuteButton = showMuteButton
@@ -80,7 +77,8 @@ struct MediaCell: View, Equatable {
                             url: url,
                             mid: attachment.mid,
                             isVisible: isVisible,
-                            autoPlay: play,
+                            autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
+                            videoManager: videoManager, // Pass VideoManager for reactive playback
                             onVideoFinished: onVideoFinished,
                             contentType: attachment.type,
                             cellAspectRatio: CGFloat(aspectRatio),
@@ -93,19 +91,16 @@ struct MediaCell: View, Equatable {
                             mode: .mediaCell
                         )
                         .onAppear {
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - play: \(play), isVisible: \(isVisible), autoPlay: \(play)")
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - isVisible: \(isVisible), autoPlay: \(videoManager.shouldPlayVideo(for: attachment.mid))")
                             
                             // Preload video for immediate display
                             if let url = attachment.getUrl(baseUrl) {
                                 SharedAssetCache.shared.preloadVideo(for: url)
                             }
                         }
-                        .onChange(of: play) { newPlayValue in
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] play changed to: \(newPlayValue), isVisible: \(isVisible), autoPlay: \(newPlayValue)")
-                        }
-                        .onChange(of: isVisible) { newIsVisible in
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible), play: \(play), autoPlay: \(play)")
-                        }
+                                .onChange(of: isVisible) { newIsVisible in
+            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
+        }
                         .environmentObject(MuteState.shared)
                         .onReceive(MuteState.shared.$isMuted) { isMuted in
                             print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
@@ -117,7 +112,7 @@ struct MediaCell: View, Equatable {
                                     Spacer()
                                     HStack {
                                         // Video time remaining label in bottom left corner
-                                        if play && isVisible {
+                                        if videoManager.shouldPlayVideo(for: attachment.mid) && isVisible {
                                             VideoTimeRemainingLabel(mid: attachment.mid)
                                                 .padding(.leading, 8)
                                                 .padding(.bottom, 8)
@@ -150,7 +145,7 @@ struct MediaCell: View, Equatable {
                             }
                     }
                 case "audio":
-                    SimpleAudioPlayer(url: url, autoPlay: play && isVisible)
+                    SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
                         .onTapGesture {
                             handleTap()
@@ -182,20 +177,6 @@ struct MediaCell: View, Equatable {
             
             // Refresh mute state from preferences when cell appears
             MuteState.shared.refreshFromPreferences()
-            
-            // Defer video loading to avoid blocking UI during list loading
-            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                // Don't load videos immediately - wait for shouldLoadVideo to be set by parent
-                // This prevents blocking the main thread during tweet list loading
-                play = videoManager.shouldPlayVideo(for: attachment.mid)
-            }
-        }
-        .task {
-            // Update play state after visibility is set
-            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
-                play = newPlayState
-            }
         }
         .onDisappear {
             // Set visibility to false when cell disappears
@@ -205,74 +186,13 @@ struct MediaCell: View, Equatable {
             if newValue && image == nil {
                 loadImage()
             }
-            
-            // Handle video visibility changes
-            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                if newValue {
-                    // Video became visible - only load if parent allows it (prevents UI blocking)
-                    if shouldLoadVideo {
-                        let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
-                        if play != newPlayState {
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] Video became visible - updating play from \(play) to \(newPlayState)")
-                            play = newPlayState
-                        }
-                    }
-                } else {
-                    // Video became invisible - pause playback
-                    if play {
-                        print("DEBUG: [MEDIA CELL \(attachment.mid)] Video became invisible - pausing playback")
-                        play = false
-                    }
-                }
-            }
         }
-        .onChange(of: videoManager.currentVideoIndex) { newIndex in
-            // Update play state when VideoManager changes
-            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
-                print("DEBUG: [MEDIA CELL \(attachment.mid)] VideoManager currentVideoIndex changed to \(newIndex) - current play: \(play), newPlayState: \(newPlayState), isVisible: \(isVisible)")
-                if play != newPlayState {
-                    print("DEBUG: [MEDIA CELL \(attachment.mid)] VideoManager changed - updating play from \(play) to \(newPlayState)")
-                    play = newPlayState
-                }
-            }
-        }
-        .onChange(of: forceRefreshTrigger) { _ in
-            // Force refresh play state when grid becomes visible
-            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                let newPlayState = videoManager.shouldPlayVideo(for: attachment.mid)
-                if play != newPlayState {
-                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Force refresh triggered - updating play from \(play) to \(newPlayState)")
-                    play = newPlayState
-                }
-            }
-        }
+
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Restore video state when app becomes active
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - enhanced restoration")
-                
-                // Simplified player state check to prevent deadlocks
-                print("DEBUG: [MEDIA CELL \(attachment.mid)] Player state check simplified for stability")
-                
-                // Immediate enhanced refresh to minimize black screen
-                VideoCacheManager.shared.forceRefreshVideoLayer(for: attachment.mid)
-                
-                // Ensure video is loaded
+                print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - ensuring video is loaded")
                 shouldLoadVideo = true
-                
-                // Force a view refresh by briefly toggling a state
-                let currentPlay = play
-                play = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { // Increased delay slightly
-                    // Update play state based on visibility and VideoManager
-                    let newPlayState = isVisible && videoManager.shouldPlayVideo(for: attachment.mid)
-                    play = newPlayState
-                    print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - updated play from \(currentPlay) to \(newPlayState) (isVisible: \(isVisible))")
-                    
-                    // Post-restoration verification simplified to prevent deadlocks
-                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Post-restoration completed")
-                }
             }
         }
 
@@ -300,8 +220,8 @@ struct MediaCell: View, Equatable {
             // Open full screen for videos
             showFullScreen = true
         case "audio":
-            // Toggle audio playback
-            play.toggle()
+            // Toggle audio playback - handled by SimpleAudioPlayer
+            break
         case "image":
             // Open full-screen for images
             showFullScreen = true
@@ -344,7 +264,6 @@ struct MediaCell: View, Equatable {
         return lhs.parentTweet.mid == rhs.parentTweet.mid &&
                lhs.attachmentIndex == rhs.attachmentIndex &&
                lhs.aspectRatio == rhs.aspectRatio &&
-               lhs.play == rhs.play &&
                lhs.shouldLoadVideo == rhs.shouldLoadVideo &&
                lhs.showMuteButton == rhs.showMuteButton
     }
@@ -403,28 +322,13 @@ struct VideoTimeRemainingLabel: View {
     }
     
     private func setupTimeObserver() {
-        guard let player = VideoCacheManager.shared.getCachedPlayer(for: mid) else {
-            return
-        }
-        
-        // Get duration
-        if let durationTime = player.currentItem?.duration {
-            duration = durationTime.seconds
-        }
-        
-        // Add time observer
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { time in
-            currentTime = time.seconds
-        }
+        // Time observer functionality moved to SimpleVideoPlayer
+        // This component is simplified to avoid conflicts with new system
     }
     
     private func removeTimeObserver() {
-        if let observer = timeObserver {
-            if let player = VideoCacheManager.shared.getCachedPlayer(for: mid) {
-                player.removeTimeObserver(observer)
-            }
-            timeObserver = nil
-        }
+        // Time observer functionality moved to SimpleVideoPlayer
+        timeObserver = nil
     }
     
     private func startHideTimer() {

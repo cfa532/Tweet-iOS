@@ -140,10 +140,8 @@ struct MediaBrowserView: View {
                isVideoAttachment(initialAttachment) {
                 print("DEBUG: [MediaBrowserView] Starting initial video with mid: \(initialAttachment.mid)")
                 
-                if let player = VideoCacheManager.shared.getVideoPlayer(for: initialAttachment.mid, url: initialAttachment.getUrl(baseUrl)!, isHLS: true) {
-                    player.play()
-                    print("DEBUG: [MediaBrowserView] Started playing initial video for mid: \(initialAttachment.mid)")
-                }
+                // Video playback is handled by SimpleVideoPlayer in videoView
+                print("DEBUG: [MediaBrowserView] Video playback handled by SimpleVideoPlayer")
             }
         }
         .onDisappear {

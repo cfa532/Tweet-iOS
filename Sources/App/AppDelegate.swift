@@ -111,29 +111,21 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppDidBecomeActive() {
-        print("[AppDelegate] App did become active - restoring video players and posting notification")
+        print("[AppDelegate] App did become active - posting notification")
         
-        // Use immediate restoration for faster recovery
-        VideoCacheManager.shared.immediateRestoreVideoPlayers()
-        
-        // Post notification to restore video state
+        // Post notification to restore video state (handled by SimpleVideoPlayer)
         NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
     }
     
     @objc private func handleAppDidEnterBackground() {
-        print("[AppDelegate] App did enter background - preparing video players")
+        print("[AppDelegate] App did enter background - background handling moved to SimpleVideoPlayer")
         
-        // Prepare video players for background transition
-        VideoCacheManager.shared.prepareForBackground()
+        // Background handling is now done by SimpleVideoPlayer's notification observers
     }
     
     @objc private func handleAppWillEnterForeground() {
-        print("[AppDelegate] App will enter foreground - pre-restoring videos")
+        print("[AppDelegate] App will enter foreground - foreground handling moved to SimpleVideoPlayer")
         
-        // Restore immediately when foreground is detected for faster visual recovery
-        VideoCacheManager.shared.immediateRestoreVideoPlayers()
-        
-        // Also handle any idle period restoration
-        VideoCacheManager.shared.handleVideoRestorationAfterIdle()
+        // Foreground handling is now done by SimpleVideoPlayer's notification observers
     }
 } 

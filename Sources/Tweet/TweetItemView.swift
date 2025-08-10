@@ -189,5 +189,6 @@ struct TweetItemView: View {
             isVisible = false
             tweet.isVisible = false
         }
+        .environmentObject(MuteState.shared)
     }
 }
