@@ -222,6 +222,7 @@ struct SimpleVideoPlayer: View {
     @State private var wasPlayingBeforeBackground = false
     @ObservedObject private var muteState = MuteState.shared
     @State private var instanceId = UUID().uuidString.prefix(8)
+    @State private var isLongPressing = false
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -451,28 +452,37 @@ struct SimpleVideoPlayer: View {
     @ViewBuilder
     private func videoPlayerView() -> some View {
         Group {
-                        if let player = player {
+            if let player = player {
                 if showNativeControls {
                     VideoPlayer(player: player)
                         .clipped()
+                        .contentShape(Rectangle())
+                        .scaleEffect(isLongPressing ? 0.95 : 1.0)
+                        .animation(.easeInOut(duration: 0.1), value: isLongPressing)
                         .onTapGesture {
                             onVideoTap?()
                         }
-                        .onLongPressGesture {
+                        .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
                             print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press detected - reloading video")
                             retryLoad()
-                    }
+                        } onPressingChanged: { pressing in
+                            isLongPressing = pressing
+                        }
                 } else {
                     VideoPlayer(player: player, videoOverlay: {
                         // Custom overlay that captures taps
                         Color.clear
                             .contentShape(Rectangle())
+                            .scaleEffect(isLongPressing ? 0.95 : 1.0)
+                            .animation(.easeInOut(duration: 0.1), value: isLongPressing)
                             .onTapGesture {
                                 onVideoTap?()
                             }
-                            .onLongPressGesture {
+                            .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
                                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press detected - reloading video")
                                 retryLoad()
+                            } onPressingChanged: { pressing in
+                                isLongPressing = pressing
                             }
                     })
                     .clipped()
@@ -568,6 +578,9 @@ struct SimpleVideoPlayer: View {
         // Configure player
         player.isMuted = forceUnmuted ? false : muteState.isMuted
         
+        // Reset player position to beginning (in case it was cached at the end)
+        player.seek(to: .zero)
+        
         // Set up observers
         setupPlayerObservers(player)
         
@@ -576,6 +589,7 @@ struct SimpleVideoPlayer: View {
         self.isLoading = false
         self.loadFailed = false
         self.retryCount = 0
+        self.hasFinishedPlaying = false // Reset finished state
         
         // Start playback if needed
         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player configured - checking playback conditions")
