@@ -34,6 +34,9 @@
 "Cloud Drive Port" = "クラウドドライブポート";
 "Register" = "登録";
 "Cancel" = "キャンセル";
+"Uploading..." = "アップロード中...";
+"Saving..." = "保存中...";
+"Create Account" = "アカウント作成";
 
 // MARK: - Settings Screen
 "Account" = "アカウント";
@@ -43,6 +46,8 @@
 "Version" = "バージョン";
 "All image and tweet caches have been cleared successfully." = "すべての画像とツイートキャッシュが正常にクリアされました。";
 "Cache Cleared" = "キャッシュがクリアされました";
+"Logout" = "ログアウト";
+"Dark Mode" = "ダークモード";
 
 // MARK: - Profile Screen
 "Fans" = "フォロワー";
@@ -68,6 +73,33 @@
 // MARK: - Compose
 "Question" = "質問";
 "Options" = "選択肢";
+"New Tweet" = "新しいツイート";
+"Create Poll" = "投票を作成";
+"Add Option" = "選択肢を追加";
+"Add" = "追加";
+"Add Location" = "位置情報を追加";
+
+// MARK: - Reply
+"Post your reply..." = "返信を投稿...";
+"Reply to %@" = "%@に返信";
+"Reply" = "返信";
+"You have unsaved content. Are you sure you want to discard your reply?" = "保存されていない内容があります。返信を破棄してもよろしいですか？";
+"Discard Reply" = "返信を破棄";
+"Discard" = "破棄";
+"Keep Editing" = "編集を続ける";
+
+// MARK: - Tweet Detail
+"Tweet" = "ツイート";
+"Comments" = "コメント";
+
+// MARK: - Loading States
+"Loading tweets..." = "ツイートを読み込み中...";
+"No tweet yet" = "まだツイートがありません";
+"Loading chat..." = "チャットを読み込み中...";
+"Receipt ID: %@" = "受信者ID: %@";
+"Loading..." = "読み込み中...";
+"Loading attachment..." = "添付ファイルを読み込み中...";
+"Loading %d attachments..." = "%d個の添付ファイルを読み込み中...";
 
 // MARK: - Error Messages
 "Username & password are required." = "ユーザー名とパスワードが必要です。";
@@ -87,6 +119,9 @@
 "Failed to get video info: %@" = "ビデオ情報の取得に失敗：%@";
 "Failed to initialize app" = "アプリの初期化に失敗しました";
 "Error" = "エラー";
+"Failed to load video" = "動画の読み込みに失敗";
+"Failed to load attachment" = "添付ファイルの読み込みに失敗";
+"No image available" = "画像が利用できません";
 
 // MARK: - Common Actions
 "Delete" = "削除";
@@ -105,8 +140,6 @@
 "Unfollow" = "フォロー解除";
 "Like" = "いいね";
 "Unlike" = "いいね解除";
-"Reply" = "返信";
-"Retweet" = "リツイート";
 "Bookmark" = "ブックマーク";
 "Remove Bookmark" = "ブックマーク削除";
 
@@ -171,6 +204,8 @@
 "Block User" = "ユーザーをブロック";
 "Mute User" = "ユーザーをミュート";
 "Report User" = "ユーザーを報告";
+"Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "%@とのチャットを削除してもよろしいですか？この会話のすべてのメッセージが永久に削除されます。";
+"Delete Chat" = "チャットを削除";
 
 // MARK: - Success Messages
 "Tweet posted successfully!" = "ツイートが投稿されました！";
@@ -200,4 +235,7 @@
 "No results found" = "結果が見つかりません";
 "Try searching for a different username" = "別のユーザー名で検索してみてください";
 "Search for users" = "ユーザーを検索";
-"Enter a username to find users" = "ユーザーを見つけるためにユーザー名を入力"; 
+"Enter a username to find users" = "ユーザーを見つけるためにユーザー名を入力";
+"Start Chat" = "チャットを開始";
+"%d attachments" = "%d個の添付ファイル";
+"+%d" = "+%d"; 

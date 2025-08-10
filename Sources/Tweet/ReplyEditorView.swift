@@ -72,7 +72,7 @@ struct ReplyEditorView: View {
             HStack(spacing: 12) {
                 // User avatar
                 Avatar(user: hproseInstance.appUser)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 24, height: 24)
                 
                 // Placeholder text with background
                 HStack {

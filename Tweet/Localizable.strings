@@ -34,6 +34,9 @@
 "Cloud Drive Port" = "Cloud Drive Port";
 "Register" = "Register";
 "Cancel" = "Cancel";
+"Uploading..." = "Uploading...";
+"Saving..." = "Saving...";
+"Create Account" = "Create Account";
 
 // MARK: - Settings Screen
 "Account" = "Account";
@@ -43,6 +46,8 @@
 "Version" = "Version";
 "All image and tweet caches have been cleared successfully." = "All image and tweet caches have been cleared successfully.";
 "Cache Cleared" = "Cache Cleared";
+"Logout" = "Logout";
+"Dark Mode" = "Dark Mode";
 
 // MARK: - Profile Screen
 "Fans" = "Fans";
@@ -68,6 +73,33 @@
 // MARK: - Compose
 "Question" = "Question";
 "Options" = "Options";
+"New Tweet" = "New Tweet";
+"Create Poll" = "Create Poll";
+"Add Option" = "Add Option";
+"Add" = "Add";
+"Add Location" = "Add Location";
+
+// MARK: - Reply
+"Post your reply..." = "Post your reply...";
+"Reply to %@" = "Reply to %@";
+"Reply" = "Reply";
+"You have unsaved content. Are you sure you want to discard your reply?" = "You have unsaved content. Are you sure you want to discard your reply?";
+"Discard Reply" = "Discard Reply";
+"Discard" = "Discard";
+"Keep Editing" = "Keep Editing";
+
+// MARK: - Tweet Detail
+"Tweet" = "Tweet";
+"Comments" = "Comments";
+
+// MARK: - Loading States
+"Loading tweets..." = "Loading tweets...";
+"No tweet yet" = "No tweet yet";
+"Loading chat..." = "Loading chat...";
+"Receipt ID: %@" = "Receipt ID: %@";
+"Loading..." = "Loading...";
+"Loading attachment..." = "Loading attachment...";
+"Loading %d attachments..." = "Loading %d attachments...";
 
 // MARK: - Error Messages
 "Username & password are required." = "Username & password are required.";
@@ -87,20 +119,14 @@
 "Failed to get video info: %@" = "Failed to get video info: %@";
 "Failed to initialize app" = "Failed to initialize app";
 "Error" = "Error";
+"Failed to load video" = "Failed to load video";
+"Failed to load attachment" = "Failed to load attachment";
+"No image available" = "No image available";
 
 // MARK: - Common Actions
 "Delete" = "Delete";
 "Edit" = "Edit";
 "Save" = "Save";
-"Done" = "Done";
-"Next" = "Next";
-"Back" = "Back";
-
-// MARK: - Common Actions
-"Delete" = "Delete";
-"Edit" = "Edit";
-"Save" = "Save";
-"Cancel" = "Cancel";
 "Done" = "Done";
 "Next" = "Next";
 "Back" = "Back";
@@ -114,8 +140,6 @@
 "Unfollow" = "Unfollow";
 "Like" = "Like";
 "Unlike" = "Unlike";
-"Reply" = "Reply";
-"Retweet" = "Retweet";
 "Bookmark" = "Bookmark";
 "Remove Bookmark" = "Remove Bookmark";
 
@@ -177,6 +201,8 @@
 "Block User" = "Block User";
 "Mute User" = "Mute User";
 "Report User" = "Report User";
+"Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation.";
+"Delete Chat" = "Delete Chat";
 
 // MARK: - Success Messages
 "Tweet posted successfully!" = "Tweet posted successfully!";
@@ -206,4 +232,7 @@
 "No results found" = "No results found";
 "Try searching for a different username" = "Try searching for a different username";
 "Search for users" = "Search for users";
-"Enter a username to find users" = "Enter a username to find users"; 
+"Enter a username to find users" = "Enter a username to find users";
+"Start Chat" = "Start Chat";
+"%d attachments" = "%d attachments";
+"+%d" = "+%d"; 

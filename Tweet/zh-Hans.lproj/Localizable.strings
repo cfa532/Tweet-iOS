@@ -34,6 +34,9 @@
 "Cloud Drive Port" = "云盘端口";
 "Register" = "注册";
 "Cancel" = "取消";
+"Uploading..." = "上传中...";
+"Saving..." = "保存中...";
+"Create Account" = "创建账户";
 
 // MARK: - Settings Screen
 "Account" = "账户";
@@ -43,6 +46,8 @@
 "Version" = "版本";
 "All image and tweet caches have been cleared successfully." = "所有图片和推文缓存已成功清除。";
 "Cache Cleared" = "缓存已清除";
+"Logout" = "退出登录";
+"Dark Mode" = "深色模式";
 
 // MARK: - Profile Screen
 "Fans" = "粉丝";
@@ -68,6 +73,33 @@
 // MARK: - Compose
 "Question" = "问题";
 "Options" = "选项";
+"New Tweet" = "新推文";
+"Create Poll" = "创建投票";
+"Add Option" = "添加选项";
+"Add" = "添加";
+"Add Location" = "添加位置";
+
+// MARK: - Reply
+"Post your reply..." = "发布您的回复...";
+"Reply to %@" = "回复 %@";
+"Reply" = "回复";
+"You have unsaved content. Are you sure you want to discard your reply?" = "您有未保存的内容。确定要丢弃您的回复吗？";
+"Discard Reply" = "丢弃回复";
+"Discard" = "丢弃";
+"Keep Editing" = "继续编辑";
+
+// MARK: - Tweet Detail
+"Tweet" = "推文";
+"Comments" = "评论";
+
+// MARK: - Loading States
+"Loading tweets..." = "正在加载推文...";
+"No tweet yet" = "暂无推文";
+"Loading chat..." = "正在加载聊天...";
+"Receipt ID: %@" = "收件人ID: %@";
+"Loading..." = "加载中...";
+"Loading attachment..." = "正在加载附件...";
+"Loading %d attachments..." = "正在加载 %d 个附件...";
 
 // MARK: - Error Messages
 "Username & password are required." = "用户名和密码是必需的。";
@@ -87,6 +119,9 @@
 "Failed to get video info: %@" = "获取视频信息失败：%@";
 "Failed to initialize app" = "应用初始化失败";
 "Error" = "错误";
+"Failed to load video" = "视频加载失败";
+"Failed to load attachment" = "附件加载失败";
+"No image available" = "暂无图片";
 
 // MARK: - Common Actions
 "Delete" = "删除";
@@ -105,8 +140,6 @@
 "Unfollow" = "取消关注";
 "Like" = "点赞";
 "Unlike" = "取消点赞";
-"Reply" = "回复";
-"Retweet" = "转发";
 "Bookmark" = "书签";
 "Remove Bookmark" = "移除书签";
 
@@ -171,6 +204,8 @@
 "Block User" = "屏蔽用户";
 "Mute User" = "静音用户";
 "Report User" = "举报用户";
+"Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "您确定要删除与 %@ 的聊天吗？这将永久删除此对话中的所有消息。";
+"Delete Chat" = "删除聊天";
 
 // MARK: - Success Messages
 "Tweet posted successfully!" = "推文发布成功！";
@@ -200,4 +235,7 @@
 "No results found" = "未找到结果";
 "Try searching for a different username" = "尝试搜索其他用户名";
 "Search for users" = "搜索用户";
-"Enter a username to find users" = "输入用户名以查找用户"; 
+"Enter a username to find users" = "输入用户名以查找用户";
+"Start Chat" = "开始聊天";
+"%d attachments" = "%d 个附件";
+"+%d" = "+%d"; 
