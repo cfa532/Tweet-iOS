@@ -65,6 +65,7 @@
 		46B03D7F2E474E21000E08DF /* ContextualVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D7E2E474E21000E08DF /* ContextualVideoPlayer.swift */; };
 		46B03D812E474E63000E08DF /* VideoAssetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D802E474E63000E08DF /* VideoAssetCache.swift */; };
 		46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */; };
+		46B03D852E486D3B000E08DF /* MuteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D842E486D36000E08DF /* MuteState.swift */; };
 		46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */; };
 		46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */; };
 		46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */; };
@@ -163,6 +164,7 @@
 		46B03D7E2E474E21000E08DF /* ContextualVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextualVideoPlayer.swift; sourceTree = "<group>"; };
 		46B03D802E474E63000E08DF /* VideoAssetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoAssetCache.swift; sourceTree = "<group>"; };
 		46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingletonVideoManagers.swift; sourceTree = "<group>"; };
+		46B03D842E486D36000E08DF /* MuteState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteState.swift; sourceTree = "<group>"; };
 		46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSVideoProcessor.swift; sourceTree = "<group>"; };
 		46B1F59B2E07DA7D00B3CE6C /* FFmpegWrapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FFmpegWrapper.h; sourceTree = "<group>"; };
 		46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = FFmpegWrapper.c; sourceTree = "<group>"; };
@@ -379,6 +381,7 @@
 		4629FB172DFFE9FB00588941 /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				46B03D842E486D36000E08DF /* MuteState.swift */,
 				46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */,
 				46B03D802E474E63000E08DF /* VideoAssetCache.swift */,
 				461438262E44DCCB002D1B22 /* VideoManager.swift */,
@@ -685,6 +688,7 @@
 				46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */,
 				46E8A7D32DE9D0E700A30FBA /* CommentItemView.swift in Sources */,
 				46E5B3532DDD6A7A00AEF31F /* TweetDetailView.swift in Sources */,
+				46B03D852E486D3B000E08DF /* MuteState.swift in Sources */,
 				4674940D2DF08B7E0082FAC6 /* FollowingsTweetViewModel.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -141,7 +141,7 @@ struct MediaCell: View, Equatable {
                             )
                             .onTapGesture {
                                 // Open full screen for video placeholders
-                                showFullScreen = true
+                                handleTap()
                             }
                     }
                 case "audio":

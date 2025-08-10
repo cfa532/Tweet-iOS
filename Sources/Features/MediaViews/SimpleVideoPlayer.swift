@@ -15,37 +15,35 @@ class SharedAssetCache: ObservableObject {
     static let shared = SharedAssetCache()
     private init() {}
     
-    private let cacheQueue = DispatchQueue(label: "SharedAssetCache", attributes: .concurrent)
-    private var assetCache: [String: AVAsset] = [:]
-    private var playerCache: [String: AVPlayer] = [:]
-    private var loadingTasks: [String: Task<AVAsset, Error>] = [:]
-    private var cacheTimestamps: [String: Date] = [:]
+    @MainActor private var assetCache: [String: AVAsset] = [:]
+    @MainActor private var playerCache: [String: AVPlayer] = [:]
+    @MainActor private var loadingTasks: [String: Task<AVAsset, Error>] = [:]
+    @MainActor private var cacheTimestamps: [String: Date] = [:]
     
-    /// Get cached player immediately if available, or create new one
-    func getCachedPlayer(for url: URL) -> AVPlayer? {
+    /// Get cached player immediately if available
+    @MainActor func getCachedPlayer(for url: URL) -> AVPlayer? {
         let cacheKey = url.absoluteString
-        return cacheQueue.sync {
-            return playerCache[cacheKey]
-        }
+        return playerCache[cacheKey]
     }
     
     /// Get or create asset for URL with HLS resolution
-    func getAsset(for url: URL) async throws -> AVAsset {
+    @MainActor func getAsset(for url: URL) async throws -> AVAsset {
         let cacheKey = url.absoluteString
         
         // Check if we have a cached asset
-        if let cachedAsset = cacheQueue.sync(execute: { assetCache[cacheKey] }) {
+        if let cachedAsset = assetCache[cacheKey] {
             print("DEBUG: [SHARED ASSET CACHE] Using cached asset for: \(url.lastPathComponent)")
             return cachedAsset
         }
         
         // Check if there's already a loading task
-        if let existingTask = cacheQueue.sync(execute: { loadingTasks[cacheKey] }) {
+        if let existingTask = loadingTasks[cacheKey] {
             print("DEBUG: [SHARED ASSET CACHE] Waiting for existing loading task for: \(url.lastPathComponent)")
             do {
                 return try await existingTask.value
             } catch {
                 print("DEBUG: [SHARED ASSET CACHE] Error waiting for existing task: \(error)")
+                loadingTasks.removeValue(forKey: cacheKey)
                 // Fall through to create new task
             }
         }
@@ -68,42 +66,33 @@ class SharedAssetCache: ObservableObject {
         }
         
         // Store the task
-        await MainActor.run {
-            self.loadingTasks[cacheKey] = task
-        }
+        loadingTasks[cacheKey] = task
         
         do {
             return try await task.value
         } catch {
             print("DEBUG: [SHARED ASSET CACHE] Error creating asset: \(error)")
-            // Remove failed task
-            await MainActor.run {
-                self.loadingTasks.removeValue(forKey: cacheKey)
-            }
+            loadingTasks.removeValue(forKey: cacheKey)
             throw error
         }
     }
     
     /// Cache a player instance for immediate reuse
-    func cachePlayer(_ player: AVPlayer, for url: URL) async {
+    @MainActor func cachePlayer(_ player: AVPlayer, for url: URL) {
         let cacheKey = url.absoluteString
-        _ = await MainActor.run { () -> Void in
-            self.playerCache[cacheKey] = player
-            print("DEBUG: [SHARED ASSET CACHE] Cached player for: \(url.lastPathComponent)")
-        }
+        playerCache[cacheKey] = player
+        print("DEBUG: [SHARED ASSET CACHE] Cached player for: \(url.lastPathComponent)")
     }
     
     /// Remove cached player (when it becomes invalid)
-    func removeCachedPlayer(for url: URL) {
+    @MainActor func removeCachedPlayer(for url: URL) {
         let cacheKey = url.absoluteString
-        Task { @MainActor in
-            self.playerCache.removeValue(forKey: cacheKey)
-            print("DEBUG: [SHARED ASSET CACHE] Removed invalid cached player for: \(url.lastPathComponent)")
-        }
+        playerCache.removeValue(forKey: cacheKey)
+        print("DEBUG: [SHARED ASSET CACHE] Removed invalid cached player for: \(url.lastPathComponent)")
     }
     
     /// Get cached player or create new one with asset
-    func getOrCreatePlayer(for url: URL) async throws -> AVPlayer {
+    @MainActor func getOrCreatePlayer(for url: URL) async throws -> AVPlayer {
         // Try to get cached player first
         if let cachedPlayer = getCachedPlayer(for: url) {
             print("DEBUG: [SHARED ASSET CACHE] Using cached player for: \(url.lastPathComponent)")
@@ -116,7 +105,7 @@ class SharedAssetCache: ObservableObject {
         let player = AVPlayer(playerItem: playerItem)
         
         // Cache the player for future use
-        await cachePlayer(player, for: url)
+        cachePlayer(player, for: url)
         
         return player
     }
@@ -160,14 +149,12 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Clear cache
-    func clearCache() {
-        Task { @MainActor in
-            self.assetCache.removeAll()
-            self.playerCache.removeAll()
-            self.cacheTimestamps.removeAll()
-            self.loadingTasks.values.forEach { $0.cancel() }
-            self.loadingTasks.removeAll()
-        }
+    @MainActor func clearCache() {
+        assetCache.removeAll()
+        playerCache.removeAll()
+        cacheTimestamps.removeAll()
+        loadingTasks.values.forEach { $0.cancel() }
+        loadingTasks.removeAll()
         print("DEBUG: [SHARED ASSET CACHE] Cache cleared")
     }
     
@@ -194,45 +181,8 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Get cache statistics
-    func getCacheStats() -> (assetCount: Int, playerCount: Int) {
-        return cacheQueue.sync {
-            return (assetCache.count, playerCache.count)
-        }
-    }
-}
-
-// MARK: - Global Mute State
-class MuteState: ObservableObject {
-    static let shared = MuteState()
-    @Published var isMuted: Bool = true // Default to muted
-    
-    private init() {
-        // Initialize from saved preference
-        refreshFromPreferences()
-    }
-    
-    func refreshFromPreferences() {
-        // Read the current preference and update the published property
-        let savedMuteState = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? true
-        if self.isMuted != savedMuteState {
-            self.isMuted = savedMuteState
-        }
-    }
-    
-    func toggleMute() {
-        isMuted.toggle()
-        // Save to preferences immediately when mute state changes
-        HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
-        print("DEBUG: [MUTE STATE] Mute state changed to: \(isMuted)")
-    }
-    
-    func setMuted(_ muted: Bool) {
-        if self.isMuted != muted {
-            self.isMuted = muted
-            // Save to preferences immediately when mute state changes
-            HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
-            print("DEBUG: [MUTE STATE] Mute state set to: \(isMuted)")
-        }
+    @MainActor func getCacheStats() -> (assetCount: Int, playerCount: Int) {
+        return (assetCache.count, playerCache.count)
     }
 }
 
@@ -475,23 +425,28 @@ struct SimpleVideoPlayer: View {
     // MARK: Private Methods
     private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
         // Check if all conditions are met for autoplay
-        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Checking conditions - autoPlay: \(autoPlay), isVisible: \(isVisible), player exists: \(player != nil), isLoading: \(isLoading), hasFinished: \(hasFinishedPlaying)")
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Checking conditions - autoPlay: \(autoPlay), isVisible: \(isVisible), player exists: \(player != nil), isLoading: \(isLoading), hasFinished: \(hasFinishedPlaying), disableAutoRestart: \(disableAutoRestart)")
         
         if autoPlay && isVisible && player != nil && !isLoading {
             if hasFinishedPlaying {
-                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Restarting finished video")
-                // Reset to beginning and play
-                player?.seek(to: .zero)
-                hasFinishedPlaying = false
-                player?.play()
+                if !disableAutoRestart {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Restarting finished video (auto-restart enabled)")
+                    // Reset to beginning and play
+                    player?.seek(to: .zero)
+                    hasFinishedPlaying = false
+                    player?.play()
                 } else {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video finished but auto-restart disabled - keeping finished state")
+                    // Don't restart, keep the finished state
+                }
+            } else {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] All conditions met - starting playback")
                 player?.play()
             }
-                        } else {
+        } else {
             print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Conditions not met - autoPlay: \(autoPlay), isVisible: \(isVisible), player exists: \(player != nil), isLoading: \(isLoading)")
-                        }
-                    }
+        }
+    }
                     
     @ViewBuilder
     private func videoPlayerView() -> some View {
@@ -566,153 +521,110 @@ struct SimpleVideoPlayer: View {
         }
     }
     
-    private func setupPlayer() {
+        private func setupPlayer() {
         Task {
-                // Step 1: Try to get cached player immediately
+            await MainActor.run {
+                self.isLoading = true
+                self.loadFailed = false
+            }
+            
+            do {
+                // Try to get cached player first
                 if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: url) {
-                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Using cached player immediately")
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Using cached player")
                     
-                    // Check if the cached player is still valid
-                    if let playerItem = cachedPlayer.currentItem, playerItem.status != .failed {
-                        await MainActor.run {
-                            // Configure player for context
-                            cachedPlayer.isMuted = forceUnmuted ? false : muteState.isMuted
-                            
-                            // Set up video finished observer
-                            NotificationCenter.default.addObserver(
-                                forName: .AVPlayerItemDidPlayToEndTime,
-                                object: playerItem,
-                                queue: .main
-                            ) { _ in
-                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video finished playing - disableAutoRestart: \(disableAutoRestart)")
-                                
-                                if !disableAutoRestart {
-                                    // Auto-restart immediately for fullscreen/detail contexts
-                                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Auto-restarting video immediately")
-                                    cachedPlayer.seek(to: .zero) { finished in
-                                        if finished {
-                                            cachedPlayer.play()
-                                        }
-                                    }
-                                } else {
-                                    // For MediaCell, just mark as finished for manual restart on reappearance
-                                    self.hasFinishedPlaying = true
-                                }
-                                
-                                // Call the external callback if provided
-                                if let onVideoFinished = onVideoFinished {
-                                    onVideoFinished()
-                                }
-                            }
-                            
-                            // Set up error observer
-                            NotificationCenter.default.addObserver(
-                                forName: .AVPlayerItemFailedToPlayToEndTime,
-                                object: playerItem,
-                                queue: .main
-                            ) { notification in
-                                let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video failed to play to end - \(error?.localizedDescription ?? "unknown error")")
-                                self.handleLoadFailure()
-                            }
-                            
-                            self.player = cachedPlayer
-                            self.isLoading = false
-                            self.loadFailed = false
-                            self.retryCount = 0
-                            
-                            // Start playback if needed
-                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player ready - checking playback conditions")
-                            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
-                        }
-                        return
-                    } else {
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player is invalid, creating new player")
-                        // Remove invalid cached player
+                    // Validate cached player - only reject if explicitly failed
+                    guard let playerItem = cachedPlayer.currentItem,
+                          playerItem.status != .failed else {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player invalid, removing")
                         SharedAssetCache.shared.removeCachedPlayer(for: url)
+                        throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
                     }
-                }
-                
-                // Step 2: Get or create player with asset
-                let newPlayer: AVPlayer
-                do {
-                    newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url)
-                } catch {
-                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Failed to get or create player: \(error)")
+                    
                     await MainActor.run {
-                        self.handleLoadFailure()
+                        self.configurePlayer(cachedPlayer)
                     }
                     return
                 }
-            
+                
+                // Create new player
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Creating new player")
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url)
+                
                 await MainActor.run {
-                    // Configure player for context
-                    newPlayer.isMuted = forceUnmuted ? false : muteState.isMuted
-                    
-                    // Set up video finished observer
-            NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime,
-                        object: newPlayer.currentItem,
-                queue: .main
-            ) { _ in
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video finished playing - disableAutoRestart: \(disableAutoRestart)")
-                        
-                        if !disableAutoRestart {
-                            // Auto-restart immediately for fullscreen/detail contexts
-                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Auto-restarting video immediately")
-                            newPlayer.seek(to: .zero) { finished in
-                                if finished {
-                                    newPlayer.play()
-                            }
-                        }
-                    } else {
-                            // For MediaCell, just mark as finished for manual restart on reappearance
-                            self.hasFinishedPlaying = true
-                        }
-                        
-                        // Call the external callback if provided
-                        if let onVideoFinished = onVideoFinished {
-                            onVideoFinished()
-                        }
-                    }
-                    
-                    // Set up error observer
-                    NotificationCenter.default.addObserver(
-                        forName: .AVPlayerItemFailedToPlayToEndTime,
-                        object: newPlayer.currentItem,
-                        queue: .main
-                    ) { notification in
-                        let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video failed to play to end - \(error?.localizedDescription ?? "unknown error")")
-                        self.handleLoadFailure()
-                    }
-                    
-                    // Monitor player item status for load failures
-                    Task {
-                        // Give the player a moment to start loading
-                        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-                        
-                        await MainActor.run {
-                            if let playerItem = newPlayer.currentItem, playerItem.status == .failed {
-                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player item failed to load: \(playerItem.error?.localizedDescription ?? "unknown error")")
-                                self.handleLoadFailure()
-                            }
-                        }
-                    }
-                    
-                    self.player = newPlayer
-                    self.isLoading = false
-                    self.loadFailed = false
-                    self.retryCount = 0
-                    
-                    // Start playback if needed
-                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player ready - checking playback conditions")
-                    checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
-                    
-                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid)] Created player using shared asset cache")
+                    self.configurePlayer(newPlayer)
                 }
+                
+            } catch {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Setup failed: \(error)")
+                await MainActor.run {
+                    self.handleLoadFailure()
+                }
+            }
         }
     }
+    
+    private func configurePlayer(_ player: AVPlayer) {
+        // Configure player
+        player.isMuted = forceUnmuted ? false : muteState.isMuted
+        
+        // Set up observers
+        setupPlayerObservers(player)
+        
+        // Update state
+        self.player = player
+        self.isLoading = false
+        self.loadFailed = false
+        self.retryCount = 0
+        
+        // Start playback if needed
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player configured - checking playback conditions")
+        checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+    }
+    
+    private func setupPlayerObservers(_ player: AVPlayer) {
+        guard let playerItem = player.currentItem else { return }
+        
+        // Video finished observer
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { _ in
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video finished playing - disableAutoRestart: \(disableAutoRestart)")
+            
+            if !disableAutoRestart {
+                // Auto-restart for fullscreen/detail contexts
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Auto-restarting video")
+                player.seek(to: .zero) { finished in
+                    if finished {
+                        player.play()
+                    }
+                }
+            } else {
+                // Mark as finished for MediaCell
+                self.hasFinishedPlaying = true
+            }
+            
+            // Call external callback
+            if let onVideoFinished = onVideoFinished {
+                onVideoFinished()
+            }
+        }
+        
+        // Error observer
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { notification in
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video failed to play: \(error?.localizedDescription ?? "unknown error")")
+            self.handleLoadFailure()
+        }
+    }
+    
+
     
     private func handleLoadFailure() {
         loadFailed = true

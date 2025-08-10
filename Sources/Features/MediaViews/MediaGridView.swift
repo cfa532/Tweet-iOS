@@ -92,9 +92,6 @@ struct MediaGridView: View {
                     .environmentObject(MuteState.shared)
                     .frame(width: gridWidth, height: gridHeight)
                     .clipped()
-                    .onTapGesture {
-                        onItemTap?(0)
-                    }
                     // identify MediaCell border
                     //  .border(Color.red, width: 1)
                     
@@ -122,7 +119,6 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
                                 .clipped()
                                 .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(idx) }
                             }
                         }
                     } else if isLandscape0 && isLandscape1 {
@@ -142,7 +138,6 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
                                 .clipped()
                                 .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(idx) }
                             }
                         }
                     } else {
@@ -163,7 +158,6 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
                                 .clipped()
                                 .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(0) }
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 1,
@@ -178,7 +172,6 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
                                 .clipped()
                                 .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(1) }
                             } else {
                                 MediaCell(
                                     parentTweet: parentTweet,
@@ -194,7 +187,6 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
                                 .clipped()
                                 .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(0) }
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 1,
@@ -209,7 +201,6 @@ struct MediaGridView: View {
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
                                 .clipped()
                                 .contentShape(Rectangle())
-                                .onTapGesture { onItemTap?(1) }
                             }
                         }
                     }
@@ -243,7 +234,6 @@ struct MediaGridView: View {
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 0.618 - 1, height: gridHeight)
                                 .clipped()
-                                .onTapGesture { onItemTap?(0) }
                                 
                                 // Right side: remaining 38.2% divided vertically
                                 VStack(spacing: 2) {
@@ -261,7 +251,6 @@ struct MediaGridView: View {
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth * 0.382 - 1, height: gridHeight/2 - 1)
                                         .clipped()
-                                        .onTapGesture { onItemTap?(idx) }
                                     }
                                 }
                             }
@@ -282,7 +271,6 @@ struct MediaGridView: View {
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight * 0.618 - 1)
                                 .clipped()
-                                .onTapGesture { onItemTap?(0) }
                                 
                                 // Bottom part: remaining 38.2% divided horizontally
                                 HStack(spacing: 2) {
@@ -300,7 +288,6 @@ struct MediaGridView: View {
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth/2 - 1, height: gridHeight * 0.382 - 1)
                                         .clipped()
-                                        .onTapGesture { onItemTap?(idx) }
                                     }
                                 }
                             }
@@ -320,7 +307,6 @@ struct MediaGridView: View {
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
                                 .clipped()
-                                .onTapGesture { onItemTap?(0) }
                                 VStack(spacing: 2) {
                                     ForEach(1..<3) { idx in
                                         MediaCell(
@@ -336,7 +322,6 @@ struct MediaGridView: View {
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped()
-                                        .onTapGesture { onItemTap?(idx) }
                                     }
                                 }
                             }
@@ -356,7 +341,6 @@ struct MediaGridView: View {
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
                                 .clipped()
-                                .onTapGesture { onItemTap?(0) }
                                 HStack(spacing: 2) {
                                     ForEach(1..<3) { idx in
                                         MediaCell(
@@ -372,7 +356,6 @@ struct MediaGridView: View {
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped()
-                                        .onTapGesture { onItemTap?(idx) }
                                     }
                                 }
                             }
@@ -402,7 +385,6 @@ struct MediaGridView: View {
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                 .clipped()
-                                .onTapGesture { onItemTap?(idx) }
                             }
                         }
                         HStack(spacing: 2) {
@@ -420,7 +402,6 @@ struct MediaGridView: View {
                                     .environmentObject(MuteState.shared)
                                     .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                     .clipped()
-                                    .onTapGesture { onItemTap?(idx) }
                                 }
                             }
                         }
@@ -443,9 +424,6 @@ struct MediaGridView: View {
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .clipped()
-                                .onTapGesture {
-                                    onItemTap?(idx)
-                                }
                             }
                         }
                         HStack(spacing: 2) {
