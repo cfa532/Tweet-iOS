@@ -59,6 +59,8 @@ struct TweetListView<RowView: View>: View {
     @State private var toastType: ToastView.ToastType = .info
     @State private var initialLoadComplete = false
     @State private var deletedTweetIds = Set<String>()
+    @State private var autoLoadPagesRemaining = 2 // Load 2 more pages automatically
+    @State private var autoLoadTimer: Timer?
 
     // MARK: - Initialization
     init(
@@ -150,6 +152,11 @@ struct TweetListView<RowView: View>: View {
                     await refreshTweets()
                 }
             }
+            .onDisappear {
+                // Clean up auto-load timer
+                autoLoadTimer?.invalidate()
+                autoLoadTimer = nil
+            }
             // Listen to all notifications
             ForEach(Array(notifications.enumerated()), id: \ .element.name) { idx, notification in
                 EmptyView()
@@ -174,6 +181,7 @@ struct TweetListView<RowView: View>: View {
         initialLoadComplete = false
         currentPage = 0
         tweets = []
+        autoLoadPagesRemaining = 2 // Reset auto-load counter
         let page: UInt = 0
 
         var keepLoading = true
@@ -187,6 +195,9 @@ struct TweetListView<RowView: View>: View {
 
                     isLoading = false
                     initialLoadComplete = true
+                    
+                    // Start auto-loading additional pages after initial load completes
+                    startAutoLoadAdditionalPages()
                 }
 
                 // Step 2: Fetch from server (do NOT block UI)
@@ -215,6 +226,9 @@ struct TweetListView<RowView: View>: View {
     func refreshTweets() async {
         guard !isLoading else { return }
         initialLoadComplete = false
+        autoLoadPagesRemaining = 2 // Reset auto-load counter
+        autoLoadTimer?.invalidate() // Cancel any pending auto-load
+        autoLoadTimer = nil
         await performInitialLoad()
     }
 
@@ -253,6 +267,9 @@ struct TweetListView<RowView: View>: View {
                             if hasValidTweet {
                                 currentPage = nextPage
                                 print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
+                                
+                                // Start auto-loading additional pages after successful load
+                                startAutoLoadAdditionalPages()
                             } else if tweetsInBackend.count < pageSize {
                                 hasMoreTweets = false
                                 print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
@@ -277,6 +294,45 @@ struct TweetListView<RowView: View>: View {
         }
     }
 
+    // MARK: - Auto-load Additional Pages
+    private func startAutoLoadAdditionalPages() {
+        guard autoLoadPagesRemaining > 0 else { return }
+        
+        print("[TweetListView] Starting auto-load of \(autoLoadPagesRemaining) additional pages")
+        
+        // Cancel any existing timer
+        autoLoadTimer?.invalidate()
+        
+        // Schedule the first auto-load after 1 second
+        autoLoadTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { _ in
+            Task {
+                await self.performAutoLoad()
+            }
+        }
+    }
+    
+    private func performAutoLoad() async {
+        guard autoLoadPagesRemaining > 0, !isLoadingMore, hasMoreTweets else {
+            print("[TweetListView] Auto-load conditions not met - remaining: \(autoLoadPagesRemaining), isLoadingMore: \(isLoadingMore), hasMoreTweets: \(hasMoreTweets)")
+            return
+        }
+        
+        print("[TweetListView] Performing auto-load - page \(currentPage + 1), remaining: \(autoLoadPagesRemaining)")
+        
+        // Load the next page
+        loadMoreTweets(page: currentPage + 1)
+        autoLoadPagesRemaining -= 1
+        
+        // If there are more pages to load, schedule the next one after 2 seconds
+        if autoLoadPagesRemaining > 0 {
+            autoLoadTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+                Task {
+                    await self.performAutoLoad()
+                }
+            }
+        }
+    }
+    
     // MARK: - Optimistic UI Methods
     func insertTweet(_ tweet: Tweet) {
         tweets.insert(tweet, at: 0)

@@ -34,10 +34,8 @@ class DetailVideoManager: ObservableObject {
         
         Task {
             do {
-                print("DEBUG: [DETAIL VIDEO MANAGER] Loading asset for: \(mid)")
-                let sharedAsset = try await SharedAssetCache.shared.getAsset(for: url)
-                let playerItem = AVPlayerItem(asset: sharedAsset)
-                let newPlayer = AVPlayer(playerItem: playerItem)
+                print("DEBUG: [DETAIL VIDEO MANAGER] Loading video for: \(mid)")
+                let newPlayer = try await BackgroundVideoLoader.shared.loadVideo(for: url, mid: mid)
                 
                 // Since DetailVideoManager is @MainActor, we can directly update properties
                 newPlayer.isMuted = false // Always unmuted in detail
@@ -100,9 +98,7 @@ class FullscreenVideoManager: ObservableObject {
         
         Task {
             do {
-                let sharedAsset = try await SharedAssetCache.shared.getAsset(for: url)
-                let playerItem = AVPlayerItem(asset: sharedAsset)
-                let newPlayer = AVPlayer(playerItem: playerItem)
+                let newPlayer = try await BackgroundVideoLoader.shared.loadVideo(for: url, mid: mid)
                 
                 await MainActor.run {
                     newPlayer.isMuted = false // Always unmuted in fullscreen

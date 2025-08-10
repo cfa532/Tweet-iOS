@@ -94,11 +94,6 @@ struct MediaCell: View, Equatable {
                         )
                         .onAppear {
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - isVisible: \(isVisible), autoPlay: \(videoManager.shouldPlayVideo(for: attachment.mid))")
-                            
-                            // Preload video for immediate display
-                            if let url = attachment.getUrl(baseUrl) {
-                                SharedAssetCache.shared.preloadVideo(for: url)
-                            }
                         }
                                 .onChange(of: isVisible) { newIsVisible in
             print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
