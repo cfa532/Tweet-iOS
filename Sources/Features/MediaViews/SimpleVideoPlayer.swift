@@ -146,6 +146,7 @@ struct SimpleVideoPlayer: View {
     @State private var hasFinishedPlaying = false
     @State private var loadFailed = false
     @State private var retryCount = 0
+    @State private var wasPlayingBeforeBackground = false
     @ObservedObject private var muteState = MuteState.shared
     @State private var instanceId = UUID().uuidString.prefix(8)
     
@@ -298,6 +299,36 @@ struct SimpleVideoPlayer: View {
             if newPlayer != nil {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player became available - checking playback conditions")
                 checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            // App entering background - preserve current state
+            if let player = player {
+                wasPlayingBeforeBackground = player.rate > 0
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App entering background - was playing: \(wasPlayingBeforeBackground)")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            // App returning from background - restore state if needed
+            if wasPlayingBeforeBackground && isVisible && autoPlay {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App returning from background - restoring playback")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    // Small delay to ensure UI is ready
+                    checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // Additional restoration when app becomes active
+            if wasPlayingBeforeBackground && isVisible && autoPlay {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App became active - ensuring playback restoration")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    // Slightly longer delay for more reliable restoration
+                    if let player = player, player.rate == 0 {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player was paused after background - restarting")
+                        checkPlaybackConditions(autoPlay: autoPlay, isVisible: isVisible)
+                    }
+                }
             }
         }
     }
