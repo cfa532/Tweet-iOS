@@ -66,6 +66,9 @@
 		46B03D812E474E63000E08DF /* VideoAssetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D802E474E63000E08DF /* VideoAssetCache.swift */; };
 		46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */; };
 		46B03D852E486D3B000E08DF /* MuteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D842E486D36000E08DF /* MuteState.swift */; };
+		46B03D872E48866C000E08DF /* ReplyEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D862E48866C000E08DF /* ReplyEditorView.swift */; };
+		46B03D892E488EC0000E08DF /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D882E488EC0000E08DF /* CameraView.swift */; };
+		46B03D8B2E48D760000E08DF /* MediaPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D8A2E48D760000E08DF /* MediaPicker.swift */; };
 		46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */; };
 		46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */; };
 		46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */; };
@@ -165,6 +168,9 @@
 		46B03D802E474E63000E08DF /* VideoAssetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoAssetCache.swift; sourceTree = "<group>"; };
 		46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingletonVideoManagers.swift; sourceTree = "<group>"; };
 		46B03D842E486D36000E08DF /* MuteState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteState.swift; sourceTree = "<group>"; };
+		46B03D862E48866C000E08DF /* ReplyEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyEditorView.swift; sourceTree = "<group>"; };
+		46B03D882E488EC0000E08DF /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
+		46B03D8A2E48D760000E08DF /* MediaPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPicker.swift; sourceTree = "<group>"; };
 		46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSVideoProcessor.swift; sourceTree = "<group>"; };
 		46B1F59B2E07DA7D00B3CE6C /* FFmpegWrapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FFmpegWrapper.h; sourceTree = "<group>"; };
 		46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = FFmpegWrapper.c; sourceTree = "<group>"; };
@@ -381,6 +387,7 @@
 		4629FB172DFFE9FB00588941 /* Utils */ = {
 			isa = PBXGroup;
 			children = (
+				46B03D8A2E48D760000E08DF /* MediaPicker.swift */,
 				46B03D842E486D36000E08DF /* MuteState.swift */,
 				46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */,
 				46B03D802E474E63000E08DF /* VideoAssetCache.swift */,
@@ -443,6 +450,8 @@
 		469A99512DEBFC2A00954049 /* Tweet */ = {
 			isa = PBXGroup;
 			children = (
+				46B03D882E488EC0000E08DF /* CameraView.swift */,
+				46B03D862E48866C000E08DF /* ReplyEditorView.swift */,
 				467494162DF4A13E0082FAC6 /* CommentDetailView.swift */,
 				467494122DF33BF50082FAC6 /* CommentMenu.swift */,
 				4674940E2DF2C4D00082FAC6 /* CommentListView.swift */,
@@ -605,9 +614,11 @@
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
 				46B03D812E474E63000E08DF /* VideoAssetCache.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
+				46B03D892E488EC0000E08DF /* CameraView.swift in Sources */,
 				468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */,
 				4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */,
 				468384A12DFE9EAB0079ECC5 /* MediaBrowserView.swift in Sources */,
+				46B03D8B2E48D760000E08DF /* MediaPicker.swift in Sources */,
 				469A99562DEC744200954049 /* ProfileHeaderSection.swift in Sources */,
 				469A99572DEC744200954049 /* ProfileStatsSection.swift in Sources */,
 				46E5B3492DDC0F6900AEF31F /* MediaGridView.swift in Sources */,
@@ -623,6 +634,7 @@
 				468CF22A2E39FBBC00D49038 /* ChatSessionRepository.swift in Sources */,
 				46E5B3442DDAB74400AEF31F /* TweetItemHeaderView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1A /* TweetApp.swift in Sources */,
+				46B03D872E48866C000E08DF /* ReplyEditorView.swift in Sources */,
 				468CF22C2E3A619A00D49038 /* ChatSessionManager.swift in Sources */,
 				468CF2282E39CC8900D49038 /* ChatBubbleShape.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */,

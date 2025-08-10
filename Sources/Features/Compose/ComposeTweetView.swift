@@ -35,43 +35,25 @@ struct ComposeTweetView: View {
                             }
                         
                         // Thumbnail preview section
-                        if !viewModel.selectedItems.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(identifiableItems) { identifiableItem in
-                                        ThumbnailView(item: identifiableItem.item)
-                                            .frame(width: 100, height: 100)
-                                            .overlay(
-                                                Button(action: {
-                                                    if let index = viewModel.selectedItems.firstIndex(where: { $0.itemIdentifier == identifiableItem.item.itemIdentifier }) {
-                                                        viewModel.selectedItems.remove(at: index)
-                                                    }
-                                                }) {
-                                                    Image(systemName: "xmark.circle.fill")
-                                                        .foregroundColor(.white)
-                                                        .background(Color.black.opacity(0.5))
-                                                        .clipShape(Circle())
-                                                }
-                                                .padding(4),
-                                                alignment: .topTrailing
-                                            )
-                                    }
-                                }
-                                .padding(.horizontal)
-                            }
-                            .frame(height: 120)
-                            .background(Color(.systemBackground))
-                        }
+                        MediaPreviewGrid(
+                            selectedItems: viewModel.selectedItems,
+                            onRemoveItem: { index in
+                                viewModel.selectedItems.remove(at: index)
+                            },
+                            onRemoveImage: { _ in }
+                        )
+                        .frame(height: viewModel.selectedItems.isEmpty ? 0 : 120)
+                        .background(Color(.systemBackground))
                         
                         // Attachment toolbar
                         HStack(spacing: 20) {
-                            PhotosPicker(selection: $viewModel.selectedItems,
-                                       matching: .any(of: [.images, .videos])) {
-                                Image(systemName: "photo.on.rectangle")
-                                    .font(.system(size: 20))
-                                    .foregroundColor(.themeAccent)
-                            }
-                            .buttonStyle(.plain)
+                            MediaPicker(
+                                selectedItems: $viewModel.selectedItems,
+                                showCamera: .constant(false),
+                                error: .constant(nil),
+                                maxSelectionCount: 4,
+                                supportedTypes: [.image, .movie]
+                            )
                             
                             Button(action: { /* TODO: Add poll */ }) {
                                 Image(systemName: "chart.bar")

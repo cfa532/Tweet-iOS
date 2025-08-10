@@ -1,0 +1,314 @@
+//
+//  ReplyEditorView.swift
+//  Tweet
+//
+//  Created by Assistant on 2025/1/27.
+//
+
+import SwiftUI
+import PhotosUI
+import AVFoundation
+
+@available(iOS 16.0, *)
+struct ReplyEditorView: View {
+    @ObservedObject var parentTweet: Tweet
+    @State private var replyText = ""
+    @State private var isExpanded = false
+    @State private var showExitConfirmation = false
+    @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var selectedImages: [UIImage] = []
+    @State private var isSubmitting = false
+    @State private var showCamera = false
+    @State private var showImagePicker = false
+    @State private var error: Error?
+    @FocusState private var isTextFieldFocused: Bool
+    var onClose: (() -> Void)? = nil
+    
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            if !isExpanded {
+                // Collapsed state - single line input
+                collapsedView
+            } else {
+                // Expanded state - full editor
+                expandedView
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(.systemBackground))
+        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+        .alert("Discard Reply", isPresented: $showExitConfirmation) {
+            Button("Discard", role: .destructive) {
+                clearAndClose()
+            }
+            Button("Keep Editing", role: .cancel) {
+                showExitConfirmation = false
+            }
+        } message: {
+            Text("You have unsaved content. Are you sure you want to discard your reply?")
+        }
+       .sheet(isPresented: $showCamera) {
+           CameraView { image in
+               if let image = image {
+                   selectedImages.append(image)
+               }
+           }
+       }
+       .sheet(isPresented: $showImagePicker) {
+           PhotosPicker("Select Media", selection: $selectedItems, matching: .any(of: [.images, .videos]))
+       }
+    }
+    
+    private var collapsedView: some View {
+        Button(action: {
+            isExpanded = true
+        }) {
+            HStack(spacing: 12) {
+                // User avatar
+                Avatar(user: hproseInstance.appUser)
+                    .frame(width: 32, height: 32)
+                
+                // Placeholder text with background
+                HStack {
+                    Text("Post your reply...")
+                        .foregroundColor(.secondary)
+                        .font(.body)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(Color(.systemGray6))
+                )
+                
+
+            }
+            .padding(.vertical, 8)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    private var expandedView: some View {
+        VStack(spacing: 12) {
+            // User profile section
+            HStack(alignment: .top, spacing: 8) {
+                // User avatar
+                Avatar(user: hproseInstance.appUser)
+                    .frame(width: 40, height: 40)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    // Username and handle
+                    HStack {
+                        Text(hproseInstance.appUser.name ?? hproseInstance.appUser.username ?? "")
+                            .font(.headline)
+                            .fontWeight(.bold)
+                        Spacer()
+                        
+                        // Close button
+                        Button(action: {
+                            handleCloseAttempt()
+                        }) {
+                            Image(systemName: "xmark")
+                                .foregroundColor(.secondary)
+                                .font(.system(size: 16))
+                        }
+                    }
+                    
+                    // Handle
+                    Text("@\(hproseInstance.appUser.username ?? "")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    // Reply context
+                    Text("Reply to @\(parentTweet.author?.username ?? "")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            // Text input area
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(Color(.systemGray6))
+                    .frame(minHeight: 80)
+                
+                if replyText.isEmpty {
+                    Text("Post your reply...")
+                        .foregroundColor(.secondary)
+                        .font(.body)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 12)
+                }
+                
+                TextEditor(text: $replyText)
+                    .focused($isTextFieldFocused)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.clear)
+                    .frame(minHeight: 80)
+            }
+            
+            // Display previews for attached media
+            MediaPreviewGrid(
+                selectedItems: selectedItems,
+                selectedImages: selectedImages,
+                onRemoveItem: { index in
+                    selectedItems.remove(at: index)
+                },
+                onRemoveImage: { index in
+                    selectedImages.remove(at: index)
+                }
+            )
+            
+            // Action buttons bar
+            HStack {
+                // Left side - media attachment options
+                MediaPicker(
+                    selectedItems: $selectedItems,
+                    selectedImages: $selectedImages,
+                    showCamera: $showCamera,
+                    error: $error,
+                    maxSelectionCount: 4,
+                    supportedTypes: [.image, .movie]
+                )
+                
+                Spacer()
+                
+                // Character counter (optional)
+                if !replyText.isEmpty {
+                    Text("\(replyText.count)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                // Reply button
+                Button(action: {
+                    submitReply()
+                }) {
+                    Text("Reply")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 20)
+                                .fill(canSubmit ? Color.blue : Color.gray)
+                        )
+                }
+                .disabled(!canSubmit || isSubmitting)
+            }
+            
+            // Error display
+            if let error = error {
+                Text(error.localizedDescription)
+                    .foregroundColor(.red)
+                    .font(.caption)
+                    .padding(.horizontal)
+                    .onAppear {
+                        // Auto-dismiss error after 3 seconds
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                            self.error = nil
+                        }
+                    }
+            }
+        }
+        .padding(12)
+        .onAppear {
+            // Auto-focus when expanded
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isTextFieldFocused = true
+            }
+        }
+    }
+    
+    private var canSubmit: Bool {
+        !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty
+    }
+    
+    private func hasUnsavedContent() -> Bool {
+        !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty
+    }
+    
+    private func handleCloseAttempt() {
+        if hasUnsavedContent() {
+            showExitConfirmation = true
+        } else {
+            clearAndClose()
+        }
+    }
+    
+    private func clearAndClose() {
+        replyText = ""
+        selectedImages.removeAll()
+        selectedItems.removeAll()
+        isExpanded = false
+        showExitConfirmation = false
+        isTextFieldFocused = false
+        error = nil
+        onClose?()
+    }
+    
+    private func submitReply() {
+        let trimmedContent = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Allow empty content if there are attachments
+        guard MediaUploadHelper.validateContent(
+            content: replyText,
+            selectedItems: selectedItems,
+            selectedImages: selectedImages
+        ) else {
+            print("DEBUG: Reply validation failed - empty content and no attachments")
+            error = TweetError.emptyTweet
+            return
+        }
+        
+        isSubmitting = true
+        
+        Task {
+            // Create comment tweet (not a quoted tweet)
+            let comment = Tweet(
+                mid: UUID().uuidString, // Temporary ID, will be replaced by server
+                authorId: hproseInstance.appUser.mid,
+                content: trimmedContent,
+                timestamp: Date(),
+                originalTweetId: nil, // Regular comment, not a quoted tweet
+                originalAuthorId: nil  // Regular comment, not a quoted tweet
+            )
+            
+            do {
+                // Prepare item data for background upload using helper
+                let itemData = try await MediaUploadHelper.prepareItemData(
+                    selectedItems: selectedItems,
+                    selectedImages: selectedImages
+                )
+                
+                // Schedule comment upload in background (same as CommentComposeView)
+                hproseInstance.scheduleCommentUpload(comment: comment, to: parentTweet, itemData: itemData)
+                
+                // Reset form and close
+                await MainActor.run {
+                    clearAndClose()
+                    isSubmitting = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.error = error
+                    isSubmitting = false
+                }
+            }
+        }
+    }
+}
+
+#Preview {
+    ReplyEditorView(parentTweet: Tweet(mid: "test", authorId: "test"))
+        .environmentObject(HproseInstance.shared)
+}

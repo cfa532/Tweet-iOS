@@ -10,6 +10,7 @@ enum UserActions: Int {
 struct TweetActionButtonsView: View {
     @ObservedObject var tweet: Tweet
     var commentsVM: CommentsViewModel? = nil
+    var onCommentTap: (() -> Void)? = nil
     @State private var showCommentCompose = false
     @State private var showShareSheet = false
     @State private var showLoginSheet = false
@@ -46,7 +47,7 @@ struct TweetActionButtonsView: View {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
-                    showCommentCompose = true
+                    onCommentTap?() ?? { showCommentCompose = true }()
                 }
             }) {
                 HStack(spacing: 4) {

@@ -77,43 +77,25 @@ struct CommentComposeView: View {
                             }
                         
                         // Thumbnail preview section
-                        if !selectedItems.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(identifiableItems) { identifiableItem in
-                                        ThumbnailView(item: identifiableItem.item)
-                                            .frame(width: 100, height: 100)
-                                            .overlay(
-                                                Button(action: {
-                                                    if let index = selectedItems.firstIndex(where: { $0.itemIdentifier == identifiableItem.item.itemIdentifier }) {
-                                                        selectedItems.remove(at: index)
-                                                    }
-                                                }) {
-                                                    Image(systemName: "xmark.circle.fill")
-                                                        .foregroundColor(.white)
-                                                        .background(Color.black.opacity(0.5))
-                                                        .clipShape(Circle())
-                                                }
-                                                .padding(4),
-                                                alignment: .topTrailing
-                                            )
-                                    }
-                                }
-                                .padding(.horizontal)
-                            }
-                            .frame(height: 120)
-                            .background(Color(.systemBackground))
-                        }
+                        MediaPreviewGrid(
+                            selectedItems: selectedItems,
+                            onRemoveItem: { index in
+                                selectedItems.remove(at: index)
+                            },
+                            onRemoveImage: { _ in }
+                        )
+                        .frame(height: selectedItems.isEmpty ? 0 : 120)
+                        .background(Color(.systemBackground))
                         
                         // Attachment toolbar
                         HStack(spacing: 20) {
-                            PhotosPicker(selection: $selectedItems,
-                                       matching: .any(of: [.images, .videos])) {
-                                Image(systemName: "photo.on.rectangle")
-                                    .font(.system(size: 20))
-                                    .foregroundColor(.themeAccent)
-                            }
-                            .buttonStyle(.plain)
+                            MediaPicker(
+                                selectedItems: $selectedItems,
+                                showCamera: .constant(false),
+                                error: $error,
+                                maxSelectionCount: 4,
+                                supportedTypes: [.image, .movie]
+                            )
                             
                             Spacer()
                             
@@ -195,7 +177,11 @@ struct CommentComposeView: View {
         let trimmedContent = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Allow empty content if there are attachments
-        guard !trimmedContent.isEmpty || !selectedItems.isEmpty else {
+        guard MediaUploadHelper.validateContent(
+            content: commentText,
+            selectedItems: selectedItems,
+            selectedImages: []
+        ) else {
             print("DEBUG: Comment validation failed - empty content and no attachments")
             await MainActor.run {
                 error = TweetError.emptyTweet
@@ -217,65 +203,22 @@ struct CommentComposeView: View {
             originalAuthorId: isQuoting ? tweet.authorId : nil
         )
         
-        // Prepare item data
+        // Prepare item data using helper
         print("DEBUG: Preparing item data for \(selectedItems.count) items")
-        var itemData: [HproseInstance.PendingTweetUpload.ItemData] = []
+        let itemData: [HproseInstance.PendingTweetUpload.ItemData]
         
-        for item in selectedItems {
-            print("DEBUG: Processing item: \(item.itemIdentifier ?? "unknown")")
-            do {
-                if let data = try await item.loadTransferable(type: Data.self) {
-                    print("DEBUG: Successfully loaded image data: \(data.count) bytes")
-                    
-                    // Get the type identifier and determine file extension
-                    let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                    let fileExtension: String
-                    
-                    if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
-                        fileExtension = "jpg"
-                    } else if typeIdentifier.contains("png") {
-                        fileExtension = "png"
-                    } else if typeIdentifier.contains("gif") {
-                        fileExtension = "gif"
-                    } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
-                        fileExtension = "heic"
-                    } else if typeIdentifier.contains("mp4") {
-                        fileExtension = "mp4"
-                    } else if typeIdentifier.contains("mov") {
-                        fileExtension = "mov"
-                    } else if typeIdentifier.contains("m4v") {
-                        fileExtension = "m4v"
-                    } else if typeIdentifier.contains("mkv") {
-                        fileExtension = "mkv"
-                    } else {
-                        fileExtension = "file"
-                    }
-                    
-                    // Create a unique filename with timestamp
-                    let timestamp = Int(Date().timeIntervalSince1970)
-                    let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
-                    
-                    // Determine if this is a video file for noResample parameter
-                    _ = typeIdentifier.contains("movie") || 
-                                 typeIdentifier.contains("video") || 
-                                 ["mp4", "mov", "m4v", "mkv", "avi", "flv", "wmv", "webm", "ts", "mts", "m2ts", "vob", "dat", "ogv", "ogg", "f4v", "asf"].contains(fileExtension)
-                    
-                    itemData.append(HproseInstance.PendingTweetUpload.ItemData(
-                        identifier: item.itemIdentifier ?? UUID().uuidString,
-                        typeIdentifier: typeIdentifier,
-                        data: data,
-                        fileName: filename,
-                        noResample: false // Resample the vidoe.
-                    ))
-                }
-            } catch {
-                print("DEBUG: Error loading image data: \(error)")
-                await MainActor.run {
-                    self.error = error
-                    isSubmitting = false
-                }
-                return
+        do {
+            itemData = try await MediaUploadHelper.prepareItemData(
+                selectedItems: selectedItems,
+                selectedImages: []
+            )
+        } catch {
+            print("DEBUG: Error preparing item data: \(error)")
+            await MainActor.run {
+                self.error = error
+                isSubmitting = false
             }
+            return
         }
         
         print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")

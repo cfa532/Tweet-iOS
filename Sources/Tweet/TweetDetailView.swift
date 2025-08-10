@@ -176,12 +176,37 @@ struct DetailMediaCell: View {
                                 .aspectRatio(contentMode: .fill)
                                 .clipped()
                         } else if loading {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .background(Color.gray.opacity(0.2))
+                            // Show cached placeholder while loading original image
+                            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                                Image(uiImage: cachedImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .clipped()
+                                    .overlay(
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            .scaleEffect(1.0)
+                                            .background(Color.black.opacity(0.3))
+                                            .clipShape(Circle())
+                                            .padding(),
+                                        alignment: .topTrailing
+                                    )
+                            } else {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .background(Color.gray.opacity(0.2))
+                            }
                         } else {
-                            Color.gray.opacity(0.2)
+                            // Show cached placeholder if available, otherwise gray background
+                            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                                Image(uiImage: cachedImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .clipped()
+                            } else {
+                                Color.gray.opacity(0.2)
+                            }
                         }
                     }
                     .onTapGesture {
@@ -218,16 +243,22 @@ struct DetailMediaCell: View {
     private func loadImage() {
         guard let url = attachment.getUrl(baseUrl) else { return }
         
+        // First, try to get cached image immediately
+        if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            self.image = cachedImage
+            return
+        }
+        
+        // If no cached image, start loading
         loading = true
         
         Task {
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+            if let loadedImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: baseUrl) {
                 await MainActor.run {
-                    self.image = UIImage(data: data)
+                    self.image = loadedImage
                     self.loading = false
                 }
-            } catch {
+            } else {
                 await MainActor.run {
                     self.loading = false
                 }
@@ -284,6 +315,7 @@ struct TweetDetailView: View {
     @State private var toastType: ToastView.ToastType = .info
     @State private var isVisible = true
     @State private var imageAspectRatios: [Int: CGFloat] = [:] // index: aspectRatio
+    @State private var showReplyEditor = false
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
@@ -331,7 +363,6 @@ struct TweetDetailView: View {
                 setupInitialData()
             }
         }
-//        .detectScroll()
         .background(Color(.systemBackground))
         .navigationTitle("Tweet")
         .navigationBarTitleDisplayMode(.inline)
@@ -373,6 +404,19 @@ struct TweetDetailView: View {
             }
         }
         .environmentObject(MuteState.shared)
+        .overlay(
+            VStack {
+                Spacer()
+                ReplyEditorView(
+                    parentTweet: displayTweet,
+                    onClose: {
+                        showReplyEditor = false
+                    }
+                )
+            }
+            .padding(.bottom, 48) // Move it down further, closer to navigation bar
+        )
+
     }
     
     private var mediaSection: some View {
@@ -449,11 +493,17 @@ struct TweetDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionButtonsView(tweet: displayTweet)
-            .padding(.leading, 48)
-            .padding(.trailing, 8)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+        TweetActionButtonsView(
+            tweet: displayTweet,
+            onCommentTap: {
+                print("[TweetDetailView] Comment button tapped, setting showReplyEditor to true")
+                showReplyEditor = true
+            }
+        )
+        .padding(.leading, 48)
+        .padding(.trailing, 8)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
     
     private var toastOverlay: some View {

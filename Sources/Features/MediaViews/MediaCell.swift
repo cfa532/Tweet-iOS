@@ -162,17 +162,48 @@ struct MediaCell: View, Equatable {
                                 handleTap()
                             }
                     } else if isLoading {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
-                            .scaleEffect(1.2)
-                            .onTapGesture {
-                                handleTap()
-                            }
+                        // Show cached placeholder while loading original image
+                        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                            Image(uiImage: cachedImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .clipped()
+                                .overlay(
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        .scaleEffect(0.8)
+                                        .background(Color.black.opacity(0.3))
+                                        .clipShape(Circle())
+                                        .padding(4),
+                                    alignment: .topTrailing
+                                )
+                                .onTapGesture {
+                                    handleTap()
+                                }
+                        } else {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .scaleEffect(1.2)
+                                .onTapGesture {
+                                    handleTap()
+                                }
+                        }
                     } else {
-                        Color.gray.opacity(0.3)
-                            .onTapGesture {
-                                handleTap()
-                            }
+                        // Show cached placeholder if available, otherwise gray background
+                        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                            Image(uiImage: cachedImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .clipped()
+                                .onTapGesture {
+                                    handleTap()
+                                }
+                        } else {
+                            Color.gray.opacity(0.3)
+                                .onTapGesture {
+                                    handleTap()
+                                }
+                        }
                     }
                 default:
                     EmptyView()

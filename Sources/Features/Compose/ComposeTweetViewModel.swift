@@ -40,14 +40,22 @@ class ComposeTweetViewModel: ObservableObject {
     }
     
     var canPostTweet: Bool {
-        !tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty
+        MediaUploadHelper.validateContent(
+            content: tweetContent,
+            selectedItems: selectedItems,
+            selectedImages: []
+        )
     }
     
     func postTweet() async {
         let trimmedContent = tweetContent.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Allow empty content if there are attachments
-        guard !trimmedContent.isEmpty || !selectedItems.isEmpty else {
+        guard MediaUploadHelper.validateContent(
+            content: tweetContent,
+            selectedItems: selectedItems,
+            selectedImages: []
+        ) else {
             print("DEBUG: Tweet validation failed - empty content and no attachments")
             toastMessage = "Tweet cannot be empty"
             toastType = .error
@@ -68,66 +76,24 @@ class ComposeTweetViewModel: ObservableObject {
             attachments: nil,
         )
         
-        // Prepare item data
-        var itemData: [HproseInstance.PendingTweetUpload.ItemData] = []
+        // Prepare item data using helper
+        let itemData: [HproseInstance.PendingTweetUpload.ItemData]
         
-        for item in selectedItems {
-            do {
-                if let data = try await item.loadTransferable(type: Data.self) {
-                    print("DEBUG: Successfully loaded image data: \(data.count) bytes")
-                    
-                    // Get the type identifier and determine file extension
-                    let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                    let fileExtension: String
-                    
-                    if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
-                        fileExtension = "jpg"
-                    } else if typeIdentifier.contains("png") {
-                        fileExtension = "png"
-                    } else if typeIdentifier.contains("gif") {
-                        fileExtension = "gif"
-                    } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
-                        fileExtension = "heic"
-                    } else if typeIdentifier.contains("mp4") {
-                        fileExtension = "mp4"
-                    } else if typeIdentifier.contains("mov") {
-                        fileExtension = "mov"
-                    } else if typeIdentifier.contains("m4v") {
-                        fileExtension = "m4v"
-                    } else if typeIdentifier.contains("mkv") {
-                        fileExtension = "mkv"
-                    } else {
-                        fileExtension = "file"
-                    }
-                    
-                    // Create a unique filename with timestamp
-                    let timestamp = Int(Date().timeIntervalSince1970)
-                    let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
-                    
-                    // Determine if this is a video file for noResample parameter
-                    _ = typeIdentifier.contains("movie") || 
-                                 typeIdentifier.contains("video") || 
-                                 ["mp4", "mov", "m4v", "mkv", "avi", "flv", "wmv", "webm", "ts", "mts", "m2ts", "vob", "dat", "ogv", "ogg", "f4v", "asf"].contains(fileExtension)
-                    
-                    itemData.append(HproseInstance.PendingTweetUpload.ItemData(
-                        identifier: item.itemIdentifier ?? UUID().uuidString,
-                        typeIdentifier: typeIdentifier,
-                        data: data,
-                        fileName: filename,
-                        noResample: false // Set to false for now
-                    ))
-                }
-            } catch {
-                print("DEBUG: Error loading image data: \(error)")
-                toastMessage = "Failed to load media: \(error.localizedDescription)"
-                toastType = .error
-                showToast = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    withAnimation { self.showToast = false }
-                }
-                isUploading = false
-                return
+        do {
+            itemData = try await MediaUploadHelper.prepareItemData(
+                selectedItems: selectedItems,
+                selectedImages: []
+            )
+        } catch {
+            print("DEBUG: Error preparing item data: \(error)")
+            toastMessage = "Failed to load media: \(error.localizedDescription)"
+            toastType = .error
+            showToast = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                withAnimation { self.showToast = false }
             }
+            isUploading = false
+            return
         }
         
         // Show toast before starting upload
