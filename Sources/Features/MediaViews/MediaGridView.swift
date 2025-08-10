@@ -443,9 +443,7 @@ struct MediaGridView: View {
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                         .clipped()
-                                        .onTapGesture {
-                                            onItemTap?(idx)
-                                        }
+
                                         
                                         if idx == 3 && attachments.count > 4 {
                                             Color.black.opacity(0.4)
