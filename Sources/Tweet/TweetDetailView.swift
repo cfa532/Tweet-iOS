@@ -95,8 +95,9 @@ struct DetailVideoPlayerView: View {
     }
     
     private func cleanupPlayer() {
-        // Don't clear the player when this view disappears
-        // Let DetailVideoManager handle it when switching videos
+        // Pause the video when detail view disappears
+        detailVideoManager.currentPlayer?.pause()
+        print("DEBUG: [DETAIL VIDEO PLAYER] Cleanup - paused video for: \(mid)")
     }
 }
 
@@ -153,7 +154,7 @@ struct DetailMediaCell: View {
                         DetailVideoPlayerView(
                             url: url,
                             mid: attachment.mid,
-                            isVisible: isVisible,
+                            isVisible: true, // Always visible in detail view
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                             showMuteButton: showMuteButton
                         )
