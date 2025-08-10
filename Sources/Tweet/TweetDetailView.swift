@@ -293,11 +293,24 @@ struct TweetDetailView: View {
     }
 
     private var displayTweet: Tweet {
-        if (tweet.content == nil || tweet.content?.isEmpty == true) &&
-           (tweet.attachments == nil || tweet.attachments?.isEmpty == true) {
-            return originalTweet ?? tweet
+        let isRetweet = (tweet.content == nil || tweet.content?.isEmpty == true) &&
+                       (tweet.attachments == nil || tweet.attachments?.isEmpty == true)
+        
+        print("[TweetDetailView] displayTweet computation:")
+        print("[TweetDetailView] tweet.mid: \(tweet.mid)")
+        print("[TweetDetailView] tweet.content: \(tweet.content ?? "nil")")
+        print("[TweetDetailView] tweet.attachments count: \(tweet.attachments?.count ?? 0)")
+        print("[TweetDetailView] isRetweet: \(isRetweet)")
+        print("[TweetDetailView] originalTweet?.mid: \(originalTweet?.mid ?? "nil")")
+        
+        if isRetweet {
+            let result = originalTweet ?? tweet
+            print("[TweetDetailView] Returning originalTweet: \(result.mid)")
+            return result
+        } else {
+            print("[TweetDetailView] Returning tweet: \(tweet.mid)")
+            return tweet
         }
-        return tweet
     }
 
     var body: some View {
@@ -461,11 +474,16 @@ struct TweetDetailView: View {
             title: "Comments",
             comments: $comments,
             commentFetcher: { page, size in
-                try await hproseInstance.fetchComments(
+                print("[TweetDetailView] Fetching comments for displayTweet: \(displayTweet.mid)")
+                print("[TweetDetailView] displayTweet content: \(displayTweet.content ?? "nil")")
+                print("[TweetDetailView] displayTweet originalTweetId: \(displayTweet.originalTweetId ?? "nil")")
+                let fetchedComments = try await hproseInstance.fetchComments(
                     displayTweet,
                     pageNumber: page,
                     pageSize: size
                 )
+                print("[TweetDetailView] Fetched \(fetchedComments.compactMap { $0 }.count) comments")
+                return fetchedComments
             },
             showTitle: false,
             notifications: [
@@ -498,7 +516,7 @@ struct TweetDetailView: View {
             ],
             rowView: { comment in
                 CommentItemView(
-                    parentTweet: tweet,
+                    parentTweet: displayTweet,
                     comment: comment,
                     onAvatarTap: { user in selectedUser = user },
                     onTap: { comment in
@@ -510,16 +528,26 @@ struct TweetDetailView: View {
     }
 
     private func setupInitialData() {
+        print("[TweetDetailView] setupInitialData called")
+        print("[TweetDetailView] tweet.originalTweetId: \(tweet.originalTweetId ?? "nil")")
+        print("[TweetDetailView] tweet.originalAuthorId: \(tweet.originalAuthorId ?? "nil")")
+        
         if let originalTweetId = tweet.originalTweetId,
            let originalAuthorId = tweet.originalAuthorId {
+            print("[TweetDetailView] Fetching original tweet: \(originalTweetId)")
             Task {
                 if let originalTweet = try? await hproseInstance.getTweet(
                     tweetId: originalTweetId,
                     authorId: originalAuthorId
                 ) {
+                    print("[TweetDetailView] Successfully fetched original tweet: \(originalTweet.mid)")
                     self.originalTweet = originalTweet
+                } else {
+                    print("[TweetDetailView] Failed to fetch original tweet")
                 }
             }
+        } else {
+            print("[TweetDetailView] No originalTweetId/originalAuthorId, skipping original tweet fetch")
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {

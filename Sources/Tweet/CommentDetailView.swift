@@ -170,15 +170,27 @@ struct CommentDetailView: View {
                 CommentListNotification(
                     name: .newCommentAdded,
                     key: "comment",
-                    shouldAccept: { _ in true },
+                    shouldAccept: { reply in
+                        // Only accept replies that belong to this comment
+                        let shouldAccept = reply.originalTweetId == comment.mid
+                        print("[CommentDetailView] Reply \(reply.mid) shouldAccept check: \(shouldAccept)")
+                        print("[CommentDetailView] Reply originalTweetId: \(reply.originalTweetId ?? "nil")")
+                        print("[CommentDetailView] Comment mid: \(comment.mid)")
+                        return shouldAccept
+                    },
                     action: { reply in
+                        print("[CommentDetailView] Adding reply \(reply.mid) to replies list")
                         replies.insert(reply, at: 0)
+                        print("[CommentDetailView] Replies count after insert: \(replies.count)")
                     }
                 ),
                 CommentListNotification(
                     name: .commentDeleted,
                     key: "comment",
-                    shouldAccept: { _ in true },
+                    shouldAccept: { reply in
+                        // Only accept reply deletions that belong to this comment
+                        reply.originalTweetId == comment.mid
+                    },
                     action: { reply in replies.removeAll { $0.mid == reply.mid } }
                 )
             ],

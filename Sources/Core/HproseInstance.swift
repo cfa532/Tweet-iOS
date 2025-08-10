@@ -883,17 +883,11 @@ final class HproseInstance: ObservableObject {
                 // Set the author
                 newTweet.author = appUser
                 
-                // Post notification for the new tweet on main thread
-                await MainActor.run {
-                    print("[HproseInstance] Posting newTweetCreated notification for retweet")
-                    NotificationCenter.default.post(
-                        name: .newTweetCreated,
-                        object: nil,
-                        userInfo: ["tweet": newTweet]
-                    )
-                }
+                // For comments, we should NOT post newTweetCreated notification
+                // Comments should only appear in comment sections, not in the main feed
+                print("[HproseInstance] Comment created with retweetId: \(retweetId), but NOT posting newTweetCreated notification")
                 
-                // Also post the comment notification on main thread
+                // Only post the comment notification on main thread
                 await MainActor.run {
                     print("[HproseInstance] Posting newCommentAdded notification")
                     print("[HproseInstance] New comment mid: \(comment.mid)")
