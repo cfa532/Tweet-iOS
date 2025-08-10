@@ -71,6 +71,17 @@ struct ComposeTweetView: View {
                             
                             Spacer()
                             
+                            // Private toggle
+                            HStack(spacing: 8) {
+                                Image(systemName: "lock")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(viewModel.isPrivate ? .themeAccent : .themeSecondaryText)
+                                
+                                Toggle("Private", isOn: $viewModel.isPrivate)
+                                    .toggleStyle(SwitchToggleStyle(tint: .themeAccent))
+                                    .labelsHidden()
+                            }
+                            
                             Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.tweetContent.count))")
                                 .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .themeSecondaryText)
                         }

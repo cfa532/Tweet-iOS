@@ -38,7 +38,10 @@ struct FollowingsTweetView: View {
                     TweetListNotification(
                         name: .newTweetCreated,
                         key: "tweet",
-                        shouldAccept: { _ in true },
+                        shouldAccept: { tweet in
+                            // Don't show private tweets in the home feed
+                            !(tweet.isPrivate ?? false)
+                        },
                         action: { tweet in viewModel.handleNewTweet(tweet) }
                     ),
                     TweetListNotification(

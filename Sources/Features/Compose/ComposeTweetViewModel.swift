@@ -32,6 +32,7 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var showToast = false
     @Published var toastMessage = ""
     @Published var toastType: ToastView.ToastType = .error
+    @Published var isPrivate: Bool = false
     
     private let hproseInstance: HproseInstance
     
@@ -74,6 +75,7 @@ class ComposeTweetViewModel: ObservableObject {
             content: trimmedContent,
             timestamp: Date(),
             attachments: nil,
+            isPrivate: isPrivate
         )
         
         // Prepare item data using helper

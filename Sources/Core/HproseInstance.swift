@@ -1396,7 +1396,28 @@ final class HproseInstance: ObservableObject {
             }
             
             // Construct convert-video endpoint URL
-            let convertVideoURL = "\(writableUrl.scheme ?? "http")://\(writableUrl.host ?? writableUrl.absoluteString):\(cloudDrivePort)/convert-video"
+            let scheme = writableUrl.scheme ?? "http"
+            let host: String
+            
+            if let urlHost = writableUrl.host {
+                host = urlHost
+            } else {
+                // Fallback: extract host from absoluteString
+                let urlString = writableUrl.absoluteString
+                if let schemeRange = urlString.range(of: "://") {
+                    let afterScheme = String(urlString[schemeRange.upperBound...])
+                    if let colonRange = afterScheme.firstIndex(of: ":") {
+                        host = String(afterScheme[..<colonRange])
+                    } else {
+                        host = afterScheme
+                    }
+                } else {
+                    host = writableUrl.absoluteString
+                }
+            }
+            
+            let convertVideoURL = "\(scheme)://\(host):\(cloudDrivePort)/convert-video"
+            print("DEBUG: Constructed convert-video URL: \(convertVideoURL)")
             guard let url = URL(string: convertVideoURL) else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid convert-video URL"])
             }

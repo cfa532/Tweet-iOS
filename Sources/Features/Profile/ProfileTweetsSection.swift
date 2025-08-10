@@ -40,7 +40,10 @@ class ProfileTweetsViewModel: ObservableObject {
     }
     
     func handleNewTweet(_ tweet: Tweet) {
-        tweets.insert(tweet, at: 0)
+        // Only show private tweets if the current user is the author
+        if !(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid {
+            tweets.insert(tweet, at: 0)
+        }
     }
     
     func handleDeletedTweet(_ tweetId: String) {

@@ -73,7 +73,10 @@ class FollowingsTweetViewModel: ObservableObject {
     // optimistic UI update
     func handleNewTweet(_ tweet: Tweet?) {
         if let tweet = tweet {
-            tweets.insert(tweet, at: 0)
+            // Don't show private tweets in the home feed
+            if !(tweet.isPrivate ?? false) {
+                tweets.insert(tweet, at: 0)
+            }
         }
     }
     
