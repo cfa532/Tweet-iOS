@@ -92,7 +92,7 @@ struct CommentDetailView: View {
                             parentTweet: comment,
                             attachmentIndex: index,
                             showMuteButton: true,
-                            videoManager: VideoManager(),
+                            videoManager: DetailVideoManager.shared,
                             onImageTap: {
                                 selectedMediaIndex = index
                                 showBrowser = true

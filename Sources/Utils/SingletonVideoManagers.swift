@@ -21,8 +21,11 @@ class DetailVideoManager: ObservableObject {
     
     /// Set current video for detail view
     func setCurrentVideo(url: URL, mid: String, autoPlay: Bool = true) {
+        print("DEBUG: [DETAIL VIDEO MANAGER] Setting current video: \(mid), autoPlay: \(autoPlay)")
+        
         // If switching to a different video, stop the current one
         if currentVideoMid != mid {
+            print("DEBUG: [DETAIL VIDEO MANAGER] Switching from \(currentVideoMid ?? "none") to \(mid)")
             currentPlayer?.pause()
             currentPlayer = nil
         }
@@ -31,21 +34,21 @@ class DetailVideoManager: ObservableObject {
         
         Task {
             do {
+                print("DEBUG: [DETAIL VIDEO MANAGER] Loading asset for: \(mid)")
                 let sharedAsset = try await SharedAssetCache.shared.getAsset(for: url)
                 let playerItem = AVPlayerItem(asset: sharedAsset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 
-                await MainActor.run {
-                    newPlayer.isMuted = false // Always unmuted in detail
-                    self.currentPlayer = newPlayer
-                    
-                    if autoPlay {
-                        newPlayer.play()
-                        self.isPlaying = true
-                    }
-                    
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Set current video: \(mid)")
+                // Since DetailVideoManager is @MainActor, we can directly update properties
+                newPlayer.isMuted = false // Always unmuted in detail
+                self.currentPlayer = newPlayer
+                
+                if autoPlay {
+                    newPlayer.play()
+                    self.isPlaying = true
                 }
+                
+                print("DEBUG: [DETAIL VIDEO MANAGER] Successfully set current video: \(mid), player: \(newPlayer)")
             } catch {
                 print("DEBUG: [DETAIL VIDEO MANAGER] Failed to load video: \(error)")
             }

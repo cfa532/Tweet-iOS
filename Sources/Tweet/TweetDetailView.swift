@@ -1,6 +1,105 @@
 import SwiftUI
 import AVKit
 
+// MARK: - Detail Video Player View
+@available(iOS 16.0, *)
+struct DetailVideoPlayerView: View {
+    let url: URL
+    let mid: String
+    let isVisible: Bool
+    let videoAspectRatio: CGFloat
+    let showMuteButton: Bool
+    
+    @StateObject private var detailVideoManager = DetailVideoManager.shared
+    @State private var isLoading = true
+    @ObservedObject private var muteState = MuteState.shared
+    
+    var body: some View {
+        Group {
+            if let player = detailVideoManager.currentPlayer {
+                VideoPlayer(player: player)
+                    .aspectRatio(videoAspectRatio, contentMode: .fit)
+                    .clipped()
+                    .overlay(
+                        // Video controls overlay
+                        Group {
+                            VStack {
+                                Spacer()
+                                HStack {
+                                    // Video time remaining label in bottom left corner
+                                    if isVisible {
+                                        VideoTimeRemainingLabel(mid: mid)
+                                            .padding(.leading, 8)
+                                            .padding(.bottom, 8)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    // Mute button in bottom right corner
+                                    if showMuteButton {
+                                        MuteButton()
+                                            .padding(.trailing, 8)
+                                            .padding(.bottom, 8)
+                                    }
+                                }
+                            }
+                        }
+                    )
+            } else if isLoading {
+                ProgressView("Loading video...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(0.1))
+            } else {
+                Color.black
+                    .overlay(
+                        Image(systemName: "play.circle")
+                            .font(.system(size: 40))
+                            .foregroundColor(.white)
+                    )
+            }
+        }
+        .onAppear {
+            setupPlayer()
+        }
+        .onDisappear {
+            cleanupPlayer()
+        }
+        .onChange(of: isVisible) { visible in
+            if visible {
+                detailVideoManager.currentPlayer?.play()
+            } else {
+                detailVideoManager.currentPlayer?.pause()
+            }
+        }
+        .onChange(of: muteState.isMuted) { isMuted in
+            detailVideoManager.currentPlayer?.isMuted = isMuted
+        }
+        .onChange(of: detailVideoManager.currentPlayer) { player in
+            print("DEBUG: [DETAIL VIDEO PLAYER] Player changed: \(player != nil ? "available" : "nil")")
+            if player != nil {
+                isLoading = false
+            }
+        }
+    }
+    
+    private func setupPlayer() {
+        print("DEBUG: [DETAIL VIDEO PLAYER] Setting up player for: \(mid)")
+        Task {
+            await MainActor.run {
+                isLoading = true
+            }
+            
+            // Use DetailVideoManager to get or create player
+            detailVideoManager.setCurrentVideo(url: url, mid: mid, autoPlay: isVisible)
+        }
+    }
+    
+    private func cleanupPlayer() {
+        // Don't clear the player when this view disappears
+        // Let DetailVideoManager handle it when switching videos
+    }
+}
+
 // Custom MediaCell for TweetDetailView that shows native video controls instead of going full-screen
 @available(iOS 16.0, *)
 struct DetailMediaCell: View {
@@ -13,7 +112,7 @@ struct DetailMediaCell: View {
     @State private var image: UIImage?
     @State private var loading = false
     let showMuteButton: Bool
-    @ObservedObject var videoManager: VideoManager
+    @ObservedObject var videoManager: DetailVideoManager
     let onImageTap: () -> Void
     
     // Local mute state management for detail view
@@ -21,7 +120,7 @@ struct DetailMediaCell: View {
     @State private var hasSavedOriginalState: Bool = false
     @State private var unmuteTimer: Timer? = nil
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: VideoManager, onImageTap: @escaping () -> Void) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: DetailVideoManager, onImageTap: @escaping () -> Void) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -49,50 +148,14 @@ struct DetailMediaCell: View {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
-                    // Show video with native controls (no tap override)
+                    // Show video with native controls using DetailVideoManager singleton
                     if shouldLoadVideo {
-                        SimpleVideoPlayer(
+                        DetailVideoPlayerView(
                             url: url,
                             mid: attachment.mid,
                             isVisible: isVisible,
-                            autoPlay: true, // Always auto-play in detail view
-                            onVideoFinished: nil,
-                            contentType: attachment.type,
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showNativeControls: true,
-                            forceUnmuted: true, // Always unmuted in detail view
-                            onVideoTap: {
-                                // Native controls will be shown by VideoPlayer automatically
-                                print("DEBUG: [DETAIL MEDIA CELL] Video tapped - native controls should handle")
-                            },
-                            disableAutoRestart: false, // Enable auto-replay in detail view
-                            mode: .mediaBrowser // Use mediaBrowser mode to enable native controls
-                        )
-                        .environmentObject(MuteState.shared)
-                        .overlay(
-                            // Video controls overlay (timer and mute button)
-                            Group {
-                                VStack {
-                                    Spacer()
-                                    HStack {
-                                        // Video time remaining label in bottom left corner
-                                        if play && isVisible {
-                                            VideoTimeRemainingLabel(mid: attachment.mid)
-                                                .padding(.leading, 8)
-                                                .padding(.bottom, 8)
-                                        }
-                                        
-                                        Spacer()
-                                        
-                                        // Mute button in bottom right corner (only if showMuteButton is true)
-                                        if showMuteButton {
-                                            MuteButton()
-                                                .padding(.trailing, 8)
-                                                .padding(.bottom, 8)
-                                        }
-                                    }
-                                }
-                            }
+                            showMuteButton: showMuteButton
                         )
                     } else {
                         // Show placeholder for videos that haven't been loaded yet
@@ -312,7 +375,7 @@ struct TweetDetailView: View {
                             play: index == selectedMediaIndex,
                             shouldLoadVideo:  index == selectedMediaIndex,
                             showMuteButton: true,
-                            videoManager: VideoManager(),
+                            videoManager: DetailVideoManager.shared,
                             onImageTap: {
                                 selectedMediaIndex = index
                                 showBrowser = true
