@@ -498,6 +498,40 @@ extension Array where Element == Tweet {
         self = Array(uniqueTweets.values).sorted { $0.timestamp > $1.timestamp }
         print("[TweetListView] After merge: \(self.count) tweets")
     }
+    
+    /// Merge new tweets smoothly, preserving existing positions to prevent UI jumping
+    mutating func mergeTweetsSmoothly(_ newTweets: [Tweet]) {
+        print("[TweetListView] Smoothly merging \(newTweets.count) tweets")
+        
+        // Create a set of existing tweet IDs for quick lookup
+        let existingIds = Set(self.map { $0.mid })
+        
+        // Filter out tweets that already exist to avoid unnecessary updates
+        let trulyNewTweets = newTweets.filter { !existingIds.contains($0.mid) }
+        
+        if trulyNewTweets.isEmpty {
+            print("[TweetListView] No new tweets to merge")
+            return
+        }
+        
+        // Update existing tweets with new data (preserving positions)
+        for newTweet in newTweets {
+            if let existingIndex = self.firstIndex(where: { $0.mid == newTweet.mid }) {
+                // Update existing tweet in place to preserve position
+                self[existingIndex] = newTweet
+            }
+        }
+        
+        // Add truly new tweets at the end (they will be sorted by timestamp)
+        self.append(contentsOf: trulyNewTweets)
+        
+        // Sort only if we added new tweets to maintain chronological order
+        if !trulyNewTweets.isEmpty {
+            self.sort { $0.timestamp > $1.timestamp }
+        }
+        
+        print("[TweetListView] After smooth merge: \(self.count) tweets (added \(trulyNewTweets.count) new)")
+    }
 }
 
 extension Tweet: Equatable {

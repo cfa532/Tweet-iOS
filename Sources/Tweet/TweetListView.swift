@@ -1,31 +1,5 @@
 import SwiftUI
 
-// MARK: - Scroll Offset Preference Key
-private struct ScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-// MARK: - Scroll Offset Reader
-private struct ScrollOffsetReader: View {
-    let onOffsetChange: (CGFloat) -> Void
-    
-    var body: some View {
-        GeometryReader { geometry in
-            Color.clear
-                .preference(
-                    key: ScrollOffsetPreferenceKey.self,
-                    value: geometry.frame(in: .named("scroll")).minY
-                )
-                .onPreferenceChange(ScrollOffsetPreferenceKey.self) { offset in
-                    onOffsetChange(offset)
-                }
-        }
-    }
-}
-
 struct TweetListNotification {
     let name: Notification.Name
     let key: String
@@ -101,12 +75,6 @@ struct TweetListView<RowView: View>: View {
             ZStack {
                 ScrollView {
                     VStack(spacing: 0) {
-                        // Scroll offset reader at the top
-                        ScrollOffsetReader { offset in
-                            onScroll?(offset)
-                        }
-                        .frame(height: 0)
-                        
                         TweetListContentView(
                             tweets: Binding(
                                 get: { tweets.map { Optional($0) } },
@@ -127,6 +95,7 @@ struct TweetListView<RowView: View>: View {
                     }
                 }
                 .coordinateSpace(name: "scroll")
+                
                 if showToast {
                     VStack {
                         Spacer()
@@ -176,39 +145,23 @@ struct TweetListView<RowView: View>: View {
         tweets = []
         let page: UInt = 0
 
-        var keepLoading = true
-        while keepLoading {
-            do {
-                print("[TweetListView] Loading page \(page) for user: \(hproseInstance.appUser.mid)")
-                // Step 1: Fetch from cache
-                let tweetsInCache = try await tweetFetcher(page, pageSize, true)
-                await MainActor.run {
-                    tweets.mergeTweets(tweetsInCache.compactMap { $0 })
-
-                    isLoading = false
-                    initialLoadComplete = true
-                }
-
-                // Step 2: Fetch from server (do NOT block UI)
-                Task {
-                    do {
-                        let tweetsInBackend = try await tweetFetcher(page, pageSize, false)
-                        await MainActor.run {
-                            tweets.mergeTweets(tweetsInBackend.compactMap { $0 })
-                        }
-                    } catch {
-                        print("[TweetListView] Error fetching from server: \(error)")
-                    }
-                }
-
-                // Stop after first page for instant UI; let loadMoreTweets handle more
-                keepLoading = false
-            } catch {
-                print("[TweetListView] Error during initial load for user \(hproseInstance.appUser.mid): \(error)")
-                errorMessage = error.localizedDescription
-                break
+        do {
+            print("[TweetListView] Loading page \(page) for user: \(hproseInstance.appUser.mid)")
+            let tweetsFromServer = try await tweetFetcher(page, pageSize, false)
+            await MainActor.run {
+                tweets.mergeTweets(tweetsFromServer.compactMap { $0 })
+                isLoading = false
+                initialLoadComplete = true
+            }
+        } catch {
+            print("[TweetListView] Error during initial load for user \(hproseInstance.appUser.mid): \(error)")
+            errorMessage = error.localizedDescription
+            await MainActor.run {
+                isLoading = false
+                initialLoadComplete = true
             }
         }
+        
         print("[TweetListView] Initial load complete - total tweets: \(tweets.count), hasMoreTweets: \(hasMoreTweets) for user: \(hproseInstance.appUser.mid)")
     }
 
@@ -229,51 +182,36 @@ struct TweetListView<RowView: View>: View {
         let pageSize = self.pageSize
         
         Task {
-            if initialLoadComplete { isLoadingMore = true }
+            isLoadingMore = true
             
             do {
                 print("[TweetListView] Starting to load more tweets - page: \(nextPage) for user: \(hproseInstance.appUser.mid)")
-                // Step 1: Fetch from cache for the given page
-                let tweetsInCache = try await tweetFetcher(nextPage, pageSize, true)
+                let tweetsFromServer = try await tweetFetcher(nextPage, pageSize, false)
+                let hasValidTweet = tweetsFromServer.contains { $0 != nil }
+                
                 await MainActor.run {
-                    print("[TweetListView] Got \(tweetsInCache.count) tweets from cache for user: \(hproseInstance.appUser.mid)")
-                    tweets.mergeTweets(tweetsInCache.compactMap { $0 })
-                }
-
-                // Step 2: Fetch from backend (do NOT block UI)
-                Task {
-                    do {
-                        let tweetsInBackend = try await tweetFetcher(nextPage, pageSize, false)
-                        let hasValidTweet = tweetsInBackend.contains { $0 != nil }
-                        
-                        await MainActor.run {
-                            print("[TweetListView] Got \(tweetsInBackend.count) tweets from backend for user: \(hproseInstance.appUser.mid)")
-                            tweets.mergeTweets(tweetsInBackend.compactMap { $0 })
-                            
-                            if hasValidTweet {
-                                currentPage = nextPage
-                                print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
-                            } else if tweetsInBackend.count < pageSize {
-                                hasMoreTweets = false
-                                print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
-                            } else {
-                                // All tweets are nil, auto-increment and try again
-                                print("[TweetListView] All tweets nil for page \(nextPage), auto-incrementing page")
-                                isLoadingMore = false
-                                loadMoreTweets(page: nextPage + 1)
-                                return
-                            }
-                        }
-                    } catch {
-                        print("[TweetListView] Error loading more tweets: \(error)")
-                        await MainActor.run { hasMoreTweets = false }
+                    print("[TweetListView] Got \(tweetsFromServer.count) tweets from server for user: \(hproseInstance.appUser.mid)")
+                    tweets.mergeTweets(tweetsFromServer.compactMap { $0 })
+                    
+                    if hasValidTweet {
+                        currentPage = nextPage
+                        print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
+                    } else if tweetsFromServer.count < pageSize {
+                        hasMoreTweets = false
+                        print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
+                    } else {
+                        // All tweets are nil, auto-increment and try again
+                        print("[TweetListView] All tweets nil for page \(nextPage), auto-incrementing page")
+                        isLoadingMore = false
+                        loadMoreTweets(page: nextPage + 1)
+                        return
                     }
-                    await MainActor.run { isLoadingMore = false }
                 }
             } catch {
                 print("[TweetListView] Error loading more tweets: \(error)")
-                await MainActor.run { hasMoreTweets = false; isLoadingMore = false }
+                await MainActor.run { hasMoreTweets = false }
             }
+            await MainActor.run { isLoadingMore = false }
         }
     }
 
@@ -351,7 +289,7 @@ struct TweetListContentView<RowView: View>: View {
                             print("[TweetListContentView] Setting hasMoreTweets to true")
                             hasMoreTweets = true
                             print("[TweetListContentView] Scheduling loadMoreTweets")
-                            // Add a delay to prevent rapid re-triggering
+                            // Use shorter delay like ProfileView
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                                 if initialLoadComplete && !isLoadingMore {
                                     print("[TweetListContentView] Calling loadMoreTweets")
