@@ -142,7 +142,7 @@ struct MediaCell: View, Equatable {
                     } else {
                         // Show placeholder for videos that haven't been loaded yet
                         ZStack {
-                            Color.gray
+                            Color.gray.opacity(0.3)
                                 .aspectRatio(contentMode: .fill)
                                 .overlay(
                                     Image(systemName: "play.circle")
@@ -189,7 +189,7 @@ struct MediaCell: View, Equatable {
                                     ProgressView()
                                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                         .scaleEffect(0.8)
-                                        .background(Color.black.opacity(0.3))
+                                        .background(Color.gray.opacity(0.3))
                                         .clipShape(Circle())
                                         .padding(4),
                                     alignment: .topTrailing
@@ -341,7 +341,7 @@ struct MuteButton: View {
                 .font(.system(size: 14))
                 .foregroundColor(.white.opacity(0.8))
                 .frame(width: 30, height: 30)
-                .background(Color.black.opacity(0.4))
+                .background(Color.gray.opacity(0.4))
                 .clipShape(Circle())
                 .contentShape(Circle())
         }
@@ -366,7 +366,7 @@ struct VideoTimeRemainingLabel: View {
                     .foregroundColor(.white.opacity(0.8))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.4))
+                    .background(Color.gray.opacity(0.4))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                     .transition(.opacity)
             }

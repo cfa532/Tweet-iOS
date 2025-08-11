@@ -126,7 +126,7 @@ struct SimpleVideoPlayer: View {
                             .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2)
                             .rotationEffect(.degrees(-90))
                             .scaleEffect(screenHeight / screenWidth)
-                            .background(Color.black)
+                            .background(Color.gray)
                         }
                         .onAppear {
                             // OrientationManager.shared.lockToPortrait()
@@ -338,9 +338,9 @@ struct SimpleVideoPlayer: View {
             } else if isLoading {
                 ProgressView("Loading video...")
                     .frame(maxWidth: .infinity, maxHeight: 200)
-                    .background(Color.black.opacity(0.1))
+                    .background(Color.gray.opacity(0.3))
             } else if loadFailed {
-                Color.black.opacity(0.1)
+                Color.gray.opacity(0.3)
                     .overlay(
                         VStack(spacing: 12) {
                             Image(systemName: "exclamationmark.triangle")
@@ -369,7 +369,7 @@ struct SimpleVideoPlayer: View {
                         }
                         }
                     } else {
-                Color.black
+                Color.gray.opacity(0.3)
                     .overlay(
                         Image(systemName: "play.circle")
                             .font(.system(size: 40))
