@@ -27,7 +27,7 @@ struct DetailVideoPlayerView: View {
                                 Spacer()
                                 HStack {
                                     // Video time remaining label in bottom left corner
-                                    if isVisible {
+                                    if showMuteButton {
                                         VideoTimeRemainingLabel(mid: mid)
                                             .padding(.leading, 8)
                                             .padding(.bottom, 8)
@@ -118,7 +118,6 @@ struct DetailMediaCell: View {
     // Local mute state management for detail view
     @State private var isMuted: Bool = false // Always unmuted in detail view
     @State private var hasSavedOriginalState: Bool = false
-    @State private var unmuteTimer: Timer? = nil
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: DetailVideoManager) {
         self.parentTweet = parentTweet
