@@ -168,6 +168,7 @@ struct SimpleVideoPlayer: View {
             player?.pause()
         }
         .onChange(of: isMuted) { newMuteState in
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Mute state changed to: \(newMuteState)")
             player?.isMuted = newMuteState
         }
         .onChange(of: currentAutoPlay) { shouldAutoPlay in
@@ -396,6 +397,7 @@ struct SimpleVideoPlayer: View {
     
     private func configurePlayer(_ player: AVPlayer) {
         // Configure player
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Configuring player - setting mute to: \(isMuted)")
         player.isMuted = isMuted
         
         // Reset player position to beginning (in case it was cached at the end)

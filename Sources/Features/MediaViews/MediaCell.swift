@@ -106,8 +106,9 @@ struct MediaCell: View, Equatable {
             print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
         }
                         .onChange(of: MuteState.shared.isMuted) { newMuteState in
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] Global mute state changed to: \(newMuteState)")
                             isMuted = newMuteState
-                            print("DEBUG: [MEDIA CELL] Mute state changed to: \(newMuteState)")
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] Local mute state updated to: \(newMuteState)")
                         }
                         .overlay(
                             // Video controls overlay

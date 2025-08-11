@@ -361,6 +361,10 @@ struct TweetDetailView: View {
             refreshTimer?.invalidate()
             refreshTimer = nil
             isVisible = false
+            
+            // Clear the DetailVideoManager to prevent cached player issues
+            DetailVideoManager.shared.clearCurrentVideo()
+            print("DEBUG: [TweetDetailView] Cleared DetailVideoManager on disappear")
         }
         .navigationDestination(isPresented: Binding(
             get: { selectedUser != nil },
