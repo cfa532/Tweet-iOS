@@ -12,17 +12,15 @@ struct MediaGridView: View {
     let parentTweet: Tweet
     let attachments: [MimeiFileType]
     let maxImages: Int = 4
-    let onItemTap: ((Int) -> Void)?
     @State private var shouldLoadVideo = true
     @State private var videoLoadTimer: Timer?
     @State private var isVisible = false
     @State private var forceRefreshTrigger = 0
     @StateObject private var videoManager = VideoManager()
     
-    init(parentTweet: Tweet, attachments: [MimeiFileType], onItemTap: ((Int) -> Void)? = nil) {
+    init(parentTweet: Tweet, attachments: [MimeiFileType]) {
         self.parentTweet = parentTweet
         self.attachments = attachments
-        self.onItemTap = onItemTap
     }
     
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
@@ -87,8 +85,7 @@ struct MediaGridView: View {
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
                         videoManager: videoManager,
-                        forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                        forceRefreshTrigger: forceRefreshTrigger
                     )
                     .environmentObject(MuteState.shared)
                     .frame(width: gridWidth, height: gridHeight)
@@ -115,8 +112,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
@@ -135,8 +131,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
@@ -156,8 +151,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
@@ -171,8 +165,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
@@ -187,8 +180,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
@@ -202,8 +194,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
@@ -237,8 +228,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 0.618 - 1, height: gridHeight)
@@ -256,8 +246,7 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth * 0.382 - 1, height: gridHeight/2 - 1)
@@ -278,8 +267,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight * 0.618 - 1)
@@ -297,8 +285,7 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth/2 - 1, height: gridHeight * 0.382 - 1)
@@ -318,8 +305,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
@@ -335,8 +321,7 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
@@ -355,8 +340,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
@@ -371,8 +355,7 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
@@ -401,8 +384,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
@@ -419,8 +401,7 @@ struct MediaGridView: View {
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished,
                                         videoManager: videoManager,
-                                        forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                        forceRefreshTrigger: forceRefreshTrigger
                                     )
                                     .environmentObject(MuteState.shared)
                                     .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
@@ -442,8 +423,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                    forceRefreshTrigger: forceRefreshTrigger
                                 )
                                 .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
@@ -462,8 +442,7 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger,
-                        onItemTap: onItemTap
+                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                         .environmentObject(MuteState.shared)
                                         .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)

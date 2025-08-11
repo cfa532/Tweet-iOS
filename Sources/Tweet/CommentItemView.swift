@@ -43,10 +43,7 @@ struct CommentItemView: View {
                 .onTapGesture { onTap?(comment) }
                 .padding(.top, -8)
                 
-                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible, onItemTap: { idx in
-                    selectedMediaIndex = idx
-                    showBrowser = true
-                })
+                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible)
                 .padding(.top, -12)
                 
                 TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)

@@ -26,11 +26,7 @@ struct TweetItemView: View {
             if let attachments = tweet.attachments, !attachments.isEmpty {
                 MediaGridView(
                     parentTweet: tweet,
-                    attachments: attachments,
-                    onItemTap: { idx in
-                        selectedMediaIndex = idx
-                        showBrowser = true
-                    }
+                    attachments: attachments
                 )
                 .padding(.top, 8)
             }
@@ -70,10 +66,7 @@ struct TweetItemView: View {
                                 .padding(.top, -8)
                         }
                         
-                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, onItemTap: { idx in
-                            selectedEmbeddedMediaIndex = idx
-                            showEmbeddedBrowser = true
-                        })
+                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
                         .padding(.top, -12)
                         
                         TweetActionButtonsView(tweet: originalTweet)
@@ -87,10 +80,7 @@ struct TweetItemView: View {
                             TweetMenu(tweet: tweet, isPinned: isPinned)
                         }
                         .padding(.top, -8)
-                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, onItemTap: { idx in
-                            selectedMediaIndex = idx
-                            showBrowser = true
-                        })
+                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                         .padding(.top, -12)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
@@ -132,10 +122,7 @@ struct TweetItemView: View {
                     .onTapGesture {
                         onTap?(tweet)
                     }
-                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, onItemTap: { idx in
-                        selectedMediaIndex = idx
-                        showBrowser = true
-                    })
+                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                     .padding(.top, -12)
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)

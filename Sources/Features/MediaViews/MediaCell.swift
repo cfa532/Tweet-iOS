@@ -40,9 +40,8 @@ struct MediaCell: View, Equatable {
     let showMuteButton: Bool
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
-    let onItemTap: ((Int) -> Void)?
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0, onItemTap: ((Int) -> Void)? = nil) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -52,7 +51,6 @@ struct MediaCell: View, Equatable {
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
         self.forceRefreshTrigger = forceRefreshTrigger
-        self.onItemTap = onItemTap
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -102,9 +100,9 @@ struct MediaCell: View, Equatable {
                                 SharedAssetCache.shared.preloadVideo(for: url)
                             }
                         }
-                                .onChange(of: isVisible) { newIsVisible in
-            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
-        }
+                        .onChange(of: isVisible) { newIsVisible in
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
+                        }
                         .onChange(of: MuteState.shared.isMuted) { newMuteState in
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] Global mute state changed to: \(newMuteState)")
                             isMuted = newMuteState
@@ -232,7 +230,7 @@ struct MediaCell: View, Equatable {
                 loadImage()
             }
         }
-
+        
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Restore video state when app becomes active
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
@@ -240,7 +238,7 @@ struct MediaCell: View, Equatable {
                 shouldLoadVideo = true
             }
         }
-
+        
         .fullScreenCover(isPresented: $showFullScreen) {
             MediaBrowserView(
                 tweet: parentTweet,
@@ -256,17 +254,11 @@ struct MediaCell: View, Equatable {
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)
             }
         }
-
+        
     }
     
     private func handleTap() {
-        // If onItemTap is provided, use it (for retweets and other external tap handling)
-        if let onItemTap = onItemTap {
-            onItemTap(attachmentIndex)
-            return
-        }
-        
-        // Otherwise, use internal full screen logic
+        // Use internal full screen logic
         switch attachment.type.lowercased() {
         case "video", "hls_video":
             // Open full screen for videos
@@ -279,7 +271,7 @@ struct MediaCell: View, Equatable {
             showFullScreen = true
         default:
             // Open full-screen for other types
-            showFullScreen = true
+            return
         }
     }
     
@@ -308,16 +300,16 @@ struct MediaCell: View, Equatable {
         }
     }
     
-
+    
     
     // MARK: - Equatable
     static func == (lhs: MediaCell, rhs: MediaCell) -> Bool {
         // Only compare the essential properties that should trigger recomposition
         return lhs.parentTweet.mid == rhs.parentTweet.mid &&
-               lhs.attachmentIndex == rhs.attachmentIndex &&
-               lhs.aspectRatio == rhs.aspectRatio &&
-               lhs.shouldLoadVideo == rhs.shouldLoadVideo &&
-               lhs.showMuteButton == rhs.showMuteButton
+        lhs.attachmentIndex == rhs.attachmentIndex &&
+        lhs.aspectRatio == rhs.aspectRatio &&
+        lhs.shouldLoadVideo == rhs.shouldLoadVideo &&
+        lhs.showMuteButton == rhs.showMuteButton
     }
 }
 
