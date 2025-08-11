@@ -45,6 +45,7 @@ struct SimpleVideoPlayer: View {
     @State private var wasPlayingBeforeBackground = false
     @State private var instanceId = UUID().uuidString.prefix(8)
     @State private var isLongPressing = false
+    @State private var needsPlayerLayerRefresh = false
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -222,11 +223,37 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // Additional restoration when app becomes active
+            // Enhanced restoration when app becomes active - fix black screen issues
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App became active - handling player layer refresh")
+            
+            // Mark that we need to refresh the player layer
+            needsPlayerLayerRefresh = true
+            
+            // Force layout update to ensure proper frame
+            DispatchQueue.main.async {
+                // Trigger layout update to re-attach AVPlayerLayer
+                if let player = player {
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Refreshing player layer after background")
+                    
+                    // Force a small seek to refresh the layer and trigger readyForDisplay
+                    let currentTime = player.currentTime()
+                    let seekTime = CMTimeAdd(currentTime, CMTime(seconds: 0.01, preferredTimescale: 600))
+                    player.seek(to: seekTime) { finished in
+                        if finished {
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid):\(self.instanceId)] Player layer refreshed")
+                        }
+                    }
+                }
+            }
+            
+            // Start monitoring for readyForDisplay property
+            startReadyForDisplayMonitoring()
+            
+            // Restore playback if needed
             if wasPlayingBeforeBackground && isVisible && currentAutoPlay {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App became active - ensuring playback restoration")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    // Slightly longer delay for more reliable restoration
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    // Longer delay to ensure UI and player layer are ready
                     if let player = player, player.rate == 0 {
                         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player was paused after background - restarting")
                         checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
@@ -521,6 +548,36 @@ struct SimpleVideoPlayer: View {
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {
         return false
+        }
+    }
+    
+    // MARK: - Black Screen Fix Methods
+    
+    /// Start monitoring for readyForDisplay property to handle black screen issues
+    private func startReadyForDisplayMonitoring() {
+        guard let player = player else { return }
+        
+        // Create a timer to check if video is displaying properly
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
+            // Check if we need to refresh the player layer
+            if self.needsPlayerLayerRefresh {
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid):\(self.instanceId)] Checking for black screen issues")
+                
+                // If player is playing but might have black screen, try to refresh
+                if player.rate > 0 && self.isVisible && self.currentAutoPlay {
+                    // Force another seek to ensure the layer is properly attached
+                    let currentTime = player.currentTime()
+                    let seekTime = CMTimeAdd(currentTime, CMTime(seconds: 0.02, preferredTimescale: 600))
+                    player.seek(to: seekTime) { finished in
+                        if finished {
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(self.mid):\(self.instanceId)] Additional layer refresh completed")
+                        }
+                    }
+                }
+                
+                self.needsPlayerLayerRefresh = false
+                timer.invalidate()
+            }
         }
     }
 } 
