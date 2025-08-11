@@ -147,12 +147,21 @@ struct TweetListView<RowView: View>: View {
 
         do {
             print("[TweetListView] Loading page \(page) for user: \(hproseInstance.appUser.mid)")
-            let tweetsFromServer = try await tweetFetcher(page, pageSize, false)
+            
+            // Step 1: Load from cache first for instant UX (always try cache)
+            let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
             await MainActor.run {
-                tweets.mergeTweets(tweetsFromServer.compactMap { $0 })
+                tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
                 isLoading = false
                 initialLoadComplete = true
+                print("[TweetListView] Loaded \(tweetsFromCache.compactMap { $0 }.count) tweets from cache")
             }
+            
+            // Step 2: Load from server to update with fresh data (non-blocking, no retry)
+            Task {
+                await loadFromServer(page: page, pageSize: pageSize)
+            }
+            
         } catch {
             print("[TweetListView] Error during initial load for user \(hproseInstance.appUser.mid): \(error)")
             errorMessage = error.localizedDescription
@@ -186,33 +195,76 @@ struct TweetListView<RowView: View>: View {
             
             do {
                 print("[TweetListView] Starting to load more tweets - page: \(nextPage) for user: \(hproseInstance.appUser.mid)")
-                let tweetsFromServer = try await tweetFetcher(nextPage, pageSize, false)
-                let hasValidTweet = tweetsFromServer.contains { $0 != nil }
                 
+                // Step 1: Load from cache first for instant UX
+                let tweetsFromCache = try await tweetFetcher(nextPage, pageSize, true)
                 await MainActor.run {
-                    print("[TweetListView] Got \(tweetsFromServer.count) tweets from server for user: \(hproseInstance.appUser.mid)")
-                    tweets.mergeTweets(tweetsFromServer.compactMap { $0 })
-                    
-                    if hasValidTweet {
-                        currentPage = nextPage
-                        print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
-                    } else if tweetsFromServer.count < pageSize {
-                        hasMoreTweets = false
-                        print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
-                    } else {
-                        // All tweets are nil, auto-increment and try again
-                        print("[TweetListView] All tweets nil for page \(nextPage), auto-incrementing page")
-                        isLoadingMore = false
-                        loadMoreTweets(page: nextPage + 1)
-                        return
-                    }
+                    print("[TweetListView] Got \(tweetsFromCache.count) tweets from cache for user: \(hproseInstance.appUser.mid)")
+                    tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
+                }
+                
+                // Step 2: Load from server to update with fresh data (non-blocking, no retry)
+                Task {
+                    await loadFromServer(page: nextPage, pageSize: pageSize)
                 }
             } catch {
                 print("[TweetListView] Error loading more tweets: \(error)")
-                await MainActor.run { hasMoreTweets = false }
+                await MainActor.run { hasMoreTweets = false; isLoadingMore = false }
             }
-            await MainActor.run { isLoadingMore = false }
         }
+    }
+    
+    // MARK: - Server Loading (No Retry)
+    private func loadFromServer(page: UInt, pageSize: UInt) async {
+        let networkMonitor = NetworkMonitor.shared
+        
+        // Skip server loading if no network connection
+        guard networkMonitor.hasAnyConnection else {
+            print("[TweetListView] No network connection available, skipping server load")
+            await MainActor.run { isLoadingMore = false }
+            return
+        }
+        
+        do {
+            let tweetsFromServer = try await tweetFetcher(page, pageSize, false)
+            let hasValidTweet = tweetsFromServer.contains { $0 != nil }
+            
+            await MainActor.run {
+                print("[TweetListView] Got \(tweetsFromServer.count) tweets from server for user: \(hproseInstance.appUser.mid)")
+                tweets.mergeTweets(tweetsFromServer.compactMap { $0 })
+                
+                if hasValidTweet {
+                    currentPage = page
+                    print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
+                } else if tweetsFromServer.count < pageSize {
+                    hasMoreTweets = false
+                    print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
+                } else {
+                    // All tweets are nil, auto-increment and try again
+                    print("[TweetListView] All tweets nil for page \(page), auto-incrementing page")
+                    isLoadingMore = false
+                    loadMoreTweets(page: page + 1)
+                    return
+                }
+            }
+            
+        } catch {
+            print("[TweetListView] Server load failed: \(error)")
+            print("[TweetListView] Continuing with cached data only")
+            
+            // Show user-friendly error message for network issues
+            if !networkMonitor.hasAnyConnection {
+                await MainActor.run {
+                    errorMessage = "No internet connection. Showing cached content."
+                }
+            } else {
+                await MainActor.run {
+                    errorMessage = "Unable to load fresh content. Showing cached data."
+                }
+            }
+        }
+        
+        await MainActor.run { isLoadingMore = false }
     }
 
     // MARK: - Optimistic UI Methods
@@ -235,6 +287,9 @@ struct TweetListContentView<RowView: View>: View {
     let initialLoadComplete: Bool
     let loadMoreTweets: () -> Void
     
+    @StateObject private var networkMonitor = NetworkMonitor.shared
+    @State private var showOfflineIndicator = false
+    
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0)
@@ -242,6 +297,21 @@ struct TweetListContentView<RowView: View>: View {
             // Header content
             if let header = header {
                 header()
+            }
+            
+            // Offline indicator
+            if showOfflineIndicator && !networkMonitor.hasAnyConnection {
+                HStack {
+                    Image(systemName: "wifi.slash")
+                        .foregroundColor(.orange)
+                    Text("Offline - Showing cached content")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.1))
             }
             
             // Show loading state
@@ -305,6 +375,14 @@ struct TweetListContentView<RowView: View>: View {
                         .frame(height: 40)
                 }
             }
+        }
+        .onAppear {
+            // Check network status when view appears
+            showOfflineIndicator = !networkMonitor.hasAnyConnection
+        }
+        .onChange(of: networkMonitor.isConnected) { isConnected in
+            // Update offline indicator when network status changes
+            showOfflineIndicator = !isConnected
         }
     }
 }
