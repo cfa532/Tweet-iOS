@@ -36,6 +36,7 @@ struct MediaCell: View, Equatable {
     @State private var isVisible = false
     @State private var shouldLoadVideo: Bool
     @State private var onVideoFinished: (() -> Void)?
+    @State private var isMuted: Bool = MuteState.shared.isMuted
     let showMuteButton: Bool
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
@@ -86,6 +87,7 @@ struct MediaCell: View, Equatable {
                             cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                             showNativeControls: false, // Disable native controls to allow fullscreen tap
+                            isMuted: isMuted,
                             onVideoTap: {
                                 showFullScreen = true
                             },
@@ -103,9 +105,9 @@ struct MediaCell: View, Equatable {
                                 .onChange(of: isVisible) { newIsVisible in
             print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
         }
-                        .environmentObject(MuteState.shared)
-                        .onReceive(MuteState.shared.$isMuted) { isMuted in
-                            print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
+                        .onChange(of: MuteState.shared.isMuted) { newMuteState in
+                            isMuted = newMuteState
+                            print("DEBUG: [MEDIA CELL] Mute state changed to: \(newMuteState)")
                         }
                         .overlay(
                             // Video controls overlay

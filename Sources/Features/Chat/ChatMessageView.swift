@@ -325,6 +325,7 @@ struct ChatVideoPlayer: View {
                     isVisible: true,
                     videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
                     showNativeControls: false,
+                    isMuted: MuteState.shared.isMuted,
                     onVideoTap: {
                         showFullScreen = true
                     },
@@ -333,7 +334,9 @@ struct ChatVideoPlayer: View {
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
                 .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-                .environmentObject(MuteState.shared)
+                .onChange(of: MuteState.shared.isMuted) { _ in
+                    // Mute state changes will be handled by SimpleVideoPlayer's onChange
+                }
                 .fullScreenCover(isPresented: $showFullScreen) {
                     // Create a temporary tweet-like structure for the video
                     let tempTweet = Tweet(

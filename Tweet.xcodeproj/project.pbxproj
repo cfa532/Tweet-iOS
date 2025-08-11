@@ -69,6 +69,7 @@
 		46B03D872E48866C000E08DF /* ReplyEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D862E48866C000E08DF /* ReplyEditorView.swift */; };
 		46B03D892E488EC0000E08DF /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D882E488EC0000E08DF /* CameraView.swift */; };
 		46B03D8B2E48D760000E08DF /* MediaPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D8A2E48D760000E08DF /* MediaPicker.swift */; };
+		46B03D912E49E35E000E08DF /* SharedAssetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D902E49E35B000E08DF /* SharedAssetCache.swift */; };
 		46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */; };
 		46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */; };
 		46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */; };
@@ -171,6 +172,7 @@
 		46B03D862E48866C000E08DF /* ReplyEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyEditorView.swift; sourceTree = "<group>"; };
 		46B03D882E488EC0000E08DF /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		46B03D8A2E48D760000E08DF /* MediaPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPicker.swift; sourceTree = "<group>"; };
+		46B03D902E49E35B000E08DF /* SharedAssetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedAssetCache.swift; sourceTree = "<group>"; };
 		46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSVideoProcessor.swift; sourceTree = "<group>"; };
 		46B1F59B2E07DA7D00B3CE6C /* FFmpegWrapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FFmpegWrapper.h; sourceTree = "<group>"; };
 		46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = FFmpegWrapper.c; sourceTree = "<group>"; };
@@ -291,6 +293,11 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */,
+				46B03D802E474E63000E08DF /* VideoAssetCache.swift */,
+				46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */,
+				460680E72E16264C00D9D15A /* VideoCacheManager.swift */,
+				46B03D902E49E35B000E08DF /* SharedAssetCache.swift */,
 				4614381C2E3F69AD002D1B22 /* CoreDataManager.swift */,
 				4614381A2E3F5E97002D1B22 /* BlackList.swift */,
 				461438162E3E426A002D1B22 /* ChatCacheManager.swift */,
@@ -389,17 +396,13 @@
 			children = (
 				46B03D8A2E48D760000E08DF /* MediaPicker.swift */,
 				46B03D842E486D36000E08DF /* MuteState.swift */,
-				46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */,
-				46B03D802E474E63000E08DF /* VideoAssetCache.swift */,
 				461438262E44DCCB002D1B22 /* VideoManager.swift */,
 				468CF2232E39CC7C00D49038 /* AppHeaderView.swift */,
 				468CF2242E39CC7C00D49038 /* TabButton.swift */,
 				468CF2172E39B06900D49038 /* BadgeView.swift */,
 				469CF0F12E27FED700FBCDB8 /* OrientationManager.swift */,
 				460680EB2E165F8300D9D15A /* LocalizationHelper.swift */,
-				460680E72E16264C00D9D15A /* VideoCacheManager.swift */,
 				46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */,
-				46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */,
 				469A99492DEB163F00954049 /* ToastView.swift */,
 				4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */,
 				4642A1DC2DD62CCB00A20E19 /* Gadget.swift */,
@@ -659,6 +662,7 @@
 				468CF2102E39AF5900D49038 /* ChatMessage.swift in Sources */,
 				46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */,
 				468CF20E2E39AF3A00D49038 /* ChatRepository.swift in Sources */,
+				46B03D912E49E35E000E08DF /* SharedAssetCache.swift in Sources */,
 				46E5B34B2DDC155600AEF31F /* MediaCell.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */,
 				469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */,

@@ -16,7 +16,7 @@ struct MediaBrowserView: View {
     @State private var showVideoPlayer = false
     @State private var play = false
     @State private var isVisible = true
-    @State private var originalMuteState: Bool = false // Store original mute state when entering fullscreen
+    @State private var isMuted: Bool = false // Local mute state for fullscreen (always unmuted)
     @State private var imageStates: [Int: ImageState] = [:]
     @State private var showControls = true
     @State private var controlsTimer: Timer?
@@ -128,9 +128,7 @@ struct MediaBrowserView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
             
-            // Store original mute state when entering fullscreen
-            originalMuteState = MuteState.shared.isMuted
-            print("DEBUG: [MediaBrowserView] Stored original mute state: \(originalMuteState)")
+
             
             // Initialize previous index
             previousIndex = currentIndex
@@ -149,14 +147,7 @@ struct MediaBrowserView: View {
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
             
-            // Restore original mute state when exiting fullscreen
-            if MuteState.shared.isMuted != originalMuteState {
-                MuteState.shared.setMuted(originalMuteState)
-                print("DEBUG: [MediaBrowserView] Restored original mute state: \(originalMuteState)")
-            }
-            
-            // Don't pause videos when exiting full-screen - let them continue playing in MediaCell
-            // The shared video player instance will maintain the current playback state
+            // No need to restore global mute state - let it remain unchanged
             print("DEBUG: [MediaBrowserView] Exiting full-screen - preserving video playback state")
         }
     }
@@ -225,7 +216,7 @@ struct MediaBrowserView: View {
             autoPlay: index == currentIndex, // Only auto-play if this is the current video
             contentType: attachment.type,
             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-            forceUnmuted: true, // Always unmuted in fullscreen
+            isMuted: isMuted, // Use local mute state
             onVideoTap: {
                 // Native controls will be shown by VideoPlayer automatically
                 // Also show our close button overlay
@@ -237,9 +228,11 @@ struct MediaBrowserView: View {
             disableAutoRestart: false, // Enable auto-replay in fullscreen
             mode: .mediaBrowser
         )
-        .environmentObject(MuteState.shared)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .onChange(of: isMuted) { _ in
+            // Local mute state changes will be handled by SimpleVideoPlayer's onChange
+        }
     }
     
 
