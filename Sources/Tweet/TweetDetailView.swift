@@ -489,9 +489,9 @@ struct TweetDetailView: View {
             title: "Comments",
             comments: $comments,
             commentFetcher: { page, size in
-                print("[TweetDetailView] Fetching comments for displayTweet: \(displayTweet.mid)")
-                print("[TweetDetailView] displayTweet content: \(displayTweet.content ?? "nil")")
-                print("[TweetDetailView] displayTweet originalTweetId: \(displayTweet.originalTweetId ?? "nil")")
+                print("[TweetDetailView] Fetching comments for displayTweet: \(await displayTweet.mid)")
+                print("[TweetDetailView] displayTweet content: \(await displayTweet.content ?? "nil")")
+                print("[TweetDetailView] displayTweet originalTweetId: \(await displayTweet.originalTweetId ?? "nil")")
                 let fetchedComments = try await hproseInstance.fetchComments(
                     displayTweet,
                     pageNumber: page,

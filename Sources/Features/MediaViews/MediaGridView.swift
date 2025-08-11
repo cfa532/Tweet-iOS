@@ -373,7 +373,7 @@ struct MediaGridView: View {
                     let ar3 = attachments[3].aspectRatio ?? 1
                     let allPortrait = ar0 < 1 && ar1 < 1 && ar2 < 1 && ar3 < 1
                     let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1 && ar3 > 1
-                    let cellAspect: CGFloat = allPortrait ? 3.0/2.0 : (allLandscape ? 4.0/5.0 : 1.0)
+                    let _: CGFloat = allPortrait ? 3.0/2.0 : (allLandscape ? 4.0/5.0 : 1.0)
                     VStack(spacing: 2) {
                         HStack(spacing: 2) {
                             ForEach(0..<2) { idx in
