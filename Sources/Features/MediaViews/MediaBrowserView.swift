@@ -16,9 +16,10 @@ struct MediaBrowserView: View {
     @State private var showVideoPlayer = false
     @State private var play = false
     @State private var isVisible = true
-    @State private var originalMuteState: Bool = false // Store original mute state when entering fullscreen
+
     @State private var imageStates: [Int: ImageState] = [:]
     @State private var showControls = true
+    @State private var isFullscreenMuted = false // Local mute state for fullscreen
     @State private var controlsTimer: Timer?
     @State private var dragOffset = CGSize.zero
     @State private var isDragging = false
@@ -68,7 +69,7 @@ struct MediaBrowserView: View {
                 previousIndex = newIndex
             }
             
-            // Close button overlay
+            // Controls overlay
             if showControls {
                 VStack {
                     HStack {
@@ -80,7 +81,23 @@ struct MediaBrowserView: View {
                                 .background(Color.black.opacity(0.5))
                                 .clipShape(Circle())
                         }
+                        
                         Spacer()
+                        
+                        // Local mute button for videos in fullscreen
+                        if let currentAttachment = attachments[safe: currentIndex],
+                           isVideoAttachment(currentAttachment) {
+                            Button(action: {
+                                isFullscreenMuted.toggle()
+                            }) {
+                                Image(systemName: isFullscreenMuted ? "speaker.slash" : "speaker.wave.2")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .padding()
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                            }
+                        }
                     }
                     Spacer()
                 }
@@ -128,9 +145,7 @@ struct MediaBrowserView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             startControlsTimer()
             
-            // Store original mute state when entering fullscreen
-            originalMuteState = MuteState.shared.isMuted
-            print("DEBUG: [MediaBrowserView] Stored original mute state: \(originalMuteState)")
+
             
             // Initialize previous index
             previousIndex = currentIndex
@@ -149,11 +164,7 @@ struct MediaBrowserView: View {
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
             
-            // Restore original mute state when exiting fullscreen
-            if MuteState.shared.isMuted != originalMuteState {
-                MuteState.shared.setMuted(originalMuteState)
-                print("DEBUG: [MediaBrowserView] Restored original mute state: \(originalMuteState)")
-            }
+
             
             // Don't pause videos when exiting full-screen - let them continue playing in MediaCell
             // The shared video player instance will maintain the current playback state
@@ -225,7 +236,7 @@ struct MediaBrowserView: View {
             autoPlay: index == currentIndex, // Only auto-play if this is the current video
             contentType: attachment.type,
             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-            forceUnmuted: true, // Always unmuted in fullscreen
+            isMuted: isFullscreenMuted, // Use local mute state for fullscreen
             onVideoTap: {
                 // Native controls will be shown by VideoPlayer automatically
                 // Also show our close button overlay
@@ -237,7 +248,9 @@ struct MediaBrowserView: View {
             disableAutoRestart: false, // Enable auto-replay in fullscreen
             mode: .mediaBrowser
         )
-        .environmentObject(MuteState.shared)
+        .onChange(of: isFullscreenMuted) { newMutedState in
+            print("DEBUG: [MediaBrowserView] Fullscreen mute state changed to: \(newMutedState)")
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
     }
@@ -250,7 +263,6 @@ struct MediaBrowserView: View {
             url: url,
             autoPlay: isVisible && currentIndex == index
         )
-        .environmentObject(MuteState.shared)
     }
     
     @ViewBuilder

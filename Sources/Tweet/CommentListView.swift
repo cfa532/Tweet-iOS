@@ -35,6 +35,7 @@ struct CommentListView<RowView: View>: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     @State private var initialLoadComplete = false
+    @StateObject private var refreshDebouncer = RefreshDebouncer(debounceInterval: 1.5)
 
     // MARK: - Initialization
     init(
@@ -80,7 +81,7 @@ struct CommentListView<RowView: View>: View {
                     .animation(.easeInOut, value: showToast)
                 }
             }
-            .refreshable {
+            .debouncedRefresh(debouncer: refreshDebouncer) {
                 await refreshComments()
             }
             .task {

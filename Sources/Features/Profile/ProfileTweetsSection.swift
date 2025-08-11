@@ -160,9 +160,6 @@ struct ProfileTweetsSection<Header: View>: View {
             }
         )
         .frame(maxHeight: .infinity)
-        .refreshable {
-            await onPinnedTweetsRefresh()
-        }
         .onChange(of: user.mid) { _ in
             viewModel.tweets.removeAll()
         }

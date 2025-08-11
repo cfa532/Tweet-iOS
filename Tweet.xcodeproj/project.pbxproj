@@ -272,6 +272,7 @@
 				46E5B32A2DDA038E00AEF31F /* AppConfig.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1D /* ContentView.swift */,
+				468CF2232E39CC7C00D49038 /* AppHeaderView.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -391,7 +392,6 @@
 				46B03D802E474E63000E08DF /* VideoAssetCache.swift */,
 				46B03D812E474E64000E08DF /* VideoPlaceholderSystem.swift */,
 				461438262E44DCCB002D1B22 /* VideoManager.swift */,
-				468CF2232E39CC7C00D49038 /* AppHeaderView.swift */,
 				468CF2242E39CC7C00D49038 /* TabButton.swift */,
 				468CF2172E39B06900D49038 /* BadgeView.swift */,
 				469CF0F12E27FED700FBCDB8 /* OrientationManager.swift */,

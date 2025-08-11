@@ -40,6 +40,7 @@ struct MediaCell: View, Equatable {
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
     @StateObject private var placeholderManager = VideoPlaceholderManager.shared
+    @ObservedObject private var muteState = MuteState.shared
     let onItemTap: ((Int) -> Void)?
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0, onItemTap: ((Int) -> Void)? = nil) {
@@ -87,7 +88,7 @@ struct MediaCell: View, Equatable {
                             contentType: attachment.type,
                             cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showNativeControls: false, // Disable native controls to allow fullscreen tap
+                            showNativeControls: false, isMuted: muteState.isMuted, // Disable native controls to allow fullscreen tap
                             onVideoTap: {
                                 showFullScreen = true
                             },
@@ -100,9 +101,8 @@ struct MediaCell: View, Equatable {
                         .onChange(of: isVisible) { newIsVisible in
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
                         }
-                        .environmentObject(MuteState.shared)
-                        .onReceive(MuteState.shared.$isMuted) { isMuted in
-                            print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
+                        .onReceive(muteState.$isMuted) { isMuted in
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] Mute state changed to: \(isMuted)")
                         }
                         .overlay(
                             // Video controls overlay
@@ -121,7 +121,7 @@ struct MediaCell: View, Equatable {
                                         
                                         // Mute button in bottom right corner (only if showMuteButton is true)
                                         if showMuteButton {
-                                            MuteButton()
+                                            MuteButton(muteState: muteState)
                                                 .padding(.trailing, 8)
                                                 .padding(.bottom, 8)
                                         }
@@ -229,7 +229,7 @@ struct MediaCell: View, Equatable {
                 loadImage()
             }
         }
-
+        
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Restore video state when app becomes active
             if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
@@ -237,7 +237,7 @@ struct MediaCell: View, Equatable {
                 shouldLoadVideo = true
             }
         }
-
+        
         .fullScreenCover(isPresented: $showFullScreen) {
             MediaBrowserView(
                 tweet: parentTweet,
@@ -253,7 +253,7 @@ struct MediaCell: View, Equatable {
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)
             }
         }
-
+        
     }
     
     private func handleTap() {
@@ -305,25 +305,26 @@ struct MediaCell: View, Equatable {
         }
     }
     
-
+    
     
     // MARK: - Equatable
     static func == (lhs: MediaCell, rhs: MediaCell) -> Bool {
         // Only compare the essential properties that should trigger recomposition
         return lhs.parentTweet.mid == rhs.parentTweet.mid &&
-               lhs.attachmentIndex == rhs.attachmentIndex &&
-               lhs.aspectRatio == rhs.aspectRatio &&
-               lhs.shouldLoadVideo == rhs.shouldLoadVideo &&
-               lhs.showMuteButton == rhs.showMuteButton
+        lhs.attachmentIndex == rhs.attachmentIndex &&
+        lhs.aspectRatio == rhs.aspectRatio &&
+        lhs.shouldLoadVideo == rhs.shouldLoadVideo &&
+        lhs.showMuteButton == rhs.showMuteButton
     }
 }
 
 // MARK: - MuteButton
 struct MuteButton: View {
-    @EnvironmentObject var muteState: MuteState
+    @ObservedObject var muteState: MuteState
     
     var body: some View {
         Button(action: {
+            print("DEBUG: [MUTE BUTTON] Button pressed - current state: \(muteState.isMuted)")
             muteState.toggleMute()
         }) {
             Image(systemName: muteState.isMuted ? "speaker.slash" : "speaker.wave.2")

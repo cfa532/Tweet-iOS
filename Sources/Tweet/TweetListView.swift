@@ -61,6 +61,7 @@ struct TweetListView<RowView: View>: View {
     @State private var deletedTweetIds = Set<String>()
     @State private var autoLoadPagesRemaining = 2 // Load 2 more pages automatically
     @State private var autoLoadTimer: Timer?
+    @StateObject private var refreshDebouncer = RefreshDebouncer(debounceInterval: 1.5)
 
     // MARK: - Initialization
     init(
@@ -139,7 +140,7 @@ struct TweetListView<RowView: View>: View {
                     .animation(.easeInOut, value: showToast)
                 }
             }
-            .refreshable {
+            .debouncedRefresh(debouncer: refreshDebouncer) {
                 await refreshTweets()
             }
             .task {

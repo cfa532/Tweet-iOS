@@ -37,7 +37,7 @@ struct DetailVideoPlayerView: View {
                                     
                                     // Mute button in bottom right corner
                                     if showMuteButton {
-                                        MuteButton()
+                                        MuteButton(muteState: muteState)
                                             .padding(.trailing, 8)
                                             .padding(.bottom, 8)
                                     }
@@ -121,6 +121,7 @@ struct DetailMediaCell: View {
     @State private var hasSavedOriginalState: Bool = false
     @State private var unmuteTimer: Timer? = nil
     @StateObject private var placeholderManager = VideoPlaceholderManager.shared
+    @ObservedObject private var muteState = MuteState.shared
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: DetailVideoManager, onImageTap: @escaping () -> Void) {
         self.parentTweet = parentTweet
@@ -445,7 +446,7 @@ struct TweetDetailView: View {
                                 showBrowser = true
                             }
                         )
-                        .environmentObject(MuteState.shared)
+
                         .tag(index)
                     }
                 }

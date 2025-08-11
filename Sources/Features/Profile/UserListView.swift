@@ -19,6 +19,7 @@ struct UserListView: View {
     @State private var errorMessage: String? = nil
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @StateObject private var refreshDebouncer = RefreshDebouncer(debounceInterval: 1.5)
 
     // MARK: - Initialization
     init(
@@ -66,7 +67,7 @@ struct UserListView: View {
                     Color.clear.frame(height: 60)
                 }
             }
-            .refreshable {
+            .debouncedRefresh(debouncer: refreshDebouncer) {
                 await refreshUsers()
             }
             .onAppear {

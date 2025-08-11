@@ -153,7 +153,7 @@ struct SimpleVideoPlayer: View {
     var cellAspectRatio: CGFloat? = nil
     var videoAspectRatio: CGFloat? = nil
     var showNativeControls: Bool = true
-    var forceUnmuted: Bool = false
+    var isMuted: Bool = false // Mute state passed from parent
     var onVideoTap: (() -> Void)? = nil
     var disableAutoRestart: Bool = false
     
@@ -172,7 +172,7 @@ struct SimpleVideoPlayer: View {
     @State private var loadFailed = false
     @State private var retryCount = 0
     @State private var wasPlayingBeforeBackground = false
-    @ObservedObject private var muteState = MuteState.shared
+
     @State private var instanceId = UUID().uuidString.prefix(8)
     @State private var isLongPressing = false
     
@@ -279,10 +279,9 @@ struct SimpleVideoPlayer: View {
         .onDisappear {
             player?.pause()
         }
-        .onChange(of: muteState.isMuted) { newMuteState in
-            if mode == .mediaCell && !forceUnmuted {
-                player?.isMuted = newMuteState
-            }
+        .onChange(of: isMuted) { newMuteState in
+            player?.isMuted = newMuteState
+            print("DEBUG: [SIMPLE VIDEO PLAYER] Mute state updated: \(newMuteState) for video: \(mid)")
         }
         .onChange(of: currentAutoPlay) { shouldAutoPlay in
             checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
@@ -360,7 +359,8 @@ struct SimpleVideoPlayer: View {
     }
     
     private func configurePlayer(_ player: AVPlayer) {
-        player.isMuted = forceUnmuted ? false : muteState.isMuted
+        player.isMuted = isMuted
+        print("DEBUG: [SIMPLE VIDEO PLAYER] Player configured with mute state: \(isMuted) for video: \(mid)")
         player.seek(to: .zero)
         setupPlayerObservers(player)
         
@@ -405,6 +405,10 @@ struct SimpleVideoPlayer: View {
     
     private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
         if autoPlay && isVisible && player != nil && !isLoading {
+            // Apply current mute state
+            player?.isMuted = isMuted
+            print("DEBUG: [SIMPLE VIDEO PLAYER] Playback conditions checked - mute state: \(isMuted) for video: \(mid)")
+            
             if hasFinishedPlaying {
                 if !disableAutoRestart {
                     player?.seek(to: .zero)
