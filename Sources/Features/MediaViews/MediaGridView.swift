@@ -18,6 +18,7 @@ struct MediaGridView: View {
     @State private var isVisible = false
     @State private var forceRefreshTrigger = 0
     @StateObject private var videoManager = VideoManager()
+    @StateObject private var placeholderManager = VideoPlaceholderManager.shared
     
     init(parentTweet: Tweet, attachments: [MimeiFileType], onItemTap: ((Int) -> Void)? = nil) {
         self.parentTweet = parentTweet
@@ -490,21 +491,29 @@ struct MediaGridView: View {
                 // Mark the grid as visible
                 isVisible = true
                 
-                // Start video loading timer if this grid contains videos
-                let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
+                // Start background loading for all videos in this grid immediately
+                let videoAttachments = attachments.enumerated().compactMap { index, attachment in
+                    if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                        return (index, attachment)
+                    }
+                    return nil
+                }
                 
-                if hasVideos {
+                // Start background loading for all videos
+                for (_, attachment) in videoAttachments {
+                    if let url = attachment.getUrl(parentTweet.author?.baseUrl ?? HproseInstance.baseUrl) {
+                        placeholderManager.startBackgroundLoading(for: url, mid: attachment.mid)
+                    }
+                }
+                
+                // Start video loading timer if this grid contains videos
+                if !videoAttachments.isEmpty {
                     // Balanced delay - enough to let UI settle without feeling slow
                     videoLoadTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
                         shouldLoadVideo = true
                         
                         // Setup video playback for any videos in this grid
-                        let videoMids = attachments.enumerated().compactMap { index, attachment in
-                            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                                return attachment.mid
-                            }
-                            return nil
-                        }
+                        let videoMids = videoAttachments.map { $0.1.mid }
                         
                         if !videoMids.isEmpty {
                             print("DEBUG: [MediaGridView] Grid appeared with \(videoMids.count) videos - setting up playback")
@@ -526,40 +535,6 @@ struct MediaGridView: View {
                 videoLoadTimer = nil
                 shouldLoadVideo = false
                 videoManager.stopSequentialPlayback()
-            }
-            .onAppear {
-                // Mark the grid as visible
-                isVisible = true
-                
-                // Setup sequential playback for videos
-                let videoMids = attachments.enumerated().compactMap { index, attachment in
-                    if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                        return attachment.mid
-                    }
-                    return nil
-                }
-                
-                // Always stop any existing playback first to handle reuse scenarios
-                videoManager.stopSequentialPlayback()
-                
-                if videoMids.count > 1 {
-                    videoManager.setupSequentialPlayback(for: videoMids)
-                    print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
-                } else if videoMids.count == 1 {
-                    // For single videos, set up the video MID but don't enable sequential playback
-                    let wasEmpty = videoManager.videoMids.isEmpty
-                    let isNewSequence = videoManager.videoMids != videoMids && !wasEmpty
-                    videoManager.videoMids = videoMids
-                    videoManager.isSequentialPlaybackEnabled = false
-                    videoManager.currentVideoIndex = 0
-                    
-                    if isNewSequence {
-                        print("DEBUG: [MediaGridView] Setup NEW single video playback for \(videoMids[0])")
-                        // Reset handled by SimpleVideoPlayer's internal state management
-                    } else {
-                        print("DEBUG: [MediaGridView] Setup \(wasEmpty ? "FIRST TIME" : "EXISTING") single video playback for \(videoMids[0])")
-                    }
-                }
             }
             .onChange(of: isVisible) { newVisibility in
                 // Handle visibility changes

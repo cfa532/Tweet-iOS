@@ -39,6 +39,7 @@ struct MediaCell: View, Equatable {
     let showMuteButton: Bool
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
+    @StateObject private var placeholderManager = VideoPlaceholderManager.shared
     let onItemTap: ((Int) -> Void)?
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0, onItemTap: ((Int) -> Void)? = nil) {
@@ -73,8 +74,9 @@ struct MediaCell: View, Equatable {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
-                    // Only create video player if we should load video
-                    if shouldLoadVideo {
+                    // Use placeholder system for better scrolling performance
+                    if shouldLoadVideo && placeholderManager.isVideoReady(for: attachment.mid) {
+                        // Video is ready - show actual player
                         SimpleVideoPlayer(
                             url: url,
                             mid: attachment.mid,
@@ -95,9 +97,9 @@ struct MediaCell: View, Equatable {
                         .onAppear {
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - isVisible: \(isVisible), autoPlay: \(videoManager.shouldPlayVideo(for: attachment.mid))")
                         }
-                                .onChange(of: isVisible) { newIsVisible in
-            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
-        }
+                        .onChange(of: isVisible) { newIsVisible in
+                            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
+                        }
                         .environmentObject(MuteState.shared)
                         .onReceive(MuteState.shared.$isMuted) { isMuted in
                             print("DEBUG: [MEDIA CELL] Mute state changed to: \(isMuted)")
@@ -128,18 +130,15 @@ struct MediaCell: View, Equatable {
                             }
                         )
                     } else {
-                        // Show placeholder for videos that haven't been loaded yet
-                        Color.black
-                            .aspectRatio(contentMode: .fill)
-                            .overlay(
-                                Image(systemName: "play.circle")
-                                    .font(.system(size: 40))
-                                    .foregroundColor(.white)
-                            )
-                            .onTapGesture {
-                                // Open full screen for video placeholders
-                                handleTap()
-                            }
+                        // Show placeholder while video loads in background
+                        VideoPlaceholderView(
+                            aspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                            isLoading: shouldLoadVideo && !placeholderManager.isVideoReady(for: attachment.mid)
+                        )
+                        .onTapGesture {
+                            // Open full screen for video placeholders
+                            handleTap()
+                        }
                     }
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
@@ -214,6 +213,12 @@ struct MediaCell: View, Equatable {
             
             // Refresh mute state from preferences when cell appears
             MuteState.shared.refreshFromPreferences()
+            
+            // Start background video loading for video attachments
+            if (attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video"),
+               let url = attachment.getUrl(baseUrl) {
+                placeholderManager.startBackgroundLoading(for: url, mid: attachment.mid)
+            }
         }
         .onDisappear {
             // Set visibility to false when cell disappears
@@ -405,5 +410,7 @@ struct VideoTimeRemainingLabel: View {
         }
     }
 }
+
+
 
 

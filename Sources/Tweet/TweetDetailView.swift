@@ -120,6 +120,7 @@ struct DetailMediaCell: View {
     @State private var originalMuteState: Bool = false
     @State private var hasSavedOriginalState: Bool = false
     @State private var unmuteTimer: Timer? = nil
+    @StateObject private var placeholderManager = VideoPlaceholderManager.shared
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: DetailVideoManager, onImageTap: @escaping () -> Void) {
         self.parentTweet = parentTweet
@@ -149,8 +150,9 @@ struct DetailMediaCell: View {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
-                    // Show video with native controls using DetailVideoManager singleton
-                    if shouldLoadVideo {
+                    // Use placeholder system for better scrolling performance
+                    if shouldLoadVideo && placeholderManager.isVideoReady(for: attachment.mid) {
+                        // Video is ready - show actual player
                         DetailVideoPlayerView(
                             url: url,
                             mid: attachment.mid,
@@ -159,13 +161,11 @@ struct DetailMediaCell: View {
                             showMuteButton: showMuteButton
                         )
                     } else {
-                        // Show placeholder for videos that haven't been loaded yet
-                        Color.black
-                            .overlay(
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(1.5)
-                            )
+                        // Show placeholder while video loads in background
+                        VideoPlaceholderView(
+                            aspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                            isLoading: shouldLoadVideo && !placeholderManager.isVideoReady(for: attachment.mid)
+                        )
                     }
                 case "image":
                     // Images still go to full-screen when tapped
@@ -223,6 +223,12 @@ struct DetailMediaCell: View {
             isVisible = true
             if attachment.type.lowercased() == "image" && image == nil {
                 loadImage()
+            }
+            
+            // Start background video loading for video attachments
+            if (attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video"),
+               let url = attachment.getUrl(baseUrl) {
+                placeholderManager.startBackgroundLoading(for: url, mid: attachment.mid)
             }
             
             // Handle mute state for videos in detail view - delay 1s before unmuting
