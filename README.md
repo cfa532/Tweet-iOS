@@ -8,6 +8,23 @@ The Tweet-iOS video system provides seamless video playback across different con
 
 ## 🏗️ Architecture
 
+### Video Architecture Overview
+
+```
+📱 TweetListView (MediaCell)
+├── VideoPlaceholderView (while loading)
+└── SimpleVideoPlayer (when ready)
+    └── Uses BackgroundVideoLoader for smooth scrolling
+
+📱 TweetDetailView (DetailMediaCell)
+└── SimpleVideoPlayer (direct)
+    └── Immediate playback, no background loading
+
+🖥️ MediaBrowserView (Fullscreen)
+└── SimpleVideoPlayer (direct)
+    └── Independent mute state, immediate playback
+```
+
 ### Core Components
 
 #### 1. **BackgroundVideoLoader** (`SimpleVideoPlayer.swift`)
@@ -17,6 +34,7 @@ The Tweet-iOS video system provides seamless video playback across different con
   - URL-based caching system
   - HLS playlist resolution
   - Concurrent loading task management
+- **Usage**: Only in list views (TweetListView) for smooth scrolling
 
 ```swift
 class BackgroundVideoLoader: ObservableObject {
@@ -28,37 +46,46 @@ class BackgroundVideoLoader: ObservableObject {
 }
 ```
 
-#### 2. **SingletonVideoManagers** (`SingletonVideoManagers.swift`)
-- **DetailVideoManager**: Manages video playback in detail views
-- **FullscreenVideoManager**: Handles fullscreen video playback
+#### 2. **VideoPlaceholderSystem** (`VideoPlaceholderSystem.swift`)
+- **Purpose**: Provides placeholder UI while videos load in background
 - **Features**:
-  - Context-aware video management
-  - Automatic play/pause coordination
-  - State persistence across view transitions
-
-```swift
-@MainActor
-class DetailVideoManager: ObservableObject {
-    @Published var currentPlayer: AVPlayer?
-    @Published var currentVideoMid: String?
-    @Published var isPlaying = false
-}
-```
+  - Fixed-size placeholders prevent scroll jumping
+  - Background video loading
+  - Smooth transition from placeholder to video
+- **Usage**: Only in list views for better scrolling experience
 
 #### 3. **SimpleVideoPlayer** (`SimpleVideoPlayer.swift`)
-- **Purpose**: Core video player component with custom controls
+- **Purpose**: Core video player component with mode-based rendering
 - **Features**:
   - Automatic HLS detection and handling
   - Custom playback controls
   - Background/foreground state management
   - Black screen recovery mechanisms
+  - Mode-based rendering (mediaCell, mediaBrowser, fullscreen)
 
-#### 4. **MediaGridView** (`MediaGridView.swift`)
+```swift
+enum Mode {
+    case mediaCell      // For list views with placeholders
+    case mediaBrowser   // For detail/fullscreen views
+    case fullscreen     // For landscape/portrait handling
+}
+```
+
+#### 4. **MuteState** (`MuteState.swift`)
+- **Purpose**: Global mute state management
+- **Features**:
+  - Singleton pattern for app-wide mute control
+  - Preference persistence
+  - Debounced refresh utilities
+- **Usage**: Controls mute state across all video players
+
+#### 5. **MediaGridView** (`MediaGridView.swift`)
 - **Purpose**: Grid layout for multiple media items
 - **Features**:
   - Sequential video playback
   - Visibility-based loading
   - Debounced video loading (0.3s delay)
+  - Video placeholder integration
 
 ## 🎬 Video Loading Strategy
 
@@ -192,12 +219,23 @@ func recreateVideoPlayerView(for videoMid: String) {
 
 ## 🚀 Performance Optimizations
 
-### 1. **Sequential Playback**
+### 1. **Context-Aware Video Loading**
+- **List Views**: Background loading with placeholders for smooth scrolling
+- **Detail Views**: Direct loading for immediate playback
+- **Fullscreen**: Direct loading with independent controls
+
+### 2. **Video Placeholder System**
+- Fixed-size placeholders prevent scroll jumping
+- Background video loading while showing placeholders
+- Smooth transition when videos are ready
+- Memory-efficient placeholder management
+
+### 3. **Sequential Playback**
 - Only one video plays at a time in grid views
 - Automatic pause/resume coordination
 - Memory-efficient playback management
 
-### 2. **Visibility-Based Loading**
+### 4. **Visibility-Based Loading**
 ```swift
 .onAppear {
     // Mark grid as visible
@@ -240,34 +278,65 @@ func recreateVideoPlayerView(for videoMid: String) {
 - **Task management**: Prevents duplicate loading
 - **Automatic cleanup**: Memory pressure handling
 
+### Mute State Management
+- **Global Mute**: Controls all list view videos via MuteState.shared
+- **Local Mute**: Fullscreen videos have independent mute controls
+- **State Persistence**: Mute preferences saved to device storage
+- **Debounced Refresh**: 1.5-second debounce for pull-to-refresh operations
+
 ## 📱 Usage Examples
 
-### Grid View Integration
+### Grid View Integration (with Placeholders)
+```swift
+// Shows placeholder while video loads in background
+if placeholderManager.isVideoReady(for: attachment.mid) {
+    SimpleVideoPlayer(
+        url: url,
+        mid: attachment.mid,
+        isVisible: isVisible,
+        autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
+        isMuted: muteState.isMuted,
+        mode: .mediaCell
+    )
+} else {
+    VideoPlaceholderView()
+}
+```
+
+### Detail View Integration (Direct Loading)
+```swift
+SimpleVideoPlayer(
+    url: url,
+    mid: mid,
+    isVisible: isVisible,
+    autoPlay: true,
+    isMuted: muteState.isMuted,
+    mode: .mediaBrowser
+)
+```
+
+### Fullscreen Integration (Independent Mute)
 ```swift
 SimpleVideoPlayer(
     url: url,
     mid: attachment.mid,
-    autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
-    showControls: false
+    isVisible: index == currentIndex,
+    autoPlay: index == currentIndex,
+    isMuted: isFullscreenMuted, // Local mute state
+    mode: .mediaBrowser
 )
 ```
 
-### Detail View Integration
+### Mute State Management
 ```swift
-DetailVideoManager.shared.setCurrentVideo(
-    url: url,
-    mid: attachment.mid,
-    autoPlay: true
-)
-```
+// Global mute control (for list views)
+@ObservedObject private var muteState = MuteState.shared
 
-### Fullscreen Integration
-```swift
-FullscreenVideoManager.shared.setCurrentVideo(
-    url: url,
-    mid: attachment.mid,
-    autoPlay: true
-)
+// Local mute control (for fullscreen)
+@State private var isFullscreenMuted = false
+
+// Mute button with global state
+MuteButton(muteState: muteState)
 ```
 
 ## 🐛 Troubleshooting
@@ -299,11 +368,13 @@ print("DEBUG: [DETAIL VIDEO MANAGER] Setting current video: \(mid)")
 
 ## 🔄 Migration Status
 
-- ✅ **Grid Views**: Fully migrated to new system
-- ✅ **Detail Views**: Using new SingletonVideoManagers
-- ✅ **Fullscreen**: New FullscreenVideoManager
-- ✅ **Background Loading**: BackgroundVideoLoader active
+- ✅ **Grid Views**: Fully migrated to new system with placeholders
+- ✅ **Detail Views**: Using SimpleVideoPlayer directly (no singleton managers)
+- ✅ **Fullscreen**: Using SimpleVideoPlayer with independent mute state
+- ✅ **Background Loading**: BackgroundVideoLoader active for list views only
 - ✅ **Black Screen Recovery**: Multi-strategy system active
+- ✅ **Mute State**: Centralized management with global/local state support
+- ✅ **Video Placeholders**: Implemented for smooth scrolling experience
 
 ## 📚 Related Documentation
 
