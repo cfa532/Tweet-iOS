@@ -74,24 +74,34 @@ struct MediaCell: View, Equatable {
                 case "video", "hls_video":
                     // Only create video player if we should load video
                     if shouldLoadVideo {
-                        SimpleVideoPlayer(
-                            url: url,
-                            mid: attachment.mid,
-                            isVisible: isVisible,
-                            autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
-                            videoManager: videoManager, // Pass VideoManager for reactive playback
-                            onVideoFinished: onVideoFinished,
-                            contentType: attachment.type,
-                            cellAspectRatio: CGFloat(aspectRatio),
-                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showNativeControls: false, // Disable native controls to allow fullscreen tap
-                            isMuted: muteState.isMuted,
-                            onVideoTap: {
-                                showFullScreen = true
-                            },
-                            disableAutoRestart: true,
-                            mode: .mediaCell
-                        )
+                        ZStack {
+                            SimpleVideoPlayer(
+                                url: url,
+                                mid: attachment.mid,
+                                isVisible: isVisible,
+                                autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
+                                videoManager: videoManager, // Pass VideoManager for reactive playback
+                                onVideoFinished: onVideoFinished,
+                                contentType: attachment.type,
+                                cellAspectRatio: CGFloat(aspectRatio),
+                                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                                showNativeControls: false, // Disable native controls to allow fullscreen tap
+                                isMuted: muteState.isMuted,
+                                onVideoTap: {
+                                    showFullScreen = true
+                                },
+                                disableAutoRestart: true,
+                                mode: .mediaCell
+                            )
+                            
+                            // Invisible overlay to prevent tap propagation to parent views
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    // This prevents the tap from reaching parent views
+                                    showFullScreen = true
+                                }
+                        }
                         .onAppear {
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - isVisible: \(isVisible), autoPlay: \(videoManager.shouldPlayVideo(for: attachment.mid))")
                             
@@ -131,17 +141,27 @@ struct MediaCell: View, Equatable {
                         )
                     } else {
                         // Show placeholder for videos that haven't been loaded yet
-                        Color.black
-                            .aspectRatio(contentMode: .fill)
-                            .overlay(
-                                Image(systemName: "play.circle")
-                                    .font(.system(size: 40))
-                                    .foregroundColor(.white)
-                            )
-                            .onTapGesture {
-                                // Open full screen for video placeholders
-                                handleTap()
-                            }
+                        ZStack {
+                            Color.gray
+                                .aspectRatio(contentMode: .fill)
+                                .overlay(
+                                    Image(systemName: "play.circle")
+                                        .font(.system(size: 40))
+                                        .foregroundColor(.white)
+                                )
+                                .onTapGesture {
+                                    // Open full screen for video placeholders
+                                    handleTap()
+                                }
+                            
+                            // Invisible overlay to prevent tap propagation to parent views
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    // This prevents the tap from reaching parent views
+                                    handleTap()
+                                }
+                        }
                     }
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
