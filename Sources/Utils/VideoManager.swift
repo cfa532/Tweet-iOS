@@ -80,7 +80,8 @@ class VideoManager: ObservableObject {
             return shouldPlay
         }
         
-        print("DEBUG: [VideoManager] Video \(mid) should not play - no matching conditions")
+        // If no sequential playback and no video MIDs, don't play anything
+        // This prevents interference with detail view videos
         return false
     }
     
