@@ -2,36 +2,70 @@
 //  SharedAssetCache.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/8/11.
+//  Shared asset cache for video players with background loading support
 //
-import SwiftUI
-import AVKit
+
+import Foundation
 import AVFoundation
 
-// MARK: - Asset Sharing System
-/// Shared asset cache to avoid duplicate network requests and provide immediate cached content
+/// Shared asset cache for video players with background loading and priority management
+@MainActor
 class SharedAssetCache: ObservableObject {
     static let shared = SharedAssetCache()
-    private init() {}
     
-    @MainActor private var assetCache: [String: AVAsset] = [:]
-    @MainActor private var playerCache: [String: AVPlayer] = [:]
-    @MainActor private var loadingTasks: [String: Task<AVAsset, Error>] = [:]
-    @MainActor private var cacheTimestamps: [String: Date] = [:]
-    
-    /// Get cached player immediately if available
-    @MainActor func getCachedPlayer(for url: URL) -> AVPlayer? {
-        let cacheKey = url.absoluteString
-        return playerCache[cacheKey]
+    private init() {
+        // Start background cleanup timer
+        startBackgroundCleanup()
     }
     
-    /// Get or create asset for URL with HLS resolution
+    // MARK: - Cache Storage
+    private var assetCache: [String: AVAsset] = [:]
+    private var playerCache: [String: AVPlayer] = [:]
+    private var cacheTimestamps: [String: Date] = [:]
+    private var loadingTasks: [String: Task<AVAsset, Error>] = [:]
+    private var preloadTasks: [String: Task<Void, Never>] = [:]
+    
+    // MARK: - Configuration
+    private let maxCacheSize = 20 // Maximum number of cached assets
+    private let maxPlayerCacheSize = 10 // Maximum number of cached players
+    private let cacheExpirationInterval: TimeInterval = 300 // 5 minutes
+    
+    // MARK: - Background Cleanup
+    private var cleanupTimer: Timer?
+    
+    private func startBackgroundCleanup() {
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+            Task { @MainActor in
+                self.performCleanup()
+            }
+        }
+    }
+    
+    private func performCleanup() {
+        let now = Date()
+        let expiredKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > cacheExpirationInterval }.map { $0.key }
+        
+        for key in expiredKeys {
+            assetCache.removeValue(forKey: key)
+            playerCache.removeValue(forKey: key)
+            cacheTimestamps.removeValue(forKey: key)
+            print("DEBUG: [SHARED ASSET CACHE] Cleaned up expired asset: \(key)")
+        }
+        
+        // Manage cache size
+        manageCacheSize()
+    }
+    
+    // MARK: - Asset Management
+    
+    /// Get cached asset or create new one
     @MainActor func getAsset(for url: URL) async throws -> AVAsset {
         let cacheKey = url.absoluteString
         
         // Check if we have a cached asset
         if let cachedAsset = assetCache[cacheKey] {
             print("DEBUG: [SHARED ASSET CACHE] Using cached asset for: \(url.lastPathComponent)")
+            cacheTimestamps[cacheKey] = Date() // Update access time
             return cachedAsset
         }
         
@@ -39,7 +73,9 @@ class SharedAssetCache: ObservableObject {
         if let existingTask = loadingTasks[cacheKey] {
             print("DEBUG: [SHARED ASSET CACHE] Waiting for existing loading task for: \(url.lastPathComponent)")
             do {
-                return try await existingTask.value
+                let asset = try await existingTask.value
+                cacheTimestamps[cacheKey] = Date() // Update access time
+                return asset
             } catch {
                 print("DEBUG: [SHARED ASSET CACHE] Error waiting for existing task: \(error)")
                 loadingTasks.removeValue(forKey: cacheKey)
@@ -68,7 +104,8 @@ class SharedAssetCache: ObservableObject {
         loadingTasks[cacheKey] = task
         
         do {
-            return try await task.value
+            let asset = try await task.value
+            return asset
         } catch {
             print("DEBUG: [SHARED ASSET CACHE] Error creating asset: \(error)")
             loadingTasks.removeValue(forKey: cacheKey)
@@ -77,14 +114,37 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Cache a player instance for immediate reuse
-    @MainActor func cachePlayer(_ player: AVPlayer, for url: URL) {
+    func cachePlayer(_ player: AVPlayer, for url: URL) {
         let cacheKey = url.absoluteString
+        
+        // Remove old player if exists
+        if let oldPlayer = playerCache[cacheKey] {
+            oldPlayer.pause()
+            print("DEBUG: [SHARED ASSET CACHE] Replacing cached player for: \(url.lastPathComponent)")
+        }
+        
         playerCache[cacheKey] = player
+        cacheTimestamps[cacheKey] = Date()
+        
+        // Manage cache size
+        managePlayerCacheSize()
+        
         print("DEBUG: [SHARED ASSET CACHE] Cached player for: \(url.lastPathComponent)")
     }
     
-    /// Remove cached player (when it becomes invalid)
-    @MainActor func removeCachedPlayer(for url: URL) {
+    /// Get cached player if available
+    func getCachedPlayer(for url: URL) -> AVPlayer? {
+        let cacheKey = url.absoluteString
+        if let player = playerCache[cacheKey] {
+            cacheTimestamps[cacheKey] = Date() // Update access time
+            print("DEBUG: [SHARED ASSET CACHE] Using cached player for: \(url.lastPathComponent)")
+            return player
+        }
+        return nil
+    }
+    
+    /// Remove invalid cached player
+    func removeInvalidPlayer(for url: URL) {
         let cacheKey = url.absoluteString
         playerCache.removeValue(forKey: cacheKey)
         print("DEBUG: [SHARED ASSET CACHE] Removed invalid cached player for: \(url.lastPathComponent)")
@@ -154,27 +214,116 @@ class SharedAssetCache: ObservableObject {
         cacheTimestamps.removeAll()
         loadingTasks.values.forEach { $0.cancel() }
         loadingTasks.removeAll()
+        preloadTasks.values.forEach { $0.cancel() }
+        preloadTasks.removeAll()
         print("DEBUG: [SHARED ASSET CACHE] Cache cleared")
     }
     
-    /// Preload video for immediate display
+    // MARK: - Enhanced Preloading Methods
+    
+    /// Preload video for immediate display (high priority)
     func preloadVideo(for url: URL) {
-        Task {
+        let cacheKey = url.absoluteString
+        
+        // Cancel existing preload task if any
+        preloadTasks[cacheKey]?.cancel()
+        
+        let task = Task {
             do {
+                print("DEBUG: [SHARED ASSET CACHE] Starting high-priority video preload for: \(url.lastPathComponent)")
                 _ = try await getOrCreatePlayer(for: url)
+                print("DEBUG: [SHARED ASSET CACHE] High-priority video preload completed for: \(url.lastPathComponent)")
             } catch {
-                print("DEBUG: [SHARED ASSET CACHE] Error preloading video: \(error)")
+                print("DEBUG: [SHARED ASSET CACHE] Error in high-priority video preload: \(error)")
+            }
+        }
+        
+        preloadTasks[cacheKey] = task
+    }
+    
+    /// Preload asset only (for background loading - lower priority)
+    func preloadAsset(for url: URL) {
+        let cacheKey = url.absoluteString
+        
+        // Cancel existing preload task if any
+        preloadTasks[cacheKey]?.cancel()
+        
+        let task = Task {
+            do {
+                print("DEBUG: [SHARED ASSET CACHE] Starting background asset preload for: \(url.lastPathComponent)")
+                _ = try await getAsset(for: url)
+                print("DEBUG: [SHARED ASSET CACHE] Background asset preload completed for: \(url.lastPathComponent)")
+            } catch {
+                print("DEBUG: [SHARED ASSET CACHE] Error in background asset preload: \(error)")
+            }
+        }
+        
+        preloadTasks[cacheKey] = task
+    }
+    
+    /// Cancel preload for specific URL
+    func cancelPreload(for url: URL) {
+        let cacheKey = url.absoluteString
+        preloadTasks[cacheKey]?.cancel()
+        preloadTasks.removeValue(forKey: cacheKey)
+        print("DEBUG: [SHARED ASSET CACHE] Cancelled preload for: \(url.lastPathComponent)")
+    }
+    
+    /// Preload multiple videos with priority management
+    func preloadVideos(_ urls: [URL], priority: PreloadPriority = .normal) {
+        for (index, url) in urls.enumerated() {
+            let delay = priority.delay(for: index)
+            
+            Task {
+                if delay > 0 {
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
+                
+                guard !Task.isCancelled else { return }
+                
+                switch priority {
+                case .high:
+                    await MainActor.run {
+                        preloadVideo(for: url)
+                    }
+                case .normal, .low:
+                    await MainActor.run {
+                        preloadAsset(for: url)
+                    }
+                }
             }
         }
     }
     
-    /// Preload asset only (for background loading)
-    func preloadAsset(for url: URL) {
-        Task {
-            do {
-                _ = try await getAsset(for: url)
-            } catch {
-                print("DEBUG: [SHARED ASSET CACHE] Error preloading asset: \(error)")
+    // MARK: - Cache Management
+    
+    private func manageCacheSize() {
+        if assetCache.count > maxCacheSize {
+            // Remove least recently used assets
+            let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+            let keysToRemove = sortedKeys.prefix(assetCache.count - maxCacheSize)
+            
+            for key in keysToRemove {
+                assetCache.removeValue(forKey: key)
+                cacheTimestamps.removeValue(forKey: key)
+                print("DEBUG: [SHARED ASSET CACHE] Removed LRU asset: \(key)")
+            }
+        }
+    }
+    
+    private func managePlayerCacheSize() {
+        if playerCache.count > maxPlayerCacheSize {
+            // Remove least recently used players
+            let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+            let keysToRemove = sortedKeys.prefix(playerCache.count - maxPlayerCacheSize)
+            
+            for key in keysToRemove {
+                if let player = playerCache[key] {
+                    player.pause()
+                    playerCache.removeValue(forKey: key)
+                    cacheTimestamps.removeValue(forKey: key)
+                    print("DEBUG: [SHARED ASSET CACHE] Removed LRU player: \(key)")
+                }
             }
         }
     }
@@ -182,5 +331,24 @@ class SharedAssetCache: ObservableObject {
     /// Get cache statistics
     @MainActor func getCacheStats() -> (assetCount: Int, playerCount: Int) {
         return (assetCache.count, playerCache.count)
+    }
+}
+
+// MARK: - Preload Priority
+
+enum PreloadPriority {
+    case high
+    case normal
+    case low
+    
+    func delay(for index: Int) -> TimeInterval {
+        switch self {
+        case .high:
+            return 0 // No delay for high priority
+        case .normal:
+            return Double(index) * 0.1 // 0.1 second delay per item
+        case .low:
+            return Double(index) * 0.3 // 0.3 second delay per item
+        }
     }
 }

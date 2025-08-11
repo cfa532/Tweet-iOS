@@ -395,7 +395,7 @@ struct SimpleVideoPlayer: View {
                     guard let playerItem = cachedPlayer.currentItem,
                           playerItem.status != .failed else {
                         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player invalid, removing")
-                        SharedAssetCache.shared.removeCachedPlayer(for: url)
+                        SharedAssetCache.shared.removeInvalidPlayer(for: url)
                         throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
                     }
                     

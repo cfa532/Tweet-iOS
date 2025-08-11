@@ -473,6 +473,9 @@ struct MediaGridView: View {
                 let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
                 
                 if hasVideos {
+                    // Start background preloading for all videos in the grid
+                    startBackgroundPreloading()
+                    
                     // Balanced delay - enough to let UI settle without feeling slow
                     videoLoadTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
                         shouldLoadVideo = true
@@ -631,6 +634,43 @@ struct ZoomableView<Content: View>: View {
                     }
                 }
                 .allowsHitTesting(scale > 1) // Only allow zoom gestures when zoomed in
+        }
+    }
+}
+
+// MARK: - Background Preloading
+
+extension MediaGridView {
+    /// Start background preloading for all videos in the grid
+    private func startBackgroundPreloading() {
+        let videoAttachments = attachments.enumerated().compactMap { index, attachment in
+            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                return (index, attachment)
+            }
+            return nil
+        }
+        
+        guard !videoAttachments.isEmpty else { return }
+        
+        print("DEBUG: [MediaGridView] Starting background preloading for \(videoAttachments.count) videos")
+        
+        // Get URLs for all videos
+        let baseUrl = parentTweet.author?.baseUrl ?? HproseInstance.baseUrl
+        let videoURLs = videoAttachments.compactMap { index, attachment in
+            attachment.getUrl(baseUrl)
+        }
+        
+        // Start preloading with priority based on position
+        // First video gets high priority, others get normal priority
+        if let firstURL = videoURLs.first {
+            // High priority for first video
+            SharedAssetCache.shared.preloadVideo(for: firstURL)
+            
+            // Normal priority for remaining videos
+            let remainingURLs = Array(videoURLs.dropFirst())
+            if !remainingURLs.isEmpty {
+                SharedAssetCache.shared.preloadVideos(remainingURLs, priority: .normal)
+            }
         }
     }
 }

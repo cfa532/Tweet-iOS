@@ -36,6 +36,8 @@ struct MediaCell: View, Equatable {
     @State private var isVisible = false
     @State private var shouldLoadVideo: Bool
     @State private var onVideoFinished: (() -> Void)?
+    @State private var preloadTask: Task<Void, Never>?
+    @State private var isPreloading = false
     let showMuteButton: Bool
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
@@ -65,6 +67,11 @@ struct MediaCell: View, Equatable {
     
     private var baseUrl: URL {
         return parentTweet.author?.baseUrl ?? HproseInstance.baseUrl
+    }
+    
+    private var isVideoAttachment: Bool {
+        let type = attachment.type.lowercased()
+        return type == "video" || type == "hls_video"
     }
     
     var body: some View {
@@ -104,11 +111,6 @@ struct MediaCell: View, Equatable {
                         }
                         .onAppear {
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - isVisible: \(isVisible), autoPlay: \(videoManager.shouldPlayVideo(for: attachment.mid))")
-                            
-                            // Preload video for immediate display
-                            if let url = attachment.getUrl(baseUrl) {
-                                SharedAssetCache.shared.preloadVideo(for: url)
-                            }
                         }
                         .onChange(of: isVisible) { newIsVisible in
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
@@ -145,9 +147,22 @@ struct MediaCell: View, Equatable {
                             Color.gray.opacity(0.3)
                                 .aspectRatio(contentMode: .fill)
                                 .overlay(
-                                    Image(systemName: "play.circle")
-                                        .font(.system(size: 40))
-                                        .foregroundColor(.white)
+                                    Group {
+                                        if isPreloading {
+                                            // Show loading indicator during preload
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                                .scaleEffect(0.8)
+                                                .background(Color.gray.opacity(0.4))
+                                                .clipShape(Circle())
+                                                .padding(4)
+                                        } else {
+                                            // Show play button when not preloading
+                                            Image(systemName: "play.circle")
+                                                .font(.system(size: 40))
+                                                .foregroundColor(.white)
+                                        }
+                                    }
                                 )
                                 .onTapGesture {
                                     // Open full screen for video placeholders
@@ -234,12 +249,20 @@ struct MediaCell: View, Equatable {
             // Set visibility to true immediately when cell appears
             isVisible = true
             
+            // Start background preloading for videos
+            if isVideoAttachment {
+                startBackgroundPreloading()
+            }
+            
             // Refresh mute state from preferences when cell appears
             MuteState.shared.refreshFromPreferences()
         }
         .onDisappear {
             // Set visibility to false when cell disappears
             isVisible = false
+            
+            // Cancel any ongoing preload tasks
+            cancelPreloadTask()
         }
         .onChange(of: isVisible) { newValue in
             if newValue && image == nil {
@@ -249,9 +272,14 @@ struct MediaCell: View, Equatable {
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Restore video state when app becomes active
-            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+            if isVideoAttachment {
                 print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - ensuring video is loaded")
                 shouldLoadVideo = true
+                
+                // Resume background preloading if needed
+                if !shouldLoadVideo {
+                    startBackgroundPreloading()
+                }
             }
         }
         
@@ -271,6 +299,70 @@ struct MediaCell: View, Equatable {
             }
         }
         
+    }
+    
+    // MARK: - Video Preloading Methods
+    
+    /// Start background preloading of video assets
+    private func startBackgroundPreloading() {
+        guard isVideoAttachment,
+              let url = attachment.getUrl(baseUrl),
+              !shouldLoadVideo,
+              preloadTask == nil else {
+            return
+        }
+        
+        print("DEBUG: [MEDIA CELL \(attachment.mid)] Starting background preloading")
+        isPreloading = true
+        
+        preloadTask = Task {
+            do {
+                // Use lower priority for background preloading
+                try await Task.sleep(nanoseconds: 100_000_000) // 0.1 second delay
+                
+                // Check if we should still preload (cell might have disappeared)
+                guard !Task.isCancelled else {
+                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Preload cancelled")
+                    return
+                }
+                
+                // Preload asset first (lighter operation)
+                await MainActor.run {
+                    SharedAssetCache.shared.preloadAsset(for: url)
+                }
+                
+                // Wait a bit more before preloading the full player
+                try await Task.sleep(nanoseconds: 200_000_000) // 0.2 second delay
+                
+                guard !Task.isCancelled else {
+                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Preload cancelled before player creation")
+                    return
+                }
+                
+                // Preload the full player (heavier operation)
+                await MainActor.run {
+                    SharedAssetCache.shared.preloadVideo(for: url)
+                }
+                
+                await MainActor.run {
+                    isPreloading = false
+                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Background preloading completed")
+                }
+                
+            } catch {
+                await MainActor.run {
+                    isPreloading = false
+                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Background preloading failed: \(error)")
+                }
+            }
+        }
+    }
+    
+    /// Cancel ongoing preload task
+    private func cancelPreloadTask() {
+        preloadTask?.cancel()
+        preloadTask = nil
+        isPreloading = false
     }
     
     private func handleTap() {
