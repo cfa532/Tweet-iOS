@@ -114,14 +114,13 @@ struct DetailMediaCell: View {
     @State private var loading = false
     let showMuteButton: Bool
     @ObservedObject var videoManager: DetailVideoManager
-    let onImageTap: () -> Void
     
     // Local mute state management for detail view
     @State private var isMuted: Bool = false // Always unmuted in detail view
     @State private var hasSavedOriginalState: Bool = false
     @State private var unmuteTimer: Timer? = nil
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: DetailVideoManager, onImageTap: @escaping () -> Void) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: DetailVideoManager) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -129,7 +128,6 @@ struct DetailMediaCell: View {
         self.shouldLoadVideo = shouldLoadVideo
         self.showMuteButton = showMuteButton
         self.videoManager = videoManager
-        self.onImageTap = onImageTap
     }
     
     private var attachment: MimeiFileType {
@@ -209,9 +207,6 @@ struct DetailMediaCell: View {
                             }
                         }
                     }
-                    .onTapGesture {
-                        onImageTap()
-                    }
                 default:
                     Color.gray.opacity(0.2)
                 }
@@ -226,7 +221,7 @@ struct DetailMediaCell: View {
             }
             
             // Handle mute state for videos in detail view - delay 1s before unmuting
-            if (attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video") && !hasSavedOriginalState {
+            if (attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video") {
                 setupDetailViewMuteState()
             }
         }
@@ -262,9 +257,6 @@ struct DetailMediaCell: View {
     // MARK: - Mute State Management for Detail View
     
     private func setupDetailViewMuteState() {
-        // Save the original global mute state
-        
-        
         // Set local mute state to false (unmuted) immediately
         isMuted = false
     }
@@ -382,7 +374,6 @@ struct TweetDetailView: View {
                 TweetDetailView(tweet: selectedComment)
             }
         }
-        .environmentObject(MuteState.shared)
         .overlay(
             VStack {
                 Spacer()
@@ -411,14 +402,9 @@ struct TweetDetailView: View {
                             aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
                             play: index == selectedMediaIndex,
                             shouldLoadVideo:  index == selectedMediaIndex,
-                            showMuteButton: true,
+                            showMuteButton: false,
                             videoManager: DetailVideoManager.shared,
-                            onImageTap: {
-                                selectedMediaIndex = index
-                                showBrowser = true
-                            }
                         )
-                        .environmentObject(MuteState.shared)
                         .tag(index)
                     }
                 }

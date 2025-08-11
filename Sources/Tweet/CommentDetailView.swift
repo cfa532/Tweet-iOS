@@ -91,12 +91,8 @@ struct CommentDetailView: View {
                         DetailMediaCell(
                             parentTweet: comment,
                             attachmentIndex: index,
-                            showMuteButton: true,
+                            showMuteButton: false,
                             videoManager: DetailVideoManager.shared,
-                            onImageTap: {
-                                selectedMediaIndex = index
-                                showBrowser = true
-                            }
                         )
                         .tag(index)
                     }
