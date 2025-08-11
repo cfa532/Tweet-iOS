@@ -36,10 +36,10 @@ struct MediaCell: View, Equatable {
     @State private var isVisible = false
     @State private var shouldLoadVideo: Bool
     @State private var onVideoFinished: (() -> Void)?
-    @State private var isMuted: Bool = MuteState.shared.isMuted
     let showMuteButton: Bool
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
+    @ObservedObject private var muteState = MuteState.shared
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0) {
         self.parentTweet = parentTweet
@@ -85,7 +85,7 @@ struct MediaCell: View, Equatable {
                             cellAspectRatio: CGFloat(aspectRatio),
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                             showNativeControls: false, // Disable native controls to allow fullscreen tap
-                            isMuted: isMuted,
+                            isMuted: muteState.isMuted,
                             onVideoTap: {
                                 showFullScreen = true
                             },
@@ -103,11 +103,7 @@ struct MediaCell: View, Equatable {
                         .onChange(of: isVisible) { newIsVisible in
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
                         }
-                        .onChange(of: MuteState.shared.isMuted) { newMuteState in
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] Global mute state changed to: \(newMuteState)")
-                            isMuted = newMuteState
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] Local mute state updated to: \(newMuteState)")
-                        }
+
                         .overlay(
                             // Video controls overlay
                             Group {
