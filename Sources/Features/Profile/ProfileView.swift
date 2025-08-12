@@ -27,6 +27,10 @@ struct ProfileView: View {
     @State private var pinnedTweets: [Tweet] = []
     @State private var pinnedTweetIds: Set<String> = []
     
+    /// Bookmarks and favorites tweets state
+    @State private var bookmarksTweets: [Tweet] = []
+    @State private var favoritesTweets: [Tweet] = []
+    
     /// Indicates if avatar is currently being uploaded
     @State private var isUploadingAvatar = false
     /// Indicates if profile data is currently being submitted
@@ -79,10 +83,12 @@ struct ProfileView: View {
                                 },
                                 onBookmarksTap: {
                                     tweetListType = .BOOKMARKS
+                                    bookmarksTweets.removeAll() // Clear previous data
                                     showTweetList = true
                                 },
                                 onFavoritesTap: {
                                     tweetListType = .FAVORITES
+                                    favoritesTweets.removeAll() // Clear previous data
                                     showTweetList = true
                                 }
                             )
@@ -278,6 +284,14 @@ struct ProfileView: View {
         }
         .navigationDestination(isPresented: $showTweetList) {
             bookmarksOrFavoritesListView()
+                .onAppear {
+                    // Clear tweets when view appears to ensure fresh data
+                    if tweetListType == .BOOKMARKS {
+                        bookmarksTweets.removeAll()
+                    } else {
+                        favoritesTweets.removeAll()
+                    }
+                }
         }
         .navigationDestination(isPresented: Binding(
             get: { selectedUser != nil },
@@ -351,9 +365,18 @@ struct ProfileView: View {
         if tweetListType == .BOOKMARKS {
             TweetListView(
                 title: "Bookmarks",
-                tweets: .constant([]),
-                tweetFetcher: { page, size, _ in
-                    try await hproseInstance.getUserTweetsByType(user: user, type: .BOOKMARKS, pageNumber: page, pageSize: size)
+                tweets: $bookmarksTweets,
+                tweetFetcher: { page, size, isFromCache in
+                    print("DEBUG: [ProfileView] Fetching bookmarks - page: \(page), size: \(size), isFromCache: \(isFromCache)")
+                    if isFromCache {
+                        // For bookmarks/favorites, we don't cache, so return empty array
+                        print("DEBUG: [ProfileView] Cache requested for bookmarks, returning empty array")
+                        return []
+                    } else {
+                        let tweets = try await hproseInstance.getUserTweetsByType(user: user, type: .BOOKMARKS, pageNumber: page, pageSize: size)
+                        print("DEBUG: [ProfileView] Got \(tweets.count) bookmarks tweets, valid: \(tweets.compactMap { $0 }.count)")
+                        return tweets
+                    }
                 },
                 rowView: { tweet in
                     TweetItemView(
@@ -366,9 +389,18 @@ struct ProfileView: View {
         } else {
             TweetListView(
                 title: "Favorites",
-                tweets: .constant([]),
-                tweetFetcher: { page, size, _ in
-                    try await hproseInstance.getUserTweetsByType(user: user, type: .FAVORITES, pageNumber: page, pageSize: size)
+                tweets: $favoritesTweets,
+                tweetFetcher: { page, size, isFromCache in
+                    print("DEBUG: [ProfileView] Fetching favorites - page: \(page), size: \(size), isFromCache: \(isFromCache)")
+                    if isFromCache {
+                        // For favorites, we don't cache, so return empty array
+                        print("DEBUG: [ProfileView] Cache requested for favorites, returning empty array")
+                        return []
+                    } else {
+                        let tweets = try await hproseInstance.getUserTweetsByType(user: user, type: .FAVORITES, pageNumber: page, pageSize: size)
+                        print("DEBUG: [ProfileView] Got \(tweets.count) favorites tweets, valid: \(tweets.compactMap { $0 }.count)")
+                        return tweets
+                    }
                 },
                 rowView: { tweet in
                     TweetItemView(

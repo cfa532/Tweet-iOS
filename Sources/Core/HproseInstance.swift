@@ -554,21 +554,10 @@ final class HproseInstance: ObservableObject {
         guard var service = user.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
-        
-        var newClient: HproseClient? = nil
-        if user.baseUrl != appUser.baseUrl {
-            let client = HproseHttpClient()
-            client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
-            client.uri = "\(user.baseUrl!.absoluteString)/webapi/"
-            service = client.useService(HproseService.self) as AnyObject
-            newClient = client
-        }
 
         guard let response = service.runMApp(entry.rawValue, params, nil) as? [[String: Any]] else {
-            newClient?.close()
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFollows: No response"])
         }
-        newClient?.close()
         
         let sorted = response.sorted {
             (lhs, rhs) in
@@ -585,6 +574,7 @@ final class HproseInstance: ObservableObject {
         pageNumber: UInt = 0,
         pageSize: UInt = 20
     ) async throws -> [Tweet?] {
+        print("DEBUG: [HproseInstance] getUserTweetsByType called - user: \(user.mid), type: \(type.rawValue), page: \(pageNumber), size: \(pageSize)")
         let entry = "get_user_meta"
         let params = [
             "aid": appId,
@@ -595,15 +585,18 @@ final class HproseInstance: ObservableObject {
             "ps": pageSize,
             "appuserid": appUser.mid
         ] as [String : Any]
+        print("DEBUG: [HproseInstance] getUserTweetsByType params: \(params)")
         
         guard var service = user.hproseService else {
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Service not initialized for user: \(user.mid)")
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
         
         var newClient: HproseClient? = nil
         if let baseUrl = user.baseUrl, baseUrl != appUser.baseUrl {
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Creating new client for different baseUrl: \(baseUrl)")
             let client = HproseHttpClient()
-            client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
+            client.timeout = 300
             client.uri = "\(baseUrl)/webapi/"
             service = client.useService(HproseService.self) as AnyObject
             newClient = client
@@ -611,12 +604,14 @@ final class HproseInstance: ObservableObject {
         
         guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
             newClient?.close()
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Invalid response format")
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
         }
-        newClient?.close()
+        
+        print("DEBUG: [HproseInstance] getUserTweetsByType - Got response with \(response.count) items")
         
         var tweetsWithAuthors: [Tweet?] = []
-        for dict in response {
+        for (index, dict) in response.enumerated() {
             if let item = dict {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: item) }
@@ -625,14 +620,19 @@ final class HproseInstance: ObservableObject {
                     }
                     // Don't cache tweets from bookmarks/favorites - only cache from main feed
                     tweetsWithAuthors.append(tweet)
+                    print("DEBUG: [HproseInstance] getUserTweetsByType - Successfully processed tweet \(index): \(tweet.mid)")
                 } catch {
-                    print("Error processing tweet: \(error)")
+                    print("DEBUG: [HproseInstance] getUserTweetsByType - Error processing tweet \(index): \(error)")
                     tweetsWithAuthors.append(nil)
                 }
             } else {
+                print("DEBUG: [HproseInstance] getUserTweetsByType - Item \(index) is nil")
                 tweetsWithAuthors.append(nil)
             }
         }
+        
+        newClient?.close()
+        print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(tweetsWithAuthors.count) tweets, valid: \(tweetsWithAuthors.compactMap { $0 }.count)")
         return tweetsWithAuthors
     }
     
