@@ -366,8 +366,8 @@ struct ProfileView: View {
             TweetListView(
                 title: "Bookmarks",
                 tweets: $bookmarksTweets,
-                tweetFetcher: { page, size, isFromCache in
-                    print("DEBUG: [ProfileView] Fetching bookmarks - page: \(page), size: \(size), isFromCache: \(isFromCache)")
+                tweetFetcher: { page, size, isFromCache, shouldCache in
+                    print("DEBUG: [ProfileView] Fetching bookmarks - page: \(page), size: \(size), isFromCache: \(isFromCache), shouldCache: \(shouldCache)")
                     if isFromCache {
                         // For bookmarks/favorites, we don't cache, so return empty array
                         print("DEBUG: [ProfileView] Cache requested for bookmarks, returning empty array")
@@ -378,6 +378,7 @@ struct ProfileView: View {
                         return tweets
                     }
                 },
+                shouldCacheServerTweets: false,
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,
@@ -390,8 +391,8 @@ struct ProfileView: View {
             TweetListView(
                 title: "Favorites",
                 tweets: $favoritesTweets,
-                tweetFetcher: { page, size, isFromCache in
-                    print("DEBUG: [ProfileView] Fetching favorites - page: \(page), size: \(size), isFromCache: \(isFromCache)")
+                tweetFetcher: { page, size, isFromCache, shouldCache in
+                    print("DEBUG: [ProfileView] Fetching favorites - page: \(page), size: \(size), isFromCache: \(isFromCache), shouldCache: \(shouldCache)")
                     if isFromCache {
                         // For favorites, we don't cache, so return empty array
                         print("DEBUG: [ProfileView] Cache requested for favorites, returning empty array")
@@ -402,6 +403,7 @@ struct ProfileView: View {
                         return tweets
                     }
                 },
+                shouldCacheServerTweets: false,
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,

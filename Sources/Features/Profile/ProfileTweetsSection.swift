@@ -36,7 +36,7 @@ class ProfileTweetsViewModel: ObservableObject {
         pinnedTweetIds = newPinnedTweetIds
     }
     
-    func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
+    func fetchTweets(page: UInt, pageSize: UInt, shouldCache: Bool = false) async throws -> [Tweet?] {
         do {
             let serverTweets = try await hproseInstance.fetchUserTweets(
                 user: user,
@@ -62,6 +62,14 @@ class ProfileTweetsViewModel: ObservableObject {
             await MainActor.run {
                 tweets.mergeTweets(filteredTweets.compactMap{ $0 })
             }
+            
+            // Cache tweets if shouldCache is true
+            if shouldCache {
+                for tweet in filteredTweets.compactMap({ $0 }) {
+                    TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
+                }
+            }
+            
             return filteredTweets
         } catch {
             print("[ProfileTweetsViewModel] Error fetching tweets: \(error)")
@@ -139,14 +147,14 @@ struct ProfileTweetsSection<Header: View>: View {
         TweetListView<TweetItemView>(
             title: "",
             tweets: $viewModel.tweets,
-            tweetFetcher: { page, size, isFromCache in
+            tweetFetcher: { page, size, isFromCache, shouldCache in
                 if isFromCache {
                     return []
                 } else {
-                    return try await viewModel.fetchTweets(page: page, pageSize: size)
+                    return try await viewModel.fetchTweets(page: page, pageSize: size, shouldCache: shouldCache)
                 }
             },
-            showTitle: false,
+            showTitle: false, shouldCacheServerTweets: false,
             notifications: [
                 TweetListNotification(
                     name: .newTweetCreated,

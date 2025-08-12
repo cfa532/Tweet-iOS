@@ -20,7 +20,7 @@ struct FollowingsTweetView: View {
             TweetListView<TweetItemView>(
                 title: "Timeline",
                 tweets: $viewModel.tweets,
-                tweetFetcher: { page, size, isFromCache in
+                tweetFetcher: { page, size, isFromCache, shouldCache in
                     if isFromCache {
                         // Fetch from cache - don't merge here, let TweetListView handle it
                         let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
@@ -30,10 +30,10 @@ struct FollowingsTweetView: View {
                         return filteredCachedTweets.map { Optional($0) }
                     } else {
                         // Fetch from server
-                        return await viewModel.fetchTweets(page: page, pageSize: size)
+                        return await viewModel.fetchTweets(page: page, pageSize: size, shouldCache: shouldCache)
                     }
                 },
-                showTitle: false,
+                showTitle: false, shouldCacheServerTweets: true,
                 notifications: [
                     TweetListNotification(
                         name: .newTweetCreated,

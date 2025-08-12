@@ -20,7 +20,7 @@ class FollowingsTweetViewModel: ObservableObject {
         self.hproseInstance = hproseInstance
     }
     
-    func fetchTweets(page: UInt, pageSize: UInt) async -> [Tweet?] {
+    func fetchTweets(page: UInt, pageSize: UInt, shouldCache: Bool = true) async -> [Tweet?] {
         // fetch tweets from server
         // Load tweets of alphaId if appUser is a guest user
         if hproseInstance.appUser.isGuest {
@@ -51,6 +51,13 @@ class FollowingsTweetViewModel: ObservableObject {
             )
             await MainActor.run {
                 tweets.mergeTweets(serverTweets.compactMap{ $0 })
+            }
+            
+            // Cache tweets if shouldCache is true
+            if shouldCache {
+                for tweet in serverTweets.compactMap({ $0 }) {
+                    TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
+                }
             }
             if page == 0 {
                 // only check for new tweets from followings on initial load.

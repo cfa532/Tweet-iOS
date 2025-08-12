@@ -11,12 +11,13 @@ struct TweetListNotification {
 struct TweetListView<RowView: View>: View {
     // MARK: - Properties
     let title: String
-    let tweetFetcher: @Sendable (UInt, UInt, Bool) async throws -> [Tweet?]
+    let tweetFetcher: @Sendable (UInt, UInt, Bool, Bool) async throws -> [Tweet?]
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     let header: (() -> AnyView)?
     let notifications: [TweetListNotification]
     let onScroll: ((CGFloat) -> Void)?
+    let shouldCacheServerTweets: Bool
     private let pageSize: UInt = 10
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -38,8 +39,9 @@ struct TweetListView<RowView: View>: View {
     init(
         title: String,
         tweets: Binding<[Tweet]>,
-        tweetFetcher: @escaping @Sendable (UInt, UInt, Bool) async throws -> [Tweet?],
+        tweetFetcher: @escaping @Sendable (UInt, UInt, Bool, Bool) async throws -> [Tweet?],
         showTitle: Bool = true,
+        shouldCacheServerTweets: Bool = false,
         notifications: [TweetListNotification]? = nil,
         onScroll: ((CGFloat) -> Void)? = nil,
         header: (() -> AnyView)? = nil,
@@ -49,6 +51,7 @@ struct TweetListView<RowView: View>: View {
         self._tweets = tweets
         self.tweetFetcher = tweetFetcher
         self.showTitle = showTitle
+        self.shouldCacheServerTweets = shouldCacheServerTweets
         self.onScroll = onScroll
         self.header = header
         // Default: listen for newTweetCreated and insert at top
@@ -149,7 +152,7 @@ struct TweetListView<RowView: View>: View {
             print("[TweetListView] Loading page \(page) for user: \(hproseInstance.appUser.mid)")
             
             // Step 1: Load from cache first for instant UX (always try cache)
-            let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
+            let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
             await MainActor.run {
                 tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
                 isLoading = false
@@ -197,7 +200,7 @@ struct TweetListView<RowView: View>: View {
                 print("[TweetListView] Starting to load more tweets - page: \(nextPage) for user: \(hproseInstance.appUser.mid)")
                 
                 // Step 1: Load from cache first for instant UX
-                let tweetsFromCache = try await tweetFetcher(nextPage, pageSize, true)
+                let tweetsFromCache = try await tweetFetcher(nextPage, pageSize, true, false)
                 await MainActor.run {
                     print("[TweetListView] Got \(tweetsFromCache.count) tweets from cache for user: \(hproseInstance.appUser.mid)")
                     tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
@@ -226,7 +229,7 @@ struct TweetListView<RowView: View>: View {
         }
         
         do {
-            let tweetsFromServer = try await tweetFetcher(page, pageSize, false)
+            let tweetsFromServer = try await tweetFetcher(page, pageSize, false, shouldCacheServerTweets)
             let hasValidTweet = tweetsFromServer.contains { $0 != nil }
             
             await MainActor.run {
