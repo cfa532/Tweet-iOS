@@ -1908,40 +1908,7 @@ final class HproseInstance: ObservableObject {
             throw error
         }
     }
-    
-    /// Get hosts IPs with BlackList integration
-    func getHostsIPs(mimeiId: MimeiId) async throws -> [String] {
-        // Check if this resource is blacklisted
-        if blackList.isBlacklisted(mimeiId) {
-            print("[HproseInstance] Skipping blacklisted resource: \(mimeiId)")
-            throw URLError(.badServerResponse)
-        }
-        
-        do {
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "mid": mimeiId
-            ]
-            
-            if let response = appUser.hproseService?.runMApp("get_hosts", params, []) {
-                if let ips = response as? [String] {
-                    // Record success
-                    blackList.recordSuccess(mimeiId)
-                    return ips
-                }
-            }
-            
-            // Record failure if no valid response
-            blackList.recordFailure(mimeiId)
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response from get_hosts"])
-        } catch {
-            // Record failure
-            blackList.recordFailure(mimeiId)
-            throw error
-        }
-    }
-    
+
     /// Process BlackList candidates (move eligible ones to blacklist)
     func processBlackListCandidates() {
         blackList.processCandidates()
