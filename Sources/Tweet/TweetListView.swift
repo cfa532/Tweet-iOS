@@ -157,14 +157,16 @@ struct TweetListView<RowView: View>: View {
             let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
             await MainActor.run {
                 tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
-                isLoading = false
-                initialLoadComplete = true
                 print("[TweetListView] Loaded \(tweetsFromCache.compactMap { $0 }.count) tweets from cache")
             }
             
-            // Step 2: Load from server to update with fresh data (non-blocking, no retry)
-            Task {
-                await loadFromServer(page: page, pageSize: pageSize)
+            // Step 2: Load from server to update with fresh data
+            await loadFromServer(page: page, pageSize: pageSize)
+            
+            // Set loading complete after both cache and server loading
+            await MainActor.run {
+                isLoading = false
+                initialLoadComplete = true
             }
             
         } catch {
