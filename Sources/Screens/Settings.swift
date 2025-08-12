@@ -12,6 +12,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
     @EnvironmentObject private var themeManager: ThemeManager
+    @ObservedObject private var muteState = MuteState.shared
     @State private var isCleaningCache = false
     @State private var showCacheCleanedAlert = false
     
@@ -31,6 +32,12 @@ struct SettingsView: View {
                 
                 Section(header: Text(LocalizedStringKey("App Settings"))) {
                     Toggle("Dark Mode", isOn: $themeManager.isDarkMode)
+                    
+                    Toggle(LocalizedStringKey("Mute Videos"), isOn: $muteState.isMuted)
+                        .onChange(of: muteState.isMuted) { newValue in
+                            // The MuteState will automatically save to preferences
+                            print("DEBUG: [SETTINGS] Mute setting changed to: \(newValue)")
+                        }
                     
                     Button(action: {
                         cleanupCache()

@@ -17,9 +17,6 @@ class AppState: ObservableObject {
             // Load chat sessions after user is properly initialized
             ChatSessionManager.shared.loadSessionsWhenUserAvailable()
             
-            // Reset speaker mute preference to default (muted)
-            PreferenceHelper().resetSpeakerMuteToDefault()
-            
             // Refresh mute state from preferences after HproseInstance is ready
             MuteState.shared.refreshFromPreferences()
             
