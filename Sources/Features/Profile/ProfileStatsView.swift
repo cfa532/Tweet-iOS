@@ -7,6 +7,7 @@ struct ProfileStatsView: View {
     let onFollowingTap: () -> Void
     let onBookmarksTap: () -> Void
     let onFavoritesTap: () -> Void
+    @EnvironmentObject private var hproseInstance: HproseInstance
     
     var body: some View {
         HStack {
@@ -45,27 +46,29 @@ struct ProfileStatsView: View {
                     .foregroundColor(.themeText)
             }
             Spacer()
-            Button {
-                onBookmarksTap()
-            } label: {
-                VStack {
-                    Image(systemName: "bookmark")
-                        .foregroundColor(.themeSecondaryText)
-                    Text("\(user.bookmarksCount ?? 0)")
-                        .font(.headline)
-                        .foregroundColor(.themeText)
+            if hproseInstance.appUser.mid == user.mid {
+                Button {
+                    onBookmarksTap()
+                } label: {
+                    VStack {
+                        Image(systemName: "bookmark")
+                            .foregroundColor(.themeSecondaryText)
+                        Text("\(user.bookmarksCount ?? 0)")
+                            .font(.headline)
+                            .foregroundColor(.themeText)
+                    }
                 }
-            }
-            Spacer()
-            Button {
-                onFavoritesTap()
-            } label: {
-                VStack {
-                    Image(systemName: "heart")
-                        .foregroundColor(.themeSecondaryText)
-                    Text("\(user.favoritesCount ?? 0)")
-                        .font(.headline)
-                        .foregroundColor(.themeText)
+                Spacer()
+                Button {
+                    onFavoritesTap()
+                } label: {
+                    VStack {
+                        Image(systemName: "heart")
+                            .foregroundColor(.themeSecondaryText)
+                        Text("\(user.favoritesCount ?? 0)")
+                            .font(.headline)
+                            .foregroundColor(.themeText)
+                    }
                 }
             }
         }
@@ -73,4 +76,4 @@ struct ProfileStatsView: View {
         .padding(.vertical, 8)
         .background(Color.themeSecondaryBackground)
     }
-} 
+}

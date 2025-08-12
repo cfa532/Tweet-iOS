@@ -137,6 +137,8 @@ struct TweetListView<RowView: View>: View {
                     }
             }
         }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Methods
