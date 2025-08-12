@@ -90,10 +90,10 @@
             filePath = "Sources/Features/Profile/ProfileView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "319"
-            endingLineNumber = "319"
-            landmarkName = "showToastMessage(_:type:)"
-            landmarkType = "7">
+            startingLineNumber = "317"
+            endingLineNumber = "317"
+            landmarkName = "body"
+            landmarkType = "24">
          </BreakpointContent>
       </BreakpointProxy>
       <BreakpointProxy

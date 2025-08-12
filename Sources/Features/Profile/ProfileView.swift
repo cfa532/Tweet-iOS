@@ -146,9 +146,18 @@ struct ProfileView: View {
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                if isAppUser {
-                    Button("Logout") {
-                        onLogout?()
+                HStack(spacing: 12) {
+                    if !isAppUser {
+                        Button(action: {
+                            showChat = true
+                        }) {
+                            Image(systemName: "message")
+                                .foregroundColor(.blue)
+                        }
+                    }
+                    
+                    if isAppUser {
+                        // show nothing for now.
                     }
                 }
             }
