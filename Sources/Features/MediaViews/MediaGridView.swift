@@ -87,7 +87,6 @@ struct MediaGridView: View {
                         videoManager: videoManager,
                         forceRefreshTrigger: forceRefreshTrigger
                     )
-                    .environmentObject(MuteState.shared)
                     .frame(width: gridWidth, height: gridHeight)
                     .clipped().contentShape(Rectangle())
                     .contentShape(Rectangle())

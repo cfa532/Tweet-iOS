@@ -293,14 +293,6 @@ struct TweetDetailView: View {
     private var displayTweet: Tweet {
         let isRetweet = (tweet.content == nil || tweet.content?.isEmpty == true) &&
                        (tweet.attachments == nil || tweet.attachments?.isEmpty == true)
-        
-        print("[TweetDetailView] displayTweet computation:")
-        print("[TweetDetailView] tweet.mid: \(tweet.mid)")
-        print("[TweetDetailView] tweet.content: \(tweet.content ?? "nil")")
-        print("[TweetDetailView] tweet.attachments count: \(tweet.attachments?.count ?? 0)")
-        print("[TweetDetailView] isRetweet: \(isRetweet)")
-        print("[TweetDetailView] originalTweet?.mid: \(originalTweet?.mid ?? "nil")")
-        
         if isRetweet {
             let result = originalTweet ?? tweet
             print("[TweetDetailView] Returning originalTweet: \(result.mid)")
