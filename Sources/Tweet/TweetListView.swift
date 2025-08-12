@@ -155,12 +155,14 @@ struct TweetListView<RowView: View>: View {
             
             // Step 1: Load from cache first for instant UX (always try cache)
             let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
+            let validCachedTweets = tweetsFromCache.compactMap { $0 }
+            
             await MainActor.run {
-                tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
-                print("[TweetListView] Loaded \(tweetsFromCache.compactMap { $0 }.count) tweets from cache")
+                tweets.mergeTweets(validCachedTweets)
+                print("[TweetListView] Loaded \(validCachedTweets.count) tweets from cache")
             }
             
-            // Step 2: Load from server to update with fresh data
+            // Step 2: Always load from server to get the most up-to-date data
             await loadFromServer(page: page, pageSize: pageSize)
             
             // Set loading complete after both cache and server loading
@@ -183,8 +185,46 @@ struct TweetListView<RowView: View>: View {
 
     func refreshTweets() async {
         guard !isLoading else { return }
+        
+        print("[TweetListView] Starting refresh for user: \(hproseInstance.appUser.mid)")
+        isLoading = true
         initialLoadComplete = false
-        await performInitialLoad()
+        currentPage = 0
+        
+        do {
+            // Always load fresh data from server for refresh
+            let freshTweets = try await tweetFetcher(0, pageSize, false, shouldCacheServerTweets)
+            let validTweets = freshTweets.compactMap { $0 }
+            let hasValidTweet = !validTweets.isEmpty
+            
+            await MainActor.run {
+                // Always use server data if we have valid tweets
+                if hasValidTweet {
+                    tweets = validTweets
+                    currentPage = 0
+                    hasMoreTweets = freshTweets.count >= pageSize
+                    print("[TweetListView] Refreshed with \(tweets.count) fresh tweets from server for user: \(hproseInstance.appUser.mid)")
+                } else {
+                    // Only clear if server returned no valid tweets
+                    tweets = []
+                    hasMoreTweets = false
+                    print("[TweetListView] Server returned no valid tweets, cleared list for user: \(hproseInstance.appUser.mid)")
+                }
+                
+                isLoading = false
+                initialLoadComplete = true
+            }
+            
+        } catch {
+            print("[TweetListView] Refresh failed for user \(hproseInstance.appUser.mid): \(error)")
+            await MainActor.run {
+                isLoading = false
+                initialLoadComplete = true
+                // Keep existing tweets on refresh failure
+            }
+        }
+        
+        print("[TweetListView] Refresh complete - total tweets: \(tweets.count), hasMoreTweets: \(hasMoreTweets) for user: \(hproseInstance.appUser.mid)")
     }
 
     func loadMoreTweets(page: UInt? = nil) {
@@ -234,13 +274,24 @@ struct TweetListView<RowView: View>: View {
         
         do {
             let tweetsFromServer = try await tweetFetcher(page, pageSize, false, shouldCacheServerTweets)
-            let hasValidTweet = tweetsFromServer.contains { $0 != nil }
+            let validServerTweets = tweetsFromServer.compactMap { $0 }
+            let hasValidTweet = !validServerTweets.isEmpty
             
             await MainActor.run {
-                print("[TweetListView] Got \(tweetsFromServer.count) tweets from server for user: \(hproseInstance.appUser.mid)")
-                tweets.mergeTweets(tweetsFromServer.compactMap { $0 })
+                print("[TweetListView] Got \(tweetsFromServer.count) tweets from server, \(validServerTweets.count) valid for user: \(hproseInstance.appUser.mid)")
                 
+                // Always use server data if we have valid tweets
                 if hasValidTweet {
+                    if page == 0 {
+                        // For first page, replace all tweets with server data
+                        tweets = validServerTweets
+                        print("[TweetListView] Replaced tweets with server data for page 0")
+                    } else {
+                        // For subsequent pages, merge server data
+                        tweets.mergeTweets(validServerTweets)
+                        print("[TweetListView] Merged server data for page \(page)")
+                    }
+                    
                     currentPage = page
                     print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
                 } else if tweetsFromServer.count < pageSize {
