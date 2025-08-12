@@ -211,12 +211,27 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            // App returning from background - restore state if needed
-            if player?.rate ?? 0 > 0 && isVisible && currentAutoPlay {
-                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App returning from background - restoring playback")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    // Small delay to ensure UI is ready
-                    checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+            // App returning from background - force refresh video layer to show cached content
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App returning from background - refreshing video layer")
+            
+            // Use the more aggressive force refresh method
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.forceVideoLayerRefresh()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // App became active - additional refresh to ensure video layer is visible
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] App became active - ensuring video layer visibility")
+            
+            // Additional refresh with a longer delay to ensure UI is fully ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                if let player = self.player {
+                    // Force a seek to refresh the video layer
+                    let currentTime = player.currentTime()
+                    player.seek(to: currentTime) { _ in
+                        // Video layer should now be refreshed and showing cached content
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(self.instanceId)] Video layer refreshed after app became active")
+                    }
                 }
             }
         }
@@ -275,6 +290,10 @@ struct SimpleVideoPlayer: View {
                         } onPressingChanged: { pressing in
                             isLongPressing = pressing
                         }
+                        .background(
+                            // Hidden view to access the underlying layer for refresh
+                            VideoLayerRefreshView(player: player, mid: mid, instanceId: String(instanceId))
+                        )
                 } else {
                     VideoPlayer(player: player, videoOverlay: {
                         // Custom overlay that captures taps
@@ -293,6 +312,10 @@ struct SimpleVideoPlayer: View {
                             }
                     })
                     .clipped()
+                    .background(
+                        // Hidden view to access the underlying layer for refresh
+                        VideoLayerRefreshView(player: player, mid: mid, instanceId: String(instanceId))
+                    )
                 }
             } else if isLoading {
                 ProgressView("Loading video...")
@@ -455,6 +478,39 @@ struct SimpleVideoPlayer: View {
         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Load failed, retry count: \(retryCount)")
     }
     
+    /// Force refresh the video layer to show cached content
+    private func forceVideoLayerRefresh() {
+        guard let player = player else { return }
+        
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Force refreshing video layer")
+        
+        // Store current state
+        let wasPlaying = player.rate > 0
+        let currentTime = player.currentTime()
+        let currentItem = player.currentItem
+        
+        // Temporarily remove and re-add the player item to force layer refresh
+        player.replaceCurrentItem(with: nil)
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+            // Re-add the same item
+            player.replaceCurrentItem(with: currentItem)
+            
+            // Seek to the same position
+            player.seek(to: currentTime) { finished in
+                if finished {
+                    // If it was playing before, resume playback
+                    if wasPlaying && isVisible && currentAutoPlay {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Resuming playback after force refresh")
+                            player.play()
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     private func retryLoad() {
         guard retryCount < 3 else {
             print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Max retry attempts reached")
@@ -508,5 +564,56 @@ struct SimpleVideoPlayer: View {
         } catch {
         return false
         }
+    }
+}
+
+// MARK: - Video Layer Refresh View
+struct VideoLayerRefreshView: UIViewRepresentable {
+    let player: AVPlayer
+    let mid: String
+    let instanceId: String
+    
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
+        
+        // Set up notification observer for app foreground
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            self.refreshVideoLayer()
+        }
+        
+        return view
+    }
+    
+    func updateUIView(_ uiView: UIView, context: Context) {
+        // This view is used to access the underlying video layer for refresh
+    }
+    
+    private func refreshVideoLayer() {
+        // Force refresh the video layer by temporarily changing its properties
+        DispatchQueue.main.async {
+            // Find the AVPlayerLayer in the view hierarchy
+            if let playerLayer = self.findPlayerLayer(in: self.player) {
+                print("DEBUG: [VIDEO LAYER REFRESH \(mid):\(instanceId)] Refreshing video layer")
+                
+                // Temporarily change opacity to force a redraw
+                let originalOpacity = playerLayer.opacity
+                playerLayer.opacity = 0.99
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                    playerLayer.opacity = originalOpacity
+                }
+            }
+        }
+    }
+    
+    private func findPlayerLayer(in player: AVPlayer) -> AVPlayerLayer? {
+        // This is a fallback method - the main refresh logic is in the parent view
+        return nil
     }
 } 

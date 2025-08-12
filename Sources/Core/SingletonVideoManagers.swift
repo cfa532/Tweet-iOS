@@ -8,12 +8,15 @@
 
 import Foundation
 import AVFoundation
+import UIKit
 
 /// Singleton video manager for detail view context
 @MainActor
 class DetailVideoManager: ObservableObject {
     static let shared = DetailVideoManager()
-    private init() {}
+    private init() {
+        setupAppLifecycleNotifications()
+    }
     
     @Published var currentPlayer: AVPlayer?
     @Published var currentVideoMid: String?
@@ -76,13 +79,68 @@ class DetailVideoManager: ObservableObject {
             isPlaying = true
         }
     }
+    
+    // MARK: - App Lifecycle Handling
+    
+    private func setupAppLifecycleNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppWillEnterForeground()
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppDidBecomeActive()
+        }
+    }
+    
+    private func handleAppWillEnterForeground() {
+        print("DEBUG: [DETAIL VIDEO MANAGER] App will enter foreground - refreshing video layer")
+        refreshVideoLayer()
+    }
+    
+    private func handleAppDidBecomeActive() {
+        print("DEBUG: [DETAIL VIDEO MANAGER] App did become active - ensuring video layer visibility")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            self.refreshVideoLayer()
+        }
+    }
+    
+    private func refreshVideoLayer() {
+        guard let player = currentPlayer else { return }
+        
+        print("DEBUG: [DETAIL VIDEO MANAGER] Refreshing video layer")
+        
+        // Store current state
+        let wasPlaying = isPlaying
+        let currentTime = player.currentTime()
+        
+        // Force a seek to refresh the video layer
+        player.seek(to: currentTime) { finished in
+            if finished && wasPlaying {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Resuming playback after refresh")
+                    player.play()
+                    self.isPlaying = true
+                }
+            }
+        }
+    }
 }
 
 /// Singleton video manager for fullscreen context
 @MainActor  
 class FullscreenVideoManager: ObservableObject {
     static let shared = FullscreenVideoManager()
-    private init() {}
+    private init() {
+        setupAppLifecycleNotifications()
+    }
     
     @Published var currentPlayer: AVPlayer?
     @Published var currentVideoMid: String?
@@ -140,6 +198,59 @@ class FullscreenVideoManager: ObservableObject {
         } else {
             player.play()
             isPlaying = true
+        }
+    }
+    
+    // MARK: - App Lifecycle Handling
+    
+    private func setupAppLifecycleNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppWillEnterForeground()
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppDidBecomeActive()
+        }
+    }
+    
+    private func handleAppWillEnterForeground() {
+        print("DEBUG: [FULLSCREEN VIDEO MANAGER] App will enter foreground - refreshing video layer")
+        refreshVideoLayer()
+    }
+    
+    private func handleAppDidBecomeActive() {
+        print("DEBUG: [FULLSCREEN VIDEO MANAGER] App did become active - ensuring video layer visibility")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            self.refreshVideoLayer()
+        }
+    }
+    
+    private func refreshVideoLayer() {
+        guard let player = currentPlayer else { return }
+        
+        print("DEBUG: [FULLSCREEN VIDEO MANAGER] Refreshing video layer")
+        
+        // Store current state
+        let wasPlaying = isPlaying
+        let currentTime = player.currentTime()
+        
+        // Force a seek to refresh the video layer
+        player.seek(to: currentTime) { finished in
+            if finished && wasPlaying {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    print("DEBUG: [FULLSCREEN VIDEO MANAGER] Resuming playback after refresh")
+                    player.play()
+                    self.isPlaying = true
+                }
+            }
         }
     }
 }

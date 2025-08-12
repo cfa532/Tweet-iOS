@@ -7,6 +7,7 @@
 
 import Foundation
 import AVFoundation
+import UIKit
 
 /// Shared asset cache for video players with background loading and priority management
 @MainActor
@@ -16,6 +17,9 @@ class SharedAssetCache: ObservableObject {
     private init() {
         // Start background cleanup timer
         startBackgroundCleanup()
+        
+        // Set up app lifecycle notifications
+        setupAppLifecycleNotifications()
     }
     
     // MARK: - Cache Storage
@@ -331,6 +335,52 @@ class SharedAssetCache: ObservableObject {
     /// Get cache statistics
     @MainActor func getCacheStats() -> (assetCount: Int, playerCount: Int) {
         return (assetCache.count, playerCache.count)
+    }
+    
+    // MARK: - App Lifecycle Handling
+    
+    private func setupAppLifecycleNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppWillEnterForeground()
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppDidBecomeActive()
+        }
+    }
+    
+    private func handleAppWillEnterForeground() {
+        print("DEBUG: [SHARED ASSET CACHE] App will enter foreground - refreshing cached players")
+        refreshCachedPlayers()
+    }
+    
+    private func handleAppDidBecomeActive() {
+        print("DEBUG: [SHARED ASSET CACHE] App did become active - ensuring cached players are ready")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            self.refreshCachedPlayers()
+        }
+    }
+    
+    private func refreshCachedPlayers() {
+        // Refresh all cached players to ensure they show cached content
+        for (urlString, player) in playerCache {
+            print("DEBUG: [SHARED ASSET CACHE] Refreshing cached player for: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
+            
+            // Force a seek to refresh the video layer
+            let currentTime = player.currentTime()
+            player.seek(to: currentTime) { _ in
+                // Video layer should now be refreshed and showing cached content
+                print("DEBUG: [SHARED ASSET CACHE] Refreshed cached player for: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
+            }
+        }
     }
 }
 
