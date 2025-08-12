@@ -62,7 +62,7 @@
 		469A99622DEF318C00954049 /* TweetModel.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 469A99602DEF318C00954049 /* TweetModel.xcdatamodeld */; };
 		469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469CF0EF2E27FEC000FBCDB8 /* AppDelegate.swift */; };
 		469CF0F22E27FED700FBCDB8 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469CF0F12E27FED700FBCDB8 /* OrientationManager.swift */; };
-		46B03D812E474E63000E08DF /* VideoAssetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D802E474E63000E08DF /* VideoAssetCache.swift */; };
+
 		46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */; };
 		46B03D852E486D3B000E08DF /* MuteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D842E486D36000E08DF /* MuteState.swift */; };
 		46B03D872E48866C000E08DF /* ReplyEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D862E48866C000E08DF /* ReplyEditorView.swift */; };
@@ -165,7 +165,7 @@
 		469A99612DEF318C00954049 /* TweetModel.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = TweetModel.xcdatamodel; sourceTree = "<group>"; };
 		469CF0EF2E27FEC000FBCDB8 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		469CF0F12E27FED700FBCDB8 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
-		46B03D802E474E63000E08DF /* VideoAssetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoAssetCache.swift; sourceTree = "<group>"; };
+
 		46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingletonVideoManagers.swift; sourceTree = "<group>"; };
 		46B03D842E486D36000E08DF /* MuteState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteState.swift; sourceTree = "<group>"; };
 		46B03D862E48866C000E08DF /* ReplyEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyEditorView.swift; sourceTree = "<group>"; };
@@ -294,7 +294,6 @@
 			isa = PBXGroup;
 			children = (
 				46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */,
-				46B03D802E474E63000E08DF /* VideoAssetCache.swift */,
 				46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */,
 				460680E72E16264C00D9D15A /* VideoCacheManager.swift */,
 				46B03D902E49E35B000E08DF /* SharedAssetCache.swift */,
@@ -615,7 +614,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
-				46B03D812E474E63000E08DF /* VideoAssetCache.swift in Sources */,
+
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
 				46B03D892E488EC0000E08DF /* CameraView.swift in Sources */,
 				468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */,
