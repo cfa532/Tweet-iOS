@@ -135,10 +135,6 @@ class VideoCacheManager: ObservableObject {
         }
     }
     
-
-    
-
-    
     /// Set mute state for a video player
     func setMuteState(for videoMid: String, isMuted: Bool) {
         cacheLock.lock()
@@ -242,90 +238,6 @@ class VideoCacheManager: ObservableObject {
         }
     }
     
-    /// Restore video players when app becomes active (fixes black screen issue)
-    func restoreVideoPlayers() {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        
-        print("DEBUG: [VIDEO CACHE] Restoring video players after app became active")
-        
-        for (mid, cachedPlayer) in videoCache {
-            // Multiple strategies to minimize black screen duration
-            restorePlayerLayer(cachedPlayer: cachedPlayer, mid: mid)
-            cachedPlayer.lastAccessed = Date()
-        }
-    }
-    
-    /// Enhanced player layer restoration with multiple techniques
-    private func restorePlayerLayer(cachedPlayer: CachedVideoPlayer, mid: String) {
-        let player = cachedPlayer.player
-        let currentTime = player.currentTime()
-        let wasPlaying = player.rate > 0
-        
-        // Strategy 1: Immediate micro-seek to force layer refresh
-        player.seek(to: currentTime, toleranceBefore: CMTime(value: 1, timescale: 600), toleranceAfter: CMTime(value: 1, timescale: 600)) { [weak player] completed in
-            guard let player = player, completed else { return }
-            
-            // Strategy 2: Brief pause-play cycle to reinitialize layer
-            if wasPlaying {
-                player.pause()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-                    player.play()
-                }
-            }
-            
-            print("DEBUG: [VIDEO CACHE] Enhanced restoration completed for mid: \(mid)")
-        }
-        
-        // Strategy 3: Force immediate layer update by changing a player property
-        let currentVolume = player.volume
-        player.volume = currentVolume == 1.0 ? 0.99 : 1.0
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-            player.volume = currentVolume
-        }
-    }
-    
-    /// Force refresh video layer for a specific video (for severe black screen cases)
-    func forceRefreshVideoLayer(for videoMid: String) {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        
-        guard let cachedPlayer = videoCache[videoMid] else {
-            print("DEBUG: [VIDEO CACHE] No cached player found for mid: \(videoMid)")
-            return
-        }
-        
-        print("DEBUG: [VIDEO CACHE] Force refreshing video layer for mid: \(videoMid)")
-        
-        // Use enhanced restoration techniques
-        restorePlayerLayer(cachedPlayer: cachedPlayer, mid: videoMid)
-        cachedPlayer.lastAccessed = Date()
-        
-        // Health check temporarily disabled to prevent freezing
-        // TODO: Re-implement health check without deadlocks
-    }
-    
-    /// Prepare video players for background transition (reduces black screen duration)
-    func prepareForBackground() {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        
-        print("DEBUG: [VIDEO CACHE] Preparing video players for background transition")
-        
-        for (mid, cachedPlayer) in videoCache {
-            // Store current state for faster restoration
-            let player = cachedPlayer.player
-            let currentTime = player.currentTime()
-            let wasPlaying = player.rate > 0
-            
-            // Store state in the cached player for quick restoration
-            cachedPlayer.preservedTime = currentTime
-            cachedPlayer.wasPlayingBeforeBackground = wasPlaying
-            
-            print("DEBUG: [VIDEO CACHE] Prepared player \(mid) - time: \(currentTime.seconds), playing: \(wasPlaying)")
-        }
-    }
-    
     /// Check if a video player's layer is healthy (has visual content) - LOCK-FREE VERSION
     private func checkVideoLayerHealthUnsafe(for videoMid: String) -> Bool {
         // This method assumes cacheLock is already held by caller
@@ -404,21 +316,15 @@ class VideoCacheManager: ObservableObject {
             // Use preserved state for faster restoration
             let player = cachedPlayer.player
             
-            if let preservedTime = cachedPlayer.preservedTime {
-                print("DEBUG: [VIDEO CACHE] Restoring \(mid) with preserved state - time: \(preservedTime.seconds)")
-                // Immediate restoration using preserved state
-                player.seek(to: preservedTime, toleranceBefore: .zero, toleranceAfter: .zero) { completed in
-                    if completed, cachedPlayer.wasPlayingBeforeBackground {
-                        DispatchQueue.main.async {
-                            player.play()
-                            print("DEBUG: [VIDEO CACHE] Resumed playback for \(mid)")
-                        }
-                    }
+            // Simple restoration without preserved state
+            let currentTime = player.currentTime()
+            print("DEBUG: [VIDEO CACHE] Restoring \(mid) with current time: \(currentTime.seconds)")
+            
+            // Basic restoration
+            player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { completed in
+                if completed {
+                    print("DEBUG: [VIDEO CACHE] Restoration completed for \(mid)")
                 }
-            } else {
-                print("DEBUG: [VIDEO CACHE] Restoring \(mid) with fallback method")
-                // Fallback to standard restoration
-                restorePlayerLayer(cachedPlayer: cachedPlayer, mid: mid)
             }
             
             cachedPlayer.lastAccessed = Date()
@@ -453,40 +359,6 @@ class VideoCacheManager: ObservableObject {
         }
     }
     
-    /// Handle video restoration after app has been idle (fixes black screen from long idle periods)
-    func handleVideoRestorationAfterIdle() {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        
-        print("DEBUG: [VIDEO CACHE] Handling video restoration after idle period")
-        
-        for (mid, cachedPlayer) in videoCache {
-            // Check if the player item is still valid
-            guard let playerItem = cachedPlayer.player.currentItem,
-                  playerItem.status == .readyToPlay else {
-                print("DEBUG: [VIDEO CACHE] Player item not ready for mid: \(mid), skipping restoration")
-                continue
-            }
-            
-            // For videos that were playing before, try to restore them
-            let wasPlaying = cachedPlayer.player.rate != 0
-            let currentTime = cachedPlayer.player.currentTime()
-            
-            // Force a seek to refresh the video layer
-            cachedPlayer.player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                if wasPlaying {
-                    // Resume playback if it was playing before
-                    cachedPlayer.player.play()
-                    print("DEBUG: [VIDEO CACHE] Restored and resumed video for mid: \(mid)")
-                } else {
-                    print("DEBUG: [VIDEO CACHE] Restored video layer for mid: \(mid) (was paused)")
-                }
-            }
-            
-            cachedPlayer.lastAccessed = Date()
-        }
-    }
-    
     /// Get cache statistics for debugging
     func getCacheStats() -> (count: Int, maxSize: Int) {
         cacheLock.lock()
@@ -516,8 +388,6 @@ class CachedVideoPlayer {
     let videoMid: String
     let url: URL
     var lastAccessed: Date
-    var preservedTime: CMTime? = nil
-    var wasPlayingBeforeBackground: Bool = false
     var resolvedPlaylistURL: URL? = nil // Cache resolved HLS playlist URL
     var isHLSMode: Bool = true // Remember if this is HLS or regular video
     
@@ -526,8 +396,6 @@ class CachedVideoPlayer {
         self.videoMid = videoMid
         self.url = url
         self.lastAccessed = Date()
-        self.preservedTime = nil
-        self.wasPlayingBeforeBackground = false
         self.resolvedPlaylistURL = nil
         self.isHLSMode = true
     }

@@ -74,7 +74,6 @@ struct CommentItemView: View {
             isVisible = false
             comment.isVisible = false
         }
-        .environmentObject(MuteState.shared)
     }
 }
 

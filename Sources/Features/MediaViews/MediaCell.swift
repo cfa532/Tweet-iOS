@@ -253,9 +253,6 @@ struct MediaCell: View, Equatable {
             if isVideoAttachment {
                 startBackgroundPreloading()
             }
-            
-            // Refresh mute state from preferences when cell appears
-            MuteState.shared.refreshFromPreferences()
         }
         .onDisappear {
             // Set visibility to false when cell disappears
@@ -423,7 +420,7 @@ struct MediaCell: View, Equatable {
 
 // MARK: - MuteButton
 struct MuteButton: View {
-    @EnvironmentObject var muteState: MuteState
+    @ObservedObject private var muteState = MuteState.shared
     
     var body: some View {
         Button(action: {

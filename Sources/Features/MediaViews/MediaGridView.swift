@@ -114,7 +114,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
@@ -133,7 +132,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
@@ -153,7 +151,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
@@ -167,7 +164,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
@@ -182,7 +178,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
@@ -196,7 +191,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
@@ -230,7 +224,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth * 0.618 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
@@ -248,8 +241,7 @@ struct MediaGridView: View {
                                             videoManager: videoManager,
                                             forceRefreshTrigger: forceRefreshTrigger
                                         )
-                                        .environmentObject(MuteState.shared)
-                                        .frame(width: gridWidth * 0.382 - 1, height: gridHeight/2 - 1)
+                                                .frame(width: gridWidth * 0.382 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
                                         .contentShape(Rectangle())
                                     }
@@ -269,7 +261,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight * 0.618 - 1)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
@@ -287,8 +278,7 @@ struct MediaGridView: View {
                                             videoManager: videoManager,
                                             forceRefreshTrigger: forceRefreshTrigger
                                         )
-                                        .environmentObject(MuteState.shared)
-                                        .frame(width: gridWidth/2 - 1, height: gridHeight * 0.382 - 1)
+                                                .frame(width: gridWidth/2 - 1, height: gridHeight * 0.382 - 1)
                                         .clipped().contentShape(Rectangle())
                                         .contentShape(Rectangle())
                                     }
@@ -307,7 +297,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
@@ -323,8 +312,7 @@ struct MediaGridView: View {
                                             videoManager: videoManager,
                                             forceRefreshTrigger: forceRefreshTrigger
                                         )
-                                        .environmentObject(MuteState.shared)
-                                        .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                                                .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
                                     }
                                 }
@@ -342,7 +330,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
                                 HStack(spacing: 2) {
@@ -357,8 +344,7 @@ struct MediaGridView: View {
                                             videoManager: videoManager,
                                             forceRefreshTrigger: forceRefreshTrigger
                                         )
-                                        .environmentObject(MuteState.shared)
-                                        .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                                                .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
                                     }
                                 }
@@ -386,7 +372,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
                             }
@@ -403,8 +388,7 @@ struct MediaGridView: View {
                                         videoManager: videoManager,
                                         forceRefreshTrigger: forceRefreshTrigger
                                     )
-                                    .environmentObject(MuteState.shared)
-                                    .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                                        .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                     .clipped().contentShape(Rectangle())
                                 }
                             }
@@ -425,7 +409,6 @@ struct MediaGridView: View {
                                     videoManager: videoManager,
                                     forceRefreshTrigger: forceRefreshTrigger
                                 )
-                                .environmentObject(MuteState.shared)
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .clipped().contentShape(Rectangle())
                             }
@@ -444,8 +427,7 @@ struct MediaGridView: View {
                                             videoManager: videoManager,
                                             forceRefreshTrigger: forceRefreshTrigger
                                         )
-                                        .environmentObject(MuteState.shared)
-                                        .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
+                                                .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                         .clipped().contentShape(Rectangle())
 
                                         
