@@ -76,7 +76,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "2278"
             endingLineNumber = "2278"
-            landmarkName = "togglePinnedTweet(tweetId:)"
+            landmarkName = "scheduleCommentUpload(comment:to:itemData:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

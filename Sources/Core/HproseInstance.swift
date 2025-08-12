@@ -664,7 +664,7 @@ final class HproseInstance: ObservableObject {
     /*
      Return an updated tweet object after toggling favorite status of the tweet by appUser.
      */
-    func toggleFavorite(_ tweet: Tweet) async throws -> Tweet? {
+    func toggleFavorite(_ tweet: Tweet) async throws -> (Tweet?, User?) {
         return try await withRetry {
             let entry = "toggle_favorite"
             let params = [
@@ -681,26 +681,33 @@ final class HproseInstance: ObservableObject {
             guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: Invalid response"])
             }
+            
+            // Check if the operation was successful
+            guard let success = response["success"] as? Bool, success else {
+                let errorMessage = response["error"] as? String ?? "toggleFavorite: Operation failed"
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            }
+            
+            var updatedUser: User?
+            var updatedTweet: Tweet?
+            
+            // Parse updated user
             if let userDict = response["user"] as? [String: Any] {
-                let _ = try User.from(dict: userDict)
+                updatedUser = try User.from(dict: userDict)
             }
-            if let isFavorite = response["isFavorite"] as? Bool,
-               let favoriteCount = response["count"] as? Int {
-                var favorites = tweet.favorites ?? [false, false, false]
-                favorites[UserActions.FAVORITE.rawValue] = isFavorite
-                let updatedFavorites = favorites
-                let updatedTweet = await MainActor.run {
-                    return tweet.copy(favorites: updatedFavorites, favoriteCount: favoriteCount)
-                }
+            
+            // Parse updated tweet
+            if let tweetDict = response["tweet"] as? [String: Any] {
+                updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 // Cache the updated tweet for main feed
-                TweetCacheManager.shared.saveTweet(updatedTweet, userId: appUser.mid)
-                return updatedTweet
+                TweetCacheManager.shared.saveTweet(updatedTweet!, userId: appUser.mid)
             }
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: No favorite info"])
+            
+            return (updatedTweet, updatedUser)
         }
     }
     
-    func toggleBookmark(_ tweet: Tweet) async throws -> Tweet?  {
+    func toggleBookmark(_ tweet: Tweet) async throws -> (Tweet?, User?)  {
         try await withRetry {
             let entry = "toggle_bookmark"
             let params = [
@@ -717,22 +724,29 @@ final class HproseInstance: ObservableObject {
             guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: Invalid response"])
             }
+            
+            // Check if the operation was successful
+            guard let success = response["success"] as? Bool, success else {
+                let errorMessage = response["error"] as? String ?? "toggleBookmark: Operation failed"
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            }
+            
+            var updatedUser: User?
+            var updatedTweet: Tweet?
+            
+            // Parse updated user
             if let userDict = response["user"] as? [String: Any] {
-                let _ = try User.from(dict: userDict)
+                updatedUser = try User.from(dict: userDict)
             }
-            if let hasBookmarked = response["hasBookmarked"] as? Bool,
-               let bookmarkCount = response["count"] as? Int {
-                var favorites = tweet.favorites ?? [false, false, false]
-                favorites[UserActions.BOOKMARK.rawValue] = hasBookmarked
-                let updatedFavorites = favorites
-                let updatedTweet = await MainActor.run {
-                    return tweet.copy(favorites: updatedFavorites, bookmarkCount: bookmarkCount)
-                }
+            
+            // Parse updated tweet
+            if let tweetDict = response["tweet"] as? [String: Any] {
+                updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 // Cache the updated tweet for main feed
-                TweetCacheManager.shared.saveTweet(updatedTweet, userId: appUser.mid)
-                return updatedTweet
+                TweetCacheManager.shared.saveTweet(updatedTweet!, userId: appUser.mid)
             }
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: No bookmark info"])
+            
+            return (updatedTweet, updatedUser)
         }
     }
 

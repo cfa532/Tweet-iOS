@@ -316,6 +316,38 @@ struct ProfileView: View {
                 TweetDetailView(tweet: selectedTweet)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .bookmarkAdded)) { notification in
+            if let tweet = notification.userInfo?["tweet"] as? Tweet,
+               isAppUser {
+                // Add tweet to bookmarks list if it's not already there
+                if !bookmarksTweets.contains(where: { $0.mid == tweet.mid }) {
+                    bookmarksTweets.insert(tweet, at: 0)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .bookmarkRemoved)) { notification in
+            if let tweet = notification.userInfo?["tweet"] as? Tweet,
+               isAppUser {
+                // Remove tweet from bookmarks list
+                bookmarksTweets.removeAll { $0.mid == tweet.mid }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .favoriteAdded)) { notification in
+            if let tweet = notification.userInfo?["tweet"] as? Tweet,
+               isAppUser {
+                // Add tweet to favorites list if it's not already there
+                if !favoritesTweets.contains(where: { $0.mid == tweet.mid }) {
+                    favoritesTweets.insert(tweet, at: 0)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .favoriteRemoved)) { notification in
+            if let tweet = notification.userInfo?["tweet"] as? Tweet,
+               isAppUser {
+                // Remove tweet from favorites list
+                favoritesTweets.removeAll { $0.mid == tweet.mid }
+            }
+        }
 
     }
     

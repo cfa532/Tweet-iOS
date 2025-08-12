@@ -14,6 +14,9 @@ struct TweetActionButtonsView: View {
     @State private var showCommentCompose = false
     @State private var showShareSheet = false
     @State private var showLoginSheet = false
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastType: ToastView.ToastType = .error
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     private func handleGuestAction() {
@@ -96,11 +99,66 @@ struct TweetActionButtonsView: View {
                         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
                         var newFavorites = tweet.favorites ?? [false, false, false]
                         newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
+                        
+                        // Store original values for rollback
+                        let originalFavoriteCount = tweet.favoriteCount ?? 0
+                        let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
+                        
                         await MainActor.run {
                             tweet.favorites = newFavorites
                             tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
+                            // Update appUser favorite count immediately
+                            hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount + (wasFavorite ? -1 : 1)
                         }
-                        _ = try? await hproseInstance.toggleFavorite(tweet)
+                        
+                        do {
+                            let (updatedTweet, updatedUser) = try await hproseInstance.toggleFavorite(tweet)
+                            
+                            // Update appUser with server response if available
+                            if let updatedUser = updatedUser {
+                                await MainActor.run {
+                                    hproseInstance.appUser.favoritesCount = updatedUser.favoritesCount
+                                    hproseInstance.appUser.favoriteTweets = updatedUser.favoriteTweets
+                                }
+                            }
+                            
+                            // Update tweet with server response if available
+                            if let updatedTweet = updatedTweet {
+                                await MainActor.run {
+                                    self.tweet.favorites = updatedTweet.favorites
+                                    self.tweet.favoriteCount = updatedTweet.favoriteCount
+                                }
+                            }
+                            
+                            // Post notification for favorite list updates
+                            if let updatedTweet = updatedTweet {
+                                let notificationName: Notification.Name = wasFavorite ? .favoriteRemoved : .favoriteAdded
+                                NotificationCenter.default.post(
+                                    name: notificationName,
+                                    object: nil,
+                                    userInfo: ["tweet": updatedTweet]
+                                )
+                            }
+                        } catch {
+                            // Rollback optimistic updates on failure
+                            await MainActor.run {
+                                self.tweet.favorites = tweet.favorites
+                                self.tweet.favoriteCount = originalFavoriteCount
+                                hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
+                            }
+                            
+                            // Show error toast
+                            await MainActor.run {
+                                showToast = true
+                                toastMessage = "Failed to \(wasFavorite ? "remove favorite" : "add favorite"). Please try again."
+                                toastType = .error
+                                
+                                // Auto-hide toast after 3 seconds
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                    showToast = false
+                                }
+                            }
+                        }
                     }
                 }
             }) {
@@ -126,11 +184,65 @@ struct TweetActionButtonsView: View {
                         var newFavorites = tweet.favorites ?? [false, false, false]
                         newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
                         
+                        // Store original values for rollback
+                        let originalBookmarkCount = tweet.bookmarkCount ?? 0
+                        let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
+                        
                         await MainActor.run {
                             self.tweet.favorites = newFavorites
                             self.tweet.bookmarkCount = (self.tweet.bookmarkCount ?? 0) + (wasBookmarked ? -1 : 1)
+                            // Update appUser bookmark count immediately
+                            hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount + (wasBookmarked ? -1 : 1)
                         }
-                        _ = try? await hproseInstance.toggleBookmark(tweet)
+                        
+                        do {
+                            let (updatedTweet, updatedUser) = try await hproseInstance.toggleBookmark(tweet)
+                            
+                            // Update appUser with server response if available
+                            if let updatedUser = updatedUser {
+                                await MainActor.run {
+                                    hproseInstance.appUser.bookmarksCount = updatedUser.bookmarksCount
+                                    hproseInstance.appUser.bookmarkedTweets = updatedUser.bookmarkedTweets
+                                }
+                            }
+                            
+                            // Update tweet with server response if available
+                            if let updatedTweet = updatedTweet {
+                                await MainActor.run {
+                                    self.tweet.favorites = updatedTweet.favorites
+                                    self.tweet.bookmarkCount = updatedTweet.bookmarkCount
+                                }
+                            }
+                            
+                            // Post notification for bookmark list updates
+                            if let updatedTweet = updatedTweet {
+                                let notificationName: Notification.Name = wasBookmarked ? .bookmarkRemoved : .bookmarkAdded
+                                NotificationCenter.default.post(
+                                    name: notificationName,
+                                    object: nil,
+                                    userInfo: ["tweet": updatedTweet]
+                                )
+                            }
+                        } catch {
+                            // Rollback optimistic updates on failure
+                            await MainActor.run {
+                                self.tweet.favorites = tweet.favorites
+                                self.tweet.bookmarkCount = originalBookmarkCount
+                                hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount
+                            }
+                            
+                            // Show error toast
+                            await MainActor.run {
+                                showToast = true
+                                toastMessage = "Failed to \(wasBookmarked ? "remove bookmark" : "add bookmark"). Please try again."
+                                toastType = .error
+                                
+                                // Auto-hide toast after 3 seconds
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                    showToast = false
+                                }
+                            }
+                        }
                     }
                 }
             }) {
@@ -173,6 +285,18 @@ struct TweetActionButtonsView: View {
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
+        .overlay(
+            // Toast message overlay
+            VStack {
+                Spacer()
+                if showToast {
+                    ToastView(message: toastMessage, type: toastType)
+                        .padding(.bottom, 40)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: showToast)
+        )
     }
 
     private func tweetShareText(_ tweet: Tweet) -> String {
