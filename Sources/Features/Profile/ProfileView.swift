@@ -314,25 +314,35 @@ struct ProfileView: View {
     }
     
     private func refreshPinnedTweets() async {
+        print("DEBUG: [ProfileView] Starting to refresh pinned tweets for user: \(user.mid)")
         do {
             let pinnedTweetData = try await hproseInstance.getPinnedTweets(user: user)
+            print("DEBUG: [ProfileView] Got \(pinnedTweetData.count) pinned tweet data items from server")
+            
             var pinnedTweets: [Tweet] = []
             var pinnedTweetIds: [String] = []
             
             // Extract tweets and IDs from the response
-            for tweetData in pinnedTweetData {
+            for (index, tweetData) in pinnedTweetData.enumerated() {
+                print("DEBUG: [ProfileView] Processing pinned tweet data item \(index): \(tweetData)")
                 if let tweet = tweetData["tweet"] as? Tweet {
+                    print("DEBUG: [ProfileView] Successfully extracted tweet: \(tweet.mid)")
                     pinnedTweets.append(tweet)
                     pinnedTweetIds.append(tweet.mid)
+                } else {
+                    print("DEBUG: [ProfileView] Failed to extract tweet from data item \(index)")
                 }
             }
+            
+            print("DEBUG: [ProfileView] Final pinned tweets count: \(pinnedTweets.count), IDs: \(pinnedTweetIds)")
             
             await MainActor.run {
                 self.pinnedTweetIds = Set(pinnedTweetIds)
                 self.pinnedTweets = pinnedTweets
+                print("DEBUG: [ProfileView] Updated pinned tweets state - count: \(self.pinnedTweets.count), IDs: \(self.pinnedTweetIds)")
             }
         } catch {
-            print("Failed to refresh pinned tweets: \(error)")
+            print("DEBUG: [ProfileView] Failed to refresh pinned tweets: \(error)")
         }
     }
     
