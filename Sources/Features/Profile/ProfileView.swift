@@ -12,7 +12,7 @@ struct ProfileView: View {
     @State private var selectedTweet: Tweet? = nil
     @State private var showUserList = false
     @State private var showTweetList = false
-    @State private var showChat = false
+
     @State private var userListType: UserListType = .FOLLOWER
     @State private var tweetListType: TweetListType = .BOOKMARKS
     
@@ -148,9 +148,7 @@ struct ProfileView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 12) {
                     if !isAppUser {
-                        Button(action: {
-                            showChat = true
-                        }) {
+                        NavigationLink(destination: ChatScreen(receiptId: user.mid)) {
                             Image(systemName: "message")
                                 .foregroundColor(.blue)
                         }
@@ -318,9 +316,7 @@ struct ProfileView: View {
                 TweetDetailView(tweet: selectedTweet)
             }
         }
-        .navigationDestination(isPresented: $showChat) {
-            ChatScreen(receiptId: user.mid)
-        }
+
     }
     
     // MARK: - Helper Methods
