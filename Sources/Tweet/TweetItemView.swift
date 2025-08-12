@@ -1,7 +1,7 @@
 import SwiftUI
 
 @available(iOS 16.0, *)
-struct TweetItemView: View {
+struct TweetItemView: View, Equatable {
     @ObservedObject var tweet: Tweet
     let embedded: Bool = false
     var isPinned: Bool = false
@@ -20,6 +20,7 @@ struct TweetItemView: View {
     @State private var selectedMediaIndex = 0
     @State private var showEmbeddedBrowser = false
     @State private var selectedEmbeddedMediaIndex = 0
+    @State private var hasLoadedOriginalTweet = false
 
     private func mediaGrid(for tweet: Tweet) -> some View {
         Group {
@@ -84,11 +85,10 @@ struct TweetItemView: View {
                         .padding(.top, -12)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
-                        TweetItemView(
+                        EmbeddedTweetView(
                             tweet: originalTweet,
                             isPinned: isPinned,
                             onTap: { t in onTap?(t) },
-                            hideActions: true,
                             backgroundColor: Color(.systemGray4).opacity(0.7)
                         )
                         .cornerRadius(6)
@@ -158,17 +158,29 @@ struct TweetItemView: View {
             tweet.isVisible = true
             // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
-            if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
-                if let t = try? await hproseInstance.getTweet(
-                    tweetId: originalTweetId,
-                    authorId: originalAuthorId
-                ) {
-                    originalTweet = t
-                    detailTweet = t
-                } else {
-                    // Could not fetch original tweet, remove this tweet from the list
-                    onRemove?(tweet.mid)
-                    return
+        }
+        .onAppear {
+            // Defer original tweet loading to reduce async operations during scrolling
+            if !hasLoadedOriginalTweet, 
+               let originalTweetId = tweet.originalTweetId, 
+               let originalAuthorId = tweet.originalAuthorId {
+                hasLoadedOriginalTweet = true
+                // TweetCacheManager already handles caching, so this will be fast
+                Task {
+                    if let t = try? await hproseInstance.getTweet(
+                        tweetId: originalTweetId,
+                        authorId: originalAuthorId
+                    ) {
+                        await MainActor.run {
+                            originalTweet = t
+                            detailTweet = t
+                        }
+                    } else {
+                        // Could not fetch original tweet, remove this tweet from the list
+                        await MainActor.run {
+                            onRemove?(tweet.mid)
+                        }
+                    }
                 }
             }
         }
@@ -176,5 +188,69 @@ struct TweetItemView: View {
             isVisible = false
             tweet.isVisible = false
         }
+        // Add stable identity to prevent unnecessary re-composition
+        .id("\(tweet.mid)_\(originalTweet?.mid ?? "none")")
+    }
+    
+    // MARK: - Equatable Implementation
+    static func == (lhs: TweetItemView, rhs: TweetItemView) -> Bool {
+        return lhs.tweet.mid == rhs.tweet.mid &&
+               lhs.isPinned == rhs.isPinned &&
+               lhs.isInProfile == rhs.isInProfile &&
+               lhs.hideActions == rhs.hideActions &&
+               lhs.backgroundColor == rhs.backgroundColor &&
+               lhs.originalTweet?.mid == rhs.originalTweet?.mid
+    }
+}
+
+// MARK: - Optimized Embedded Tweet View
+@available(iOS 16.0, *)
+struct EmbeddedTweetView: View, Equatable {
+    @ObservedObject var tweet: Tweet
+    var isPinned: Bool = false
+    var onTap: ((Tweet) -> Void)? = nil
+    var backgroundColor: Color = Color(.systemBackground)
+    @State private var isVisible = false
+    @EnvironmentObject private var hproseInstance: HproseInstance
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if let user = tweet.author {
+                Avatar(user: user)
+            }
+            VStack(alignment: .leading) {
+                HStack {
+                    TweetItemHeaderView(tweet: tweet)
+                    Spacer()
+                }
+                .padding(.top, -8)
+                
+                TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                .padding(.top, -12)
+            }
+        }
+        .padding(8)
+        .background(backgroundColor)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap?(tweet)
+        }
+        .onAppear {
+            isVisible = true
+            tweet.isVisible = true
+        }
+        .onDisappear {
+            isVisible = false
+            tweet.isVisible = false
+        }
+        // Add stable identity for embedded tweets
+        .id("embedded_\(tweet.mid)")
+    }
+    
+    // MARK: - Equatable Implementation
+    static func == (lhs: EmbeddedTweetView, rhs: EmbeddedTweetView) -> Bool {
+        return lhs.tweet.mid == rhs.tweet.mid &&
+               lhs.isPinned == rhs.isPinned &&
+               lhs.backgroundColor == rhs.backgroundColor
     }
 }

@@ -350,6 +350,8 @@ struct TweetListContentView<RowView: View>: View {
                                 .foregroundColor(Color(.systemGray))
                         }
                         rowView(tweet)
+                            // Add stable identity to prevent unnecessary re-composition
+                            .id("tweet_\(tweet.mid)_\(index)")
                     }
                 }
                 
