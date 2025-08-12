@@ -52,15 +52,18 @@ class FollowingsTweetViewModel: ObservableObject {
             await MainActor.run {
                 tweets.mergeTweets(serverTweets.compactMap{ $0 })
             }
-            Task {
-                let newTweets = try await hproseInstance.fetchTweetFeed(
-                    user: hproseInstance.appUser,
-                    pageNumber: page,
-                    pageSize: pageSize,
-                    entry: "update_following_tweets"    // check for new tweets have not been synced.
-                )
-                await MainActor.run {
-                    tweets.mergeTweets(newTweets.compactMap{ $0 })
+            if page == 0 {
+                // only check for new tweets from followings on initial load.
+                Task {
+                    let newTweets = try await hproseInstance.fetchTweetFeed(
+                        user: hproseInstance.appUser,
+                        pageNumber: page,
+                        pageSize: pageSize,
+                        entry: "update_following_tweets"    // check for new tweets have not been synced.
+                    )
+                    await MainActor.run {
+                        tweets.mergeTweets(newTweets.compactMap{ $0 })
+                    }
                 }
             }
             return serverTweets     // including nil

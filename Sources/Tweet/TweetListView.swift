@@ -323,7 +323,7 @@ struct TweetListContentView<RowView: View>: View {
                         .foregroundColor(.secondary)
                         .font(.subheadline)
                 }
-                .frame(maxWidth: .infinity, minHeight: 200)
+                .frame(maxWidth: .infinity)
                 .padding()
             } else if initialLoadComplete && tweets.compactMap({ $0 }).isEmpty {
                 // Show empty state when loading is complete but no tweets
@@ -335,7 +335,7 @@ struct TweetListContentView<RowView: View>: View {
                         .font(.headline)
                         .foregroundColor(.secondary)
                 }
-                .frame(maxWidth: .infinity, minHeight: 200)
+                .frame(maxWidth: .infinity)
                 .padding()
             } else {
                 // Show tweets
