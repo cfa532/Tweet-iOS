@@ -68,7 +68,17 @@ struct ProfileView: View {
                                 isCurrentUser: isAppUser,
                                 isFollowing: isFollowing,
                                 onEditTap: { showEditSheet = true },
-                                onFollowToggle: { isFollowing.toggle() },
+                                onFollowToggle: {
+                                    isFollowing.toggle()
+                                    Task {
+                                        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid) {
+                                            isFollowing = ret
+                                        } else {
+                                            isFollowing.toggle()
+                                            showToastMessage("Failed to toggle following status", type: .error)
+                                        }
+                                    }
+                                },
                                 onAvatarTap: { showAvatarFullScreen = true }
                             )
                             ProfileStatsSection(

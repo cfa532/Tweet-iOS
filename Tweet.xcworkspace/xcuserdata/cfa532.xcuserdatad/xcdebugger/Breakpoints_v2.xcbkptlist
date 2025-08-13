@@ -76,7 +76,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "2278"
             endingLineNumber = "2278"
-            landmarkName = "scheduleCommentUpload(comment:to:itemData:)"
+            landmarkName = "getPinnedTweets(user:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -90,8 +90,8 @@
             filePath = "Sources/Features/Profile/ProfileView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "317"
-            endingLineNumber = "317"
+            startingLineNumber = "322"
+            endingLineNumber = "322"
             landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>
@@ -125,6 +125,22 @@
             startingLineNumber = "614"
             endingLineNumber = "614"
             landmarkName = "getUserTweetsByType(user:type:pageNumber:pageSize:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "6CA4BF2A-C017-413E-9B62-75E6838447AC"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Core/HproseInstance.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "654"
+            endingLineNumber = "654"
+            landmarkName = "toggleFollowing(followingId:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

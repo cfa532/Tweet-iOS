@@ -345,7 +345,9 @@ class SharedAssetCache: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppWillEnterForeground()
+            Task { @MainActor in
+                self?.handleAppWillEnterForeground()
+            }
         }
         
         NotificationCenter.default.addObserver(
@@ -353,7 +355,9 @@ class SharedAssetCache: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppDidBecomeActive()
+            Task { @MainActor in
+                self?.handleAppDidBecomeActive()
+            }
         }
     }
     

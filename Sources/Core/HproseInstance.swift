@@ -551,7 +551,7 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "userid": user.mid,
         ]
-        guard var service = user.hproseService else {
+        guard let service = user.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
 
@@ -641,7 +641,7 @@ final class HproseInstance: ObservableObject {
      * @param followedId is the user that appUser is following or unfollowing.
      * */
     func toggleFollowing(
-        followingId: String
+        followingId: MimeiId
     )  async throws -> Bool? {
         try await withRetry {
             let entry = "toggle_following"

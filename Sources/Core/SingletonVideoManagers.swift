@@ -88,7 +88,9 @@ class DetailVideoManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppWillEnterForeground()
+            Task { @MainActor in
+                self?.handleAppWillEnterForeground()
+            }
         }
         
         NotificationCenter.default.addObserver(
@@ -96,7 +98,9 @@ class DetailVideoManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppDidBecomeActive()
+            Task { @MainActor in
+                self?.handleAppDidBecomeActive()
+            }
         }
     }
     
@@ -209,7 +213,9 @@ class FullscreenVideoManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppWillEnterForeground()
+            Task { @MainActor in
+                self?.handleAppWillEnterForeground()
+            }
         }
         
         NotificationCenter.default.addObserver(
@@ -217,7 +223,9 @@ class FullscreenVideoManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppDidBecomeActive()
+            Task { @MainActor in
+                self?.handleAppDidBecomeActive()
+            }
         }
     }
     
