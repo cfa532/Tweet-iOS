@@ -33,27 +33,63 @@ struct LoginView: View {
                     .foregroundColor(.themeText)
                 
                 Group {
-                    TextField(LocalizedStringKey("Username"), text: $username)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .autocapitalization(.none)
-                        .disabled(isLoading)
-                        .focused($focusedField, equals: .username)
-                        .submitLabel(.next)
-                        .onSubmit {
-                            focusedField = .password
-                        }
-                    
-                    SecureField(LocalizedStringKey("Password"), text: $password)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .disabled(isLoading)
-                        .focused($focusedField, equals: .password)
-                        .submitLabel(.done)
-                        .onSubmit {
-                            focusedField = nil
-                            Task {
-                                await login()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(LocalizedStringKey("Username"))
+                            .font(.headline)
+                            .foregroundColor(.themeText)
+                        
+                        TextField(LocalizedStringKey("Enter your username"), text: $username)
+                            .textFieldStyle(PlainTextFieldStyle())
+                            .autocapitalization(.none)
+                            .disabled(isLoading)
+                            .focused($focusedField, equals: .username)
+                            .submitLabel(.next)
+                            .onSubmit {
+                                focusedField = .password
                             }
-                        }
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(Color(.systemGray6))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(focusedField == .username ? Color.themeAccent : Color.clear, lineWidth: 2)
+                                    )
+                            )
+                            .onTapGesture {
+                                focusedField = .username
+                            }
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(LocalizedStringKey("Password"))
+                            .font(.headline)
+                            .foregroundColor(.themeText)
+                        
+                        SecureField(LocalizedStringKey("Enter your password"), text: $password)
+                            .textFieldStyle(PlainTextFieldStyle())
+                            .disabled(isLoading)
+                            .focused($focusedField, equals: .password)
+                            .submitLabel(.done)
+                            .onSubmit {
+                                focusedField = nil
+                                Task {
+                                    await login()
+                                }
+                            }
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(Color(.systemGray6))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12)
+                                            .stroke(focusedField == .password ? Color.themeAccent : Color.clear, lineWidth: 2)
+                                    )
+                            )
+                            .onTapGesture {
+                                focusedField = .password
+                            }
+                    }
                 }
                 
                 if let errorMessage = errorMessage {
