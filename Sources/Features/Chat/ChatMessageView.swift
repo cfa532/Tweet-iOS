@@ -106,7 +106,7 @@ struct ChatMessageView: View {
                             .help(message.errorMsg ?? "Message failed to send")
                         }
                     }
-                    .frame(maxWidth: 280)
+                    .frame(maxWidth: 280, alignment: .leading)
                     .clipped()
                     .contentShape(Rectangle())
                 }
@@ -378,6 +378,7 @@ struct ChatVideoPlayer: View {
     
     var body: some View {
         Group {
+            // Compact layout to minimize spacing
             if let url = attachment.getUrl(baseUrl) {
                 ZStack {
                     SimpleVideoPlayer(
@@ -393,9 +394,8 @@ struct ChatVideoPlayer: View {
                         },
                         disableAutoRestart: true
                     )
-                    .frame(maxWidth: UIScreen.main.bounds.width)
-                    .aspectRatio(CGFloat(attachment.aspectRatio ?? 16.0/9.0), contentMode: .fit)
-                    .clipped()
+                    .aspectRatio(max(CGFloat(attachment.aspectRatio ?? 16.0/9.0), 0.9), contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
                     
                     // Play button overlay
