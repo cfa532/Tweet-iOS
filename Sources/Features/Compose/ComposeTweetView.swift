@@ -111,7 +111,7 @@ struct ComposeTweetView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
+                    Button(NSLocalizedString("Cancel", comment: "Cancel button")) {
                         dismiss()
                     }
                 }

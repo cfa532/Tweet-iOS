@@ -33,7 +33,7 @@ struct ProfileHeaderView: View {
                 Spacer()
                 // Edit/Follow/Unfollow button
                 if isCurrentUser {
-                    Button("Edit") {
+                    Button(NSLocalizedString("Edit", comment: "Edit button")) {
                         onEditTap()
                     }
                     .padding(.horizontal, 16)

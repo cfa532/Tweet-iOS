@@ -40,7 +40,7 @@ struct UserRowView: View {
                                     .font(.footnote)
                                     .foregroundColor(.themeSecondaryText)
                                     .lineLimit(nil)
-                                Button("Show less") {
+                                Button(NSLocalizedString("Show less", comment: "Show less button")) {
                                     showFullProfile = false
                                 }
                                 .font(.caption)
@@ -53,7 +53,7 @@ struct UserRowView: View {
                                     .lineLimit(4)
                                     .truncationMode(.tail)
                                 if profile.count > 200 {
-                                    Button("...") {
+                                    Button(NSLocalizedString("...", comment: "More options button")) {
                                         showFullProfile = true
                                     }
                                     .font(.caption)

@@ -68,7 +68,7 @@ struct RegistrationView: View {
                                                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                                             .scaleEffect(1.2)
                                                         
-                                                        Text("Uploading...")
+                                                        Text(NSLocalizedString("Uploading...", comment: "Upload progress message"))
                                                             .font(.caption)
                                                             .foregroundColor(.white)
                                                     }
@@ -251,7 +251,7 @@ struct RegistrationView: View {
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                     .scaleEffect(0.8)
                             }
-                            Text(isSubmitting ? (hproseInstance.appUser.isGuest ? "Creating Account..." : "Saving...") : (hproseInstance.appUser.isGuest ? "Create Account" : "Save"))
+                            Text(isSubmitting ? (hproseInstance.appUser.isGuest ? NSLocalizedString("Creating Account...", comment: "Account creation progress") : NSLocalizedString("Saving...", comment: "Save progress message")) : (hproseInstance.appUser.isGuest ? NSLocalizedString("Create Account", comment: "Create account button") : NSLocalizedString("Save", comment: "Save button")))
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
@@ -270,7 +270,7 @@ struct RegistrationView: View {
                                             ProgressView()
                                                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                                 .scaleEffect(0.8)
-                                            Text("Saving...")
+                                            Text(NSLocalizedString("Saving...", comment: "Save progress message"))
                                                 .foregroundColor(.white)
                                                 .font(.caption)
                                         }
@@ -281,7 +281,7 @@ struct RegistrationView: View {
                 }
                 .padding()
             }
-            .navigationBarItems(trailing: Button("Close") { dismiss() })
+            .navigationBarItems(trailing: Button(NSLocalizedString("Close", comment: "Close button")) { dismiss() })
             .onAppear {
                 let appUser = hproseInstance.appUser
                 if !appUser.isGuest {

@@ -73,7 +73,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            .navigationBarItems(trailing: Button("Done") {
+            .navigationBarItems(trailing: Button(NSLocalizedString("Done", comment: "Done button")) {
                 dismiss()
             })
             .alert(LocalizedStringKey("Cache Cleared"), isPresented: $showCacheCleanedAlert) {
