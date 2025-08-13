@@ -43,11 +43,15 @@ struct SearchScreen: View {
                     .background(Color(.systemGray6))
                     .cornerRadius(20)
                     
-                    Button(action: {
+                    DebounceButton(
+                        cooldownDuration: 0.5,
+                        enableAnimation: true,
+                        enableVibration: false
+                    ) {
                         Task {
                             await searchViewModel.search(query: searchText)
                         }
-                    }) {
+                    } label: {
                         Text(LocalizedStringKey("Search"))
                             .foregroundColor(.blue)
                     }
