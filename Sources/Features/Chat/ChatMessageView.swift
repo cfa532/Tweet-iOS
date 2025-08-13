@@ -427,7 +427,7 @@ struct ChatVideoPlayer: View {
                     // Create a temporary tweet-like structure for the video
                     let tempTweet = Tweet(
                         mid: "chat_video_\(attachment.mid)",
-                        authorId: "chat_author",
+                        authorId: isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? Constants.GUEST_ID),
                         content: "",
                         attachments: [attachment]
                     )
@@ -474,6 +474,7 @@ struct ChatAttachmentLoader: View {
                         .foregroundColor(.secondary)
                 }
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                .aspectRatio(1.618, contentMode: .fit)
                 .padding(.vertical, 8)
                 .background(Color(.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
