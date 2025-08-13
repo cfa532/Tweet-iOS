@@ -364,6 +364,7 @@ struct ChatVideoPlayer: View {
     let senderUser: User?
     
     @State private var showFullScreen = false
+    @State private var showPlayButton = true
     
     private var baseUrl: URL {
         if isFromCurrentUser {
@@ -378,23 +379,50 @@ struct ChatVideoPlayer: View {
     var body: some View {
         Group {
             if let url = attachment.getUrl(baseUrl) {
-                SimpleVideoPlayer(
-                    url: url,
-                    mid: attachment.mid,
-                    isVisible: true,
-                    cellAspectRatio: CGFloat(1.0),
-                    videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-                    showNativeControls: false,
-                    isMuted: MuteState.shared.isMuted,
-                    onVideoTap: {
-                        showFullScreen = true
-                    },
-                    disableAutoRestart: true
-                )
-                .frame(maxWidth: UIScreen.main.bounds.width)
-                .aspectRatio(CGFloat(attachment.aspectRatio ?? 16.0/9.0), contentMode: .fit)
-                .clipped()
-                .contentShape(Rectangle())
+                ZStack {
+                    SimpleVideoPlayer(
+                        url: url,
+                        mid: attachment.mid,
+                        isVisible: true,
+                        cellAspectRatio: CGFloat(1.0),
+                        videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
+                        showNativeControls: false,
+                        isMuted: MuteState.shared.isMuted,
+                        onVideoTap: {
+                            showFullScreen = true
+                        },
+                        disableAutoRestart: true
+                    )
+                    .frame(maxWidth: UIScreen.main.bounds.width)
+                    .aspectRatio(CGFloat(attachment.aspectRatio ?? 16.0/9.0), contentMode: .fit)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    
+                    // Play button overlay
+                    if showPlayButton {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 50))
+                            .foregroundColor(.white)
+                            .background(
+                                Circle()
+                                    .fill(Color.black.opacity(0.3))
+                                    .frame(width: 60, height: 60)
+                            )
+                            .transition(.opacity)
+                            .animation(.easeInOut(duration: 0.2), value: showPlayButton)
+                    }
+                }
+                .onTapGesture {
+                    showFullScreen = true
+                }
+                .onAppear {
+                    // Auto-hide play button after 2 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showPlayButton = false
+                        }
+                    }
+                }
                 .fullScreenCover(isPresented: $showFullScreen) {
                     // Create a temporary tweet-like structure for the video
                     let tempTweet = Tweet(
