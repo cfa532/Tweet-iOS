@@ -62,11 +62,15 @@ struct LoginView: View {
                         .font(.caption)
                 }
                 
-                Button(action: {
+                DebounceButton(
+                    cooldownDuration: 0.5,
+                    enableAnimation: true,
+                    enableVibration: false
+                ) {
                     Task {
                         await login()
                     }
-                }) {
+                } label: {
                     HStack {
                         if isLoading {
                             ProgressView()

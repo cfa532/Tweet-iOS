@@ -21,7 +21,12 @@ struct SettingsView: View {
             List {
                 Section(header: Text(LocalizedStringKey("Account"))) {
                     if !hproseInstance.appUser.isGuest {
-                        Button("Logout") {
+                        DebounceButton(
+                            "Logout",
+                            cooldownDuration: 0.5,
+                            enableAnimation: true,
+                            enableVibration: false
+                        ) {
                             hproseInstance.logout()
                             NotificationCenter.default.post(name: .userDidLogout, object: nil)
                             dismiss()
@@ -39,9 +44,13 @@ struct SettingsView: View {
                             print("DEBUG: [SETTINGS] Mute setting changed to: \(newValue)")
                         }
                     
-                    Button(action: {
+                    DebounceButton(
+                        cooldownDuration: 0.5,
+                        enableAnimation: true,
+                        enableVibration: false
+                    ) {
                         cleanupCache()
-                    }) {
+                    } label: {
                         HStack {
                             Text(LocalizedStringKey("Clear Media Cache"))
                             Spacer()

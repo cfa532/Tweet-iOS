@@ -169,7 +169,13 @@ struct ChatScreen: View {
                         }
                     
                     // Send button
-                    Button(action: sendMessage) {
+                    DebounceButton(
+                        cooldownDuration: 0.3,
+                        enableAnimation: true,
+                        enableVibration: false
+                    ) {
+                        sendMessage()
+                    } label: {
                         Image(systemName: "paperplane.fill")
                             .font(.system(size: 18))
                             .foregroundColor(.white)
