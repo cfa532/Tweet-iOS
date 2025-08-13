@@ -142,7 +142,12 @@ struct CommentComposeView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(isQuoting ? "Quote" : "Reply") {
+                    DebounceButton(
+                        isQuoting ? "Quote" : "Reply",
+                        cooldownDuration: 0.5,
+                        enableAnimation: true,
+                        enableVibration: false
+                    ) {
                         Task {
                             await submitComment()
                         }

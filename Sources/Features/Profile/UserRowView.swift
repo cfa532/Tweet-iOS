@@ -66,7 +66,7 @@ struct UserRowView: View {
                 }
                 Spacer()
                 if let onFollowToggle = onFollowToggle {
-                    PreventRepeatedTapButton(
+                    DebounceButton(
                         cooldownDuration: 0.5,
                         enableVibration: false
                     ) {

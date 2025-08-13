@@ -46,7 +46,7 @@ struct TweetActionButtonsView: View {
     var body: some View {
         HStack(spacing: 0) {
             // Comment button
-            PreventRepeatedTapButton(
+            DebounceButton(
                 cooldownDuration: 0.3,
                 enableAnimation: true,
                 enableVibration: false
@@ -69,7 +69,7 @@ struct TweetActionButtonsView: View {
             }
             Spacer(minLength: 12)
             // Retweet button
-            PreventRepeatedTapButton(
+            DebounceButton(
                 cooldownDuration: 0.5,
                 enableAnimation: true,
                 enableVibration: false
@@ -98,7 +98,7 @@ struct TweetActionButtonsView: View {
             }
             Spacer(minLength: 12)
             // Like button
-            PreventRepeatedTapButton(
+            DebounceButton(
                 cooldownDuration: 0.3,
                 enableAnimation: true,
                 enableVibration: false
@@ -186,7 +186,7 @@ struct TweetActionButtonsView: View {
             }
             Spacer(minLength: 12)
             // Bookmark button
-            PreventRepeatedTapButton(
+            DebounceButton(
                 cooldownDuration: 0.3,
                 enableAnimation: true,
                 enableVibration: false
@@ -274,7 +274,7 @@ struct TweetActionButtonsView: View {
             }
             // Share button
             Spacer(minLength: 16)
-            PreventRepeatedTapButton(
+            DebounceButton(
                 cooldownDuration: 0.3,
                 enableAnimation: true,
                 enableVibration: false

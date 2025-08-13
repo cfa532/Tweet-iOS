@@ -196,9 +196,13 @@ struct ReplyEditorView: View {
                 }
                 
                 // Reply button
-                Button(action: {
+                DebounceButton(
+                    cooldownDuration: 0.5,
+                    enableAnimation: true,
+                    enableVibration: false
+                ) {
                     submitReply()
-                }) {
+                } label: {
                     Text(NSLocalizedString("Reply", comment: "Reply button text"))
                         .font(.caption)
                         .fontWeight(.medium)

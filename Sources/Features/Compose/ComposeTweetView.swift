@@ -117,7 +117,12 @@ struct ComposeTweetView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Tweet") {
+                    DebounceButton(
+                        "Tweet",
+                        cooldownDuration: 0.5,
+                        enableAnimation: true,
+                        enableVibration: false
+                    ) {
                         // Immediately dismiss the view and prevent repeated tapping
                         dismiss()
                         

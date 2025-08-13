@@ -239,7 +239,7 @@ struct RegistrationView: View {
                             .font(.caption)
                     }
 
-                    PreventRepeatedTapButton(
+                    DebounceButton(
                         cooldownDuration: 1.0,
                         enableVibration: false
                     ) {

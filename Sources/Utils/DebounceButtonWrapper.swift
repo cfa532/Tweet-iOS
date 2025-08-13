@@ -2,7 +2,7 @@ import SwiftUI
 
 /// A custom button wrapper that prevents unintentional repeated tapping
 /// by adding a cooldown period between taps.
-struct PreventRepeatedTapButton<Label: View>: View {
+struct DebounceButton<Label: View>: View {
     private let action: () -> Void
     private let label: () -> Label
     private let cooldownDuration: TimeInterval
@@ -77,7 +77,7 @@ struct PreventRepeatedTapButton<Label: View>: View {
 }
 
 /// Convenience initializer for text-based buttons
-extension PreventRepeatedTapButton where Label == Text {
+extension DebounceButton where Label == Text {
     init(
         _ title: String,
         cooldownDuration: TimeInterval = 0.5,
@@ -99,7 +99,7 @@ extension PreventRepeatedTapButton where Label == Text {
 }
 
 /// Convenience initializer for system image buttons
-extension PreventRepeatedTapButton where Label == Image {
+extension DebounceButton where Label == Image {
     init(
         systemName: String,
         cooldownDuration: TimeInterval = 0.5,
@@ -122,18 +122,18 @@ extension PreventRepeatedTapButton where Label == Image {
 
 #Preview {
     VStack(spacing: 20) {
-        PreventRepeatedTapButton("Tap Me (0.5s cooldown)") {
+        DebounceButton("Tap Me (0.5s cooldown)") {
             print("Button tapped!")
         }
         
-        PreventRepeatedTapButton(
+        DebounceButton(
             "Tap Me (1s cooldown)",
             cooldownDuration: 1.0
         ) {
             print("Button tapped!")
         }
         
-        PreventRepeatedTapButton(
+        DebounceButton(
             systemName: "heart.fill",
             cooldownDuration: 0.3
         ) {
@@ -141,7 +141,7 @@ extension PreventRepeatedTapButton where Label == Image {
         }
         .foregroundColor(.red)
         
-        PreventRepeatedTapButton(
+        DebounceButton(
             cooldownDuration: 0.8
         ) {
             print("Custom button tapped!")

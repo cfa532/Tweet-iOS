@@ -44,7 +44,7 @@ struct ProfileHeaderView: View {
                     )
                     .foregroundColor(.themeText)
                 } else {
-                    PreventRepeatedTapButton(
+                    DebounceButton(
                         isFollowing ? "Unfollow" : "Follow",
                         cooldownDuration: 0.5,
                         enableVibration: false
