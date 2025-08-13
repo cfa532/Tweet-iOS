@@ -329,7 +329,7 @@ struct SimpleVideoPlayer: View {
                                 .font(.system(size: 30))
                                 .foregroundColor(.white)
                             
-                            Text("Failed to load video")
+                            Text(NSLocalizedString("Failed to load video", comment: "Video loading error"))
                                 .foregroundColor(.white)
                                 .font(.caption)
                             

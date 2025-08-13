@@ -691,9 +691,9 @@ struct ChatLoadingView: View {
     
     var body: some View {
         VStack {
-            Text("Loading chat...")
+                            Text(NSLocalizedString("Loading chat...", comment: "Loading chat message"))
                 .font(.headline)
-            Text("Receipt ID: \(receiptId)")
+                          Text(String(format: NSLocalizedString("Receipt ID: %@", comment: "Receipt ID display"), receiptId))
                 .font(.caption)
                 .foregroundColor(.gray)
         }
@@ -729,7 +729,7 @@ struct ChatHeaderView: View {
                         .font(.headline)
                 }
             } else {
-                Text("Loading...")
+                Text(NSLocalizedString("Loading...", comment: "Loading message"))
                     .font(.headline)
             }
             

@@ -86,7 +86,7 @@ struct ChatListScreen: View {
             }
         } message: {
             if let session = sessionToDelete {
-                Text("Are you sure you want to delete the chat with \(session.receiptId)? This will permanently delete all messages in this conversation.")
+                Text(String(format: NSLocalizedString("Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation.", comment: "Delete chat confirmation"), session.receiptId))
             }
         }
     }
@@ -174,7 +174,7 @@ struct ChatSessionRow: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                         } else {
-                            Text("Loading...")
+                            Text(NSLocalizedString("Loading...", comment: "Loading message"))
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundColor(.gray)
                                 .lineLimit(1)

@@ -113,7 +113,7 @@ struct ZoomableImageView: View {
                         Image(systemName: "photo")
                             .font(.system(size: 50))
                             .foregroundColor(.gray)
-                        Text("No image available")
+                        Text(NSLocalizedString("No image available", comment: "No image available message"))
                             .foregroundColor(.gray)
                             .font(.caption)
                     }

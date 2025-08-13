@@ -432,7 +432,7 @@ struct MediaGridView: View {
                                         
                                         if idx == 3 && attachments.count > 4 {
                                             Color.black.opacity(0.4)
-                                            Text("+\(attachments.count - 4)")
+                                            Text(String(format: NSLocalizedString("+%d more", comment: "Additional media count"), attachments.count - 4))
                                                 .foregroundColor(.white)
                                                 .font(.title)
                                                 .bold()

@@ -362,7 +362,7 @@ struct TweetListContentView<RowView: View>: View {
                 HStack {
                     Image(systemName: "wifi.slash")
                         .foregroundColor(.orange)
-                    Text("Offline - Showing cached content")
+                    Text(NSLocalizedString("Offline - Showing cached content", comment: "Offline status message"))
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Spacer()
@@ -377,7 +377,7 @@ struct TweetListContentView<RowView: View>: View {
                 VStack(spacing: 16) {
                     ProgressView()
                         .scaleEffect(1.2)
-                    Text("Loading tweets...")
+                    Text(NSLocalizedString("Loading tweets...", comment: "Loading tweets message"))
                         .foregroundColor(.secondary)
                         .font(.subheadline)
                 }
@@ -389,7 +389,7 @@ struct TweetListContentView<RowView: View>: View {
                     Image(systemName: "tray")
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
-                    Text("No tweet yet")
+                    Text(NSLocalizedString("No tweet yet", comment: "No tweets available message"))
                         .font(.headline)
                         .foregroundColor(.secondary)
                 }

@@ -52,7 +52,7 @@ struct ReplyEditorView: View {
                 showExitConfirmation = false
             }
         } message: {
-            Text("You have unsaved content. Are you sure you want to discard your reply?")
+                            Text(NSLocalizedString("You have unsaved content. Are you sure you want to discard your reply?", comment: "Discard reply confirmation"))
         }
        .sheet(isPresented: $showCamera) {
            CameraView { image in
@@ -83,7 +83,7 @@ struct ReplyEditorView: View {
                 
                 // Placeholder text with background
                 HStack {
-                    Text("Post your reply...")
+                    Text(NSLocalizedString("Post your reply...", comment: "Reply placeholder text"))
                         .foregroundColor(.secondary)
                         .font(.body)
                     Spacer()
@@ -147,7 +147,7 @@ struct ReplyEditorView: View {
                     .frame(minHeight: 80)
                 
                 if replyText.isEmpty {
-                    Text("Post your reply...")
+                    Text(NSLocalizedString("Post your reply...", comment: "Reply placeholder text"))
                         .foregroundColor(.secondary)
                         .font(.body)
                         .padding(.horizontal, 12)
@@ -199,7 +199,7 @@ struct ReplyEditorView: View {
                 Button(action: {
                     submitReply()
                 }) {
-                    Text("Reply")
+                    Text(NSLocalizedString("Reply", comment: "Reply button text"))
                         .font(.caption)
                         .fontWeight(.medium)
                         .foregroundColor(.white)

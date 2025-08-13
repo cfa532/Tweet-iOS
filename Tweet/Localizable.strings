@@ -236,4 +236,39 @@
 "Enter a username to find users" = "Enter a username to find users";
 "Start Chat" = "Start Chat";
 "%d attachments" = "%d attachments";
-"+%d" = "+%d"; 
+"+%d" = "+%d";
+
+// MARK: - Toast Messages
+"Failed to toggle following status" = "Failed to toggle following status";
+"Failed to add favorite" = "Failed to add favorite";
+"Failed to remove favorite" = "Failed to remove favorite";
+"Failed to add bookmark" = "Failed to add bookmark";
+"Failed to remove bookmark" = "Failed to remove bookmark";
+
+// MARK: - Status Messages
+"Offline - Showing cached content" = "Offline - Showing cached content";
+"Creating Account..." = "Creating Account...";
+"Updating avatar..." = "Updating avatar...";
+"Updating profile..." = "Updating profile...";
+
+// MARK: - Character Count
+"Characters remaining" = "Characters remaining";
+
+// MARK: - Media Count
+"attachments" = "attachments";
+"Loading %d attachments..." = "Loading %d attachments...";
+"%d attachments" = "%d attachments";
+
+// MARK: - Chat Messages
+"Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation.";
+"Receipt ID: %@" = "Receipt ID: %@";
+
+// MARK: - Video Player
+"Failed to load video" = "Failed to load video";
+"Loading HLS stream..." = "Loading HLS stream...";
+
+// MARK: - Media Grid
+"+%d more" = "+%d more";
+
+// MARK: - Badge
+"99+" = "99+";

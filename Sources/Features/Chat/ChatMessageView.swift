@@ -380,7 +380,7 @@ struct ChatAttachmentLoader: View {
                 HStack {
                     ProgressView()
                         .scaleEffect(0.8)
-                    Text("Loading attachment...")
+                    Text(NSLocalizedString("Loading attachment...", comment: "Loading attachment message"))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -396,7 +396,7 @@ struct ChatAttachmentLoader: View {
                 HStack {
                     Image(systemName: "exclamationmark.triangle")
                         .foregroundColor(.orange)
-                    Text("Failed to load attachment")
+                    Text(NSLocalizedString("Failed to load attachment", comment: "Attachment loading error"))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -478,7 +478,7 @@ struct ChatMultipleAttachmentsLoader: View {
                 HStack {
                     ProgressView()
                         .scaleEffect(0.8)
-                    Text("Loading \(attachments.count) attachments...")
+                    Text(String(format: NSLocalizedString("Loading %d attachments...", comment: "Loading multiple attachments"), attachments.count))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -494,7 +494,7 @@ struct ChatMultipleAttachmentsLoader: View {
                 HStack {
                     Image(systemName: "doc.on.doc")
                         .foregroundColor(.blue)
-                    Text("\(attachments.count) attachments")
+                    Text(String(format: NSLocalizedString("%d attachments", comment: "Attachment count"), attachments.count))
                         .font(.caption)
                         .foregroundColor(.primary)
                     Spacer()

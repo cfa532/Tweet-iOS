@@ -16,7 +16,7 @@ struct BadgeView: View {
                     .fill(Color.red)
                     .frame(width: size, height: size)
                 
-                Text("\(count > 99 ? "99+" : "\(count)")")
+                Text("\(count > 99 ? NSLocalizedString("99+", comment: "Badge overflow") : "\(count)")")
                     .font(.caption2)
                     .fontWeight(.bold)
                     .foregroundColor(.white)

@@ -239,4 +239,39 @@
 "Enter a username to find users" = "输入用户名以查找用户";
 "Start Chat" = "开始聊天";
 "%d attachments" = "%d 个附件";
-"+%d" = "+%d"; 
+"+%d" = "+%d";
+
+// MARK: - Toast Messages
+"Failed to toggle following status" = "切换关注状态失败";
+"Failed to add favorite" = "添加到收藏失败";
+"Failed to remove favorite" = "从收藏中移除失败";
+"Failed to add bookmark" = "添加到书签失败";
+"Failed to remove bookmark" = "从书签中移除失败";
+
+// MARK: - Status Messages
+"Offline - Showing cached content" = "离线 - 显示缓存内容";
+"Creating Account..." = "创建账户中...";
+"Updating avatar..." = "更新头像中...";
+"Updating profile..." = "更新个人资料中...";
+
+// MARK: - Character Count
+"Characters remaining" = "剩余字符数";
+
+// MARK: - Media Count
+"attachments" = "附件";
+"Loading %d attachments..." = "正在加载 %d 个附件...";
+"%d attachments" = "%d 个附件";
+
+// MARK: - Chat Messages
+"Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "确定要删除与 %@ 的聊天吗？这将永久删除此对话中的所有消息。";
+"Receipt ID: %@" = "收件人ID: %@";
+
+// MARK: - Video Player
+"Failed to load video" = "视频加载失败";
+"Loading HLS stream..." = "正在加载 HLS 流...";
+
+// MARK: - Media Grid
+"+%d more" = "+%d 更多";
+
+// MARK: - Badge
+"99+" = "99+";

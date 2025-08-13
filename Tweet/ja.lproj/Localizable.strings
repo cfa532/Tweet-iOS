@@ -238,4 +238,39 @@
 "Enter a username to find users" = "ユーザーを見つけるためにユーザー名を入力";
 "Start Chat" = "チャットを開始";
 "%d attachments" = "%d個の添付ファイル";
-"+%d" = "+%d"; 
+"+%d" = "+%d";
+
+// MARK: - Toast Messages
+"Failed to toggle following status" = "フォロー状態の切り替えに失敗しました";
+"Failed to add favorite" = "お気に入りに追加できませんでした";
+"Failed to remove favorite" = "お気に入りから削除できませんでした";
+"Failed to add bookmark" = "ブックマークに追加できませんでした";
+"Failed to remove bookmark" = "ブックマークから削除できませんでした";
+
+// MARK: - Status Messages
+"Offline - Showing cached content" = "オフライン - キャッシュされたコンテンツを表示中";
+"Creating Account..." = "アカウント作成中...";
+"Updating avatar..." = "アバター更新中...";
+"Updating profile..." = "プロフィール更新中...";
+
+// MARK: - Character Count
+"Characters remaining" = "残り文字数";
+
+// MARK: - Media Count
+"attachments" = "添付ファイル";
+"Loading %d attachments..." = "%d個の添付ファイルを読み込み中...";
+"%d attachments" = "%d個の添付ファイル";
+
+// MARK: - Chat Messages
+"Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "%@とのチャットを削除してもよろしいですか？この操作により、この会話のすべてのメッセージが永久に削除されます。";
+"Receipt ID: %@" = "受信者ID: %@";
+
+// MARK: - Video Player
+"Failed to load video" = "動画の読み込みに失敗しました";
+"Loading HLS stream..." = "HLSストリームを読み込み中...";
+
+// MARK: - Media Grid
+"+%d more" = "+%d個追加";
+
+// MARK: - Badge
+"99+" = "99+";
