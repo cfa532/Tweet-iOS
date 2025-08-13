@@ -524,6 +524,12 @@ final class HproseInstance: ObservableObject {
                     // Update appUser to the logged-in user
                     self.appUser = loginUser
                 }
+                
+                // Populate fans and following lists for the logged-in user
+                Task {
+                    await populateUserLists(user: loginUser)
+                }
+                
                 return ["reason": "Success", "status": "success"]
             }
         }
@@ -566,6 +572,98 @@ final class HproseInstance: ObservableObject {
             return lval > rval
         }
         return sorted.compactMap { $0["field"] as? String }
+    }
+    
+    /**
+     * Get a list of users that the given user is following, sorted by timestamp when followed.
+     * For guest users, returns alpha IDs as fallback.
+     */
+    func getFollowings(user: User) async throws -> [MimeiId] {
+        let entry = "get_followings_sorted"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": user.mid
+        ]
+        
+        do {
+            guard let service = user.hproseService else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFollowings: No response"])
+            }
+            
+            let sorted = response.sorted { (lhs, rhs) in
+                let lval = (lhs["value"] as? Int) ?? 0
+                let rval = (rhs["value"] as? Int) ?? 0
+                return lval > rval
+            }
+            return sorted.compactMap { $0["field"] as? String }
+        } catch {
+            print("DEBUG: [HproseInstance] getFollowings error: \(error)")
+            return Gadget.getAlphaIds()
+        }
+    }
+    
+    /**
+     * Populate fans and following lists for a given user
+     */
+    func populateUserLists(user: User) async {
+        do {
+            // Get followings (users that the user is following)
+            let followings = try await getFollowings(user: user)
+            await MainActor.run {
+                user.followingList = followings
+            }
+            print("DEBUG: [HproseInstance] Populated followingList for user \(user.mid) with \(followings.count) users")
+            
+            // Get fans (users who are following the user)
+            if let fans = try await getFans(user: user) {
+                await MainActor.run {
+                    user.fansList = fans
+                }
+                print("DEBUG: [HproseInstance] Populated fansList for user \(user.mid) with \(fans.count) users")
+            } else {
+                print("DEBUG: [HproseInstance] No fans found for user \(user.mid)")
+            }
+        } catch {
+            print("DEBUG: [HproseInstance] Error populating fans/following lists for user \(user.mid): \(error)")
+        }
+    }
+    
+    /**
+     * Get a list of users who are following the given user, sorted by timestamp when they started following.
+     * Returns nil for guest users.
+     */
+    func getFans(user: User) async throws -> [MimeiId]? {
+        let entry = "get_followers_sorted"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": user.mid
+        ]
+        
+        do {
+            guard let service = user.hproseService else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            }
+            
+            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFans: No response"])
+            }
+            
+            let sorted = response.sorted { (lhs, rhs) in
+                let lval = (lhs["value"] as? Int) ?? 0
+                let rval = (rhs["value"] as? Int) ?? 0
+                return lval > rval
+            }
+            return sorted.compactMap { $0["field"] as? String }
+        } catch {
+            print("DEBUG: [HproseInstance] getFans error: \(error)")
+            return nil
+        }
     }
     
     func getUserTweetsByType(
@@ -632,8 +730,18 @@ final class HproseInstance: ObservableObject {
         }
         
         newClient?.close()
-        print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(tweetsWithAuthors.count) tweets, valid: \(tweetsWithAuthors.compactMap { $0 }.count)")
-        return tweetsWithAuthors
+        
+        // Sort tweets in descending order by timestamp (most recent first)
+        let sortedTweets = tweetsWithAuthors.sorted { tweet1, tweet2 in
+            guard let t1 = tweet1, let t2 = tweet2 else {
+                // Put non-nil tweets before nil tweets
+                return tweet1 != nil && tweet2 == nil
+            }
+            return t1.timestamp > t2.timestamp
+        }
+        
+        print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), sorted by timestamp (descending)")
+        return sortedTweets
     }
     
     /**

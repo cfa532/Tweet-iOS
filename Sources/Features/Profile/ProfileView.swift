@@ -73,6 +73,34 @@ struct ProfileView: View {
                                     Task {
                                         if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid) {
                                             isFollowing = ret
+                                            
+                                            // Update app user's followingList based on the result
+                                            if ret {
+                                                // User is now following - add to followingList
+                                                if hproseInstance.appUser.followingList == nil {
+                                                    hproseInstance.appUser.followingList = []
+                                                }
+                                                if !hproseInstance.appUser.followingList!.contains(user.mid) {
+                                                    hproseInstance.appUser.followingList!.append(user.mid)
+                                                }
+                                            } else {
+                                                // User is no longer following - remove from followingList
+                                                hproseInstance.appUser.followingList?.removeAll { $0 == user.mid }
+                                            }
+                                            
+                                            // Update the followed user's fansList
+                                            if ret {
+                                                // User is now following - add app user to followed user's fansList
+                                                if user.fansList == nil {
+                                                    user.fansList = []
+                                                }
+                                                if !user.fansList!.contains(hproseInstance.appUser.mid) {
+                                                    user.fansList!.append(hproseInstance.appUser.mid)
+                                                }
+                                            } else {
+                                                // User is no longer following - remove app user from followed user's fansList
+                                                user.fansList?.removeAll { $0 == hproseInstance.appUser.mid }
+                                            }
                                         } else {
                                             isFollowing.toggle()
                                             showToastMessage("Failed to toggle following status", type: .error)
@@ -153,6 +181,10 @@ struct ProfileView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
+        }
+        .onAppear {
+            // Calculate isFollowing by checking if the user's mid is in the app user's followingList
+            isFollowing = hproseInstance.appUser.followingList?.contains(user.mid) ?? false
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -291,10 +323,38 @@ struct ProfileView: View {
                     return Array(ids[startIndex..<endIndex])
                 },
                 onFollowToggle: { user in
-                    if let _ = try? await hproseInstance.toggleFollowing(
+                    if let ret = try? await hproseInstance.toggleFollowing(
                         followingId: user.mid
                     ) {
-                        // Handle follow toggle success
+                        // Update app user's followingList based on the result
+                        if ret {
+                            // User is now following - add to followingList
+                            if hproseInstance.appUser.followingList == nil {
+                                hproseInstance.appUser.followingList = []
+                            }
+                            if !hproseInstance.appUser.followingList!.contains(user.mid) {
+                                hproseInstance.appUser.followingList!.append(user.mid)
+                            }
+                        } else {
+                            // User is no longer following - remove from followingList
+                            hproseInstance.appUser.followingList?.removeAll { $0 == user.mid }
+                        }
+                        
+                        // Update the followed user's fansList
+                        if ret {
+                            // User is now following - add app user to followed user's fansList
+                            if user.fansList == nil {
+                                user.fansList = []
+                            }
+                            if !user.fansList!.contains(hproseInstance.appUser.mid) {
+                                user.fansList!.append(hproseInstance.appUser.mid)
+                            }
+                        } else {
+                            // User is no longer following - remove app user from followed user's fansList
+                            user.fansList?.removeAll { $0 == hproseInstance.appUser.mid }
+                        }
+                    } else {
+                        showToastMessage("Failed to toggle following status", type: .error)
                     }
                 }
             )

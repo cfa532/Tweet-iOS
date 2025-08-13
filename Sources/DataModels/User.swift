@@ -90,8 +90,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
     }
     
-    @Published var fansList: [String]? // List of MimeiId
-    @Published var followingList: [String]? // List of MimeiId
+    @Published var fansList: [MimeiId]? // List of MimeiId
+    @Published var followingList: [MimeiId]? // List of MimeiId
     @Published var bookmarkedTweets: [String]? // List of MimeiId
     @Published var favoriteTweets: [String]? // List of MimeiId
     @Published var repliedTweets: [String]? // List of MimeiId

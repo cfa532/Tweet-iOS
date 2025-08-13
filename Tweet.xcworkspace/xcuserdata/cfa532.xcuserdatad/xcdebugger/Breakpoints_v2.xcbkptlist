@@ -76,7 +76,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "2278"
             endingLineNumber = "2278"
-            landmarkName = "getPinnedTweets(user:)"
+            landmarkName = "scheduleCommentUpload(comment:to:itemData:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -108,7 +108,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "592"
             endingLineNumber = "592"
-            landmarkName = "getUserTweetsByType(user:type:pageNumber:pageSize:)"
+            landmarkName = "getFollowings(user:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -124,7 +124,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "614"
             endingLineNumber = "614"
-            landmarkName = "getUserTweetsByType(user:type:pageNumber:pageSize:)"
+            landmarkName = "getFans(user:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -140,7 +140,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "654"
             endingLineNumber = "654"
-            landmarkName = "toggleFollowing(followingId:)"
+            landmarkName = "getUserTweetsByType(user:type:pageNumber:pageSize:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
