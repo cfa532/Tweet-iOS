@@ -23,12 +23,16 @@ struct SearchScreen: View {
                             }
                         
                         if !searchText.isEmpty {
-                            Button(action: {
+                            DebounceButton(
+                                cooldownDuration: 0.3,
+                                enableAnimation: true,
+                                enableVibration: false
+                            ) {
                                 searchText = ""
                                 Task {
                                     await searchViewModel.clearResults()
                                 }
-                            }) {
+                            } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundColor(.gray)
                             }
