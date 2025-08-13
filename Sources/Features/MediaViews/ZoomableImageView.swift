@@ -26,7 +26,9 @@ struct ZoomableImageView: View {
                 if let imageURL = imageURL {
                     WebImage(url: imageURL, options: [.progressiveLoad])
                         .onSuccess { image, data, cacheType in
-                            isImageLoaded = true
+                            Task { @MainActor in
+                                isImageLoaded = true
+                            }
                         }
                         .onFailure { error in
                             // Handle error state

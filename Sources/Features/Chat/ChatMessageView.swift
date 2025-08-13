@@ -73,9 +73,17 @@ struct ChatMessageView: View {
                         if attachments.count == 1, let attachment = attachments.first {
                             // Single attachment
                             if attachment.type.lowercased().contains("image") {
-                                ChatImageViewWithPlaceholder(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                                ChatImageViewWithPlaceholder(
+                                    attachment: attachment, 
+                                    isFromCurrentUser: isFromCurrentUser,
+                                    senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser
+                                )
                             } else if attachment.type.lowercased().contains("video") {
-                                ChatVideoPlayer(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                                ChatVideoPlayer(
+                                    attachment: attachment, 
+                                    isFromCurrentUser: isFromCurrentUser,
+                                    senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser
+                                )
                             } else {
                                 // Other file types
                                 ChatAttachmentLoader(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
@@ -98,6 +106,9 @@ struct ChatMessageView: View {
                             .help(message.errorMsg ?? "Message failed to send")
                         }
                     }
+                    .frame(maxWidth: 280)
+                    .clipped()
+                    .contentShape(Rectangle())
                 }
                 
                 // Timestamp - show for last message from each party
@@ -231,10 +242,21 @@ struct AttachmentView: View {
 struct ChatImageViewWithPlaceholder: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
+    let senderUser: User?
     
     @State private var showFullScreen = false
+    @State private var isImageLoaded = false
+    @State private var hasLoadError = false
     
-    private let baseUrl = HproseInstance.baseUrl
+    private var baseUrl: URL {
+        if isFromCurrentUser {
+            // For messages sent by current user, use app user's baseUrl
+            return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
+        } else {
+            // For messages received from other users, use sender's baseUrl
+            return senderUser?.baseUrl ?? HproseInstance.baseUrl
+        }
+    }
     
     var body: some View {
         Group {
@@ -263,9 +285,17 @@ struct ChatImageViewWithPlaceholder: View {
         WebImage(url: url, options: [.progressiveLoad])
             .onSuccess { image, data, cacheType in
                 // Image loaded successfully
+                Task { @MainActor in
+                    isImageLoaded = true
+                    hasLoadError = false
+                }
             }
             .onFailure { error in
                 // Handle error state
+                Task { @MainActor in
+                    hasLoadError = true
+                    isImageLoaded = false
+                }
             }
             .resizable()
             .aspectRatio(contentMode: .fit)
@@ -273,20 +303,40 @@ struct ChatImageViewWithPlaceholder: View {
             .aspectRatio(aspectRatio, contentMode: .fit)
             .overlay(
                 Group {
-                    if let placeholderImage = getCachedPlaceholder() {
-                        Image(uiImage: placeholderImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .foregroundColor(.gray)
-                    } else {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
+                    if !isImageLoaded && !hasLoadError {
+                        if let placeholderImage = getCachedPlaceholder() {
+                            Image(uiImage: placeholderImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .foregroundColor(.gray)
+                        } else {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                        }
+                    } else if hasLoadError {
+                        // Show error state
+                        VStack {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundColor(.orange)
+                                .font(.system(size: 20))
+                            Text(NSLocalizedString("Failed to load image", comment: "Image loading error"))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(8)
+                        .background(Color(.systemGray6).opacity(0.8))
+                        .cornerRadius(6)
                     }
                 }
             )
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .onTapGesture {
                 showFullScreen = true
+            }
+            .onAppear {
+                // Reset state when view appears
+                isImageLoaded = false
+                hasLoadError = false
             }
     }
     
@@ -311,10 +361,19 @@ struct ChatImageViewWithPlaceholder: View {
 struct ChatVideoPlayer: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
+    let senderUser: User?
     
     @State private var showFullScreen = false
     
-    private let baseUrl = HproseInstance.baseUrl
+    private var baseUrl: URL {
+        if isFromCurrentUser {
+            // For messages sent by current user, use app user's baseUrl
+            return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
+        } else {
+            // For messages received from other users, use sender's baseUrl
+            return senderUser?.baseUrl ?? HproseInstance.baseUrl
+        }
+    }
     
     var body: some View {
         Group {
@@ -323,6 +382,7 @@ struct ChatVideoPlayer: View {
                     url: url,
                     mid: attachment.mid,
                     isVisible: true,
+                    cellAspectRatio: CGFloat(1.0),
                     videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
                     showNativeControls: false,
                     isMuted: MuteState.shared.isMuted,
@@ -331,9 +391,10 @@ struct ChatVideoPlayer: View {
                     },
                     disableAutoRestart: true
                 )
-                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
-                .aspectRatio(CGFloat(max(attachment.aspectRatio ?? 16.0/9.0, 0.8)), contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .frame(maxWidth: UIScreen.main.bounds.width)
+                .aspectRatio(CGFloat(attachment.aspectRatio ?? 16.0/9.0), contentMode: .fit)
+                .clipped()
+                .contentShape(Rectangle())
                 .fullScreenCover(isPresented: $showFullScreen) {
                     // Create a temporary tweet-like structure for the video
                     let tempTweet = Tweet(

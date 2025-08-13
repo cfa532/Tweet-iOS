@@ -88,7 +88,7 @@ struct MediaGridView: View {
                         forceRefreshTrigger: forceRefreshTrigger
                     )
                     .frame(width: gridWidth, height: gridHeight)
-                    .clipped().contentShape(Rectangle())
+                    .clipped()
                     .contentShape(Rectangle())
                     // identify MediaCell border
                     //  .border(Color.red, width: 1)
