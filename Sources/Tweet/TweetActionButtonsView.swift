@@ -48,7 +48,7 @@ struct TweetActionButtonsView: View {
             // Comment button
             PreventRepeatedTapButton(
                 cooldownDuration: 0.3,
-                enableAnimation: false,
+                enableAnimation: true,
                 enableVibration: false
             ) {
                 if hproseInstance.appUser.isGuest {
@@ -71,7 +71,7 @@ struct TweetActionButtonsView: View {
             // Retweet button
             PreventRepeatedTapButton(
                 cooldownDuration: 0.5,
-                enableAnimation: false,
+                enableAnimation: true,
                 enableVibration: false
             ) {
                 if hproseInstance.appUser.isGuest {
@@ -100,7 +100,7 @@ struct TweetActionButtonsView: View {
             // Like button
             PreventRepeatedTapButton(
                 cooldownDuration: 0.3,
-                enableAnimation: false,
+                enableAnimation: true,
                 enableVibration: false
             ) {
                 if hproseInstance.appUser.isGuest {
@@ -188,7 +188,7 @@ struct TweetActionButtonsView: View {
             // Bookmark button
             PreventRepeatedTapButton(
                 cooldownDuration: 0.3,
-                enableAnimation: false,
+                enableAnimation: true,
                 enableVibration: false
             ) {
                 if hproseInstance.appUser.isGuest {
@@ -276,7 +276,7 @@ struct TweetActionButtonsView: View {
             Spacer(minLength: 16)
             PreventRepeatedTapButton(
                 cooldownDuration: 0.3,
-                enableAnimation: false,
+                enableAnimation: true,
                 enableVibration: false
             ) {
                 showShareSheet = true
