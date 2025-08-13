@@ -207,7 +207,7 @@ final class HproseInstance: ObservableObject {
         guard let service = appUser.hproseService else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
         }
-        let params = [
+        var params = [
             "aid": appId,
             "ver": "last",
             "pn": pageNumber,
@@ -216,6 +216,9 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid,
         ]
         
+        if entry == "update_following_tweets" {
+            params["hostid"] = appUser.hostIds?.first
+        }
         guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchTweetFeed"])
         }
@@ -233,7 +236,9 @@ final class HproseInstance: ObservableObject {
         let tweetsData = response["tweets"] as? [[String: Any]?] ?? []
         let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
         
-        print("[fetchTweetFeed] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
+        if entry == "update_following_tweets" {
+            print("[fetchTweetFeed] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
+        }
         
         // Cache original tweets first
         for originalTweetDict in originalTweetsData {
