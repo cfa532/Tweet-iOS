@@ -235,8 +235,6 @@ struct MediaBrowserView: View {
         }
     }
     
-
-    
     @ViewBuilder
     private func audioView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
         SimpleAudioPlayer(
