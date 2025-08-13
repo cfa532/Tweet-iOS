@@ -66,7 +66,10 @@ struct UserRowView: View {
                 }
                 Spacer()
                 if let onFollowToggle = onFollowToggle {
-                    Button {
+                    PreventRepeatedTapButton(
+                        cooldownDuration: 0.5,
+                        enableVibration: false
+                    ) {
                         Task {
                             await onFollowToggle(user)
                             isFollowing.toggle()

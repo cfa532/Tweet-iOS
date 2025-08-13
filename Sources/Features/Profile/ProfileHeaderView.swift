@@ -44,7 +44,11 @@ struct ProfileHeaderView: View {
                     )
                     .foregroundColor(.themeText)
                 } else {
-                    Button(isFollowing ? "Unfollow" : "Follow") {
+                    PreventRepeatedTapButton(
+                        isFollowing ? "Unfollow" : "Follow",
+                        cooldownDuration: 0.5,
+                        enableVibration: false
+                    ) {
                         onFollowToggle()
                     }
                     .padding(.horizontal, 16)

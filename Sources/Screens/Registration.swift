@@ -239,7 +239,12 @@ struct RegistrationView: View {
                             .font(.caption)
                     }
 
-                    Button(action: handleSubmit) {
+                    PreventRepeatedTapButton(
+                        cooldownDuration: 1.0,
+                        enableVibration: false
+                    ) {
+                        handleSubmit()
+                    } label: {
                         HStack {
                             if isSubmitting {
                                 ProgressView()

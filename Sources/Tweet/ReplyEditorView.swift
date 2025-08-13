@@ -23,6 +23,7 @@ struct ReplyEditorView: View {
     @State private var error: Error?
     @FocusState private var isTextFieldFocused: Bool
     var onClose: (() -> Void)? = nil
+    var initialExpanded: Bool = false
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
@@ -60,8 +61,14 @@ struct ReplyEditorView: View {
                }
            }
        }
-       .sheet(isPresented: $showImagePicker) {
+               .sheet(isPresented: $showImagePicker) {
            PhotosPicker("Select Media", selection: $selectedItems, matching: .any(of: [.images, .videos]))
+       }
+       .onAppear {
+           // Set initial expanded state if requested
+           if initialExpanded {
+               isExpanded = true
+           }
        }
     }
     

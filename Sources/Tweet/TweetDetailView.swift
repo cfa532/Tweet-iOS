@@ -282,6 +282,7 @@ struct TweetDetailView: View {
     @State private var isVisible = true
     @State private var imageAspectRatios: [Int: CGFloat] = [:] // index: aspectRatio
     @State private var showReplyEditor = false
+    @State private var cachedDisplayTweet: Tweet?
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
@@ -291,16 +292,34 @@ struct TweetDetailView: View {
     }
 
     private var displayTweet: Tweet {
+        // Check if we need to update the cached value
         let isRetweet = (tweet.content == nil || tweet.content?.isEmpty == true) &&
                        (tweet.attachments == nil || tweet.attachments?.isEmpty == true)
-        if isRetweet {
-            let result = originalTweet ?? tweet
-            print("[TweetDetailView] Returning originalTweet: \(result.mid)")
-            return result
-        } else {
-            print("[TweetDetailView] Returning tweet: \(tweet.mid)")
-            return tweet
+        let shouldUseOriginal = isRetweet && originalTweet != nil
+        
+        // If we have a cached value and the conditions haven't changed, return it
+        if let cached = cachedDisplayTweet {
+            let cachedIsRetweet = (cached.content == nil || cached.content?.isEmpty == true) &&
+                                 (cached.attachments == nil || cached.attachments?.isEmpty == true)
+            let cachedShouldUseOriginal = cachedIsRetweet && originalTweet != nil
+            
+            if shouldUseOriginal == cachedShouldUseOriginal {
+                return cached
+            }
         }
+        
+        // Calculate new value and cache it
+        let result: Tweet
+        if shouldUseOriginal {
+            result = originalTweet ?? tweet
+            print("[TweetDetailView] Returning originalTweet: \(result.mid)")
+        } else {
+            result = tweet
+            print("[TweetDetailView] Returning tweet: \(result.mid)")
+        }
+        
+        cachedDisplayTweet = result
+        return result
     }
 
     var body: some View {
@@ -339,6 +358,10 @@ struct TweetDetailView: View {
                 dismiss()
             }
         }
+        .onChange(of: originalTweet) { _ in
+            // Clear cache when originalTweet changes
+            cachedDisplayTweet = nil
+        }
         .overlay(toastOverlay)
         .onDisappear {
             refreshTimer?.invalidate()
@@ -368,12 +391,15 @@ struct TweetDetailView: View {
         .overlay(
             VStack {
                 Spacer()
-                ReplyEditorView(
-                    parentTweet: displayTweet,
-                    onClose: {
-                        showReplyEditor = false
-                    }
-                )
+                if showReplyEditor {
+                    ReplyEditorView(
+                        parentTweet: displayTweet,
+                        onClose: {
+                            showReplyEditor = false
+                        },
+                        initialExpanded: true
+                    )
+                }
             }
             .padding(.bottom, 48) // Move it down further, closer to navigation bar
         )

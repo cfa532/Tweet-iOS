@@ -46,13 +46,17 @@ struct TweetActionButtonsView: View {
     var body: some View {
         HStack(spacing: 0) {
             // Comment button
-            Button(action: {
+            PreventRepeatedTapButton(
+                cooldownDuration: 0.3,
+                enableAnimation: false,
+                enableVibration: false
+            ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
                     onCommentTap?() ?? { showCommentCompose = true }()
                 }
-            }) {
+            } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "bubble.left")
                         .frame(width: 20)
@@ -65,7 +69,11 @@ struct TweetActionButtonsView: View {
             }
             Spacer(minLength: 12)
             // Retweet button
-            Button(action: {
+            PreventRepeatedTapButton(
+                cooldownDuration: 0.5,
+                enableAnimation: false,
+                enableVibration: false
+            ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
@@ -77,7 +85,7 @@ struct TweetActionButtonsView: View {
                         }
                     }
                 }
-            }) {
+            } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.2.squarepath")
                         .frame(width: 20)
@@ -90,7 +98,11 @@ struct TweetActionButtonsView: View {
             }
             Spacer(minLength: 12)
             // Like button
-            Button(action: {
+            PreventRepeatedTapButton(
+                cooldownDuration: 0.3,
+                enableAnimation: false,
+                enableVibration: false
+            ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
@@ -161,7 +173,7 @@ struct TweetActionButtonsView: View {
                         }
                     }
                 }
-            }) {
+            } label: {
                 HStack(spacing: 4) {
                     Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
                         .frame(width: 20)
@@ -174,7 +186,11 @@ struct TweetActionButtonsView: View {
             }
             Spacer(minLength: 12)
             // Bookmark button
-            Button(action: {
+            PreventRepeatedTapButton(
+                cooldownDuration: 0.3,
+                enableAnimation: false,
+                enableVibration: false
+            ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
@@ -245,7 +261,7 @@ struct TweetActionButtonsView: View {
                         }
                     }
                 }
-            }) {
+            } label: {
                 HStack(spacing: 4) {
                     Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
                         .frame(width: 20)
@@ -258,9 +274,13 @@ struct TweetActionButtonsView: View {
             }
             // Share button
             Spacer(minLength: 16)
-            Button(action: {
+            PreventRepeatedTapButton(
+                cooldownDuration: 0.3,
+                enableAnimation: false,
+                enableVibration: false
+            ) {
                 showShareSheet = true
-            }) {
+            } label: {
                 Image(systemName: "square.and.arrow.up")
                     .frame(width: 20)
                     .frame(maxWidth: .infinity, alignment: .trailing)
