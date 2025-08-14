@@ -287,7 +287,7 @@ struct TweetActionButtonsView: View {
             }
         }
         .foregroundColor(.themeSecondaryText)
-        .padding(.trailing, 4)
+        .padding(.trailing, 8)
         .padding(.leading, 0)
         .sheet(isPresented: $showCommentCompose) {
             if let commentsVM = commentsVM {

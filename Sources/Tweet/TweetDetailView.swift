@@ -482,10 +482,10 @@ struct TweetDetailView: View {
                 showReplyEditor = true
             }
         )
-        .padding(.leading, 48)
-        .padding(.trailing, 8)
+        .padding(.leading, 16)
         .padding(.top, 8)
         .padding(.bottom, 4)
+        .padding(.trailing, 12)
     }
     
     private var toastOverlay: some View {

@@ -450,49 +450,12 @@ struct MediaGridView: View {
                 // Mark the grid as visible
                 isVisible = true
                 
-                // Start video loading timer if this grid contains videos
-                let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
-                
-                if hasVideos {
-                    // Start background preloading for all videos in the grid
-                    startBackgroundPreloading()
-                    
-                    // Balanced delay - enough to let UI settle without feeling slow
-                    videoLoadTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
-                        shouldLoadVideo = true
-                        
-                        // Setup video playback for any videos in this grid
-                        let videoMids = attachments.enumerated().compactMap { index, attachment in
-                            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                                return attachment.mid
-                            }
-                            return nil
-                        }
-                        
-                        if !videoMids.isEmpty {
-                            print("DEBUG: [MediaGridView] Grid appeared with \(videoMids.count) videos - setting up playback")
-                            // Always stop any existing playback first
-                            videoManager.stopSequentialPlayback()
-                            // Setup playback starting with the first video in sequence
-                            videoManager.setupSequentialPlayback(for: videoMids)
-                            // Force refresh all cells to update their play states
-                            forceRefreshTrigger += 1
-                        }
-                    }
-                }
-            }
-            .onDisappear {
-                // Mark the grid as not visible
-                isVisible = false
-                
-                videoLoadTimer?.invalidate()
-                videoLoadTimer = nil
+                // Check if running in simulator - disable complex video features to prevent crashes
+                #if targetEnvironment(simulator)
+                print("DEBUG: [MediaGridView] Running in simulator - disabling video playback to prevent crashes")
                 shouldLoadVideo = false
-                videoManager.stopSequentialPlayback()
-            }
-            .onAppear {
-                // Mark the grid as visible
-                isVisible = true
+                return
+                #endif
                 
                 // Setup sequential playback for videos
                 let videoMids = attachments.enumerated().compactMap { index, attachment in
@@ -523,28 +486,48 @@ struct MediaGridView: View {
                         print("DEBUG: [MediaGridView] Setup \(wasEmpty ? "FIRST TIME" : "EXISTING") single video playback for \(videoMids[0])")
                     }
                 }
-            }
-            .onChange(of: isVisible) { newVisibility in
-                // Handle visibility changes
-                if newVisibility {
-                    // Grid became visible - start video playback for any videos
-                    let videoMids = attachments.enumerated().compactMap { index, attachment in
-                        if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                            return attachment.mid
-                        }
-                        return nil
-                    }
+                
+                // Start video loading timer if this grid contains videos
+                let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
+                
+                if hasVideos {
+                    print("DEBUG: [MediaGridView] Grid contains videos - starting loading process")
                     
-                    if !videoMids.isEmpty {
-                        print("DEBUG: [MediaGridView] Grid became visible with \(videoMids.count) videos - starting playback")
-                        // Always stop any existing playback first
-                        videoManager.stopSequentialPlayback()
-                        // Setup playback starting with the first video in sequence
-                        videoManager.setupSequentialPlayback(for: videoMids)
+                    // Start background preloading for all videos in the grid
+                    startBackgroundPreloading()
+                    
+                    // Balanced delay - enough to let UI settle without feeling slow
+                    #if targetEnvironment(simulator)
+                    let timerInterval: TimeInterval = 0.1 // Faster in simulator for testing
+                    #else
+                    let timerInterval: TimeInterval = 0.3
+                    #endif
+                    
+                    videoLoadTimer = Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: false) { _ in
+                        print("DEBUG: [MediaGridView] Video load timer fired - enabling video loading")
+                        shouldLoadVideo = true
+                        
                         // Force refresh all cells to update their play states
                         forceRefreshTrigger += 1
+                        print("DEBUG: [MediaGridView] Force refresh trigger incremented to: \(forceRefreshTrigger)")
                     }
                 } else {
+                    print("DEBUG: [MediaGridView] Grid contains no videos")
+                }
+            }
+            .onDisappear {
+                // Mark the grid as not visible
+                isVisible = false
+                
+                videoLoadTimer?.invalidate()
+                videoLoadTimer = nil
+                shouldLoadVideo = false
+                videoManager.stopSequentialPlayback()
+            }
+            // Removed duplicate .onAppear block that was causing infinite loop
+            .onChange(of: isVisible) { newVisibility in
+                // Handle visibility changes
+                if !newVisibility {
                     // Grid became invisible - stop video playback
                     print("DEBUG: [MediaGridView] Grid became invisible - stopping playback")
                     videoManager.stopSequentialPlayback()

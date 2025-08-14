@@ -79,6 +79,22 @@ struct MediaCell: View, Equatable {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
+                    // Check if running in simulator - show placeholder instead of video player
+                    #if targetEnvironment(simulator)
+                    // Show placeholder for videos in simulator to prevent crashes
+                    ZStack {
+                        Color.gray.opacity(0.3)
+                            .aspectRatio(contentMode: .fill)
+                            .overlay(
+                                Image(systemName: "play.circle.fill")
+                                    .font(.system(size: 50))
+                                    .foregroundColor(.white)
+                            )
+                            .onTapGesture {
+                                showFullScreen = true
+                            }
+                    }
+                    #else
                     // Only create video player if we should load video
                     if shouldLoadVideo {
                         ZStack {
@@ -178,6 +194,7 @@ struct MediaCell: View, Equatable {
                                 }
                         }
                     }
+                    #endif
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
@@ -264,6 +281,14 @@ struct MediaCell: View, Equatable {
         .onChange(of: isVisible) { newValue in
             if newValue && image == nil {
                 loadImage()
+            }
+        }
+        .onChange(of: forceRefreshTrigger) { _ in
+            // Force refresh triggered by MediaGridView - update video state
+            if isVideoAttachment {
+                print("DEBUG: [MEDIA CELL \(attachment.mid)] Force refresh triggered - updating video state")
+                // The SimpleVideoPlayer will automatically update its autoPlay state
+                // based on the videoManager.shouldPlayVideo() call
             }
         }
         
