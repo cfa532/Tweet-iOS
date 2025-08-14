@@ -300,7 +300,7 @@ struct TweetActionButtonsView: View {
             // Video management is now handled locally per grid
         }
         .sheet(isPresented: $showShareSheet) {
-            ShareSheet(activityItems: [tweetShareText(tweet)])
+            ShareSheet(activityItems: [createCustomShareItem(), createCustomShareImage()])
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
@@ -319,12 +319,109 @@ struct TweetActionButtonsView: View {
         )
     }
 
+    private func createCustomShareItem() -> CustomShareItem {
+        let shareText = tweetShareText(tweet)
+        return CustomShareItem(shareText: shareText, tweet: tweet)
+    }
+    
+    private func createCustomShareImage() -> UIImage {
+        // Create a custom image to cover the whole shared applet box
+        let size = CGSize(width: 600, height: 315) // Optimal size for social sharing (like Twitter cards)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        
+        return renderer.image { context in
+            let rect = CGRect(origin: .zero, size: size)
+            
+            // Background gradient
+            let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                    colors: [UIColor.systemBlue.cgColor, UIColor.systemPurple.cgColor] as CFArray,
+                                    locations: [0, 1])!
+            context.cgContext.drawLinearGradient(gradient, start: CGPoint(x: 0, y: 0), end: CGPoint(x: size.width, y: size.height), options: [])
+            
+            // Content area with padding
+            let contentRect = rect.insetBy(dx: 40, dy: 40)
+            
+            // Draw tweet content if available
+            if let content = tweet.content, !content.isEmpty {
+                let maxLength = 200
+                let displayContent = content.count > maxLength ? String(content.prefix(maxLength)) + "..." : content
+                
+                let contentAttributes: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 24),
+                    .foregroundColor: UIColor.white
+                ]
+                let contentString = NSAttributedString(string: displayContent, attributes: contentAttributes)
+                let contentRect = CGRect(x: contentRect.minX, y: contentRect.minY + 60, width: contentRect.width, height: contentRect.height - 120)
+                contentString.draw(in: contentRect)
+            } else if let attachments = tweet.attachments, !attachments.isEmpty {
+                // Show localized attachment indicator
+                let attachmentText = NSLocalizedString("[attachments]", comment: "Indicator for tweets with attachments but no text content")
+                let contentAttributes: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 24),
+                    .foregroundColor: UIColor.white
+                ]
+                let contentString = NSAttributedString(string: attachmentText, attributes: contentAttributes)
+                let contentRect = CGRect(x: contentRect.minX, y: contentRect.minY + 60, width: contentRect.width, height: contentRect.height - 120)
+                contentString.draw(in: contentRect)
+            }
+            
+            // Draw author name at the top
+            let authorName = tweet.author?.name ?? tweet.author?.username ?? "Unknown User"
+            let authorAttributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.boldSystemFont(ofSize: 28),
+                .foregroundColor: UIColor.white
+            ]
+            let authorString = NSAttributedString(string: authorName, attributes: authorAttributes)
+            let authorRect = CGRect(x: contentRect.minX, y: contentRect.minY, width: contentRect.width, height: 40)
+            authorString.draw(in: authorRect)
+            
+            // Draw a large bird emoji in the bottom right corner
+            let iconAttributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 80),
+                .foregroundColor: UIColor.white.withAlphaComponent(0.8)
+            ]
+            let iconString = NSAttributedString(string: "🐦", attributes: iconAttributes)
+            let iconStringSize = iconString.size()
+            let iconStringRect = CGRect(
+                x: rect.maxX - iconStringSize.width - 40,
+                y: rect.maxY - iconStringSize.height - 40,
+                width: iconStringSize.width,
+                height: iconStringSize.height
+            )
+            iconString.draw(in: iconStringRect)
+        }
+    }
+    
     private func tweetShareText(_ tweet: Tweet) -> String {
+        // Create a share text that includes app branding
+        var shareText = ""
+        
+        // Add app icon emoji at the beginning
+        shareText += "🐦 "
+        
+        // Add author and content info
+        if let authorName = tweet.author?.name ?? tweet.author?.username {
+            shareText += "Tweet by \(authorName)"
+        } else {
+            shareText += "Tweet"
+        }
+        
+        // Add tweet content if available
+        if let content = tweet.content, !content.isEmpty {
+            let maxLength = 100
+            let truncatedContent = content.count > maxLength ? String(content.prefix(maxLength)) + "..." : content
+            shareText += ": \(truncatedContent)"
+        } else if let attachments = tweet.attachments, !attachments.isEmpty {
+            shareText += ": \(NSLocalizedString("[attachments]", comment: "Indicator for tweets with attachments but no text content"))"
+        }
+        
+        // Add URL
         if var text = hproseInstance.preferenceHelper?.getAppUrls().first {
             text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            shareText += "\n\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
         }
-        return "App url not available."
+        
+        return shareText
     }
 }
 
@@ -338,4 +435,34 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+class CustomShareItem: NSObject, UIActivityItemSource {
+    let shareText: String
+    let tweet: Tweet
+    
+    init(shareText: String, tweet: Tweet) {
+        self.shareText = shareText
+        self.tweet = tweet
+        super.init()
+    }
+    
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        return shareText
+    }
+    
+    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        return shareText
+    }
+    
+    func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
+        // Custom app name with bird icon
+        if let content = tweet.content, !content.isEmpty {
+            let maxLength = 40
+            let truncatedContent = content.count > maxLength ? String(content.prefix(maxLength)) + "..." : content
+            return "🐦 Tweet: \(truncatedContent)"
+        } else {
+            return "🐦 Tweet"
+        }
+    }
 }
