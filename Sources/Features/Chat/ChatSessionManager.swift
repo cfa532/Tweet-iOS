@@ -106,6 +106,9 @@ class ChatSessionManager: ObservableObject {
                                 chatSessions[index] = updatedSession
                                 saveChatSessionToCoreData(updatedSession)
                                 print("[ChatSessionManager] Updated session with new last message for \(partnerId): \(lastMessage.id)")
+                                
+                                // Trigger notification for new message
+                                await triggerNotificationForMessage(lastMessage, partnerId: partnerId)
                             }
                         } else {
                             // No existing session - create new session with the actual message
@@ -120,6 +123,9 @@ class ChatSessionManager: ObservableObject {
                             chatSessions.append(newSession)
                             saveChatSessionToCoreData(newSession)
                             print("[ChatSessionManager] Created new session for \(partnerId) with actual message: \(lastMessage.id)")
+                            
+                            // Trigger notification for new message
+                            await triggerNotificationForMessage(lastMessage, partnerId: partnerId)
                         }
                     }
                 }
@@ -301,5 +307,77 @@ class ChatSessionManager: ObservableObject {
             }
         }
         updateUnreadMessageCount()
+    }
+    
+    // MARK: - Notification Handling
+    
+    private func triggerNotificationForMessage(_ message: ChatMessage, partnerId: String) async {
+        // Check if app is in background or inactive
+        let appState = UIApplication.shared.applicationState
+        guard appState == .background || appState == .inactive else {
+            print("[ChatSessionManager] App is in foreground, skipping notification for message: \(message.id)")
+            return
+        }
+        
+        // Check notification permission
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        guard settings.authorizationStatus == .authorized else {
+            print("[ChatSessionManager] No notification permission, skipping notification")
+            return
+        }
+        
+        // Get sender name by fetching user details
+        var senderName = partnerId
+        do {
+            if let user = try await hproseInstance.fetchUser(partnerId) {
+                senderName = user.name ?? user.username ?? partnerId
+            }
+        } catch {
+            print("[ChatSessionManager] Error fetching user details for notification: \(error)")
+            // Fallback to partnerId if user fetch fails
+        }
+        
+        // Create notification content
+        let content = UNMutableNotificationContent()
+        content.title = senderName
+        content.body = message.content ?? "New message"
+        content.sound = .default
+        
+        // Add custom data for handling notification tap
+        content.userInfo = [
+            "messageId": message.id,
+            "senderId": message.authorId,
+            "chatSessionId": message.chatSessionId,
+            "type": "chat_message"
+        ]
+        
+        // Create notification trigger (immediate)
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
+        
+        // Create notification request
+        let request = UNNotificationRequest(
+            identifier: "chat_message_\(message.id)",
+            content: content,
+            trigger: trigger
+        )
+        
+        // Schedule the notification
+        center.add(request) { error in
+            if let error = error {
+                print("[ChatSessionManager] Error scheduling notification: \(error)")
+            } else {
+                print("[ChatSessionManager] Chat notification scheduled for message: \(message.id)")
+            }
+        }
+        
+        // Update badge count
+        let currentBadge = UIApplication.shared.applicationIconBadgeNumber
+        let newBadge = currentBadge > 9 ? -1 : currentBadge + 1
+        DispatchQueue.main.async {
+            UIApplication.shared.applicationIconBadgeNumber = newBadge
+        }
+        
+        print("[ChatSessionManager] Triggered notification for message from \(senderName)")
     }
 }

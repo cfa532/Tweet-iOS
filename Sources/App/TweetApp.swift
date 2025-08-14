@@ -126,6 +126,14 @@ struct TweetApp: App {
                 }
                 showGlobalAlert = true
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openChatFromNotification)) { notification in
+                // Handle chat notification tap
+                if let senderId = notification.userInfo?["senderId"] as? String {
+                    // Navigate to chat screen with the sender
+                    // This will be handled by the navigation system
+                    print("[TweetApp] Received notification to open chat with: \(senderId)")
+                }
+            }
             .alert("Error", isPresented: .constant(appState.error != nil)) {
                 Button("OK") {
                     appState.error = nil

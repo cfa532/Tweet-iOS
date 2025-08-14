@@ -69,6 +69,11 @@ struct ChatListScreen: View {
             
             // Start periodic checking for new messages
             startPeriodicMessageCheck()
+            
+            // Clear badge count when chat list is opened
+            DispatchQueue.main.async {
+                UIApplication.shared.applicationIconBadgeNumber = 0
+            }
         }
         .onDisappear {
             // Stop periodic checking when view disappears

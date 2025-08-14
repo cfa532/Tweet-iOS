@@ -71,6 +71,7 @@
 		46B03D952E4A4ED6000E08DF /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D942E4A4ED6000E08DF /* NetworkMonitor.swift */; };
 		46B03D972E4C44E2000E08DF /* DebounceButtonWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D962E4C44E2000E08DF /* DebounceButtonWrapper.swift */; };
 		46B03D992E4C56C2000E08DF /* HapticButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */; };
+		46B03D9B2E4D7336000E08DF /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D9A2E4D7336000E08DF /* NotificationManager.swift */; };
 		46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */; };
 		46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */; };
 		46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */; };
@@ -175,6 +176,7 @@
 		46B03D942E4A4ED6000E08DF /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		46B03D962E4C44E2000E08DF /* DebounceButtonWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceButtonWrapper.swift; sourceTree = "<group>"; };
 		46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticButtonStyle.swift; sourceTree = "<group>"; };
+		46B03D9A2E4D7336000E08DF /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSVideoProcessor.swift; sourceTree = "<group>"; };
 		46B1F59B2E07DA7D00B3CE6C /* FFmpegWrapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FFmpegWrapper.h; sourceTree = "<group>"; };
 		46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = FFmpegWrapper.c; sourceTree = "<group>"; };
@@ -295,6 +297,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				46B03D9A2E4D7336000E08DF /* NotificationManager.swift */,
 				46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */,
 				46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */,
 				460680E72E16264C00D9D15A /* VideoCacheManager.swift */,
@@ -659,6 +662,7 @@
 				4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */,
 				4614381D2E3F69AD002D1B22 /* CoreDataManager.swift in Sources */,
 				46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */,
+				46B03D9B2E4D7336000E08DF /* NotificationManager.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */,
 				461438192E3EEE2D002D1B22 /* MimeiId.swift in Sources */,
 				469CF0F22E27FED700FBCDB8 /* OrientationManager.swift in Sources */,

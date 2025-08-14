@@ -97,6 +97,11 @@ struct ChatScreen: View {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
                     }
+                    
+                    // Clear badge count when chat is opened
+                    DispatchQueue.main.async {
+                        UIApplication.shared.applicationIconBadgeNumber = 0
+                    }
                 }
             }
             .background(Color(.systemBackground))

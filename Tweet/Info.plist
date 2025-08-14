@@ -22,5 +22,7 @@
     <string>en</string>
     <key>NSCameraUsageDescription</key>
     <string>This app uses the camera to allow you to take photos for your replies and tweets.</string>
+    <key>NSUserNotificationUsageDescription</key>
+    <string>This app uses notifications to alert you about new chat messages.</string>
 </dict>
 </plist> 

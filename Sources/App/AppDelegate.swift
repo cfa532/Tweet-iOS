@@ -1,6 +1,7 @@
 import UIKit
 import SwiftUI
 import BackgroundTasks
+import UserNotifications
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
@@ -11,6 +12,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         // Setup app lifecycle notifications
         setupAppLifecycleNotifications()
+        
+        // Request notification permissions
+        Task {
+            await requestNotificationPermission()
+        }
         
         return true
     }
@@ -127,5 +133,18 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] App will enter foreground - foreground handling moved to SimpleVideoPlayer")
         
         // Foreground handling is now done by SimpleVideoPlayer's notification observers
+    }
+    
+    // MARK: - Notification Permission
+    
+    private func requestNotificationPermission() async {
+        let center = UNUserNotificationCenter.current()
+        
+        do {
+            let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+            print("[AppDelegate] Notification permission granted: \(granted)")
+        } catch {
+            print("[AppDelegate] Error requesting notification permission: \(error)")
+        }
     }
 } 
