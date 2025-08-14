@@ -365,13 +365,21 @@ struct TweetActionButtonsView: View {
         // Create a share text that includes app branding
         var shareText = ""
         
-        // Add tweet content directly
-        if let content = tweet.content, !content.isEmpty {
+        // Priority: title > content > attachment types
+        if let title = tweet.title, !title.isEmpty {
+            // Use title if available
+            let maxLength = 100
+            let truncatedTitle = title.count > maxLength ? String(title.prefix(maxLength)) + "..." : title
+            shareText += truncatedTitle
+        } else if let content = tweet.content, !content.isEmpty {
+            // Use content if title is not available
             let maxLength = 100
             let truncatedContent = content.count > maxLength ? String(content.prefix(maxLength)) + "..." : content
             shareText += truncatedContent
         } else if let attachments = tweet.attachments, !attachments.isEmpty {
-            shareText += NSLocalizedString("[attachments]", comment: "Indicator for tweets with attachments but no text content")
+            // Create string from attachment types
+            let attachmentTypes = attachments.compactMap { $0.type }.joined(separator: ", ")
+            shareText += attachmentTypes.isEmpty ? NSLocalizedString("[attachments]", comment: "Indicator for tweets with attachments but no text content") : attachmentTypes
         }
         
         // Add URL
