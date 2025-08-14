@@ -363,12 +363,11 @@ class ChatSessionManager: ObservableObject {
         )
         
         // Schedule the notification
-        center.add(request) { error in
-            if let error = error {
-                print("[ChatSessionManager] Error scheduling notification: \(error)")
-            } else {
-                print("[ChatSessionManager] Chat notification scheduled for message: \(message.id)")
-            }
+        do {
+            try await center.add(request)
+            print("[ChatSessionManager] Chat notification scheduled for message: \(message.id)")
+        } catch {
+            print("[ChatSessionManager] Error scheduling notification: \(error)")
         }
         
         // Update badge count
