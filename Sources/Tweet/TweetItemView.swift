@@ -38,17 +38,18 @@ struct TweetItemView: View, Equatable {
         HStack(alignment: .top, spacing: 8) {
             if let originalTweet = originalTweet {
                 // This is a retweet
-                if let user = originalTweet.author {
-                    Button(action: {
-                        if !isInProfile {
-                            onAvatarTap?(user)
-                        }
-                    }) {
-                        Avatar(user: user)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
                 if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
+                    if let user = originalTweet.author {
+                        Button(action: {
+                            if !isInProfile {
+                                onAvatarTap?(user)
+                            }
+                        }) {
+                            Avatar(user: user)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+
                     // Show original tweet with retweet menu.
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 4) {
@@ -75,6 +76,17 @@ struct TweetItemView: View, Equatable {
                     }
                 } else {
                     // Show retweet with content and embedded original tweet
+                    if let user = tweet.author {
+                        Button(action: {
+                            if !isInProfile {
+                                onAvatarTap?(user)
+                            }
+                        }) {
+                            Avatar(user: user)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+
                     VStack(alignment: .leading) {
                         HStack {
                             TweetItemHeaderView(tweet: tweet)
