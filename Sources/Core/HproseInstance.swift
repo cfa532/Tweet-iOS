@@ -2735,6 +2735,29 @@ final class HproseInstance: ObservableObject {
             }
         }
     }
+    
+    /// Check for app upgrades
+    func checkUpgrade() async -> String? {
+        let entry = "check_upgrade"
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "entry": entry
+        ]
+        
+        guard let service = appUser.hproseService else {
+            print("[checkUpgrade] Service not initialized")
+            return nil
+        }
+        
+        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+            print("[checkUpgrade] Invalid response format")
+            return nil
+        }
+        
+        // Convert all values to strings to match Android behavior
+        return response["domain"] as? String
+    }
 }
 
 
