@@ -144,7 +144,7 @@ struct TweetItemView: View, Equatable {
             }
         }
         .padding()
-        .padding(.horizontal, -4)
+        .padding(.horizontal, -8)
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
