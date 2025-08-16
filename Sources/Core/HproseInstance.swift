@@ -157,22 +157,57 @@ final class HproseInstance: ObservableObject {
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     _hproseService = client.useService(HproseService.self) as AnyObject
                     
-                    if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid),
-                       let user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)") {
-                        // Valid login user is found, use its provider IP as base.
-                        HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
-                        client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                        _hproseService = client.useService(HproseService.self) as AnyObject
-                        let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
-                        await MainActor.run {
-                            // Update the appUser to the fetched user with all properties
-                            user.baseUrl = HproseInstance.baseUrl
-                            user.followingList = followings
-                            self.appUser = user
-                            // Update domain to share with the new base URL
-                            self._domainToShare = HproseInstance.baseUrl.absoluteString
+                    if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
+                        // Try to fetch user with retry logic
+                        var user: User? = nil
+                        var fetchError: Error? = nil
+                        
+                        // First attempt
+                        do {
+                            user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
+                        } catch {
+                            fetchError = error
+                            print("DEBUG: [initAppEntry] First fetchUser attempt failed: \(error)")
+                            
+                            // Retry once after a short delay
+                            do {
+                                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
+                                print("DEBUG: [initAppEntry] Retrying fetchUser...")
+                                user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
+                                print("DEBUG: [initAppEntry] fetchUser retry successful")
+                            } catch {
+                                fetchError = error
+                                print("DEBUG: [initAppEntry] fetchUser retry also failed: \(error)")
+                            }
                         }
-                        return
+                        
+                        if let user = user {
+                            // Valid login user is found, use its provider IP as base.
+                            HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
+                            client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
+                            _hproseService = client.useService(HproseService.self) as AnyObject
+                            let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                            await MainActor.run {
+                                // Update the appUser to the fetched user with all properties
+                                user.baseUrl = HproseInstance.baseUrl
+                                user.followingList = followings
+                                self.appUser = user
+                                // Update domain to share with the new base URL
+                                self._domainToShare = HproseInstance.baseUrl.absoluteString
+                            }
+                            return
+                        } else {
+                            print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
+                            let user = User.getInstance(mid: Constants.GUEST_ID)
+                            await MainActor.run {
+                                user.baseUrl = HproseInstance.baseUrl
+                                user.followingList = Gadget.getAlphaIds()
+                                _appUser = user
+                                // Update domain to share with the new base URL
+                                self._domainToShare = HproseInstance.baseUrl.absoluteString
+                            }
+                            return
+                        }
                     } else {
                         let user = User.getInstance(mid: Constants.GUEST_ID)
                         await MainActor.run {
