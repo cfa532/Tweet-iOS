@@ -36,7 +36,7 @@ struct SettingsView: View {
                 }
                 
                 Section(header: Text(LocalizedStringKey("App Settings"))) {
-                    Toggle("Dark Mode", isOn: $themeManager.isDarkMode)
+                    Toggle(NSLocalizedString("Dark Mode", comment: "Dark mode toggle"), isOn: $themeManager.isDarkMode)
                     
                     Toggle(LocalizedStringKey("Mute Videos"), isOn: $muteState.isMuted)
                         .onChange(of: muteState.isMuted) { newValue in
@@ -72,7 +72,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle(NSLocalizedString("Settings", comment: "Settings screen title"))
             .navigationBarItems(trailing: Button(NSLocalizedString("Done", comment: "Done button")) {
                 dismiss()
             })

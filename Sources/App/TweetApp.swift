@@ -58,7 +58,7 @@ struct TweetApp: App {
             Group {
                 if appState.isLoading {
                     // Show loading view during initialization
-                    ProgressView("Initializing...")
+                    ProgressView(NSLocalizedString("Initializing...", comment: "App initialization progress"))
                         .task {
                             await appState.initialize()
                         }
@@ -70,12 +70,12 @@ struct TweetApp: App {
                 } else {
                     // Show error state if initialization failed
                     VStack {
-                        Text(LocalizedStringKey("Failed to initialize app"))
+                        Text(NSLocalizedString("Failed to initialize app", comment: "App initialization error"))
                         if let error = appState.error {
                             Text(error.localizedDescription)
                                 .foregroundColor(.red)
                         }
-                        Button("Retry") {
+                        Button(NSLocalizedString("Retry", comment: "Retry button")) {
                             Task {
                                 await appState.initialize()
                             }
@@ -90,7 +90,7 @@ struct TweetApp: App {
                 if let msg = notification.userInfo?["error"] as? String {
                     globalAlertMessage = msg
                 } else {
-                    globalAlertMessage = "Background upload failed."
+                    globalAlertMessage = NSLocalizedString("Background upload failed.", comment: "Background upload error")
                 }
                 showGlobalAlert = true
             }
@@ -98,7 +98,7 @@ struct TweetApp: App {
                 if let msg = notification.userInfo?["error"] as? String {
                     globalAlertMessage = msg
                 } else {
-                    globalAlertMessage = "Failed to publish tweet."
+                    globalAlertMessage = NSLocalizedString("Failed to publish tweet.", comment: "Tweet publish error")
                 }
                 showGlobalAlert = true
             }
@@ -106,7 +106,7 @@ struct TweetApp: App {
                 if let msg = notification.userInfo?["error"] as? String {
                     globalAlertMessage = msg
                 } else {
-                    globalAlertMessage = "Failed to delete tweet."
+                    globalAlertMessage = NSLocalizedString("Failed to delete tweet.", comment: "Tweet delete error")
                 }
                 showGlobalAlert = true
             }
@@ -114,7 +114,7 @@ struct TweetApp: App {
                 if let msg = notification.userInfo?["error"] as? String {
                     globalAlertMessage = msg
                 } else {
-                    globalAlertMessage = "Failed to publish comment."
+                    globalAlertMessage = NSLocalizedString("Failed to publish comment.", comment: "Comment publish error")
                 }
                 showGlobalAlert = true
             }
@@ -122,7 +122,7 @@ struct TweetApp: App {
                 if let msg = notification.userInfo?["error"] as? String {
                     globalAlertMessage = msg
                 } else {
-                    globalAlertMessage = "Failed to delete comment."
+                    globalAlertMessage = NSLocalizedString("Failed to delete comment.", comment: "Comment delete error")
                 }
                 showGlobalAlert = true
             }
@@ -134,8 +134,8 @@ struct TweetApp: App {
                     print("[TweetApp] Received notification to open chat with: \(senderId)")
                 }
             }
-            .alert("Error", isPresented: .constant(appState.error != nil)) {
-                Button("OK") {
+            .alert(NSLocalizedString("Error", comment: "Error alert title"), isPresented: .constant(appState.error != nil)) {
+                Button(NSLocalizedString("OK", comment: "OK button")) {
                     appState.error = nil
                 }
             } message: {

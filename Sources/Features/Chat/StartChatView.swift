@@ -69,7 +69,7 @@ struct StartChatView: View {
                     }
                 }
             }
-            .navigationTitle("Start Chat")
+            .navigationTitle(NSLocalizedString("Start Chat", comment: "Start chat screen title"))
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $showChatScreen) {
                 if let selectedUser = selectedUser {

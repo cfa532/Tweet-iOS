@@ -160,23 +160,20 @@ final class HproseInstance: ObservableObject {
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
                         // Try to fetch user with retry logic
                         var user: User? = nil
-                        var fetchError: Error? = nil
                         
                         // First attempt
                         do {
                             user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
                         } catch {
-                            fetchError = error
                             print("DEBUG: [initAppEntry] First fetchUser attempt failed: \(error)")
                             
                             // Retry once after a short delay
                             do {
-                                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
+                                try await Task.sleep(nanoseconds: 3_000_000_000) // 3on  second delay
                                 print("DEBUG: [initAppEntry] Retrying fetchUser...")
                                 user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
                                 print("DEBUG: [initAppEntry] fetchUser retry successful")
                             } catch {
-                                fetchError = error
                                 print("DEBUG: [initAppEntry] fetchUser retry also failed: \(error)")
                             }
                         }

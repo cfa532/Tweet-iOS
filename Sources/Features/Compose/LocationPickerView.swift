@@ -12,24 +12,24 @@ struct LocationPickerView: View {
     var body: some View {
         NavigationView {
             VStack {
-                TextField("Search location...", text: $searchText)
+                TextField(NSLocalizedString("Search location...", comment: "Location search placeholder"), text: $searchText)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .padding()
                 
                 Map(coordinateRegion: $region)
                     .edgesIgnoringSafeArea(.bottom)
             }
-            .navigationTitle("Add Location")
+            .navigationTitle(NSLocalizedString("Add Location", comment: "Add location screen title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
+                    Button(NSLocalizedString("Cancel", comment: "Cancel button")) {
                         dismiss()
                     }
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Add") {
+                    Button(NSLocalizedString("Add", comment: "Add button")) {
                         // TODO: Implement location selection
                         dismiss()
                     }

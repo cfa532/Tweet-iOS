@@ -52,7 +52,7 @@ struct CommentDetailView: View {
             }
         }
         .background(Color(.systemBackground))
-        .navigationTitle("Reply")
+        .navigationTitle(NSLocalizedString("Reply", comment: "Reply screen title"))
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(tweet: comment, initialIndex: selectedMediaIndex)

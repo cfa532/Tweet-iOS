@@ -77,7 +77,7 @@ struct ComposeTweetView: View {
                                     .font(.system(size: 16))
                                     .foregroundColor(viewModel.isPrivate ? .themeAccent : .themeSecondaryText)
                                 
-                                Toggle("Private", isOn: $viewModel.isPrivate)
+                                Toggle(NSLocalizedString("Private", comment: "Private tweet toggle"), isOn: $viewModel.isPrivate)
                                     .toggleStyle(SwitchToggleStyle(tint: .themeAccent))
                                     .labelsHidden()
                             }
@@ -107,7 +107,7 @@ struct ComposeTweetView: View {
                     .animation(.easeInOut, value: viewModel.showToast)
                 }
             }
-            .navigationTitle("New Tweet")
+            .navigationTitle(NSLocalizedString("New Tweet", comment: "New tweet screen title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -118,7 +118,7 @@ struct ComposeTweetView: View {
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     DebounceButton(
-                        "Tweet",
+                        NSLocalizedString("Publish", comment: "Publish tweet button"),
                         cooldownDuration: 0.5,
                         enableAnimation: true,
                         enableVibration: false

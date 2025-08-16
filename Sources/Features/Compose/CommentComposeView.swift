@@ -143,7 +143,7 @@ struct CommentComposeView: View {
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     DebounceButton(
-                        isQuoting ? "Quote" : "Reply",
+                        NSLocalizedString("Publish", comment: "Publish comment button"),
                         cooldownDuration: 0.5,
                         enableAnimation: true,
                         enableVibration: false

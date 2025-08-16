@@ -23,6 +23,7 @@ struct ReplyEditorView: View {
     @State private var error: Error?
     @FocusState private var isTextFieldFocused: Bool
     var onClose: (() -> Void)? = nil
+    var onExpandedClose: (() -> Void)? = nil
     var initialExpanded: Bool = false
     
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -41,14 +42,15 @@ struct ReplyEditorView: View {
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(.systemBackground))
+                .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
         )
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
-        .alert("Discard Reply", isPresented: $showExitConfirmation) {
-            Button("Discard", role: .destructive) {
+        .alert(NSLocalizedString("Discard Reply", comment: "Discard reply alert title"), isPresented: $showExitConfirmation) {
+            Button(NSLocalizedString("Discard", comment: "Discard button"), role: .destructive) {
                 clearAndClose()
             }
-            Button("Keep Editing", role: .cancel) {
+            Button(NSLocalizedString("Keep Editing", comment: "Keep editing button"), role: .cancel) {
                 showExitConfirmation = false
             }
         } message: {
@@ -264,7 +266,8 @@ struct ReplyEditorView: View {
         showExitConfirmation = false
         isTextFieldFocused = false
         error = nil
-        onClose?()
+        onExpandedClose?()
+        // Don't call onClose() here - we want to keep the collapsed view visible
     }
     
     private func submitReply() {
@@ -307,6 +310,7 @@ struct ReplyEditorView: View {
                 // Reset form and close
                 await MainActor.run {
                     clearAndClose()
+                    onClose?() // Actually close the entire editor after successful submission
                     isSubmitting = false
                 }
             } catch {

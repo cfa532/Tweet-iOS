@@ -82,11 +82,11 @@ struct ChatListScreen: View {
         .sheet(isPresented: $showStartChat) {
             StartChatView()
         }
-        .alert("Delete Chat", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {
+        .alert(NSLocalizedString("Delete Chat", comment: "Delete chat alert title"), isPresented: $showDeleteConfirmation) {
+            Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) {
                 sessionToDelete = nil
             }
-            Button("Delete", role: .destructive) {
+            Button(NSLocalizedString("Delete", comment: "Delete button"), role: .destructive) {
                 confirmDeleteChatSession()
             }
         } message: {

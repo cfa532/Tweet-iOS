@@ -96,6 +96,48 @@
 "Loading tweets..." = "正在加载推文...";
 "No tweet yet" = "暂无推文";
 "Timeline" = "首页";
+
+// MARK: - Navigation Titles
+"Settings" = "设置";
+"New Tweet" = "新推文";
+"Create Poll" = "创建投票";
+"Add Location" = "添加位置";
+"Start Chat" = "开始聊天";
+"Reply" = "回复";
+"Tweet" = "推文";
+
+// MARK: - Buttons
+"Retry" = "重试";
+"OK" = "确定";
+"Add Option" = "添加选项";
+"Cancel" = "取消";
+"Add" = "添加";
+"Delete" = "删除";
+"Discard" = "丢弃";
+"Keep Editing" = "继续编辑";
+"Publish" = "发布";
+
+// MARK: - Alerts
+"Error" = "错误";
+"Delete Comment" = "删除评论";
+"Delete Chat" = "删除聊天";
+"Discard Reply" = "丢弃回复";
+
+// MARK: - Placeholders
+"Ask a question..." = "提出问题...";
+"Option %d" = "选项 %d";
+"Search location..." = "搜索位置...";
+"Type a message..." = "输入消息...";
+
+// MARK: - UI Elements
+"Private" = "私密";
+"Initializing..." = "正在初始化...";
+"Failed to initialize app" = "应用初始化失败";
+"Background upload failed." = "后台上传失败。";
+"Failed to publish tweet." = "发布推文失败。";
+"Failed to delete tweet." = "删除推文失败。";
+"Failed to publish comment." = "发布评论失败。";
+"Failed to delete comment." = "删除评论失败。";
 "Loading chat..." = "正在加载聊天...";
 "Receipt ID: %@" = "收件人ID: %@";
 "Loading..." = "加载中...";

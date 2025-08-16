@@ -47,8 +47,8 @@ struct CommentMenu: View {
                 .padding(12)
                 .contentShape(Rectangle())
         }
-        .alert("Delete Comment", isPresented: $showAlert) {
-            Button("OK", role: .cancel) { }
+        .alert(NSLocalizedString("Delete Comment", comment: "Delete comment alert title"), isPresented: $showAlert) {
+            Button(NSLocalizedString("OK", comment: "OK button"), role: .cancel) { }
         } message: {
             Text(alertMessage)
         }

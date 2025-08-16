@@ -281,7 +281,8 @@ struct TweetDetailView: View {
     @State private var toastType: ToastView.ToastType = .info
     @State private var isVisible = true
     @State private var imageAspectRatios: [Int: CGFloat] = [:] // index: aspectRatio
-    @State private var showReplyEditor = false
+    @State private var showReplyEditor = true
+    @State private var shouldShowExpandedReply = false
     @State private var cachedDisplayTweet: Tweet?
     
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -345,7 +346,7 @@ struct TweetDetailView: View {
             }
         }
         .background(Color(.systemBackground))
-        .navigationTitle("Tweet")
+        .navigationTitle(NSLocalizedString("Tweet", comment: "Tweet detail screen title"))
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
@@ -401,12 +402,18 @@ struct TweetDetailView: View {
                         onClose: {
                             showReplyEditor = false
                         },
-                        initialExpanded: true
+                        onExpandedClose: {
+                            shouldShowExpandedReply = false
+                        }, initialExpanded: shouldShowExpandedReply
                     )
                 }
             }
             .padding(.bottom, 48) // Move it down further, closer to navigation bar
+            .zIndex(1000) // Ensure it appears above other content
         )
+        .onChange(of: showReplyEditor) { newValue in
+            print("DEBUG: [TweetDetailView] showReplyEditor changed to: \(newValue)")
+        }
 
     }
     
@@ -482,8 +489,8 @@ struct TweetDetailView: View {
         TweetActionButtonsView(
             tweet: displayTweet,
             onCommentTap: {
-                print("[TweetDetailView] Comment button tapped, setting showReplyEditor to true")
-                showReplyEditor = true
+                print("[TweetDetailView] Comment button tapped, setting shouldShowExpandedReply to true")
+                shouldShowExpandedReply = true
             }
         )
         .padding(.leading, 16)

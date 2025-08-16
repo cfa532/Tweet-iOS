@@ -334,7 +334,7 @@ struct SimpleVideoPlayer: View {
                                 .font(.caption)
                             
                             if retryCount < 3 {
-                                Button("Retry") {
+                                Button(NSLocalizedString("Retry", comment: "Retry button")) {
                                     retryLoad()
                                 }
                                 .foregroundColor(.blue)

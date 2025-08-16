@@ -156,7 +156,7 @@ struct ChatScreen: View {
                     }
                     
                     // Text input
-                    TextField("Type a message...", text: $messageText, axis: .vertical)
+                    TextField(NSLocalizedString("Type a message...", comment: "Chat message input placeholder"), text: $messageText, axis: .vertical)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 12) // Increased vertical padding for taller touchable area
                         .background(Color(.systemGray6))

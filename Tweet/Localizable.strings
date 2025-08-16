@@ -96,6 +96,48 @@
 "Loading tweets..." = "Loading tweets...";
 "No tweet yet" = "No tweet yet";
 "Timeline" = "Home";
+
+// MARK: - Navigation Titles
+"Settings" = "Settings";
+"New Tweet" = "New Tweet";
+"Create Poll" = "Create Poll";
+"Add Location" = "Add Location";
+"Start Chat" = "Start Chat";
+"Reply" = "Reply";
+"Tweet" = "Tweet";
+
+// MARK: - Buttons
+"Retry" = "Retry";
+"OK" = "OK";
+"Add Option" = "Add Option";
+"Cancel" = "Cancel";
+"Add" = "Add";
+"Delete" = "Delete";
+"Discard" = "Discard";
+"Keep Editing" = "Keep Editing";
+"Publish" = "Publish";
+
+// MARK: - Alerts
+"Error" = "Error";
+"Delete Comment" = "Delete Comment";
+"Delete Chat" = "Delete Chat";
+"Discard Reply" = "Discard Reply";
+
+// MARK: - Placeholders
+"Ask a question..." = "Ask a question...";
+"Option %d" = "Option %d";
+"Search location..." = "Search location...";
+"Type a message..." = "Type a message...";
+
+// MARK: - UI Elements
+"Private" = "Private";
+"Initializing..." = "Initializing...";
+"Failed to initialize app" = "Failed to initialize app";
+"Background upload failed." = "Background upload failed.";
+"Failed to publish tweet." = "Failed to publish tweet.";
+"Failed to delete tweet." = "Failed to delete tweet.";
+"Failed to publish comment." = "Failed to publish comment.";
+"Failed to delete comment." = "Failed to delete comment.";
 "Loading chat..." = "Loading chat...";
 "Receipt ID: %@" = "Receipt ID: %@";
 "Loading..." = "Loading...";
