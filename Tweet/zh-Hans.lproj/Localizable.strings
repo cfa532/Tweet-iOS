@@ -95,6 +95,7 @@
 // MARK: - Loading States
 "Loading tweets..." = "正在加载推文...";
 "No tweet yet" = "暂无推文";
+"Timeline" = "首页";
 "Loading chat..." = "正在加载聊天...";
 "Receipt ID: %@" = "收件人ID: %@";
 "Loading..." = "加载中...";

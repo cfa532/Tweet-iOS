@@ -75,7 +75,7 @@ struct UserRowView: View {
                             isFollowing.toggle()
                         }
                     } label: {
-                        Text(isFollowing ? "Unfollow" : "Follow")
+                        Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
                             .font(.system(size: 13, weight: .medium))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)

@@ -95,6 +95,7 @@
 // MARK: - Loading States
 "Loading tweets..." = "Loading tweets...";
 "No tweet yet" = "No tweet yet";
+"Timeline" = "Home";
 "Loading chat..." = "Loading chat...";
 "Receipt ID: %@" = "Receipt ID: %@";
 "Loading..." = "Loading...";

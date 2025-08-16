@@ -318,7 +318,11 @@ struct TweetDetailView: View {
             print("[TweetDetailView] Returning tweet: \(result.mid)")
         }
         
-        cachedDisplayTweet = result
+        // Update cache on next run loop to avoid modifying state during view update
+        DispatchQueue.main.async {
+            self.cachedDisplayTweet = result
+        }
+        
         return result
     }
 

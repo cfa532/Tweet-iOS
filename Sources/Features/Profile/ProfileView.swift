@@ -19,6 +19,7 @@ struct ProfileView: View {
     /// UI state
     @State private var showEditSheet = false
     @State private var showAvatarFullScreen = false
+    @State private var showChatScreen = false
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isLoading = false
     @State private var didLoad = false
@@ -190,7 +191,9 @@ struct ProfileView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 12) {
                     if !isAppUser {
-                        NavigationLink(destination: ChatScreen(receiptId: user.mid)) {
+                        Button {
+                            showChatScreen = true
+                        } label: {
                             Image(systemName: "message")
                                 .foregroundColor(.blue)
                         }
@@ -288,6 +291,9 @@ struct ProfileView: View {
         }
         .fullScreenCover(isPresented: $showAvatarFullScreen) {
             AvatarFullScreenView(user: user, isPresented: $showAvatarFullScreen)
+        }
+        .fullScreenCover(isPresented: $showChatScreen) {
+            ChatScreen(receiptId: user.mid)
         }
         .task {
             if !didLoad {

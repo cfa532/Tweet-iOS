@@ -1,0 +1,8 @@
+/* 
+  InfoPlist.strings
+  Tweet
+  
+  Created for app name localization.
+*/
+
+CFBundleDisplayName = "Tweet";

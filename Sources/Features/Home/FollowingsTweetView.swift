@@ -18,7 +18,7 @@ struct FollowingsTweetView: View {
     var body: some View {
         ScrollViewReader { proxy in
             TweetListView<TweetItemView>(
-                title: "Timeline",
+                title: NSLocalizedString("Timeline", comment: "Timeline view title"),
                 tweets: $viewModel.tweets,
                 tweetFetcher: { page, size, isFromCache, shouldCache in
                     if isFromCache {

@@ -45,7 +45,7 @@ struct ProfileHeaderView: View {
                     .foregroundColor(.themeText)
                 } else {
                     DebounceButton(
-                        isFollowing ? "Unfollow" : "Follow",
+                        isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"),
                         cooldownDuration: 0.5,
                         enableVibration: false
                     ) {
