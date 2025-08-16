@@ -75,22 +75,31 @@ struct ReplyEditorView: View {
             if initialExpanded {
                 isExpanded = true
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notification in
+            print("[ReplyEditorView] Received newCommentAdded notification")
+            print("[ReplyEditorView] Notification userInfo: \(notification.userInfo ?? [:])")
             
-            // Listen for successful comment uploads
-            NotificationCenter.default.addObserver(
-                forName: .newCommentAdded,
-                object: nil,
-                queue: .main
-            ) { notification in
-                if let comment = notification.userInfo?["comment"] as? Tweet,
-                   let parentTweetId = notification.userInfo?["parentTweetId"] as? String {
-                    // Check if this is our comment by comparing author, timestamp, and parent tweet
-                    if comment.authorId == hproseInstance.appUser.mid &&
-                       parentTweetId == parentTweet.mid &&
-                       abs(comment.timestamp.timeIntervalSince(Date())) < 120 { // Within 2 minutes
-                        showToastMessage(NSLocalizedString("Comment published successfully", comment: "Comment published success message"), type: .success)
-                    }
+            if let comment = notification.userInfo?["comment"] as? Tweet,
+               let parentTweetId = notification.userInfo?["parentTweetId"] as? String {
+                print("[ReplyEditorView] Comment authorId: \(comment.authorId)")
+                print("[ReplyEditorView] Current user mid: \(hproseInstance.appUser.mid)")
+                print("[ReplyEditorView] Parent tweet ID: \(parentTweetId)")
+                print("[ReplyEditorView] Current parent tweet mid: \(parentTweet.mid)")
+                print("[ReplyEditorView] Comment timestamp: \(comment.timestamp)")
+                print("[ReplyEditorView] Time difference: \(abs(comment.timestamp.timeIntervalSince(Date())))")
+                
+                // Check if this is our comment by comparing author, timestamp, and parent tweet
+                if comment.authorId == hproseInstance.appUser.mid &&
+                   parentTweetId == parentTweet.mid &&
+                   abs(comment.timestamp.timeIntervalSince(Date())) < 120 { // Within 2 minutes
+                    print("[ReplyEditorView] Comment upload completed successfully")
+                    // Toast is already shown immediately after submission, no need to show again
+                } else {
+                    print("[ReplyEditorView] Comment rejected - authorId: \(comment.authorId == hproseInstance.appUser.mid), parentTweetId: \(parentTweetId == parentTweet.mid), timeDiff: \(abs(comment.timestamp.timeIntervalSince(Date())) < 120)")
                 }
+            } else {
+                print("[ReplyEditorView] Failed to extract comment or parentTweetId from notification")
             }
         }
         .overlay(
@@ -359,11 +368,18 @@ struct ReplyEditorView: View {
                 // Schedule comment upload in background (same as CommentComposeView)
                 hproseInstance.scheduleCommentUpload(comment: comment, to: parentTweet, itemData: itemData)
                 
-                // Reset form and close
+                // Show success toast immediately and close view after delay
                 await MainActor.run {
                     clearAndClose()
-                    onClose?() // Actually close the entire editor after successful submission
                     isSubmitting = false
+                    
+                    // Show success toast immediately
+                    showToastMessage(NSLocalizedString("Comment published successfully", comment: "Comment published success message"), type: .success)
+                    
+                    // Close the view after a delay to allow toast to be seen
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        onClose?()
+                    }
                 }
             } catch {
                 await MainActor.run {
