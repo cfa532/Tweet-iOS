@@ -97,6 +97,7 @@ struct ComposeTweetView: View {
                     }
                 }
                 
+                // Error toast overlay (only for validation errors)
                 if viewModel.showToast {
                     VStack {
                         Spacer()
@@ -131,12 +132,15 @@ struct ComposeTweetView: View {
                         Task {
                             await viewModel.postTweet()
                             
-                            // Dismiss the view after a delay to allow toast to be seen
+                            // Send notification for toast on presenting screen and dismiss immediately
                             await MainActor.run {
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                                    viewModel.clearForm()
-                                    dismiss()
-                                }
+                                NotificationCenter.default.post(
+                                    name: .tweetSubmitted,
+                                    object: nil,
+                                    userInfo: ["message": NSLocalizedString("Tweet published successfully", comment: "Tweet published success message")]
+                                )
+                                viewModel.clearForm()
+                                dismiss()
                             }
                         }
                     }

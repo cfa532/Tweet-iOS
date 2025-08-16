@@ -104,26 +104,11 @@ class ComposeTweetViewModel: ObservableObject {
             return
         }
         
-        // Show toast before starting upload
-        toastMessage = "Uploading tweet..."
-        toastType = .info
-        showToast = true
-        
         // Set uploading state
         isUploading = true
         
         print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
         hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
-        
-        // Show success toast
-        toastMessage = NSLocalizedString("Tweet published successfully", comment: "Tweet published success message")
-        toastType = .success
-        showToast = true
-        
-        // Hide the success toast after a short delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            withAnimation { self.showToast = false }
-        }
         
         // Reset uploading state
         isUploading = false

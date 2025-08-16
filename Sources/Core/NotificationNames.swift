@@ -10,6 +10,9 @@ extension Notification.Name {
     /// Posted when a new tweet is created
     static let newTweetCreated = Notification.Name("newTweetCreated")
     
+    /// Posted when a tweet is successfully submitted (for UI feedback)
+    static let tweetSubmitted = Notification.Name("tweetSubmitted")
+    
     /// Posted when a tweet is deleted
     static let tweetDeleted = Notification.Name("tweetDeleted")
     

@@ -12,6 +12,9 @@ struct ContentView: View {
     @State private var navigationPath = NavigationPath()
     @State private var chatNavigationPath = NavigationPath()
     @State private var isInChatScreen = false
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastType: ToastView.ToastType = .success
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -115,6 +118,30 @@ struct ContentView: View {
         .sheet(isPresented: $showComposeSheet) {
             ComposeTweetView()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .tweetSubmitted)) { notification in
+            if let message = notification.userInfo?["message"] as? String {
+                toastMessage = message
+                toastType = .success
+                showToast = true
+                
+                // Auto-hide toast after 2 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    withAnimation { showToast = false }
+                }
+            }
+        }
+        .overlay(
+            // Toast message overlay
+            VStack {
+                Spacer()
+                if showToast {
+                    ToastView(message: toastMessage, type: toastType)
+                        .padding(.bottom, 100) // Position above tab bar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: showToast)
+        )
         .environmentObject(hproseInstance)
         .environmentObject(themeManager)
     }
