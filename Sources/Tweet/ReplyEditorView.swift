@@ -66,12 +66,13 @@ struct ReplyEditorView: View {
                .sheet(isPresented: $showImagePicker) {
            PhotosPicker("Select Media", selection: $selectedItems, matching: .any(of: [.images, .videos]))
        }
-       .onAppear {
-           // Set initial expanded state if requested
-           if initialExpanded {
-               isExpanded = true
-           }
-       }
+               .onAppear {
+            // Set initial expanded state if requested
+            if initialExpanded {
+                isExpanded = true
+            }
+        }
+
     }
     
     private var collapsedView: some View {
@@ -270,6 +271,8 @@ struct ReplyEditorView: View {
         // Don't call onClose() here - we want to keep the collapsed view visible
     }
     
+
+    
     private func submitReply() {
         let trimmedContent = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
         
@@ -293,8 +296,8 @@ struct ReplyEditorView: View {
                 authorId: hproseInstance.appUser.mid,
                 content: trimmedContent,
                 timestamp: Date(),
-                originalTweetId: nil, // Regular comment, not a quoted tweet
-                originalAuthorId: nil  // Regular comment, not a quoted tweet
+                originalTweetId: nil,
+                originalAuthorId: nil
             )
             
             do {

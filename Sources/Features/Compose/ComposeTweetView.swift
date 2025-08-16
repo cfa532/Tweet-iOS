@@ -100,7 +100,7 @@ struct ComposeTweetView: View {
                 if viewModel.showToast {
                     VStack {
                         Spacer()
-                        ToastView(message: viewModel.toastMessage, type: .error)
+                        ToastView(message: viewModel.toastMessage, type: viewModel.toastType)
                             .padding(.bottom, 40)
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -112,6 +112,7 @@ struct ComposeTweetView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(NSLocalizedString("Cancel", comment: "Cancel button")) {
+                        viewModel.clearForm()
                         dismiss()
                     }
                 }
@@ -123,15 +124,20 @@ struct ComposeTweetView: View {
                         enableAnimation: true,
                         enableVibration: false
                     ) {
-                        // Immediately dismiss the view and prevent repeated tapping
-                        dismiss()
-                        
                         // Set uploading state to prevent repeated taps
                         viewModel.isUploading = true
                         
                         // Post tweet in background
                         Task {
                             await viewModel.postTweet()
+                            
+                            // Dismiss the view after a delay to allow toast to be seen
+                            await MainActor.run {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                                    viewModel.clearForm()
+                                    dismiss()
+                                }
+                            }
                         }
                     }
                     .disabled(!viewModel.canPostTweet || viewModel.isUploading)

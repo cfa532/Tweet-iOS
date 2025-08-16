@@ -138,6 +138,10 @@
 "Failed to delete tweet." = "Failed to delete tweet.";
 "Failed to publish comment." = "Failed to publish comment.";
 "Failed to delete comment." = "Failed to delete comment.";
+
+// MARK: - Toast Messages
+"Tweet published successfully" = "Tweet published successfully";
+"Comment published successfully" = "Comment published successfully";
 "Loading chat..." = "Loading chat...";
 "Receipt ID: %@" = "Receipt ID: %@";
 "Loading..." = "Loading...";

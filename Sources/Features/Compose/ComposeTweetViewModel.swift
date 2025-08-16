@@ -109,16 +109,23 @@ class ComposeTweetViewModel: ObservableObject {
         print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
         hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
         
-        // Reset form
-        tweetContent = ""
-        selectedItems = []
+        // Show success toast
+        toastMessage = NSLocalizedString("Tweet published successfully", comment: "Tweet published success message")
+        toastType = .success
+        showToast = true
         
-        // Hide the upload toast after a short delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+        // Hide the success toast after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             withAnimation { self.showToast = false }
         }
         
         // Reset uploading state
         isUploading = false
+    }
+    
+    func clearForm() {
+        tweetContent = ""
+        selectedItems = []
+        isPrivate = false
     }
 }

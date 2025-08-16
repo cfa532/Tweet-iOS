@@ -11,6 +11,9 @@ struct CommentComposeView: View {
     @State private var isQuoting = false
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var isSubmitting = false
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastType: ToastView.ToastType = .error
     @FocusState private var isEditorFocused: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
     
@@ -167,6 +170,18 @@ struct CommentComposeView: View {
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(commentText.count > 0)
+        .overlay(
+            // Toast message overlay
+            VStack {
+                Spacer()
+                if showToast {
+                    ToastView(message: toastMessage, type: toastType)
+                        .padding(.bottom, 40)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: showToast)
+        )
         .onAppear {
             // Try to focus immediately
             isEditorFocused = true
@@ -175,6 +190,17 @@ struct CommentComposeView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 isEditorFocused = true
             }
+        }
+    }
+    
+    private func showToastMessage(_ message: String, type: ToastView.ToastType) {
+        toastMessage = message
+        toastType = type
+        showToast = true
+        
+        // Hide toast after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + (type == .error ? 3 : 2)) {
+            withAnimation { showToast = false }
         }
     }
     
@@ -190,6 +216,7 @@ struct CommentComposeView: View {
             print("DEBUG: Comment validation failed - empty content and no attachments")
             await MainActor.run {
                 error = TweetError.emptyTweet
+                showToastMessage(NSLocalizedString("Failed to publish comment.", comment: "Comment publish failure message"), type: .error)
             }
             return
         }
@@ -222,6 +249,7 @@ struct CommentComposeView: View {
             await MainActor.run {
                 self.error = error
                 isSubmitting = false
+                showToastMessage(NSLocalizedString("Failed to publish comment.", comment: "Comment publish failure message"), type: .error)
             }
             return
         }
@@ -234,7 +262,14 @@ struct CommentComposeView: View {
             commentText = ""
             selectedItems = []
             isSubmitting = false
-            dismiss()
+            
+            // Show success toast before dismissing
+            showToastMessage(NSLocalizedString("Comment published successfully", comment: "Comment published success message"), type: .success)
+            
+            // Dismiss after a short delay to show the toast
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                dismiss()
+            }
         }
     }
 } 

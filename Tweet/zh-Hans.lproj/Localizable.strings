@@ -138,6 +138,10 @@
 "Failed to delete tweet." = "删除推文失败。";
 "Failed to publish comment." = "发布评论失败。";
 "Failed to delete comment." = "删除评论失败。";
+
+// MARK: - Toast Messages
+"Tweet published successfully" = "推文发布成功";
+"Comment published successfully" = "评论发布成功";
 "Loading chat..." = "正在加载聊天...";
 "Receipt ID: %@" = "收件人ID: %@";
 "Loading..." = "加载中...";
