@@ -11,8 +11,15 @@ import AVFoundation
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
-    static var baseUrl: URL = URL(string: "http://localhost")!
+    static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
     var _hproseService: AnyObject?
+    private var _domainToShare: String = AppConfig.baseUrl
+    
+    /// The domain to use for sharing links
+    var domainToShare: String {
+        get { _domainToShare }
+        set { _domainToShare = newValue }
+    }
     
     @Published private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
     var appUser: User {
@@ -67,19 +74,19 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - Public Methods
     func initialize() async throws {
+        print("DEBUG: [HproseInstance] Starting initialization")
+        
+        // Step 1: Initialize preference helper first
         self.preferenceHelper = PreferenceHelper()
         
-        // Clear cached users during initialization to ensure fresh data
+        // Step 2: Initialize app user with default values
+        await initializeAppUser()
+        
+        // Step 3: Clear cached users during initialization to ensure fresh data
         TweetCacheManager.shared.clearAllUsers()
         print("DEBUG: Cleared all user cache during app initialization")
         
-        await MainActor.run {
-            _appUser = User.getInstance(mid: preferenceHelper?.getUserId() ?? Constants.GUEST_ID)
-            _appUser.baseUrl = preferenceHelper?.getAppUrls().first.flatMap { URL(string: $0) } ?? URL(string: "http://localhost")!
-            _appUser.followingList = Gadget.getAlphaIds()
-        }
-        
-        // Try to initialize app entry only once
+        // Step 4: Try to initialize app entry and update user if successful
         do {
             try await initAppEntry()
         } catch {
@@ -87,12 +94,47 @@ final class HproseInstance: ObservableObject {
             // Don't throw here, allow the app to continue with default settings
         }
         
+        // Step 5: Clean up expired tweets
         TweetCacheManager.shared.deleteExpiredTweets()
         
-        // Recover any pending uploads with a delay to ensure app is fully started
+        // Step 6: Schedule background tasks
+        scheduleBackgroundTasks()
+        
+        print("DEBUG: [HproseInstance] Initialization completed")
+    }
+    
+    /// Initialize app user with default values
+    private func initializeAppUser() async {
+        await MainActor.run {
+            // Get user ID from preferences or use guest ID
+            let userId = preferenceHelper?.getUserId() ?? Constants.GUEST_ID
+            _appUser = User.getInstance(mid: userId)
+            
+            // Set base URL from preferences or use default
+            let baseUrlString = preferenceHelper?.getAppUrls().first ?? AppConfig.baseUrl
+            _appUser.baseUrl = URL(string: baseUrlString)!
+            
+            // Set following list
+            _appUser.followingList = Gadget.getAlphaIds()
+            
+            // Update domain to share
+            _domainToShare = baseUrlString
+            
+            print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(baseUrlString)")
+        }
+    }
+    
+    /// Schedule background tasks
+    private func scheduleBackgroundTasks() {
+        // Schedule domain update and pending upload recovery
         Task.detached(priority: .background) {
             // Wait for 30 seconds to ensure app is fully initialized
-            try? await Task.sleep(nanoseconds: 30_000_000_000) // 3 seconds
+            try? await Task.sleep(nanoseconds: 15_000_000_000) // 15 seconds
+            
+            // Check for domain updates
+            await self.checkAndUpdateDomain()
+            
+            // Recover any pending uploads
             await self.recoverPendingUploads()
         }
     }
@@ -114,7 +156,7 @@ final class HproseInstance: ObservableObject {
                     HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     _hproseService = client.useService(HproseService.self) as AnyObject
-//                    let providerIp = firstIp
+                    
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid),
                        let user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)") {
                         // Valid login user is found, use its provider IP as base.
@@ -127,6 +169,8 @@ final class HproseInstance: ObservableObject {
                             user.baseUrl = HproseInstance.baseUrl
                             user.followingList = followings
                             self.appUser = user
+                            // Update domain to share with the new base URL
+                            self._domainToShare = HproseInstance.baseUrl.absoluteString
                         }
                         return
                     } else {
@@ -135,6 +179,8 @@ final class HproseInstance: ObservableObject {
                             user.baseUrl = HproseInstance.baseUrl
                             user.followingList = Gadget.getAlphaIds()
                             _appUser = user
+                            // Update domain to share with the new base URL
+                            self._domainToShare = HproseInstance.baseUrl.absoluteString
                         }
                         return
                     }
@@ -2736,8 +2782,10 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    /// Check for app upgrades
-    func checkUpgrade() async -> String? {
+    /// Check for app upgrades and update domain in preferences
+    private func checkAndUpdateDomain() async {
+        print("[checkAndUpdateDomain] Starting background upgrade check")
+        
         let entry = "check_upgrade"
         let params: [String: Any] = [
             "aid": appId,
@@ -2746,17 +2794,29 @@ final class HproseInstance: ObservableObject {
         ]
         
         guard let service = appUser.hproseService else {
-            print("[checkUpgrade] Service not initialized")
-            return nil
+            print("[checkAndUpdateDomain] Service not initialized")
+            return
         }
         
         guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
-            print("[checkUpgrade] Invalid response format")
-            return nil
+            print("[checkAndUpdateDomain] Invalid response format")
+            return
         }
         
-        // Convert all values to strings to match Android behavior
-        return response["domain"] as? String
+        guard let domain = response["domain"] as? String else {
+            print("[checkAndUpdateDomain] No upgrade domain received")
+            return
+        }
+        
+        print("[checkAndUpdateDomain] Received domain: \(domain)")
+        
+        // Update domain to share and save to preferences
+        await MainActor.run {
+            _domainToShare = "http://" + domain
+            let domainSet = Set([_domainToShare])
+            preferenceHelper?.setAppUrls(domainSet)
+            print("[checkAndUpdateDomain] Successfully updated domain to: \(_domainToShare)")
+        }
     }
 }
 

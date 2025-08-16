@@ -383,10 +383,9 @@ struct TweetActionButtonsView: View {
         }
         
         // Add URL
-        if var text = hproseInstance.preferenceHelper?.getAppUrls().first {
-            text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
-            shareText += "\n\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
-        }
+        var text = hproseInstance.domainToShare
+        text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
+        shareText += "\n\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
         
         return shareText
     }
