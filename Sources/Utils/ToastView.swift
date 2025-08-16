@@ -8,16 +8,16 @@ struct ToastView: View {
     enum ToastType { case success, error, info }
     
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: iconName)
                 .foregroundColor(textColor)
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
             Text(message)
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundColor(textColor)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 32)
+        .padding(.vertical, 12)
         .background(backgroundColor)
         .cornerRadius(16)
         .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 2)

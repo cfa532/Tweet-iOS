@@ -313,10 +313,8 @@ struct TweetDetailView: View {
         let result: Tweet
         if shouldUseOriginal {
             result = originalTweet ?? tweet
-            print("[TweetDetailView] Returning originalTweet: \(result.mid)")
         } else {
             result = tweet
-            print("[TweetDetailView] Returning tweet: \(result.mid)")
         }
         
         // Update cache on next run loop to avoid modifying state during view update
@@ -412,9 +410,7 @@ struct TweetDetailView: View {
             .padding(.bottom, 48) // Move it down further, closer to navigation bar
             .zIndex(1000) // Ensure it appears above other content
         )
-        .onChange(of: showReplyEditor) { newValue in
-            print("DEBUG: [TweetDetailView] showReplyEditor changed to: \(newValue)")
-        }
+
 
     }
     
@@ -490,7 +486,6 @@ struct TweetDetailView: View {
         TweetActionButtonsView(
             tweet: displayTweet,
             onCommentTap: {
-                print("[TweetDetailView] Comment button tapped, setting shouldShowExpandedReply to true")
                 shouldShowExpandedReply = true
             }
         )
@@ -518,15 +513,11 @@ struct TweetDetailView: View {
             title: "Comments",
             comments: $comments,
             commentFetcher: { page, size in
-                print("[TweetDetailView] Fetching comments for displayTweet: \(await displayTweet.mid)")
-                print("[TweetDetailView] displayTweet content: \(await displayTweet.content ?? "nil")")
-                print("[TweetDetailView] displayTweet originalTweetId: \(await displayTweet.originalTweetId ?? "nil")")
                 let fetchedComments = try await hproseInstance.fetchComments(
                     displayTweet,
                     pageNumber: page,
                     pageSize: size
                 )
-                print("[TweetDetailView] Fetched \(fetchedComments.compactMap { $0 }.count) comments")
                 return fetchedComments
             },
             showTitle: false,
@@ -542,11 +533,7 @@ struct TweetDetailView: View {
                     action: { comment, parentTweetId in 
                         // Only add comment if it belongs to this tweet
                         if parentTweetId == displayTweet.mid {
-                            print("[TweetDetailView] Adding comment \(comment.mid) to comments list")
                             comments.insert(comment, at: 0)
-                            print("[TweetDetailView] Comments count after insert: \(comments.count)")
-                        } else {
-                            print("[TweetDetailView] Comment \(comment.mid) belongs to different tweet (\(parentTweetId ?? "nil")), not adding")
                         }
                     }
                 ),
@@ -578,26 +565,16 @@ struct TweetDetailView: View {
     }
 
     private func setupInitialData() {
-        print("[TweetDetailView] setupInitialData called")
-        print("[TweetDetailView] tweet.originalTweetId: \(tweet.originalTweetId ?? "nil")")
-        print("[TweetDetailView] tweet.originalAuthorId: \(tweet.originalAuthorId ?? "nil")")
-        
         if let originalTweetId = tweet.originalTweetId,
            let originalAuthorId = tweet.originalAuthorId {
-            print("[TweetDetailView] Fetching original tweet: \(originalTweetId)")
             Task {
                 if let originalTweet = try? await hproseInstance.getTweet(
                     tweetId: originalTweetId,
                     authorId: originalAuthorId
                 ) {
-                    print("[TweetDetailView] Successfully fetched original tweet: \(originalTweet.mid)")
                     self.originalTweet = originalTweet
-                } else {
-                    print("[TweetDetailView] Failed to fetch original tweet")
                 }
             }
-        } else {
-            print("[TweetDetailView] No originalTweetId/originalAuthorId, skipping original tweet fetch")
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {

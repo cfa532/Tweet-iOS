@@ -368,7 +368,7 @@ struct ReplyEditorView: View {
                 // Schedule comment upload in background (same as CommentComposeView)
                 hproseInstance.scheduleCommentUpload(comment: comment, to: parentTweet, itemData: itemData)
                 
-                // Show success toast immediately and close view after delay
+                // Show success toast immediately and reset form
                 await MainActor.run {
                     clearAndClose()
                     isSubmitting = false
@@ -376,10 +376,7 @@ struct ReplyEditorView: View {
                     // Show success toast immediately
                     showToastMessage(NSLocalizedString("Comment published successfully", comment: "Comment published success message"), type: .success)
                     
-                    // Close the view after a delay to allow toast to be seen
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        onClose?()
-                    }
+                    // Don't call onClose() - keep the collapsed view visible
                 }
             } catch {
                 await MainActor.run {

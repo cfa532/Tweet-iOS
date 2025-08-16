@@ -2845,9 +2845,6 @@ final class HproseInstance: ObservableObject {
         // Update domain to share and save to preferences
         await MainActor.run {
             _domainToShare = "http://" + domain
-            let domainSet = Set([_domainToShare])
-            preferenceHelper?.setAppUrls(domainSet)
-            print("[checkAndUpdateDomain] Successfully updated domain to: \(_domainToShare)")
         }
     }
 }
