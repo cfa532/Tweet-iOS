@@ -140,8 +140,8 @@
 "Failed to delete comment." = "Failed to delete comment.";
 
 // MARK: - Toast Messages
-"Tweet published successfully" = "Tweet published successfully";
-"Comment published successfully" = "Comment published successfully";
+"Tweet submitted" = "Tweet submitted";
+"Comment submitted" = "Comment submitted";
 "Loading chat..." = "Loading chat...";
 "Receipt ID: %@" = "Receipt ID: %@";
 "Loading..." = "Loading...";

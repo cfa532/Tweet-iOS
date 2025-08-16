@@ -261,8 +261,8 @@ struct CommentComposeView: View {
             selectedItems = []
             isSubmitting = false
             
-            // Show success toast before dismissing
-            showToastMessage(NSLocalizedString("Comment published successfully", comment: "Comment published success message"), type: .success)
+                    // Show success toast before dismissing
+        showToastMessage(NSLocalizedString("Comment submitted", comment: "Comment submitted message"), type: .success)
             
             // Dismiss after a short delay to show the toast
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {

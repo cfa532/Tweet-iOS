@@ -140,8 +140,8 @@
 "Failed to delete comment." = "删除评论失败。";
 
 // MARK: - Toast Messages
-"Tweet published successfully" = "推文发布成功";
-"Comment published successfully" = "评论发布成功";
+"Tweet submitted" = "推文已提交";
+"Comment submitted" = "评论已提交";
 "Loading chat..." = "正在加载聊天...";
 "Receipt ID: %@" = "收件人ID: %@";
 "Loading..." = "加载中...";

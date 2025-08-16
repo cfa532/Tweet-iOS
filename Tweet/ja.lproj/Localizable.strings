@@ -140,8 +140,8 @@
 "Failed to delete comment." = "コメントの削除に失敗しました。";
 
 // MARK: - Toast Messages
-"Tweet published successfully" = "ツイートが正常に公開されました";
-"Comment published successfully" = "コメントが正常に公開されました";
+"Tweet submitted" = "ツイートを送信しました";
+"Comment submitted" = "コメントを送信しました";
 "Loading chat..." = "チャットを読み込み中...";
 "Receipt ID: %@" = "受信者ID: %@";
 "Loading..." = "読み込み中...";

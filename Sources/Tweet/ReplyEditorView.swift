@@ -374,7 +374,7 @@ struct ReplyEditorView: View {
                     isSubmitting = false
                     
                     // Show success toast immediately
-                    showToastMessage(NSLocalizedString("Comment published successfully", comment: "Comment published success message"), type: .success)
+                    showToastMessage(NSLocalizedString("Comment submitted", comment: "Comment submitted message"), type: .success)
                     
                     // Don't call onClose() - keep the collapsed view visible
                 }

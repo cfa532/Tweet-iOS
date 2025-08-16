@@ -134,11 +134,11 @@ struct ComposeTweetView: View {
                             
                             // Send notification for toast on presenting screen and dismiss immediately
                             await MainActor.run {
-                                NotificationCenter.default.post(
-                                    name: .tweetSubmitted,
-                                    object: nil,
-                                    userInfo: ["message": NSLocalizedString("Tweet published successfully", comment: "Tweet published success message")]
-                                )
+                                                            NotificationCenter.default.post(
+                                name: .tweetSubmitted,
+                                object: nil,
+                                userInfo: ["message": NSLocalizedString("Tweet submitted", comment: "Tweet submitted message")]
+                            )
                                 viewModel.clearForm()
                                 dismiss()
                             }
