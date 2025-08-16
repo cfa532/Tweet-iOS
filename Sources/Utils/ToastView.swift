@@ -8,29 +8,29 @@ struct ToastView: View {
     enum ToastType { case success, error, info }
     
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Image(systemName: iconName)
-                .foregroundColor(.white)
-                .font(.system(size: 20, weight: .bold))
+                .foregroundColor(textColor)
+                .font(.system(size: 14, weight: .medium))
             Text(message)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(textColor)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
         .background(backgroundColor)
-        .cornerRadius(22)
-        .shadow(color: Color.black.opacity(0.15), radius: 12, x: 0, y: 4)
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.2), radius: 8, x: 0, y: 2)
         .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(borderColor, lineWidth: 1.5)
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(borderColor, lineWidth: 0.5)
         )
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
     
     private var backgroundColor: Color {
         switch type {
-        case .success: return Color.green.opacity(0.9)
+        case .success: return Color(.systemGray6).opacity(0.95)
         case .error: return Color.red.opacity(0.9)
         case .info: return Color.blue.opacity(0.9)
         }
@@ -38,9 +38,17 @@ struct ToastView: View {
     
     private var borderColor: Color {
         switch type {
-        case .success: return Color.green.opacity(0.7)
+        case .success: return Color(.systemGray4).opacity(0.8)
         case .error: return Color.red.opacity(0.7)
         case .info: return Color.blue.opacity(0.7)
+        }
+    }
+    
+    private var textColor: Color {
+        switch type {
+        case .success: return Color(.label)
+        case .error: return .white
+        case .info: return .white
         }
     }
     

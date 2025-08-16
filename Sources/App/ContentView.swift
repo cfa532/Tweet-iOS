@@ -136,7 +136,7 @@ struct ContentView: View {
                 Spacer()
                 if showToast {
                     ToastView(message: toastMessage, type: toastType)
-                        .padding(.bottom, 100) // Position above tab bar
+                        .padding(.bottom, 60) // Position to overlap tab bar
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
