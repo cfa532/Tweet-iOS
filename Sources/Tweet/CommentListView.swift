@@ -11,7 +11,7 @@ struct CommentListNotification {
     let name: Notification.Name
     let key: String
     let shouldAccept: (Tweet) -> Bool
-    let action: (Tweet) -> Void
+    let action: (Tweet, String?) -> Void // Added parentTweetId parameter
 }
 
 @available(iOS 16.0, *)
@@ -93,15 +93,17 @@ struct CommentListView<RowView: View>: View {
                 print("[CommentListView] Received newCommentAdded notification")
                 print("[CommentListView] Notification userInfo: \(notif.userInfo ?? [:])")
                 
-                if let comment = notif.userInfo?["comment"] as? Tweet {
+                if let comment = notif.userInfo?["comment"] as? Tweet,
+                   let parentTweetId = notif.userInfo?["parentTweetId"] as? String {
                     print("[CommentListView] Extracted comment: \(comment.mid)")
-                    print("[CommentListView] Comment originalTweetId: \(comment.originalTweetId ?? "nil")")
+                    print("[CommentListView] Parent tweet ID: \(parentTweetId)")
                     
                     if let notification = notifications.first(where: { $0.name == .newCommentAdded }) {
                         print("[CommentListView] Found matching notification")
+                        // Check if this comment belongs to the current tweet
                         if notification.shouldAccept(comment) {
                             print("[CommentListView] Comment accepted, executing action")
-                            notification.action(comment)
+                            notification.action(comment, parentTweetId)
                         } else {
                             print("[CommentListView] Comment rejected by shouldAccept")
                         }
@@ -109,15 +111,16 @@ struct CommentListView<RowView: View>: View {
                         print("[CommentListView] No matching notification found")
                     }
                 } else {
-                    print("[CommentListView] Failed to extract comment from notification")
+                    print("[CommentListView] Failed to extract comment or parentTweetId from notification")
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .commentDeleted)) { notif in
                 print("[CommentListView] Received commentDeleted notification")
                 if let comment = notif.userInfo?["comment"] as? Tweet,
+                   let parentTweetId = notif.userInfo?["parentTweetId"] as? String,
                    let notification = notifications.first(where: { $0.name == .commentDeleted }),
                    notification.shouldAccept(comment) {
-                    notification.action(comment)
+                    notification.action(comment, parentTweetId)
                 }
             }
         }

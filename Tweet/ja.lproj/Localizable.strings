@@ -156,7 +156,9 @@
 "Failed to upload avatar." = "アバターのアップロードに失敗しました。";
 "Failed to load image data." = "画像データの読み込みに失敗しました。";
 "Tweet cannot be empty." = "ツイートは空にできません。";
+"Comment cannot be empty." = "コメントは空にできません。";
 "Failed to upload tweet. Please try again." = "ツイートのアップロードに失敗しました。もう一度お試しください。";
+"Failed to upload comment. Please try again." = "コメントのアップロードに失敗しました。もう一度お試しください。";
 "Loading HLS stream..." = "HLSストリームを読み込み中...";
 "Failed to load media data" = "メディアデータの読み込みに失敗";
 "Failed to generate thumbnail" = "サムネイルの生成に失敗";

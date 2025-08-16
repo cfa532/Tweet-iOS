@@ -399,6 +399,7 @@ struct TweetDetailView: View {
                 if showReplyEditor {
                     ReplyEditorView(
                         parentTweet: displayTweet,
+                        isQuoting: false,
                         onClose: {
                             showReplyEditor = false
                         },
@@ -534,17 +535,19 @@ struct TweetDetailView: View {
                     name: .newCommentAdded,
                     key: "comment",
                     shouldAccept: { comment in
-                        // Only accept comments that belong to this tweet
-                        let shouldAccept = comment.originalTweetId == displayTweet.mid
-                        print("[TweetDetailView] Comment \(comment.mid) shouldAccept check: \(shouldAccept)")
-                        print("[TweetDetailView] Comment originalTweetId: \(comment.originalTweetId ?? "nil")")
-                        print("[TweetDetailView] Display tweet mid: \(displayTweet.mid)")
-                        return shouldAccept
+                        // Accept comments that belong to this tweet based on parentTweetId in notification
+                        // This will be handled by the notification system using the parentTweetId
+                        return true // We'll filter in the action
                     },
-                    action: { comment in 
-                        print("[TweetDetailView] Adding comment \(comment.mid) to comments list")
-                        comments.insert(comment, at: 0)
-                        print("[TweetDetailView] Comments count after insert: \(comments.count)")
+                    action: { comment, parentTweetId in 
+                        // Only add comment if it belongs to this tweet
+                        if parentTweetId == displayTweet.mid {
+                            print("[TweetDetailView] Adding comment \(comment.mid) to comments list")
+                            comments.insert(comment, at: 0)
+                            print("[TweetDetailView] Comments count after insert: \(comments.count)")
+                        } else {
+                            print("[TweetDetailView] Comment \(comment.mid) belongs to different tweet (\(parentTweetId ?? "nil")), not adding")
+                        }
                     }
                 ),
                 CommentListNotification(
@@ -554,7 +557,11 @@ struct TweetDetailView: View {
                         // Only accept comment deletions that belong to this tweet
                         comment.originalTweetId == displayTweet.mid
                     },
-                    action: { comment in comments.removeAll { $0.mid == comment.mid } }
+                    action: { comment, parentTweetId in 
+                        if parentTweetId == displayTweet.mid {
+                            comments.removeAll { $0.mid == comment.mid }
+                        }
+                    }
                 )
             ],
             rowView: { comment in

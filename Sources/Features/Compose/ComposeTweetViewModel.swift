@@ -6,14 +6,20 @@ import Photos
 @available(iOS 16.0, *)
 enum TweetError: LocalizedError {
     case emptyTweet
+    case emptyComment
     case uploadFailed
+    case commentUploadFailed
     
     var errorDescription: String? {
         switch self {
         case .emptyTweet:
             return NSLocalizedString("Tweet cannot be empty.", comment: "Empty tweet error")
+        case .emptyComment:
+            return NSLocalizedString("Comment cannot be empty.", comment: "Empty comment error")
         case .uploadFailed:
             return NSLocalizedString("Failed to upload tweet. Please try again.", comment: "Upload failed error")
+        case .commentUploadFailed:
+            return NSLocalizedString("Failed to upload comment. Please try again.", comment: "Comment upload failed error")
         }
     }
 }
@@ -58,10 +64,10 @@ class ComposeTweetViewModel: ObservableObject {
             selectedImages: []
         ) else {
             print("DEBUG: Tweet validation failed - empty content and no attachments")
-            toastMessage = "Tweet cannot be empty"
+            toastMessage = NSLocalizedString("Tweet cannot be empty.", comment: "Empty tweet error")
             toastType = .error
             showToast = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 withAnimation { self.showToast = false }
             }
             isUploading = false
@@ -88,10 +94,10 @@ class ComposeTweetViewModel: ObservableObject {
             )
         } catch {
             print("DEBUG: Error preparing item data: \(error)")
-            toastMessage = "Failed to load media: \(error.localizedDescription)"
+            toastMessage = NSLocalizedString("Failed to upload tweet. Please try again.", comment: "Upload failed error")
             toastType = .error
             showToast = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 withAnimation { self.showToast = false }
             }
             isUploading = false

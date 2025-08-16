@@ -12,6 +12,7 @@ import AVFoundation
 @available(iOS 16.0, *)
 struct ReplyEditorView: View {
     @ObservedObject var parentTweet: Tweet
+    let isQuoting: Bool
     @State private var replyText = ""
     @State private var isExpanded = false
     @State private var showExitConfirmation = false
@@ -21,6 +22,9 @@ struct ReplyEditorView: View {
     @State private var showCamera = false
     @State private var showImagePicker = false
     @State private var error: Error?
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastType: ToastView.ToastType = .error
     @FocusState private var isTextFieldFocused: Bool
     var onClose: (() -> Void)? = nil
     var onExpandedClose: (() -> Void)? = nil
@@ -71,7 +75,40 @@ struct ReplyEditorView: View {
             if initialExpanded {
                 isExpanded = true
             }
+            
+            // Listen for successful comment uploads
+            NotificationCenter.default.addObserver(
+                forName: .newCommentAdded,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if let comment = notification.userInfo?["comment"] as? Tweet,
+                   let parentTweetId = notification.userInfo?["parentTweetId"] as? String {
+                    // Check if this is our comment by comparing author, timestamp, and parent tweet
+                    if comment.authorId == hproseInstance.appUser.mid &&
+                       parentTweetId == parentTweet.mid &&
+                       abs(comment.timestamp.timeIntervalSince(Date())) < 120 { // Within 2 minutes
+                        showToastMessage(NSLocalizedString("Comment published successfully", comment: "Comment published success message"), type: .success)
+                    }
+                }
+            }
         }
+        .overlay(
+            Group {
+                if showToast {
+                    VStack {
+                        Spacer()
+                        ToastView(
+                            message: toastMessage,
+                            type: toastType
+                        )
+                        .padding(.bottom, 40)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: showToast)
+        )
 
     }
     
@@ -247,6 +284,18 @@ struct ReplyEditorView: View {
         !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty
     }
     
+    private func showToastMessage(_ message: String, type: ToastView.ToastType) {
+        toastMessage = message
+        toastType = type
+        showToast = true
+        
+        // Auto-hide toast after appropriate duration
+        let duration: TimeInterval = type == .success ? 2.0 : 3.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            withAnimation { showToast = false }
+        }
+    }
+    
     private func hasUnsavedContent() -> Bool {
         !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty
     }
@@ -283,21 +332,21 @@ struct ReplyEditorView: View {
             selectedImages: selectedImages
         ) else {
             print("DEBUG: Reply validation failed - empty content and no attachments")
-            error = TweetError.emptyTweet
+            showToastMessage(NSLocalizedString("Comment cannot be empty.", comment: "Empty comment error"), type: .error)
             return
         }
         
         isSubmitting = true
         
         Task {
-            // Create comment tweet (not a quoted tweet)
+            // Create comment tweet
             let comment = Tweet(
                 mid: UUID().uuidString, // Temporary ID, will be replaced by server
                 authorId: hproseInstance.appUser.mid,
                 content: trimmedContent,
                 timestamp: Date(),
-                originalTweetId: nil,
-                originalAuthorId: nil
+                originalTweetId: isQuoting ? parentTweet.mid : nil,
+                originalAuthorId: isQuoting ? parentTweet.authorId : nil
             )
             
             do {
@@ -318,7 +367,7 @@ struct ReplyEditorView: View {
                 }
             } catch {
                 await MainActor.run {
-                    self.error = error
+                    showToastMessage(NSLocalizedString("Failed to upload comment. Please try again.", comment: "Comment upload failed error"), type: .error)
                     isSubmitting = false
                 }
             }
@@ -327,6 +376,6 @@ struct ReplyEditorView: View {
 }
 
 #Preview {
-    ReplyEditorView(parentTweet: Tweet(mid: "test", authorId: "test"))
+    ReplyEditorView(parentTweet: Tweet(mid: "test", authorId: "test"), isQuoting: false)
         .environmentObject(HproseInstance.shared)
 }

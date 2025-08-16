@@ -156,7 +156,9 @@
 "Failed to upload avatar." = "头像上传失败。";
 "Failed to load image data." = "图片数据加载失败。";
 "Tweet cannot be empty." = "推文不能为空。";
+"Comment cannot be empty." = "评论不能为空。";
 "Failed to upload tweet. Please try again." = "推文上传失败，请重试。";
+"Failed to upload comment. Please try again." = "评论上传失败，请重试。";
 "Loading HLS stream..." = "正在加载 HLS 流...";
 "Failed to load media data" = "媒体数据加载失败";
 "Failed to generate thumbnail" = "缩略图生成失败";

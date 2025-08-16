@@ -1106,7 +1106,7 @@ final class HproseInstance: ObservableObject {
                     NotificationCenter.default.post(
                         name: .newCommentAdded,
                         object: nil,
-                        userInfo: ["comment": comment]
+                        userInfo: ["comment": comment, "parentTweetId": tweet.mid]
                     )
                 }
                 
@@ -1121,7 +1121,7 @@ final class HproseInstance: ObservableObject {
                     NotificationCenter.default.post(
                         name: .newCommentAdded,
                         object: nil,
-                        userInfo: ["comment": comment]
+                        userInfo: ["comment": comment, "parentTweetId": tweet.mid]
                     )
                 }
                 

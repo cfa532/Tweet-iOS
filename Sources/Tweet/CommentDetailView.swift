@@ -166,17 +166,18 @@ struct CommentDetailView: View {
                     name: .newCommentAdded,
                     key: "comment",
                     shouldAccept: { reply in
-                        // Only accept replies that belong to this comment
-                        let shouldAccept = reply.originalTweetId == comment.mid
-                        print("[CommentDetailView] Reply \(reply.mid) shouldAccept check: \(shouldAccept)")
-                        print("[CommentDetailView] Reply originalTweetId: \(reply.originalTweetId ?? "nil")")
-                        print("[CommentDetailView] Comment mid: \(comment.mid)")
-                        return shouldAccept
+                        // Accept replies that belong to this comment
+                        return true // We'll filter in the action
                     },
-                    action: { reply in
-                        print("[CommentDetailView] Adding reply \(reply.mid) to replies list")
-                        replies.insert(reply, at: 0)
-                        print("[CommentDetailView] Replies count after insert: \(replies.count)")
+                    action: { reply, parentTweetId in
+                        // Only add reply if it belongs to this comment
+                        if parentTweetId == comment.mid {
+                            print("[CommentDetailView] Adding reply \(reply.mid) to replies list")
+                            replies.insert(reply, at: 0)
+                            print("[CommentDetailView] Replies count after insert: \(replies.count)")
+                        } else {
+                            print("[CommentDetailView] Reply \(reply.mid) belongs to different comment (\(parentTweetId ?? "nil")), not adding")
+                        }
                     }
                 ),
                 CommentListNotification(
@@ -186,7 +187,11 @@ struct CommentDetailView: View {
                         // Only accept reply deletions that belong to this comment
                         reply.originalTweetId == comment.mid
                     },
-                    action: { reply in replies.removeAll { $0.mid == reply.mid } }
+                    action: { reply, parentTweetId in
+                        if parentTweetId == comment.mid {
+                            replies.removeAll { $0.mid == reply.mid }
+                        }
+                    }
                 )
             ],
             rowView: { reply in

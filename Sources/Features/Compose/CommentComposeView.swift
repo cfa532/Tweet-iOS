@@ -215,8 +215,7 @@ struct CommentComposeView: View {
         ) else {
             print("DEBUG: Comment validation failed - empty content and no attachments")
             await MainActor.run {
-                error = TweetError.emptyTweet
-                showToastMessage(NSLocalizedString("Failed to publish comment.", comment: "Comment publish failure message"), type: .error)
+                showToastMessage(NSLocalizedString("Comment cannot be empty.", comment: "Empty comment error"), type: .error)
             }
             return
         }
@@ -247,9 +246,8 @@ struct CommentComposeView: View {
         } catch {
             print("DEBUG: Error preparing item data: \(error)")
             await MainActor.run {
-                self.error = error
                 isSubmitting = false
-                showToastMessage(NSLocalizedString("Failed to publish comment.", comment: "Comment publish failure message"), type: .error)
+                showToastMessage(NSLocalizedString("Failed to upload comment. Please try again.", comment: "Comment upload failed error"), type: .error)
             }
             return
         }

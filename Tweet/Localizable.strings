@@ -156,7 +156,9 @@
 "Failed to upload avatar." = "Failed to upload avatar.";
 "Failed to load image data." = "Failed to load image data.";
 "Tweet cannot be empty." = "Tweet cannot be empty.";
+"Comment cannot be empty." = "Comment cannot be empty.";
 "Failed to upload tweet. Please try again." = "Failed to upload tweet. Please try again.";
+"Failed to upload comment. Please try again." = "Failed to upload comment. Please try again.";
 "Loading HLS stream..." = "Loading HLS stream...";
 "Failed to load media data" = "Failed to load media data";
 "Failed to generate thumbnail" = "Failed to generate thumbnail";
