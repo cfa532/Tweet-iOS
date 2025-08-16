@@ -998,7 +998,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
-            "authorid": appUser.mid,
+            "userid": appUser.mid,
             "tweetid": tweetId
         ]
         guard let service = appUser.hproseService else {
