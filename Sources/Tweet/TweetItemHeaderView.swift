@@ -63,13 +63,13 @@ struct TweetMenu: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     @State private var isPressed = false
-
+    
     init(tweet: Tweet, isPinned: Bool) {
         self.tweet = tweet
         self.isPinned = isPinned
         self._isCurrentlyPinned = State(initialValue: isPinned)
     }
-
+    
     var body: some View {
         ZStack {
             Menu {
@@ -101,23 +101,23 @@ struct TweetMenu: View {
                             Label("Pin", systemImage: "pin")
                         }
                     }
-                    Button(role: .destructive) {
-                        // Start deletion in background
-                        Task {
-                            do {
-                                try await deleteTweet(tweet)
-                            } catch {
-                                print("Tweet deletion failed. \(tweet)")
-                                await MainActor.run {
-                                    toastMessage = "Failed to delete tweet."
-                                    toastType = .error
-                                    showToast = true
-                                }
+                }
+                Button(role: .destructive) {
+                    // Start deletion in background
+                    Task {
+                        do {
+                            try await deleteTweet(tweet)
+                        } catch {
+                            print("Tweet deletion failed. \(tweet)")
+                            await MainActor.run {
+                                toastMessage = "Failed to delete tweet."
+                                toastType = .error
+                                showToast = true
                             }
                         }
-                    } label: {
-                        Label("Delete", systemImage: "trash")
                     }
+                } label: {
+                    Label("Delete", systemImage: "trash")
                 }
             } label: {
                 Image(systemName: "ellipsis")
