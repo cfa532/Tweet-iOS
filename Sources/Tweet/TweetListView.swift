@@ -436,8 +436,9 @@ struct TweetListContentView<RowView: View>: View {
                     VStack(spacing: 0) {
                         if index > 0 {
                             Rectangle()
+                                .padding(.horizontal, 2)
                                 .frame(height: 0.5)
-                                .foregroundColor(Color(.systemGray))
+                                .foregroundColor(Color(.systemGray).opacity(0.4))
                         }
                         rowView(tweet)
                             // Add stable identity to prevent unnecessary re-composition
