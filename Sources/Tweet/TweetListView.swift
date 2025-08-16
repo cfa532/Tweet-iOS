@@ -163,7 +163,9 @@ struct TweetListView<RowView: View>: View {
             }
             
             // Step 2: Always load from server to get the most up-to-date data
-            await loadFromServer(page: page, pageSize: pageSize)
+            await loadFromServer(page: page, pageSize: pageSize) { _ in
+                // Initial load completion handled separately
+            }
             
             // Set loading complete after both cache and server loading
             await MainActor.run {
@@ -235,40 +237,71 @@ struct TweetListView<RowView: View>: View {
         }
         
         let nextPage = page ?? (currentPage + 1)
+        
+        // Load next two pages in advance, separated by 3 seconds
+        loadNextTwoPages(startingFrom: nextPage)
+    }
+    
+    // MARK: - Batch Loading for Prefetching
+    private func loadNextTwoPages(startingFrom startPage: UInt) {
+        print("[TweetListView] Starting batch load of next two pages from page \(startPage) for user: \(hproseInstance.appUser.mid)")
+        
+        // Load first page immediately
+        loadSinglePage(page: startPage) { success in
+            if success && self.hasMoreTweets {
+                // Load second page after 3 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                    if self.hasMoreTweets && !self.isLoadingMore {
+                        print("[TweetListView] Loading second prefetch page \(startPage + 1) for user: \(self.hproseInstance.appUser.mid)")
+                        self.loadSinglePage(page: startPage + 1) { _ in
+                            // Second page load complete
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func loadSinglePage(page: UInt, completion: @escaping (Bool) -> Void) {
         let pageSize = self.pageSize
         
         Task {
             isLoadingMore = true
             
             do {
-                print("[TweetListView] Starting to load more tweets - page: \(nextPage) for user: \(hproseInstance.appUser.mid)")
+                print("[TweetListView] Starting to load page \(page) for user: \(hproseInstance.appUser.mid)")
                 
                 // Step 1: Load from cache first for instant UX
-                let tweetsFromCache = try await tweetFetcher(nextPage, pageSize, true, false)
+                let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
                 await MainActor.run {
-                    print("[TweetListView] Got \(tweetsFromCache.count) tweets from cache for user: \(hproseInstance.appUser.mid)")
+                    print("[TweetListView] Got \(tweetsFromCache.count) tweets from cache for page \(page)")
                     tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
                 }
                 
                 // Step 2: Load from server to update with fresh data (non-blocking, no retry)
                 Task {
-                    await loadFromServer(page: nextPage, pageSize: pageSize)
+                    await loadFromServer(page: page, pageSize: pageSize, completion: completion)
                 }
             } catch {
-                print("[TweetListView] Error loading more tweets: \(error)")
-                await MainActor.run { hasMoreTweets = false; isLoadingMore = false }
+                print("[TweetListView] Error loading page \(page): \(error)")
+                await MainActor.run { 
+                    hasMoreTweets = false; 
+                    isLoadingMore = false 
+                }
+                completion(false)
             }
         }
     }
     
     // MARK: - Server Loading (No Retry)
-    private func loadFromServer(page: UInt, pageSize: UInt) async {
+    private func loadFromServer(page: UInt, pageSize: UInt, completion: @escaping (Bool) -> Void) async {
         let networkMonitor = NetworkMonitor.shared
         
         // Skip server loading if no network connection
         guard networkMonitor.hasAnyConnection else {
             print("[TweetListView] No network connection available, skipping server load")
             await MainActor.run { isLoadingMore = false }
+            completion(false)
             return
         }
         
@@ -302,6 +335,7 @@ struct TweetListView<RowView: View>: View {
                     print("[TweetListView] All tweets nil for page \(page), auto-incrementing page")
                     isLoadingMore = false
                     loadMoreTweets(page: page + 1)
+                    completion(false)
                     return
                 }
             }
@@ -323,6 +357,7 @@ struct TweetListView<RowView: View>: View {
         }
         
         await MainActor.run { isLoadingMore = false }
+        completion(true)
     }
 
     // MARK: - Optimistic UI Methods
@@ -418,11 +453,11 @@ struct TweetListContentView<RowView: View>: View {
                         if initialLoadComplete && !isLoadingMore {
                             print("[TweetListContentView] Setting hasMoreTweets to true")
                             hasMoreTweets = true
-                            print("[TweetListContentView] Scheduling loadMoreTweets")
+                            print("[TweetListContentView] Scheduling batch load of next two pages")
                             // Use shorter delay like ProfileView
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                                 if initialLoadComplete && !isLoadingMore {
-                                    print("[TweetListContentView] Calling loadMoreTweets")
+                                    print("[TweetListContentView] Calling loadMoreTweets (batch mode)")
                                     loadMoreTweets()
                                 }
                             }

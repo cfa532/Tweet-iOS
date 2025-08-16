@@ -55,23 +55,10 @@ struct ComposeTweetView: View {
                                 supportedTypes: [.image, .movie]
                             )
                             
-                            Button(action: { /* TODO: Add poll */ }) {
-                                Image(systemName: "chart.bar")
-                                    .font(.system(size: 20))
-                                    .foregroundColor(.themeAccent)
-                            }
-                            .buttonStyle(.plain)
-                            
-                            Button(action: { /* TODO: Add location */ }) {
-                                Image(systemName: "location")
-                                    .font(.system(size: 20))
-                                    .foregroundColor(.themeAccent)
-                            }
-                            .buttonStyle(.plain)
-                            
                             Spacer()
                             
-                            // Private toggle
+                            #if DEBUG
+                            // Private toggle - only show on debug builds
                             HStack(spacing: 8) {
                                 Image(systemName: "lock")
                                     .font(.system(size: 16))
@@ -81,6 +68,7 @@ struct ComposeTweetView: View {
                                     .toggleStyle(SwitchToggleStyle(tint: .themeAccent))
                                     .labelsHidden()
                             }
+                            #endif
                             
                             Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.tweetContent.count))")
                                 .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .themeSecondaryText)

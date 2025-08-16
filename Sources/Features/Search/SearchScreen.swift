@@ -88,7 +88,7 @@ struct SearchScreen: View {
                         Text(LocalizedStringKey("Search for users"))
                             .font(.headline)
                             .foregroundColor(.gray)
-                        Text(LocalizedStringKey("Enter a username to find users"))
+                        Text(LocalizedStringKey("Enter @username to find users"))
                             .font(.caption)
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)

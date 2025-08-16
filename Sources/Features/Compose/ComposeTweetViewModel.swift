@@ -44,6 +44,10 @@ class ComposeTweetViewModel: ObservableObject {
     
     init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
+        #if !DEBUG
+        // Always set isPrivate to false on release builds
+        self.isPrivate = false
+        #endif
     }
     
     var canPostTweet: Bool {
@@ -75,13 +79,19 @@ class ComposeTweetViewModel: ObservableObject {
         }
         
         // Create tweet object
+        #if DEBUG
+        let isPrivateValue = isPrivate
+        #else
+        let isPrivateValue = false
+        #endif
+        
         let tweet = Tweet(
             mid: Constants.GUEST_ID,        // placeholder Mimei Id
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(),
             attachments: nil,
-            isPrivate: isPrivate
+            isPrivate: isPrivateValue
         )
         
         // Prepare item data using helper

@@ -283,6 +283,7 @@
 "Try searching for a different username" = "Try searching for a different username";
 "Search for users" = "Search for users";
 "Enter a username to find users" = "Enter a username to find users";
+"Enter @username to find users" = "Enter @username to find users";
 "Start Chat" = "Start Chat";
 "%d attachments" = "%d attachments";
 "+%d" = "+%d";

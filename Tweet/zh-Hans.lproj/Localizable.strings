@@ -285,7 +285,7 @@
 "No results found" = "未找到结果";
 "Try searching for a different username" = "尝试搜索其他用户名";
 "Search for users" = "搜索用户";
-"Enter a username to find users" = "输入用户名以查找用户";
+"Enter @username to find users" = "输入 @用户名 以查找用户";
 "Start Chat" = "开始聊天";
 "%d attachments" = "%d 个附件";
 "+%d" = "+%d";
