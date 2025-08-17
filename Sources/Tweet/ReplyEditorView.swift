@@ -46,7 +46,7 @@ struct ReplyEditorView: View {
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color(.systemBackground))
-                .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                .shadow(color: isExpanded ? .black.opacity(0.1) : .clear, radius: isExpanded ? 4 : 0, x: 0, y: isExpanded ? 2 : 0)
         )
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
@@ -127,8 +127,7 @@ struct ReplyEditorView: View {
         }) {
             HStack(spacing: 12) {
                 // User avatar
-                Avatar(user: hproseInstance.appUser)
-                    .frame(width: 24, height: 24)
+                Avatar(user: hproseInstance.appUser, size: 32)
                 
                 // Placeholder text with background
                 HStack {
@@ -141,12 +140,10 @@ struct ReplyEditorView: View {
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 20)
-                        .fill(Color(.systemGray6))
+                        .fill(Color(.systemGray6).opacity(0.8))
                 )
-                
-
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 2)
         }
         .buttonStyle(PlainButtonStyle())
     }
