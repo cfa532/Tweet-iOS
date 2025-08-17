@@ -44,11 +44,10 @@ struct ReplyEditorView: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: isExpanded ? 0 : 8)
                 .fill(Color(.systemBackground))
-                .shadow(color: isExpanded ? .black.opacity(0.1) : .clear, radius: isExpanded ? 4 : 0, x: 0, y: isExpanded ? 2 : 0)
         )
-        .padding(.horizontal, 16)
+        .padding(.horizontal, isExpanded ? 0 : 16)
         .padding(.vertical, 4)
         .alert(NSLocalizedString("Discard Reply", comment: "Discard reply alert title"), isPresented: $showExitConfirmation) {
             Button(NSLocalizedString("Discard", comment: "Discard button"), role: .destructive) {
@@ -58,19 +57,19 @@ struct ReplyEditorView: View {
                 showExitConfirmation = false
             }
         } message: {
-                            Text(NSLocalizedString("You have unsaved content. Are you sure you want to discard your reply?", comment: "Discard reply confirmation"))
+            Text(NSLocalizedString("You have unsaved content. Are you sure you want to discard your reply?", comment: "Discard reply confirmation"))
         }
-       .sheet(isPresented: $showCamera) {
-           CameraView { image in
-               if let image = image {
-                   selectedImages.append(image)
-               }
-           }
-       }
-               .sheet(isPresented: $showImagePicker) {
-           PhotosPicker("Select Media", selection: $selectedItems, matching: .any(of: [.images, .videos]))
-       }
-               .onAppear {
+        .sheet(isPresented: $showCamera) {
+            CameraView { image in
+                if let image = image {
+                    selectedImages.append(image)
+                }
+            }
+        }
+        .sheet(isPresented: $showImagePicker) {
+            PhotosPicker("Select Media", selection: $selectedItems, matching: .any(of: [.images, .videos]))
+        }
+        .onAppear {
             // Set initial expanded state if requested
             if initialExpanded {
                 isExpanded = true
@@ -91,8 +90,8 @@ struct ReplyEditorView: View {
                 
                 // Check if this is our comment by comparing author, timestamp, and parent tweet
                 if comment.authorId == hproseInstance.appUser.mid &&
-                   parentTweetId == parentTweet.mid &&
-                   abs(comment.timestamp.timeIntervalSince(Date())) < 120 { // Within 2 minutes
+                    parentTweetId == parentTweet.mid &&
+                    abs(comment.timestamp.timeIntervalSince(Date())) < 120 { // Within 2 minutes
                     print("[ReplyEditorView] Comment upload completed successfully")
                     // Toast is already shown immediately after submission, no need to show again
                 } else {
@@ -116,9 +115,9 @@ struct ReplyEditorView: View {
                     }
                 }
             }
-            .animation(.easeInOut(duration: 0.3), value: showToast)
+                .animation(.easeInOut(duration: 0.3), value: showToast)
         )
-
+        
     }
     
     private var collapsedView: some View {
@@ -188,8 +187,8 @@ struct ReplyEditorView: View {
             
             // Text input area
             ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color(.systemGray6))
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(.systemGray))
                     .frame(minHeight: 80)
                 
                 if replyText.isEmpty {
@@ -202,10 +201,11 @@ struct ReplyEditorView: View {
                 
                 TextEditor(text: $replyText)
                     .focused($isTextFieldFocused)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 1)
+                    .padding(.vertical, 1)
                     .background(Color.clear)
                     .frame(minHeight: 80)
+                    .cornerRadius(8)
             }
             
             // Display previews for attached media
@@ -325,8 +325,6 @@ struct ReplyEditorView: View {
         onExpandedClose?()
         // Don't call onClose() here - we want to keep the collapsed view visible
     }
-    
-
     
     private func submitReply() {
         let trimmedContent = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
