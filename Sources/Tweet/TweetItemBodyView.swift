@@ -28,10 +28,11 @@ struct TweetItemBodyView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading) {
             if let content = tweet.content, !content.isEmpty {
                 VStack(alignment: .leading) {
                     Text(content)
+                        .padding(.bottom, 4)
                         .font(.body)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .lineLimit(isExpanded ? nil : 10)
