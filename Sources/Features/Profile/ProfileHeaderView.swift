@@ -9,6 +9,12 @@ struct ProfileHeaderView: View {
     let onFollowToggle: () -> Void
     let onAvatarTap: () -> Void
     
+    private func formatRegistrationDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMMM yyyy"
+        return "Since \(formatter.string(from: date))"
+    }
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
@@ -16,10 +22,10 @@ struct ProfileHeaderView: View {
                 Button {
                     onAvatarTap()
                 } label: {
-                    Avatar(user: user, size: 72)
+                    Avatar(user: user, size: 80)
                 }
                 .buttonStyle(PlainButtonStyle())
-                .padding(.trailing, 12)
+                .padding(.trailing, 4)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(user.name ?? "User Name")
@@ -29,6 +35,9 @@ struct ProfileHeaderView: View {
                     Text("@\(user.username ?? NSLocalizedString("username", comment: "Default username"))")
                         .foregroundColor(.themeSecondaryText)
                         .font(.subheadline)
+                    Text(formatRegistrationDate(user.timestamp))
+                        .foregroundColor(.themeSecondaryText)
+                        .font(.caption)
                 }
                 Spacer()
                 // Edit/Follow/Unfollow button
@@ -36,13 +45,13 @@ struct ProfileHeaderView: View {
                     Button(NSLocalizedString("Edit", comment: "Edit button")) {
                         onEditTap()
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
                     .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.themeBorder, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(Color(.systemGray6))
                     )
-                    .foregroundColor(.themeText)
+                    .foregroundColor(.primary)
                 } else {
                     DebounceButton(
                         isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"),
@@ -51,19 +60,21 @@ struct ProfileHeaderView: View {
                     ) {
                         onFollowToggle()
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
                     .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(isFollowing ? Color.red : Color.themeAccent, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(isFollowing ? Color(.systemRed) : Color(.systemBlue))
                     )
-                    .foregroundColor(isFollowing ? .red : .themeAccent)
+                    .foregroundColor(.white)
                 }
             }
             if let profile = user.profile {
                 Text(profile)
                     .font(.body)
                     .foregroundColor(.themeText)
+                    .lineLimit(3)
+                    .truncationMode(.tail)
             }
         }
         .padding(.horizontal)

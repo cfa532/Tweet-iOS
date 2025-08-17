@@ -14,31 +14,41 @@ struct UserRowView: View {
     @State private var isFollowing: Bool = false
     @State private var showFullProfile: Bool = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+    
+    private func formatRegistrationDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMMM yyyy"
+        return "Since \(formatter.string(from: date))"
+    }
 
     var body: some View {
         Button {
             onTap?(user)
         } label: {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: 4) {
                 NavigationLink(destination: ProfileView(user: user, onLogout: nil)) {
-                    Avatar(user: user, size: 40)
+                    Avatar(user: user, size: 48)
                 }
                 .buttonStyle(PlainButtonStyle())
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text(user.name ?? "User Name")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
                         Text("@\(user.username ?? NSLocalizedString("Noone", comment: "Default username"))")
-                            .font(.system(size: 12))
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        Text("- " + formatRegistrationDate(user.timestamp))
+                            .font(.caption2)
                             .foregroundColor(.gray)
                     }
                     if let profile = user.profile, !profile.isEmpty {
                         Group {
                             if showFullProfile {
                                 Text(profile)
-                                    .font(.footnote)
-                                    .foregroundColor(.themeSecondaryText)
+                                    .font(.body)
+                                    .foregroundColor(.primary)
                                     .lineLimit(nil)
                                 Button(NSLocalizedString("Show less", comment: "Show less button")) {
                                     showFullProfile = false
@@ -48,9 +58,9 @@ struct UserRowView: View {
                                 .buttonStyle(.plain)
                             } else {
                                 Text(profile)
-                                    .font(.footnote)
-                                    .foregroundColor(.themeSecondaryText)
-                                    .lineLimit(4)
+                                    .font(.body)
+                                    .foregroundColor(.primary)
+                                    .lineLimit(3)
                                     .truncationMode(.tail)
                                 if profile.count > 200 {
                                     Button(NSLocalizedString("...", comment: "More options button")) {
@@ -76,18 +86,19 @@ struct UserRowView: View {
                         }
                     } label: {
                         Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
-                            .font(.system(size: 13, weight: .medium))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
                             .background(
-                                RoundedRectangle(cornerRadius: 8)
+                                RoundedRectangle(cornerRadius: 20)
                                     .stroke(isFollowing ? Color.red : Color.blue, lineWidth: 1)
                             )
                             .foregroundColor(isFollowing ? .red : .blue)
                     }
                 }
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
         .buttonStyle(PlainButtonStyle())
@@ -95,6 +106,6 @@ struct UserRowView: View {
             isFollowing = hproseInstance.appUser.followingList?.contains(user.mid) ?? false
         }
         Divider()
-            .padding(.horizontal)
+            .padding(.horizontal, 8)
     }
 }

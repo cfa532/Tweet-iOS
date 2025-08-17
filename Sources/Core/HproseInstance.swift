@@ -82,11 +82,7 @@ final class HproseInstance: ObservableObject {
         // Step 2: Initialize app user with default values
         await initializeAppUser()
         
-        // Step 3: Clear cached users during initialization to ensure fresh data
-        TweetCacheManager.shared.clearAllUsers()
-        print("DEBUG: Cleared all user cache during app initialization")
-        
-        // Step 4: Try to initialize app entry and update user if successful
+        // Step 3: Try to initialize app entry and update user if successful
         do {
             try await initAppEntry()
         } catch {
