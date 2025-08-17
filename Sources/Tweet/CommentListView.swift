@@ -22,7 +22,7 @@ struct CommentListView<RowView: View>: View {
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     let notifications: [CommentListNotification]
-    private let pageSize: UInt = 10
+    private let pageSize: UInt = 20
 
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var comments: [Tweet]
@@ -183,6 +183,8 @@ struct CommentListView<RowView: View>: View {
         let nextPage = page ?? (currentPage + 1)
         let pageSize = self.pageSize
         
+        print("[CommentListView] Loading page \(nextPage) with pageSize \(pageSize), current total comments: \(comments.count)")
+        
         Task {
             if initialLoadComplete { isLoadingMore = true }
             
@@ -190,17 +192,21 @@ struct CommentListView<RowView: View>: View {
                 print("[CommentListView] Starting to load more comments - page: \(nextPage)")
                 let newComments = try await commentFetcher(nextPage, pageSize)
                 await MainActor.run {
-                    print("[CommentListView] Got \(newComments.count) total comments")
+                    print("[CommentListView] Got \(newComments.count) total comments from page \(nextPage)")
                     // Filter out nil comments and add valid ones
                     let validComments = newComments.compactMap { $0 }
+                    print("[CommentListView] Valid comments from page \(nextPage): \(validComments.count)")
+                    
                     if !validComments.isEmpty {
+                        let previousCount = comments.count
                         comments.append(contentsOf: validComments)
+                        print("[CommentListView] Added \(validComments.count) comments, total now: \(comments.count) (was \(previousCount))")
                     }
                     
                     // Use the same logic as TweetListView
                     if newComments.count < pageSize {
                         hasMoreComments = false
-                        print("[CommentListView] No more comments available")
+                        print("[CommentListView] No more comments available (count \(newComments.count) < pageSize \(pageSize))")
                     } else if validComments.isEmpty {
                         // All comments are nil, auto-increment and try again
                         print("[CommentListView] All comments nil for page \(nextPage), auto-incrementing page")
@@ -210,10 +216,11 @@ struct CommentListView<RowView: View>: View {
                     } else {
                         // We got some valid comments, continue normally
                         hasMoreComments = true
+                        print("[CommentListView] Got valid comments, continuing to next page")
                     }
                     
                     currentPage = nextPage
-                    print("[CommentListView] Added \(validComments.count) valid comments, updated currentPage to \(currentPage), hasMoreComments: \(hasMoreComments)")
+                    print("[CommentListView] Updated currentPage to \(currentPage), hasMoreComments: \(hasMoreComments)")
                 }
             } catch {
                 print("[CommentListView] Error loading more comments: \(error)")
