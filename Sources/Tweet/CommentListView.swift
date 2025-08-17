@@ -139,8 +139,21 @@ struct CommentListView<RowView: View>: View {
             await MainActor.run {
                 // Filter out nil comments and add valid ones
                 comments = newComments.compactMap { $0 }
-                // Set hasMoreComments based on whether we got a full page (including nils)
-                hasMoreComments = newComments.count >= pageSize
+                
+                // Use the same logic as TweetListView
+                if newComments.count < pageSize {
+                    hasMoreComments = false
+                    print("[CommentListView] No more comments available in initial load")
+                } else if comments.isEmpty {
+                    // All comments were nil, try next page
+                    print("[CommentListView] All comments nil for page 0, trying page 1")
+                    initialLoadComplete = true
+                    loadMoreComments(page: 1)
+                    return
+                } else {
+                    hasMoreComments = true
+                }
+                
                 print("[CommentListView] Loaded \(comments.count) valid comments out of \(newComments.count) total, hasMoreComments: \(hasMoreComments)")
             }
         } catch {
@@ -183,8 +196,22 @@ struct CommentListView<RowView: View>: View {
                     if !validComments.isEmpty {
                         comments.append(contentsOf: validComments)
                     }
-                    // Set hasMoreComments based on whether we got a full page (including nils)
-                    hasMoreComments = newComments.count >= pageSize
+                    
+                    // Use the same logic as TweetListView
+                    if newComments.count < pageSize {
+                        hasMoreComments = false
+                        print("[CommentListView] No more comments available")
+                    } else if validComments.isEmpty {
+                        // All comments are nil, auto-increment and try again
+                        print("[CommentListView] All comments nil for page \(nextPage), auto-incrementing page")
+                        isLoadingMore = false
+                        loadMoreComments(page: nextPage + 1)
+                        return
+                    } else {
+                        // We got some valid comments, continue normally
+                        hasMoreComments = true
+                    }
+                    
                     currentPage = nextPage
                     print("[CommentListView] Added \(validComments.count) valid comments, updated currentPage to \(currentPage), hasMoreComments: \(hasMoreComments)")
                 }
