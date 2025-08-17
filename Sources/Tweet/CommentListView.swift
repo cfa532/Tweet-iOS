@@ -129,6 +129,7 @@ struct CommentListView<RowView: View>: View {
     // MARK: - Methods
     func performInitialLoad() async {
         print("[CommentListView] Starting initial load")
+        isLoading = true
         initialLoadComplete = false
         currentPage = 0
         comments = []
@@ -136,41 +137,32 @@ struct CommentListView<RowView: View>: View {
         do {
             print("[CommentListView] Loading page 0")
             let newComments = try await commentFetcher(0, pageSize)
+            let validComments = newComments.compactMap { $0 }
+            
             await MainActor.run {
-                // Filter out nil comments and add valid ones
-                comments = newComments.compactMap { $0 }
-                
-                // Use the same logic as TweetListView
-                if newComments.count < pageSize {
-                    hasMoreComments = false
-                    print("[CommentListView] No more comments available in initial load")
-                } else if comments.isEmpty {
-                    // All comments were nil, try next page
-                    print("[CommentListView] All comments nil for page 0, trying page 1")
-                    initialLoadComplete = true
-                    loadMoreComments(page: 1)
-                    return
-                } else {
-                    hasMoreComments = true
-                }
-                
+                comments = validComments
+                hasMoreComments = newComments.count >= pageSize
+                isLoading = false
+                initialLoadComplete = true
                 print("[CommentListView] Loaded \(comments.count) valid comments out of \(newComments.count) total, hasMoreComments: \(hasMoreComments)")
             }
         } catch {
             print("[CommentListView] Error during initial load: \(error)")
             errorMessage = error.localizedDescription
+            await MainActor.run {
+                isLoading = false
+                initialLoadComplete = true
+            }
         }
         
-        initialLoadComplete = true
         print("[CommentListView] Initial load complete - total valid comments: \(comments.count), hasMoreComments: \(hasMoreComments)")
     }
 
     func refreshComments() async {
         guard !isLoading else { return }
-        isLoading = true
-        initialLoadComplete = false
+        
+        print("[CommentListView] Starting refresh")
         await performInitialLoad()
-        isLoading = false
     }
 
     func loadMoreComments(page: UInt? = nil) {
@@ -186,16 +178,15 @@ struct CommentListView<RowView: View>: View {
         print("[CommentListView] Loading page \(nextPage) with pageSize \(pageSize), current total comments: \(comments.count)")
         
         Task {
-            if initialLoadComplete { isLoadingMore = true }
+            isLoadingMore = true
             
             do {
                 print("[CommentListView] Starting to load more comments - page: \(nextPage)")
                 let newComments = try await commentFetcher(nextPage, pageSize)
+                let validComments = newComments.compactMap { $0 }
+                
                 await MainActor.run {
-                    print("[CommentListView] Got \(newComments.count) total comments from page \(nextPage)")
-                    // Filter out nil comments and add valid ones
-                    let validComments = newComments.compactMap { $0 }
-                    print("[CommentListView] Valid comments from page \(nextPage): \(validComments.count)")
+                    print("[CommentListView] Got \(newComments.count) total comments from page \(nextPage), \(validComments.count) valid")
                     
                     if !validComments.isEmpty {
                         let previousCount = comments.count
@@ -256,25 +247,53 @@ struct CommentListContentView<RowView: View>: View {
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0)
-            ForEach(comments, id: \.mid) { comment in
-                rowView(comment)
-            }
-            // Sentinel view for infinite scroll
-            if hasMoreComments {
-                ProgressView()
-                    .frame(height: 40)
-                    .onAppear {
-                        print("[CommentListContentView] ProgressView appeared - initialLoadComplete: \(initialLoadComplete), isLoadingMore: \(isLoadingMore)")
-                        if initialLoadComplete && !isLoadingMore {
-                            print("[CommentListContentView] Scheduling loadMoreComments")
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                if initialLoadComplete && !isLoadingMore {
-                                    print("[CommentListContentView] Calling loadMoreComments")
-                                    loadMoreComments()
+            
+            // Show loading state
+            if isLoading {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.2)
+                    Text(NSLocalizedString("Loading comments...", comment: "Loading comments message"))
+                        .foregroundColor(.secondary)
+                        .font(.subheadline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+            } else if initialLoadComplete && comments.isEmpty {
+                // Show empty state when loading is complete but no comments
+                VStack(spacing: 16) {
+                    Image(systemName: "bubble.left")
+                        .font(.system(size: 48))
+                        .foregroundColor(.secondary)
+                    Text(NSLocalizedString("No comments yet", comment: "No comments available message"))
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+            } else {
+                // Show comments
+                ForEach(comments, id: \.mid) { comment in
+                    rowView(comment)
+                }
+                
+                // Sentinel view for infinite scroll
+                if hasMoreComments {
+                    ProgressView()
+                        .frame(height: 40)
+                        .onAppear {
+                            print("[CommentListContentView] ProgressView appeared - initialLoadComplete: \(initialLoadComplete), isLoadingMore: \(isLoadingMore)")
+                            if initialLoadComplete && !isLoadingMore {
+                                print("[CommentListContentView] Scheduling loadMoreComments")
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                    if initialLoadComplete && !isLoadingMore {
+                                        print("[CommentListContentView] Calling loadMoreComments")
+                                        loadMoreComments()
+                                    }
                                 }
                             }
                         }
-                    }
+                }
             }
         }
     }
