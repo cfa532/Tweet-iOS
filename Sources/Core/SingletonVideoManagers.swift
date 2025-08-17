@@ -16,11 +16,23 @@ class DetailVideoManager: ObservableObject {
     static let shared = DetailVideoManager()
     private init() {
         setupAppLifecycleNotifications()
+        configureAudioSession()
     }
     
     @Published var currentPlayer: AVPlayer?
     @Published var currentVideoMid: String?
     @Published var isPlaying = false
+    
+    /// Configure audio session to prevent lock screen media controls
+    private func configureAudioSession() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try audioSession.setActive(true)
+        } catch {
+            print("DEBUG: [DETAIL VIDEO MANAGER] Failed to configure audio session: \(error)")
+        }
+    }
     
     /// Set current video for detail view
     func setCurrentVideo(url: URL, mid: String, autoPlay: Bool = true) {
@@ -144,6 +156,18 @@ class FullscreenVideoManager: ObservableObject {
     static let shared = FullscreenVideoManager()
     private init() {
         setupAppLifecycleNotifications()
+        configureAudioSession()
+    }
+    
+    /// Configure audio session to prevent lock screen media controls
+    private func configureAudioSession() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try audioSession.setActive(true)
+        } catch {
+            print("DEBUG: [FULLSCREEN VIDEO MANAGER] Failed to configure audio session: \(error)")
+        }
     }
     
     @Published var currentPlayer: AVPlayer?

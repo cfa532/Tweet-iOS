@@ -362,6 +362,15 @@ struct SimpleVideoPlayer: View {
     }
     
         private func setupPlayer() {
+        // Configure audio session to prevent lock screen media controls
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try audioSession.setActive(true)
+        } catch {
+            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Failed to configure audio session: \(error)")
+        }
+        
         Task {
             await MainActor.run {
                 self.isLoading = true
