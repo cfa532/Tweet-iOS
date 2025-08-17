@@ -81,7 +81,16 @@ struct CommentListView<RowView: View>: View {
                 }
             }
             .refreshable {
+                let startTime = Date()
                 await refreshComments()
+                
+                // Ensure pull-to-refresh spinner shows for at least 0.5 seconds
+                let elapsedTime = Date().timeIntervalSince(startTime)
+                let minimumDuration: TimeInterval = 0.5
+                if elapsedTime < minimumDuration {
+                    let remainingTime = minimumDuration - elapsedTime
+                    try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
+                }
             }
             .task {
                 if comments.isEmpty {
@@ -142,7 +151,6 @@ struct CommentListView<RowView: View>: View {
             await MainActor.run {
                 comments = validComments
                 hasMoreComments = newComments.count >= pageSize
-                isLoading = false
                 initialLoadComplete = true
                 print("[CommentListView] Loaded \(comments.count) valid comments out of \(newComments.count) total, hasMoreComments: \(hasMoreComments)")
             }
@@ -150,7 +158,6 @@ struct CommentListView<RowView: View>: View {
             print("[CommentListView] Error during initial load: \(error)")
             errorMessage = error.localizedDescription
             await MainActor.run {
-                isLoading = false
                 initialLoadComplete = true
             }
         }
@@ -161,8 +168,12 @@ struct CommentListView<RowView: View>: View {
     func refreshComments() async {
         guard !isLoading else { return }
         
-        print("[CommentListView] Starting refresh")
         await performInitialLoad()
+        
+        // Set loading to false after refresh completes
+        await MainActor.run {
+            isLoading = false
+        }
     }
 
     func loadMoreComments(page: UInt? = nil) {
