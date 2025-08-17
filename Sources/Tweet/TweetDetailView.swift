@@ -326,21 +326,39 @@ struct TweetDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                mediaSection
-                tweetHeader
-                tweetContent
-                actionButtons
-                Divider()
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
-                commentsListView
-                    .padding(.leading, -4)
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    mediaSection
+                    tweetHeader
+                    tweetContent
+                    actionButtons
+                    Divider()
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+                    commentsListView
+                        .padding(.leading, -4)
+                }
+                .padding(.top, 2)
+                .task {
+                    setupInitialData()
+                }
             }
-            .padding(.top, 2)
-            .task {
-                setupInitialData()
+            
+            // ReplyEditor as a component at the bottom
+            if showReplyEditor {
+                ReplyEditorView(
+                    parentTweet: displayTweet,
+                    isQuoting: false,
+                    onClose: {
+                        showReplyEditor = false
+                    },
+                    onExpandedClose: {
+                        shouldShowExpandedReply = false
+                    }, 
+                    initialExpanded: shouldShowExpandedReply
+                )
+                .padding(.bottom, 48) // Add padding to avoid navigation bar
             }
         }
         .background(Color(.systemBackground))
@@ -391,25 +409,7 @@ struct TweetDetailView: View {
                 TweetDetailView(tweet: selectedComment)
             }
         }
-        .overlay(
-            VStack {
-                Spacer()
-                if showReplyEditor {
-                    ReplyEditorView(
-                        parentTweet: displayTweet,
-                        isQuoting: false,
-                        onClose: {
-                            showReplyEditor = false
-                        },
-                        onExpandedClose: {
-                            shouldShowExpandedReply = false
-                        }, initialExpanded: shouldShowExpandedReply
-                    )
-                }
-            }
-            .padding(.bottom, 48) // Move it down further, closer to navigation bar
-            .zIndex(1000) // Ensure it appears above other content
-        )
+
 
 
     }
