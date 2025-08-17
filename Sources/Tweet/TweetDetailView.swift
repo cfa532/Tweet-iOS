@@ -584,6 +584,7 @@ struct TweetDetailView: View {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
             Task { @MainActor in
                 refreshTweet()
+                refreshComments()
             }
         }
     }
@@ -601,6 +602,70 @@ struct TweetDetailView: View {
                 }
             } catch {
                 print("Error refreshing tweet: \(error)")
+            }
+        }
+    }
+    
+    private func refreshComments() {
+        Task {
+            do {
+                print("[TweetDetailView] Starting comments refresh")
+                var allNewComments: [Tweet] = []
+                var currentPage: UInt = 0
+                let pageSize: UInt = 20
+                var hasOverlap = false
+                
+                // Load pages until we find overlap with existing comments
+                while !hasOverlap {
+                    print("[TweetDetailView] Loading comments page \(currentPage)")
+                    let freshComments = try await hproseInstance.fetchComments(
+                        displayTweet,
+                        pageNumber: currentPage,
+                        pageSize: pageSize
+                    )
+                    let validComments = freshComments.compactMap { $0 }
+                    
+                    if validComments.isEmpty {
+                        print("[TweetDetailView] No more comments found on page \(currentPage)")
+                        break
+                    }
+                    
+                    // Check for overlap with existing comments
+                    let existingIds = Set(comments.map { $0.mid })
+                    let newCommentsOnThisPage = validComments.filter { !existingIds.contains($0.mid) }
+                    
+                    if newCommentsOnThisPage.count < validComments.count {
+                        // Found overlap - some comments on this page already exist
+                        hasOverlap = true
+                        print("[TweetDetailView] Found overlap on page \(currentPage) - \(newCommentsOnThisPage.count) new out of \(validComments.count) total")
+                    } else {
+                        // No overlap - all comments on this page are new
+                        print("[TweetDetailView] No overlap on page \(currentPage) - all \(validComments.count) comments are new")
+                    }
+                    
+                    // Add new comments from this page
+                    allNewComments.append(contentsOf: newCommentsOnThisPage)
+                    
+                    // If we got fewer comments than pageSize, we've reached the end
+                    if freshComments.count < pageSize {
+                        print("[TweetDetailView] Reached end of comments (page \(currentPage) has \(freshComments.count) < \(pageSize))")
+                        break
+                    }
+                    
+                    currentPage += 1
+                }
+                
+                await MainActor.run {
+                    if !allNewComments.isEmpty {
+                        // Insert all new comments at the beginning (most recent first)
+                        comments.insert(contentsOf: allNewComments, at: 0)
+                        print("[TweetDetailView] Merged \(allNewComments.count) new comments - total: \(comments.count)")
+                    } else {
+                        print("[TweetDetailView] No new comments found - total: \(comments.count)")
+                    }
+                }
+            } catch {
+                print("Error refreshing comments: \(error)")
             }
         }
     }
