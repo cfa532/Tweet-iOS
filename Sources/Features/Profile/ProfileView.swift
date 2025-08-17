@@ -12,6 +12,7 @@ struct ProfileView: View {
     @State private var selectedTweet: Tweet? = nil
     @State private var showUserList = false
     @State private var showTweetList = false
+    @State private var showTweetDetail = false
 
     @State private var userListType: UserListType = .FOLLOWER
     @State private var tweetListType: TweetListType = .BOOKMARKS
@@ -57,7 +58,11 @@ struct ProfileView: View {
                     user: user,
                     hproseInstance: hproseInstance,
                     onUserSelect: { user in selectedUser = user },
-                    onTweetTap: { tweet in selectedTweet = tweet },
+                    onTweetTap: { tweet in 
+                        print("DEBUG: [ProfileView] Tweet tapped: \(tweet.mid)")
+                        selectedTweet = tweet
+                        showTweetDetail = true
+                    },
                     onPinnedTweetsRefresh: refreshPinnedTweets,
                     onScroll: { offset in
                         previousScrollOffset = offset
@@ -384,12 +389,14 @@ struct ProfileView: View {
                 ProfileView(user: selectedUser, onLogout: nil)
             }
         }
-        .navigationDestination(isPresented: Binding(
-            get: { selectedTweet != nil },
-            set: { if !$0 { selectedTweet = nil } }
-        )) {
+        .navigationDestination(isPresented: $showTweetDetail) {
             if let selectedTweet = selectedTweet {
                 TweetDetailView(tweet: selectedTweet)
+                    .onDisappear {
+                        // Reset navigation state when TweetDetailView disappears
+                        print("DEBUG: [ProfileView] TweetDetailView disappeared, resetting navigation state")
+                        showTweetDetail = false
+                    }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .bookmarkAdded)) { notification in
