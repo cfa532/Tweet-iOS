@@ -295,16 +295,6 @@ struct TweetListView<RowView: View>: View {
     
     // MARK: - Server Loading (No Retry)
     private func loadFromServer(page: UInt, pageSize: UInt, completion: @escaping (Bool) -> Void) async {
-        let networkMonitor = NetworkMonitor.shared
-        
-        // Skip server loading if no network connection
-        guard networkMonitor.hasAnyConnection else {
-            print("[TweetListView] No network connection available, skipping server load")
-            await MainActor.run { isLoadingMore = false }
-            completion(false)
-            return
-        }
-        
         do {
             let tweetsFromServer = try await tweetFetcher(page, pageSize, false, shouldCacheServerTweets)
             let validServerTweets = tweetsFromServer.compactMap { $0 }
@@ -344,15 +334,8 @@ struct TweetListView<RowView: View>: View {
             print("[TweetListView] Server load failed: \(error)")
             print("[TweetListView] Continuing with cached data only")
             
-            // Show user-friendly error message for network issues
-            if !networkMonitor.hasAnyConnection {
-                await MainActor.run {
-                    errorMessage = "No internet connection. Showing cached content."
-                }
-            } else {
-                await MainActor.run {
-                    errorMessage = "Unable to load fresh content. Showing cached data."
-                }
+            await MainActor.run {
+                errorMessage = "Unable to load fresh content. Showing cached data."
             }
         }
         
@@ -380,9 +363,6 @@ struct TweetListContentView<RowView: View>: View {
     let initialLoadComplete: Bool
     let loadMoreTweets: () -> Void
     
-    @StateObject private var networkMonitor = NetworkMonitor.shared
-    @State private var showOfflineIndicator = false
-    
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0)
@@ -390,21 +370,6 @@ struct TweetListContentView<RowView: View>: View {
             // Header content
             if let header = header {
                 header()
-            }
-            
-            // Offline indicator
-            if showOfflineIndicator && !networkMonitor.hasAnyConnection {
-                HStack {
-                    Image(systemName: "wifi.slash")
-                        .foregroundColor(.orange)
-                    Text(NSLocalizedString("Offline - Showing cached content", comment: "Offline status message"))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .background(Color.orange.opacity(0.1))
             }
             
             // Show loading state
@@ -471,14 +436,6 @@ struct TweetListContentView<RowView: View>: View {
                         .frame(height: 40)
                 }
             }
-        }
-        .onAppear {
-            // Check network status when view appears
-            showOfflineIndicator = !networkMonitor.hasAnyConnection
-        }
-        .onChange(of: networkMonitor.isConnected) { isConnected in
-            // Update offline indicator when network status changes
-            showOfflineIndicator = !isConnected
         }
     }
 }

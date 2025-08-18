@@ -69,7 +69,6 @@
 		46B03D892E488EC0000E08DF /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D882E488EC0000E08DF /* CameraView.swift */; };
 		46B03D8B2E48D760000E08DF /* MediaPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D8A2E48D760000E08DF /* MediaPicker.swift */; };
 		46B03D912E49E35E000E08DF /* SharedAssetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D902E49E35B000E08DF /* SharedAssetCache.swift */; };
-		46B03D952E4A4ED6000E08DF /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D942E4A4ED6000E08DF /* NetworkMonitor.swift */; };
 		46B03D972E4C44E2000E08DF /* DebounceButtonWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D962E4C44E2000E08DF /* DebounceButtonWrapper.swift */; };
 		46B03D992E4C56C2000E08DF /* HapticButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */; };
 		46B03D9B2E4D7336000E08DF /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D9A2E4D7336000E08DF /* NotificationManager.swift */; };
@@ -175,7 +174,6 @@
 		46B03D882E488EC0000E08DF /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		46B03D8A2E48D760000E08DF /* MediaPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPicker.swift; sourceTree = "<group>"; };
 		46B03D902E49E35B000E08DF /* SharedAssetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedAssetCache.swift; sourceTree = "<group>"; };
-		46B03D942E4A4ED6000E08DF /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		46B03D962E4C44E2000E08DF /* DebounceButtonWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceButtonWrapper.swift; sourceTree = "<group>"; };
 		46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticButtonStyle.swift; sourceTree = "<group>"; };
 		46B03D9A2E4D7336000E08DF /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
@@ -403,7 +401,6 @@
 			children = (
 				46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */,
 				46B03D962E4C44E2000E08DF /* DebounceButtonWrapper.swift */,
-				46B03D942E4A4ED6000E08DF /* NetworkMonitor.swift */,
 				46B03D8A2E48D760000E08DF /* MediaPicker.swift */,
 				46B03D842E486D36000E08DF /* MuteState.swift */,
 				461438262E44DCCB002D1B22 /* VideoManager.swift */,
@@ -670,7 +667,6 @@
 				461438192E3EEE2D002D1B22 /* MimeiId.swift in Sources */,
 				469CF0F22E27FED700FBCDB8 /* OrientationManager.swift in Sources */,
 				468CF2102E39AF5900D49038 /* ChatMessage.swift in Sources */,
-				46B03D952E4A4ED6000E08DF /* NetworkMonitor.swift in Sources */,
 				46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */,
 				468CF20E2E39AF3A00D49038 /* ChatRepository.swift in Sources */,
 				46B03D912E49E35E000E08DF /* SharedAssetCache.swift in Sources */,
