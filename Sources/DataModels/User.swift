@@ -19,11 +19,71 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var lastLogin: Date?
     @Published var cloudDrivePort: Int? = 8010
     
-    @Published var tweetCount: Int?
-    @Published var followingCount: Int?
-    @Published var followersCount: Int?
-    @Published var bookmarksCount: Int?
-    @Published var favoritesCount: Int?
+    @Published var tweetCount: Int? {
+        didSet {
+            // Update cached version when tweetCount changes
+            if let newValue = tweetCount, newValue != oldValue {
+                // Update the singleton instance in the cache
+                User.userInstances[mid]?.tweetCount = newValue
+                // Also update Core Data cache if this is the app user
+                if mid == HproseInstance.shared.appUser.mid {
+                    TweetCacheManager.shared.saveUser(self)
+                }
+            }
+        }
+    }
+    @Published var followingCount: Int? {
+        didSet {
+            // Update cached version when followingCount changes
+            if let newValue = followingCount, newValue != oldValue {
+                // Update the singleton instance in the cache
+                User.userInstances[mid]?.followingCount = newValue
+                // Also update Core Data cache if this is the app user
+                if mid == HproseInstance.shared.appUser.mid {
+                    TweetCacheManager.shared.saveUser(self)
+                }
+            }
+        }
+    }
+    @Published var followersCount: Int? {
+        didSet {
+            // Update cached version when followersCount changes
+            if let newValue = followersCount, newValue != oldValue {
+                // Update the singleton instance in the cache
+                User.userInstances[mid]?.followersCount = newValue
+                // Also update Core Data cache if this is the app user
+                if mid == HproseInstance.shared.appUser.mid {
+                    TweetCacheManager.shared.saveUser(self)
+                }
+            }
+        }
+    }
+    @Published var bookmarksCount: Int? {
+        didSet {
+            // Update cached version when bookmarksCount changes
+            if let newValue = bookmarksCount, newValue != oldValue {
+                // Update the singleton instance in the cache
+                User.userInstances[mid]?.bookmarksCount = newValue
+                // Also update Core Data cache if this is the app user
+                if mid == HproseInstance.shared.appUser.mid {
+                    TweetCacheManager.shared.saveUser(self)
+                }
+            }
+        }
+    }
+    @Published var favoritesCount: Int? {
+        didSet {
+            // Update cached version when favoritesCount changes
+            if let newValue = favoritesCount, newValue != oldValue {
+                // Update the singleton instance in the cache
+                User.userInstances[mid]?.favoritesCount = newValue
+                // Also update Core Data cache if this is the app user
+                if mid == HproseInstance.shared.appUser.mid {
+                    TweetCacheManager.shared.saveUser(self)
+                }
+            }
+        }
+    }
     @Published var commentsCount: Int?
     
     @Published var hostIds: [MimeiId]? // List of MimeiId
