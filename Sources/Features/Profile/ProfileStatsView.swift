@@ -2,7 +2,7 @@ import SwiftUI
 
 @available(iOS 16.0, *)
 struct ProfileStatsView: View {
-    let user: User
+    @ObservedObject var user: User
     let onFollowersTap: () -> Void
     let onFollowingTap: () -> Void
     let onBookmarksTap: () -> Void

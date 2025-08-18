@@ -413,31 +413,44 @@ struct ProfileView: View {
                 hproseInstance.appUser.followingList?.removeAll { $0 == user.mid }
             }
             
-            // Update the followed user's fansList
-            if ret {
-                // User is now following - add app user to followed user's fansList
-                if user.fansList == nil {
-                    user.fansList = []
+            // Update the followed user's fansList and counts on main thread
+            await MainActor.run {
+                let oldFollowersCount = user.followersCount
+                let oldFollowingCount = hproseInstance.appUser.followingCount
+                
+                print("DEBUG: [ProfileView] Before update - user \(user.mid) followers count: \(oldFollowersCount ?? 0)")
+                
+                if ret {
+                    // User is now following - add app user to followed user's fansList
+                    if user.fansList == nil {
+                        user.fansList = []
+                    }
+                    if !user.fansList!.contains(hproseInstance.appUser.mid) {
+                        user.fansList!.append(hproseInstance.appUser.mid)
+                    }
+                    // Increment the followed user's followers count
+                    user.followersCount = (user.followersCount ?? 0) + 1
+                    print("DEBUG: [ProfileView] Incremented followers count for user \(user.mid): \(oldFollowersCount ?? 0) -> \(user.followersCount ?? 0)")
+                } else {
+                    // User is no longer following - remove app user from followed user's fansList
+                    user.fansList?.removeAll { $0 == hproseInstance.appUser.mid }
+                    // Decrement the followed user's followers count
+                    user.followersCount = max(0, (user.followersCount ?? 0) - 1)
+                    print("DEBUG: [ProfileView] Decremented followers count for user \(user.mid): \(oldFollowersCount ?? 0) -> \(user.followersCount ?? 0)")
                 }
-                if !user.fansList!.contains(hproseInstance.appUser.mid) {
-                    user.fansList!.append(hproseInstance.appUser.mid)
+                
+                // Update app user's following count
+                if ret {
+                    // User is now following - increment app user's following count
+                    hproseInstance.appUser.followingCount = (hproseInstance.appUser.followingCount ?? 0) + 1
+                    print("DEBUG: [ProfileView] Incremented app user following count: \(oldFollowingCount ?? 0) -> \(hproseInstance.appUser.followingCount ?? 0)")
+                } else {
+                    // User is no longer following - decrement app user's following count
+                    hproseInstance.appUser.followingCount = max(0, (hproseInstance.appUser.followingCount ?? 0) - 1)
+                    print("DEBUG: [ProfileView] Decremented app user following count: \(oldFollowingCount ?? 0) -> \(hproseInstance.appUser.followingCount ?? 0)")
                 }
-                // Increment the followed user's followers count
-                user.followersCount = (user.followersCount ?? 0) + 1
-            } else {
-                // User is no longer following - remove app user from followed user's fansList
-                user.fansList?.removeAll { $0 == hproseInstance.appUser.mid }
-                // Decrement the followed user's followers count
-                user.followersCount = max(0, (user.followersCount ?? 0) - 1)
-            }
-            
-            // Update app user's following count
-            if ret {
-                // User is now following - increment app user's following count
-                hproseInstance.appUser.followingCount = (hproseInstance.appUser.followingCount ?? 0) + 1
-            } else {
-                // User is no longer following - decrement app user's following count
-                hproseInstance.appUser.followingCount = max(0, (hproseInstance.appUser.followingCount ?? 0) - 1)
+                
+                print("DEBUG: [ProfileView] After update - user \(user.mid) followers count: \(user.followersCount ?? 0)")
             }
         } else {
             // Revert the isFollowing binding if provided
