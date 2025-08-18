@@ -486,6 +486,7 @@ struct TweetDetailView: View {
         TweetActionButtonsView(
             tweet: displayTweet,
             onCommentTap: {
+                print("DEBUG: [TweetDetailView] Comment button tapped, setting shouldShowExpandedReply = true")
                 shouldShowExpandedReply = true
             }
         )

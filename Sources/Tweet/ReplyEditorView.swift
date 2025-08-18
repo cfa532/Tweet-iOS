@@ -71,7 +71,17 @@ struct ReplyEditorView: View {
         }
         .onAppear {
             // Set initial expanded state if requested
+            print("DEBUG: [ReplyEditorView] onAppear called, initialExpanded = \(initialExpanded)")
             if initialExpanded {
+                print("DEBUG: [ReplyEditorView] Setting isExpanded = true from onAppear")
+                isExpanded = true
+            }
+        }
+        .onChange(of: initialExpanded) { newValue in
+            // Respond to changes in initialExpanded parameter
+            print("DEBUG: [ReplyEditorView] initialExpanded changed to: \(newValue)")
+            if newValue {
+                print("DEBUG: [ReplyEditorView] Setting isExpanded = true")
                 isExpanded = true
             }
         }
