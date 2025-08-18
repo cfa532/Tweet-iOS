@@ -422,9 +422,22 @@ struct ProfileView: View {
                 if !user.fansList!.contains(hproseInstance.appUser.mid) {
                     user.fansList!.append(hproseInstance.appUser.mid)
                 }
+                // Increment the followed user's followers count
+                user.followersCount = (user.followersCount ?? 0) + 1
             } else {
                 // User is no longer following - remove app user from followed user's fansList
                 user.fansList?.removeAll { $0 == hproseInstance.appUser.mid }
+                // Decrement the followed user's followers count
+                user.followersCount = max(0, (user.followersCount ?? 0) - 1)
+            }
+            
+            // Update app user's following count
+            if ret {
+                // User is now following - increment app user's following count
+                hproseInstance.appUser.followingCount = (hproseInstance.appUser.followingCount ?? 0) + 1
+            } else {
+                // User is no longer following - decrement app user's following count
+                hproseInstance.appUser.followingCount = max(0, (hproseInstance.appUser.followingCount ?? 0) - 1)
             }
         } else {
             // Revert the isFollowing binding if provided
