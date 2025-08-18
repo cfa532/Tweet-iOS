@@ -28,9 +28,11 @@ class LocalizationManager: ObservableObject {
     
     @Published var currentLanguage: String {
         didSet {
-            UserDefaults.standard.set(currentLanguage, forKey: "AppLanguage")
-            UserDefaults.standard.set([currentLanguage], forKey: "AppleLanguages")
-            UserDefaults.standard.synchronize()
+            Task { @MainActor in
+                UserDefaults.standard.set(currentLanguage, forKey: "AppLanguage")
+                UserDefaults.standard.set([currentLanguage], forKey: "AppleLanguages")
+                UserDefaults.standard.synchronize()
+            }
         }
     }
     

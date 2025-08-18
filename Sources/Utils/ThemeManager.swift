@@ -6,9 +6,11 @@ class ThemeManager: ObservableObject {
     
     @Published var isDarkMode: Bool = false {
         didSet {
-            if oldValue != isDarkMode {
-                HproseInstance.shared.preferenceHelper?.setDarkMode(isDarkMode)
-                updateAppearance()
+            Task { @MainActor in
+                if oldValue != isDarkMode {
+                    HproseInstance.shared.preferenceHelper?.setDarkMode(isDarkMode)
+                    updateAppearance()
+                }
             }
         }
     }

@@ -11,10 +11,12 @@ class MuteState: ObservableObject {
     static let shared = MuteState()
     @Published var isMuted: Bool = false { // Default to unmuted
         didSet {
-            // Save to preferences whenever the mute state changes
-            if oldValue != isMuted {
-                HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
-                print("DEBUG: [MUTE STATE] Mute state changed to: \(isMuted)")
+            Task { @MainActor in
+                // Save to preferences whenever the mute state changes
+                if oldValue != isMuted {
+                    HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
+                    print("DEBUG: [MUTE STATE] Mute state changed to: \(isMuted)")
+                }
             }
         }
     }
