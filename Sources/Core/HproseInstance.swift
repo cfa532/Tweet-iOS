@@ -2257,7 +2257,10 @@ final class HproseInstance: ObservableObject {
             if let uploadedTweet = try await self.uploadTweet(tweet) {
                 // Success - remove pending upload and notify
                 await removePendingUpload()
+                
+                // Update user's tweet count and post notification
                 await MainActor.run {
+                    self.appUser.tweetCount = (self.appUser.tweetCount ?? 0) + 1
                     NotificationCenter.default.post(
                         name: .newTweetCreated,
                         object: nil,
