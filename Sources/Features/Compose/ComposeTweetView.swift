@@ -109,30 +109,27 @@ struct ComposeTweetView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     DebounceButton(
                         NSLocalizedString("Publish", comment: "Publish tweet button"),
-                        cooldownDuration: 0.5,
+                        cooldownDuration: 1.0,
                         enableAnimation: true,
                         enableVibration: false
                     ) {
-                        // Set uploading state to prevent repeated taps
-                        viewModel.isUploading = true
-                        
                         // Post tweet in background
                         Task {
                             await viewModel.postTweet()
                             
                             // Send notification for toast on presenting screen and dismiss immediately
                             await MainActor.run {
-                                                            NotificationCenter.default.post(
-                                name: .tweetSubmitted,
-                                object: nil,
-                                userInfo: ["message": NSLocalizedString("Tweet submitted", comment: "Tweet submitted message")]
-                            )
+                                NotificationCenter.default.post(
+                                    name: .tweetSubmitted,
+                                    object: nil,
+                                    userInfo: ["message": NSLocalizedString("Tweet submitted", comment: "Tweet submitted message")]
+                                )
                                 viewModel.clearForm()
                                 dismiss()
                             }
                         }
                     }
-                    .disabled(!viewModel.canPostTweet || viewModel.isUploading)
+                    .disabled(!viewModel.canPostTweet)
                 }
             }
             .onAppear {

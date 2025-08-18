@@ -18,7 +18,7 @@ struct ReplyEditorView: View {
     @State private var showExitConfirmation = false
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImages: [UIImage] = []
-    @State private var isSubmitting = false
+    // Note: isSubmitting state is now managed by DebounceButton
     @State private var showCamera = false
     @State private var showImagePicker = false
     @State private var error: Error?
@@ -243,7 +243,7 @@ struct ReplyEditorView: View {
                 
                 // Reply button
                 DebounceButton(
-                    cooldownDuration: 0.5,
+                    cooldownDuration: 1.0,
                     enableAnimation: true,
                     enableVibration: false
                 ) {
@@ -260,7 +260,7 @@ struct ReplyEditorView: View {
                                 .fill(canSubmit ? Color.blue : Color.gray)
                         )
                 }
-                .disabled(!canSubmit || isSubmitting)
+                .disabled(!canSubmit)
             }
             
             // Error display
@@ -340,7 +340,7 @@ struct ReplyEditorView: View {
             return
         }
         
-        isSubmitting = true
+        // Note: isSubmitting state is now managed by DebounceButton
         
         Task {
             // Create comment tweet
@@ -366,7 +366,6 @@ struct ReplyEditorView: View {
                 // Show success toast immediately and reset form
                 await MainActor.run {
                     clearAndClose()
-                    isSubmitting = false
                     
                     // Show success toast immediately
                     showToastMessage(NSLocalizedString("Comment submitted", comment: "Comment submitted message"), type: .success)
@@ -376,7 +375,6 @@ struct ReplyEditorView: View {
             } catch {
                 await MainActor.run {
                     showToastMessage(NSLocalizedString("Failed to upload comment. Please try again.", comment: "Comment upload failed error"), type: .error)
-                    isSubmitting = false
                 }
             }
         }

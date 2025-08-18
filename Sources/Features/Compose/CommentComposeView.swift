@@ -10,7 +10,7 @@ struct CommentComposeView: View {
     @State private var error: Error?
     @State private var isQuoting = false
     @State private var selectedItems: [PhotosPickerItem] = []
-    @State private var isSubmitting = false
+    // Note: isSubmitting state is now managed by DebounceButton
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
@@ -147,7 +147,7 @@ struct CommentComposeView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     DebounceButton(
                         NSLocalizedString("Publish", comment: "Publish comment button"),
-                        cooldownDuration: 0.5,
+                        cooldownDuration: 1.0,
                         enableAnimation: true,
                         enableVibration: false
                     ) {
@@ -155,15 +155,8 @@ struct CommentComposeView: View {
                             await submitComment()
                         }
                     }
-                    .disabled((commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedItems.isEmpty) || isSubmitting)
-                    .overlay(
-                        Group {
-                            if isSubmitting {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                            }
-                        }
-                    )
+                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedItems.isEmpty)
+                    // Note: Progress indicator is now managed by DebounceButton
                 }
             }
         }
@@ -220,9 +213,7 @@ struct CommentComposeView: View {
             return
         }
         
-        await MainActor.run {
-            isSubmitting = true
-        }
+        // Note: isSubmitting state is now managed by DebounceButton
         
         // Create comment object with a temporary UUID
         let comment = Tweet(
@@ -246,7 +237,6 @@ struct CommentComposeView: View {
         } catch {
             print("DEBUG: Error preparing item data: \(error)")
             await MainActor.run {
-                isSubmitting = false
                 showToastMessage(NSLocalizedString("Failed to upload comment. Please try again.", comment: "Comment upload failed error"), type: .error)
             }
             return
@@ -259,10 +249,9 @@ struct CommentComposeView: View {
         await MainActor.run {
             commentText = ""
             selectedItems = []
-            isSubmitting = false
             
-                    // Show success toast before dismissing
-        showToastMessage(NSLocalizedString("Comment submitted", comment: "Comment submitted message"), type: .success)
+            // Show success toast before dismissing
+            showToastMessage(NSLocalizedString("Comment submitted", comment: "Comment submitted message"), type: .success)
             
             // Dismiss after a short delay to show the toast
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {

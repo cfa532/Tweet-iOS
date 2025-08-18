@@ -33,7 +33,7 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var error: Error?
     @Published var selectedItems: [PhotosPickerItem] = []
     @Published var selectedMedia: [MimeiFileType] = []
-    @Published var isUploading = false
+    // Note: isUploading state is now managed by DebounceButton
     @Published var uploadProgress = 0.0
     @Published var showToast = false
     @Published var toastMessage = ""
@@ -74,7 +74,6 @@ class ComposeTweetViewModel: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 withAnimation { self.showToast = false }
             }
-            isUploading = false
             return
         }
         
@@ -110,18 +109,11 @@ class ComposeTweetViewModel: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 withAnimation { self.showToast = false }
             }
-            isUploading = false
             return
         }
         
-        // Set uploading state
-        isUploading = true
-        
         print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
         hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
-        
-        // Reset uploading state
-        isUploading = false
     }
     
     func clearForm() {
