@@ -82,7 +82,7 @@ struct ProfileView: View {
                                 },
                                 onAvatarTap: { showAvatarFullScreen = true }
                             )
-                            ProfileStatsSection(
+                            ProfileStatsView(
                                 user: user,
                                 onFollowersTap: {
                                     userListType = .FOLLOWER

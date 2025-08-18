@@ -33,11 +33,11 @@ struct ProfileHeaderView: View {
                         .bold()
                         .foregroundColor(.themeText)
                     Text("@\(user.username ?? NSLocalizedString("username", comment: "Default username"))")
-                        .foregroundColor(.themeSecondaryText)
-                        .font(.subheadline)
+                        .foregroundColor(.themeText)
+                        .font(.headline)
                     Text(formatRegistrationDate(user.timestamp))
                         .foregroundColor(.themeSecondaryText)
-                        .font(.caption)
+                        .font(.subheadline)
                 }
                 Spacer()
                 // Edit/Follow/Unfollow button
@@ -45,8 +45,8 @@ struct ProfileHeaderView: View {
                     Button(NSLocalizedString("Edit", comment: "Edit button")) {
                         onEditTap()
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 20)
                             .fill(Color(.systemGray6))
@@ -60,8 +60,8 @@ struct ProfileHeaderView: View {
                     ) {
                         onFollowToggle()
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 20)
                             .fill(isFollowing ? Color(.systemRed) : Color(.systemBlue))

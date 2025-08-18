@@ -74,6 +74,6 @@ struct ProfileStatsView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
-        .background(Color.themeSecondaryBackground)
+        .background(Color.cyan.opacity(0.3))
     }
 }
