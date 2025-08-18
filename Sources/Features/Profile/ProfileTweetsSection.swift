@@ -190,6 +190,7 @@ struct ProfileTweetsSection<Header: View>: View {
                                         tweet: pinnedTweet,
                                         isPinned: true,
                                         isInProfile: true,
+                                        showDeleteButton: user.mid == hproseInstance.appUser.mid,
                                         onAvatarTap: { user in
                                             onUserSelect(user)
                                         },
@@ -224,6 +225,7 @@ struct ProfileTweetsSection<Header: View>: View {
                     tweet: tweet,
                     isPinned: pinnedTweets.contains { $0.mid == tweet.mid },
                     isInProfile: true,
+                    showDeleteButton: user.mid == hproseInstance.appUser.mid,
                     onAvatarTap: { user in
                         onUserSelect(user)
                     },

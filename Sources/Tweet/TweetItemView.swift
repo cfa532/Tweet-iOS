@@ -6,6 +6,7 @@ struct TweetItemView: View, Equatable {
     let embedded: Bool = false
     var isPinned: Bool = false
     var isInProfile: Bool = false
+    var showDeleteButton: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
     var onTap: ((Tweet) -> Void)? = nil
     var hideActions: Bool = false
@@ -64,7 +65,7 @@ struct TweetItemView: View, Equatable {
                         
                         HStack(alignment: .top) {
                             TweetItemHeaderView(tweet: originalTweet)
-                            TweetMenu(tweet: tweet, isPinned: isPinned)
+                            TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
                                 .padding(.top, -8)
                         }
                         
@@ -90,7 +91,7 @@ struct TweetItemView: View, Equatable {
                     VStack(alignment: .leading) {
                         HStack {
                             TweetItemHeaderView(tweet: tweet)
-                            TweetMenu(tweet: tweet, isPinned: isPinned)
+                            TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
                         }
                         .padding(.top, -8)
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
@@ -127,7 +128,7 @@ struct TweetItemView: View, Equatable {
                 VStack(alignment: .leading) {
                     HStack {
                         TweetItemHeaderView(tweet: tweet)
-                        TweetMenu(tweet: tweet, isPinned: isPinned)
+                        TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
                     }
                     .padding(.top, -8)
                     .contentShape(Rectangle())
@@ -209,6 +210,7 @@ struct TweetItemView: View, Equatable {
         return lhs.tweet.mid == rhs.tweet.mid &&
                lhs.isPinned == rhs.isPinned &&
                lhs.isInProfile == rhs.isInProfile &&
+               lhs.showDeleteButton == rhs.showDeleteButton &&
                lhs.hideActions == rhs.hideActions &&
                lhs.backgroundColor == rhs.backgroundColor &&
                lhs.originalTweet?.mid == rhs.originalTweet?.mid

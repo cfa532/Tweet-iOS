@@ -510,6 +510,7 @@ struct ProfileView: View {
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,
+                        showDeleteButton: isAppUser,
                         onAvatarTap: { user in selectedUser = user },
                         onTap: { tweet in selectedTweet = tweet }
                     )
@@ -535,6 +536,7 @@ struct ProfileView: View {
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,
+                        showDeleteButton: isAppUser,
                         onAvatarTap: { user in selectedUser = user },
                         onTap: { tweet in selectedTweet = tweet }
                     )

@@ -57,6 +57,7 @@ struct FollowingsTweetView: View {
                         tweet: tweet,
                         isPinned: false,
                         isInProfile: false,
+                        showDeleteButton: true,
                         onAvatarTap: { user in
                             onAvatarTap(user)
                         },

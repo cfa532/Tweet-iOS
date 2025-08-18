@@ -55,6 +55,7 @@ struct TweetItemHeaderView: View {
 struct TweetMenu: View {
     @ObservedObject var tweet: Tweet
     let isPinned: Bool
+    let showDeleteButton: Bool
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -64,9 +65,10 @@ struct TweetMenu: View {
     @State private var toastType: ToastView.ToastType = .info
     @State private var isPressed = false
     
-    init(tweet: Tweet, isPinned: Bool) {
+    init(tweet: Tweet, isPinned: Bool, showDeleteButton: Bool = false) {
         self.tweet = tweet
         self.isPinned = isPinned
+        self.showDeleteButton = showDeleteButton
         self._isCurrentlyPinned = State(initialValue: isPinned)
     }
     
@@ -102,22 +104,24 @@ struct TweetMenu: View {
                         }
                     }
                 }
-                Button(role: .destructive) {
-                    // Start deletion in background
-                    Task {
-                        do {
-                            try await deleteTweet(tweet)
-                        } catch {
-                            print("Tweet deletion failed. \(tweet)")
-                            await MainActor.run {
-                                toastMessage = "Failed to delete tweet."
-                                toastType = .error
-                                showToast = true
+                if showDeleteButton {
+                    Button(role: .destructive) {
+                        // Start deletion in background
+                        Task {
+                            do {
+                                try await deleteTweet(tweet)
+                            } catch {
+                                print("Tweet deletion failed. \(tweet)")
+                                await MainActor.run {
+                                    toastMessage = "Failed to delete tweet."
+                                    toastType = .error
+                                    showToast = true
+                                }
                             }
                         }
+                    } label: {
+                        Label("Delete", systemImage: "trash")
                     }
-                } label: {
-                    Label("Delete", systemImage: "trash")
                 }
             } label: {
                 Image(systemName: "ellipsis")
