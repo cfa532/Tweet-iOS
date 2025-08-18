@@ -303,7 +303,7 @@ final class HproseInstance: ObservableObject {
             print("[fetchTweetFeed] Tweet feed loading failed: \(errorMessage)")
             print("[fetchTweetFeed] Response: \(response)")
             
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: localizeBackendError(errorMessage)])
         }
         
         // Extract tweets and originalTweets from the new response format
@@ -2842,6 +2842,27 @@ final class HproseInstance: ObservableObject {
         await MainActor.run {
             _domainToShare = "http://" + domain
         }
+    }
+    /// Localizes backend error messages
+    private func localizeBackendError(_ errorMessage: String) -> String {
+        // Common backend error patterns that can be localized
+        let errorMappings: [String: String] = [
+            "Unknown error occurred": NSLocalizedString("Unknown error occurred", comment: "Backend error"),
+            "Unknown tweet deletion error": NSLocalizedString("Unknown tweet deletion error", comment: "Backend error"),
+            "Unknown comment upload error": NSLocalizedString("Unknown comment upload error", comment: "Backend error"),
+            "Unknown comment deletion error": NSLocalizedString("Unknown comment deletion error", comment: "Backend error"),
+            "Unknown upload error": NSLocalizedString("Unknown upload error", comment: "Backend error"),
+            "Unknown registration error.": NSLocalizedString("Unknown registration error.", comment: "Backend error"),
+            "Unknown error": NSLocalizedString("Unknown error", comment: "Backend error")
+        ]
+        
+        // Check if we have a direct mapping
+        if let localizedError = errorMappings[errorMessage] {
+            return localizedError
+        }
+        
+        // For unknown errors, return a generic localized message
+        return NSLocalizedString("An error occurred. Please try again.", comment: "Generic backend error")
     }
 }
 

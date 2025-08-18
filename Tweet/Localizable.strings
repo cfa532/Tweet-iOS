@@ -28,6 +28,9 @@
 "Username *" = "Username *";
 "Password *" = "Password *";
 "Confirm Password" = "Confirm Password";
+"New Password (optional)" = "New Password (optional)";
+"New Password" = "New Password";
+"Confirm New Password" = "Confirm New Password";
 "Alias" = "Alias";
 "Profile" = "Profile";
 "Host ID (optional)" = "Host ID (optional)";
@@ -322,3 +325,40 @@
 
 // MARK: - Badge
 "99+" = "99+";
+
+// MARK: - Validation Messages
+"Username is required." = "Username is required.";
+"Password is required." = "Password is required.";
+"Passwords do not match." = "Passwords do not match.";
+"Host ID must be %d characters if provided." = "Host ID must be %d characters if provided.";
+"Cloud Drive Port must be between 8000 and 9000." = "Cloud Drive Port must be between 8000 and 9000.";
+
+// MARK: - Backend Error Messages
+"Unknown error occurred" = "Unknown error occurred";
+"Unknown tweet deletion error" = "Unknown tweet deletion error";
+"Unknown comment upload error" = "Unknown comment upload error";
+"Unknown comment deletion error" = "Unknown comment deletion error";
+"Unknown upload error" = "Unknown upload error";
+"Unknown registration error." = "Unknown registration error.";
+"Unknown error" = "Unknown error";
+"An error occurred. Please try again." = "An error occurred. Please try again.";
+"An unknown error occurred" = "An unknown error occurred";
+
+// MARK: - Success Messages
+"Avatar updated successfully!" = "Avatar updated successfully!";
+"Profile updated successfully" = "Profile updated successfully";
+
+// MARK: - Chat Messages
+"Failed to send message" = "Failed to send message";
+"Sending message in background..." = "Sending message in background...";
+
+// MARK: - Fallback Text
+"User Name" = "User Name";
+"Unknown" = "Unknown";
+"Custom Label" = "Custom Label";
+
+// MARK: - Confirmation Dialogs
+"Unsaved Changes" = "Unsaved Changes";
+"Discard Changes" = "Discard Changes";
+"Continue Editing" = "Continue Editing";
+"You have unsaved changes. Are you sure you want to exit without saving?" = "You have unsaved changes. Are you sure you want to exit without saving?";

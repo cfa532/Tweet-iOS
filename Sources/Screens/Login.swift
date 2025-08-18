@@ -134,8 +134,8 @@ struct LoginView: View {
                 dismiss()
             })
             .sheet(isPresented: $showRegistration) {
-                RegistrationView { (username: String, password: String?, alias: String?, profile: String?, hostId: String?, cloudDrivePort: Int?) in
-                    do {
+                RegistrationView(
+                    onSubmit: { (username: String, password: String?, alias: String?, profile: String?, hostId: String?, cloudDrivePort: Int?) in
                         let success = try await hproseInstance.registerUser(
                             username: username,
                             password: password ?? "",
@@ -148,12 +148,11 @@ struct LoginView: View {
                             showSuccess = true
                             showRegistration = false
                         } else {
-                            errorMessage = NSLocalizedString("Registration failed.", comment: "Registration error message")
+                            // Let RegistrationView handle the error with toast
+                            throw NSError(domain: "Registration", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
                         }
-                    } catch {
-                        errorMessage = error.localizedDescription
                     }
-                }
+                )
             }
             .alert(LocalizedStringKey("Login Successful. Wait for a few minutes before login."), isPresented: $showSuccess) {
                 Button(LocalizedStringKey("OK")) {

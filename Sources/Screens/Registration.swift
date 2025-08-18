@@ -11,11 +11,9 @@ import PhotosUI
 @available(iOS 16.0, *)
 struct RegistrationView: View {
     @Environment(\.dismiss) private var dismiss
-    var onSubmit: (String, String?, String?, String?, String?, Int?) async -> Void // username, password, alias, profile, hostId, cloudDrivePort
+    var onSubmit: (String, String?, String?, String?, String?, Int?) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort
     var onSubmissionStateChange: ((Bool) -> Void)? = nil // Callback for submission state
-    var onAvatarUploadStateChange: ((Bool) -> Void)? = nil // Callback for avatar upload state
-    var onAvatarUploadSuccess: (() -> Void)? = nil // Callback for successful avatar upload
-    var onAvatarUploadFailure: ((String) -> Void)? = nil // Callback for failed avatar upload
+    var onRegistrationFailure: ((String) -> Void)? = nil // Callback for registration failure
 
     @State private var username: String = ""
     @State private var password: String = ""
@@ -23,110 +21,31 @@ struct RegistrationView: View {
     @State private var alias: String = ""
     @State private var profile: String = ""
     @State private var hostId: String = ""
-    @State private var cloudDrivePort: String = "8010"
-    @State private var showPasswordConfirm: Bool = false
+    @State private var cloudDrivePort: String = ""
     @State private var errorMessage: String?
     @FocusState private var focusedField: Field?
-    @State private var avatarId: String? = nil
-    @State private var showImagePicker = false
-    @State private var selectedPhoto: PhotosPickerItem? = nil
-    @State private var isUploadingAvatar = false
-    @State private var avatarUploadError: String? = nil
     @State private var isSubmitting = false
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastType: ToastView.ToastType = .error
+    @State private var showExitConfirmation = false
+    @State private var hasUnsavedChanges = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
         case username, password, confirmPassword, alias, profile, hostId, cloudDrivePort
     }
 
-    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int?) async -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onAvatarUploadStateChange: ((Bool) -> Void)? = nil, onAvatarUploadSuccess: (() -> Void)? = nil, onAvatarUploadFailure: ((String) -> Void)? = nil) {
+    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int?) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onRegistrationFailure: ((String) -> Void)? = nil) {
         self.onSubmit = onSubmit
         self.onSubmissionStateChange = onSubmissionStateChange
-        self.onAvatarUploadStateChange = onAvatarUploadStateChange
-        self.onAvatarUploadSuccess = onAvatarUploadSuccess
-        self.onAvatarUploadFailure = onAvatarUploadFailure
+        self.onRegistrationFailure = onRegistrationFailure
     }
 
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
-                    if !hproseInstance.appUser.isGuest {
-                        VStack {
-                            ZStack(alignment: .bottomTrailing) {
-                                Avatar(user: hproseInstance.appUser, size: 80)
-                                    .onTapGesture { showImagePicker = true }
-                                    .overlay(
-                                        Group {
-                                            if isUploadingAvatar {
-                                                ZStack {
-                                                    Color.black.opacity(0.6)
-                                                        .clipShape(Circle())
-                                                    
-                                                    VStack(spacing: 8) {
-                                                        ProgressView()
-                                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                                            .scaleEffect(1.2)
-                                                        
-                                                        Text(NSLocalizedString("Uploading...", comment: "Upload progress message"))
-                                                            .font(.caption)
-                                                            .foregroundColor(.white)
-                                                    }
-                                                }
-                                                .frame(width: 80, height: 80)
-                                            }
-                                        }
-                                    )
-                                Image(systemName: "camera.fill")
-                                    .foregroundColor(.white)
-                                    .background(Circle().fill(Color.blue).frame(width: 28, height: 28))
-                                    .offset(x: -8, y: -8)
-                            }
-                            if let avatarUploadError = avatarUploadError {
-                                Text(avatarUploadError)
-                                    .foregroundColor(.red)
-                                    .font(.caption)
-                            }
-                        }
-                        .padding(.bottom, 8)
-                        .photosPicker(isPresented: $showImagePicker, selection: $selectedPhoto, matching: .images)
-                        .onChange(of: selectedPhoto) { newItem in
-                            if let item = newItem {
-                                Task {
-                                    isUploadingAvatar = true
-                                    avatarUploadError = nil
-                                    onAvatarUploadStateChange?(true) // Notify parent about upload start
-                                    do {
-                                        if let data = try await item.loadTransferable(type: Data.self) {
-                                            let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                                            let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
-                                            if let uploaded = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName, referenceId: hproseInstance.appUser.mid), !uploaded.mid.isEmpty {
-                                                try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
-                                                await MainActor.run {
-                                                    hproseInstance.appUser.avatar = uploaded.mid
-                                                }
-                                                // Notify success
-                                                onAvatarUploadSuccess?()
-                                            } else {
-                                                let errorMessage = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
-                                                avatarUploadError = errorMessage
-                                                onAvatarUploadFailure?(errorMessage)
-                                            }
-                                        } else {
-                                            let errorMessage = NSLocalizedString("Failed to load image data.", comment: "Image data loading error")
-                                            avatarUploadError = errorMessage
-                                            onAvatarUploadFailure?(errorMessage)
-                                        }
-                                    } catch {
-                                        avatarUploadError = error.localizedDescription
-                                        onAvatarUploadFailure?(error.localizedDescription)
-                                    }
-                                    isUploadingAvatar = false
-                                    onAvatarUploadStateChange?(false) // Notify parent about upload end
-                                }
-                            }
-                        }
-                    }
 
                     Group {
                         VStack(alignment: .leading, spacing: 4) {
@@ -147,32 +66,27 @@ struct RegistrationView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                                            Text(LocalizedStringKey("Password *"))
-                                .font(.caption)
-                                .foregroundColor(.themeSecondaryText)
+                                Text(LocalizedStringKey("Password *"))
+                                    .font(.caption)
+                                    .foregroundColor(.themeSecondaryText)
                                 Spacer()
                             }
                             SecureField(LocalizedStringKey("Password"), text: $password)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .password)
                                 .contentShape(Rectangle())
-                                .onTapGesture {
-                                    focusedField = .password
-                                    if !hproseInstance.appUser.isGuest { showPasswordConfirm = true }
-                                }
+                                .onTapGesture { focusedField = .password }
                         }
 
-                        if hproseInstance.appUser.isGuest || !password.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(LocalizedStringKey("Confirm Password"))
-                                    .font(.caption)
-                                    .foregroundColor(.themeSecondaryText)
-                                SecureField(LocalizedStringKey("Confirm Password"), text: $confirmPassword)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                                    .focused($focusedField, equals: .confirmPassword)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { focusedField = .confirmPassword }
-                            }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(LocalizedStringKey("Confirm Password"))
+                                .font(.caption)
+                                .foregroundColor(.themeSecondaryText)
+                            SecureField(LocalizedStringKey("Confirm Password"), text: $confirmPassword)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .focused($focusedField, equals: .confirmPassword)
+                                .contentShape(Rectangle())
+                                .onTapGesture { focusedField = .confirmPassword }
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
@@ -251,47 +165,61 @@ struct RegistrationView: View {
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                     .scaleEffect(0.8)
                             }
-                            Text(isSubmitting ? (hproseInstance.appUser.isGuest ? NSLocalizedString("Creating Account...", comment: "Account creation progress") : NSLocalizedString("Saving...", comment: "Save progress message")) : (hproseInstance.appUser.isGuest ? NSLocalizedString("Create Account", comment: "Create account button") : NSLocalizedString("Save", comment: "Save button")))
+                            Text(isSubmitting ? NSLocalizedString("Creating Account...", comment: "Account creation progress") : NSLocalizedString("Create Account", comment: "Create account button"))
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background((isSubmitting || isUploadingAvatar) ? Color.themeAccent.opacity(0.6) : Color.themeAccent)
+                        .background(isSubmitting ? Color.themeAccent.opacity(0.6) : Color.themeAccent)
                         .foregroundColor(.white)
                         .cornerRadius(10)
                     }
-                    .disabled(isSubmitting || isUploadingAvatar)
-                    .overlay(
-                        Group {
-                            if isSubmitting {
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(Color.white.opacity(0.3), lineWidth: 2)
-                                    .overlay(
-                                        HStack {
-                                            ProgressView()
-                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                                .scaleEffect(0.8)
-                                            Text(NSLocalizedString("Saving...", comment: "Save progress message"))
-                                                .foregroundColor(.white)
-                                                .font(.caption)
-                                        }
-                                    )
-                            }
-                        }
-                    )
+                    .disabled(isSubmitting)
                 }
                 .padding()
             }
-            .navigationBarItems(trailing: Button(NSLocalizedString("Close", comment: "Close button")) { dismiss() })
-            .onAppear {
-                let appUser = hproseInstance.appUser
-                if !appUser.isGuest {
-                    username = appUser.username ?? ""
-                    alias = appUser.name ?? ""
-                    profile = appUser.profile ?? ""
-                    hostId = appUser.hostIds?.first ?? ""
-                    avatarId = appUser.avatar
-                    cloudDrivePort = appUser.cloudDrivePort?.description ?? "8010"
+            .navigationBarItems(trailing: Button(NSLocalizedString("Close", comment: "Close button")) { 
+                if hasUnsavedChanges {
+                    showExitConfirmation = true
+                } else {
+                    dismiss()
                 }
+            })
+            .overlay(
+                // Toast message overlay
+                VStack {
+                    Spacer()
+                    if showToast {
+                        ToastView(message: toastMessage, type: toastType)
+                            .padding(.bottom, 40)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .animation(.easeInOut(duration: 0.3), value: showToast)
+            )
+            .onAppear {
+                // Initialize with default values for new registration
+                cloudDrivePort = "8010"
+            }
+            .onChange(of: username) { _ in checkForChanges() }
+            .onChange(of: password) { _ in checkForChanges() }
+            .onChange(of: confirmPassword) { _ in checkForChanges() }
+            .onChange(of: alias) { _ in checkForChanges() }
+            .onChange(of: profile) { _ in checkForChanges() }
+            .onChange(of: hostId) { _ in checkForChanges() }
+            .onChange(of: cloudDrivePort) { _ in checkForChanges() }
+            .confirmationDialog(
+                NSLocalizedString("Unsaved Changes", comment: "Confirmation dialog title"),
+                isPresented: $showExitConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button(NSLocalizedString("Discard Changes", comment: "Discard changes button"), role: .destructive) {
+                    dismiss()
+                }
+                Button(NSLocalizedString("Continue Editing", comment: "Continue editing button"), role: .cancel) {
+                    // Do nothing, just dismiss the dialog
+                }
+            } message: {
+                Text(NSLocalizedString("You have unsaved changes. Are you sure you want to exit without saving?", comment: "Confirmation dialog message"))
             }
         }
     }
@@ -302,36 +230,26 @@ struct RegistrationView: View {
         
         // Validation
         if username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            errorMessage = "Username is required."
+            errorMessage = NSLocalizedString("Username is required.", comment: "Validation error")
             return
         }
-        if password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && hproseInstance.appUser.isGuest {
-            errorMessage = "Password is required."
+        if password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            errorMessage = NSLocalizedString("Password is required.", comment: "Validation error")
+            return
+        }
+        if password != confirmPassword {
+            errorMessage = NSLocalizedString("Passwords do not match.", comment: "Validation error")
             return
         }
         if hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != 0 && hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != Constants.MIMEI_ID_LENGTH {
-            errorMessage = "Host ID must be \(Constants.MIMEI_ID_LENGTH) characters if provided."
+            errorMessage = String(format: NSLocalizedString("Host ID must be %d characters if provided.", comment: "Validation error"), Constants.MIMEI_ID_LENGTH)
             return
         }
         
         // Validate cloudDrivePort
-        if let port = Int(cloudDrivePort), port < 1 || port > 65535 {
-            errorMessage = "Cloud Drive Port must be between 1 and 65535."
+        if let port = Int(cloudDrivePort), port < 8000 || port > 9000 {
+            errorMessage = NSLocalizedString("Cloud Drive Port must be between 8000 and 9000.", comment: "Validation error")
             return
-        }
-        
-        if hproseInstance.appUser.isGuest {
-            // Registration: password required and must match
-            if password != confirmPassword {
-                errorMessage = "Passwords do not match."
-                return
-            }
-        } else {
-            // Edit: password optional, but if provided, must match confirm
-            if !password.isEmpty && password != confirmPassword {
-                errorMessage = "Passwords do not match."
-                return
-            }
         }
         errorMessage = nil
         
@@ -341,21 +259,57 @@ struct RegistrationView: View {
         
         // Call the submit function asynchronously
         Task {
-            await onSubmit(
-                username,
-                password.isEmpty ? nil : password,
-                alias.isEmpty ? nil : alias,
-                profile.isEmpty ? nil : profile,
-                hostId,
-                Int(cloudDrivePort)
-            )
-            
-            // Reset submission state after completion
-            await MainActor.run {
-                isSubmitting = false
-                onSubmissionStateChange?(false)
+            do {
+                try await onSubmit(
+                    username,
+                    password.isEmpty ? nil : password,
+                    alias.isEmpty ? nil : alias,
+                    profile.isEmpty ? nil : profile,
+                    hostId,
+                    Int(cloudDrivePort)
+                )
+                
+                // Reset submission state after completion
+                await MainActor.run {
+                    isSubmitting = false
+                    onSubmissionStateChange?(false)
+                }
+            } catch {
+                // Handle registration failure with toast
+                await MainActor.run {
+                    let errorMessage = error.localizedDescription
+                    showToastMessage(errorMessage, type: .error)
+                    onRegistrationFailure?(errorMessage)
+                    isSubmitting = false
+                    onSubmissionStateChange?(false)
+                }
             }
         }
+    }
+    
+    private func showToastMessage(_ message: String, type: ToastView.ToastType) {
+        toastMessage = message
+        toastType = type
+        showToast = true
+        
+        // Auto-hide toast after appropriate duration
+        let duration: TimeInterval = type == .error ? 3.0 : 2.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            withAnimation { showToast = false }
+        }
+    }
+    
+    private func checkForChanges() {
+        // Check if any field has been modified from initial state
+        let hasChanges = !username.isEmpty || 
+                        !password.isEmpty || 
+                        !confirmPassword.isEmpty || 
+                        !alias.isEmpty || 
+                        !profile.isEmpty || 
+                        !hostId.isEmpty || 
+                        cloudDrivePort != "8010"
+        
+        hasUnsavedChanges = hasChanges
     }
 }
 

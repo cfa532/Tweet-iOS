@@ -109,7 +109,7 @@ struct ProfileView: View {
                                             }
                                         } else {
                                             isFollowing.toggle()
-                                            showToastMessage("Failed to toggle following status", type: .error)
+                                            showToastMessage(NSLocalizedString("Failed to toggle following status", comment: "Profile action error"), type: .error)
                                         }
                                     }
                                 },
@@ -211,69 +211,60 @@ struct ProfileView: View {
             }
         }
         .sheet(isPresented: $showEditSheet) {
-            RegistrationView(
+            ProfileEditView(
                 onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
                     // Set submission state
                     isSubmittingProfile = true
                     print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort?.description ?? "nil")")
-                    do {
-                        let success = try await hproseInstance.updateUserCore(
-                            password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort
-                        )
-                        print("DEBUG: Profile update result: \(success)")
-                        await MainActor.run {
-                            if success {
-                                // Update local user data
-                                if let alias = alias, !alias.isEmpty {
-                                    hproseInstance.appUser.name = alias
-                                    print("DEBUG: Updated name to: \(alias)")
-                                }
-                                if let profile = profile, !profile.isEmpty {
-                                    hproseInstance.appUser.profile = profile
-                                    print("DEBUG: Updated profile to: \(profile)")
-                                }
-                                if let hostId = hostId, !hostId.isEmpty {
-                                    hproseInstance.appUser.hostIds = [hostId]
-                                    print("DEBUG: Updated hostIds to: [\(hostId)]")
-                                }
-                                if let cloudDrivePort = cloudDrivePort {
-                                    hproseInstance.appUser.cloudDrivePort = cloudDrivePort
-                                    print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
-                                }
-                                
-                                // Clear user cache to ensure fresh data is loaded on next app launch
-                                TweetCacheManager.shared.deleteUser(mid: hproseInstance.appUser.mid)
-                                print("DEBUG: Cleared user cache for: \(hproseInstance.appUser.mid)")
-                                
-                                // Save updated user to cache with fresh data
-                                TweetCacheManager.shared.saveUser(hproseInstance.appUser)
-                                print("DEBUG: Saved updated user to cache")
-                                
-                                // Force refresh user data from server to ensure consistency
-                                Task {
-                                    do {
-                                        _ = try await hproseInstance.fetchUser(hproseInstance.appUser.mid, baseUrl: "")
-                                        print("DEBUG: Forced refresh of user data from server")
-                                    } catch {
-                                        print("DEBUG: Failed to refresh user data: \(error)")
-                                    }
-                                }
-                                
-                                showToastMessage("Profile updated successfully!", type: .success)
-                                // Keep the sheet open after successful update
-                            } else {
-                                showToastMessage("Profile update failed", type: .error)
+                    
+                    let success = try await hproseInstance.updateUserCore(
+                        password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort
+                    )
+                    print("DEBUG: Profile update result: \(success)")
+                    
+                    if success {
+                        // Update local user data
+                        if let alias = alias, !alias.isEmpty {
+                            hproseInstance.appUser.name = alias
+                            print("DEBUG: Updated name to: \(alias)")
+                        }
+                        if let profile = profile, !profile.isEmpty {
+                            hproseInstance.appUser.profile = profile
+                            print("DEBUG: Updated profile to: \(profile)")
+                        }
+                        if let hostId = hostId, !hostId.isEmpty {
+                            hproseInstance.appUser.hostIds = [hostId]
+                            print("DEBUG: Updated hostIds to: [\(hostId)]")
+                        }
+                        if let cloudDrivePort = cloudDrivePort {
+                            hproseInstance.appUser.cloudDrivePort = cloudDrivePort
+                            print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
+                        }
+                        
+                        // Clear user cache to ensure fresh data is loaded on next app launch
+                        TweetCacheManager.shared.deleteUser(mid: hproseInstance.appUser.mid)
+                        print("DEBUG: Cleared user cache for: \(hproseInstance.appUser.mid)")
+                        
+                        // Save updated user to cache with fresh data
+                        TweetCacheManager.shared.saveUser(hproseInstance.appUser)
+                        print("DEBUG: Saved updated user to cache")
+                        
+                        // Force refresh user data from server to ensure consistency
+                        Task {
+                            do {
+                                _ = try await hproseInstance.fetchUser(hproseInstance.appUser.mid, baseUrl: "")
+                                print("DEBUG: Forced refresh of user data from server")
+                            } catch {
+                                print("DEBUG: Failed to refresh user data: \(error)")
                             }
-                            // Reset submission state
-                            isSubmittingProfile = false
                         }
-                    } catch {
-                        print("DEBUG: Profile update error: \(error)")
-                        await MainActor.run {
-                            showToastMessage("Failed to update profile: \(error.localizedDescription)", type: .error)
-                            // Reset submission state
-                            isSubmittingProfile = false
-                        }
+                        
+                        // Reset submission state
+                        isSubmittingProfile = false
+                    } else {
+                        // Reset submission state
+                        isSubmittingProfile = false
+                        throw NSError(domain: "ProfileUpdate", code: -1, userInfo: [NSLocalizedDescriptionKey: "Profile update failed"])
                     }
                 },
                 onAvatarUploadStateChange: { isUploading in
@@ -290,6 +281,9 @@ struct ProfileView: View {
                     }
                 },
                 onAvatarUploadFailure: { errorMessage in
+                    showToastMessage(errorMessage, type: .error)
+                },
+                onProfileUpdateFailure: { errorMessage in
                     showToastMessage(errorMessage, type: .error)
                 }
             )
@@ -365,7 +359,7 @@ struct ProfileView: View {
                             user.fansList?.removeAll { $0 == hproseInstance.appUser.mid }
                         }
                     } else {
-                        showToastMessage("Failed to toggle following status", type: .error)
+                        showToastMessage(NSLocalizedString("Failed to toggle following status", comment: "Profile action error"), type: .error)
                     }
                 }
             )

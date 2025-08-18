@@ -28,6 +28,9 @@
 "Username *" = "用户名 *";
 "Password *" = "密码 *";
 "Confirm Password" = "确认密码";
+"New Password (optional)" = "新密码（可选）";
+"New Password" = "新密码";
+"Confirm New Password" = "确认新密码";
 "Alias" = "昵称";
 "Profile" = "个人简介";
 "Host ID (optional)" = "主机 ID（可选）";
@@ -324,3 +327,40 @@
 
 // MARK: - Badge
 "99+" = "99+";
+
+// MARK: - Validation Messages
+"Username is required." = "用户名是必填项。";
+"Password is required." = "密码是必填项。";
+"Passwords do not match." = "密码不匹配。";
+"Host ID must be %d characters if provided." = "主机 ID 如果提供，必须是 %d 个字符。";
+"Cloud Drive Port must be between 8000 and 9000." = "云盘端口必须在 8000 到 9000 之间。";
+
+// MARK: - Backend Error Messages
+"Unknown error occurred" = "发生未知错误";
+"Unknown tweet deletion error" = "未知的推文删除错误";
+"Unknown comment upload error" = "未知的评论上传错误";
+"Unknown comment deletion error" = "未知的评论删除错误";
+"Unknown upload error" = "未知的上传错误";
+"Unknown registration error." = "未知的注册错误。";
+"Unknown error" = "未知错误";
+"An error occurred. Please try again." = "发生错误，请重试。";
+"An unknown error occurred" = "发生未知错误";
+
+// MARK: - Success Messages
+"Avatar updated successfully!" = "头像更新成功！";
+"Profile updated successfully" = "个人资料更新成功";
+
+// MARK: - Chat Messages
+"Failed to send message" = "发送消息失败";
+"Sending message in background..." = "正在后台发送消息...";
+
+// MARK: - Fallback Text
+"User Name" = "用户名";
+"Unknown" = "未知";
+"Custom Label" = "自定义标签";
+
+// MARK: - Confirmation Dialogs
+"Unsaved Changes" = "未保存的更改";
+"Discard Changes" = "丢弃更改";
+"Continue Editing" = "继续编辑";
+"You have unsaved changes. Are you sure you want to exit without saving?" = "您有未保存的更改。确定要退出而不保存吗？";

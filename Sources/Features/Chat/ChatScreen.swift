@@ -231,7 +231,7 @@ struct ChatScreen: View {
             if let error = notification.userInfo?["error"] as? Error {
                 showToastMessage(error.localizedDescription, type: .error)
             } else {
-                showToastMessage("Failed to send message", type: .error)
+                showToastMessage(NSLocalizedString("Failed to send message", comment: "Chat error"), type: .error)
             }
         }
         .task {
@@ -363,7 +363,7 @@ struct ChatScreen: View {
         selectedPhotos = []
         
         // Show toast message for background upload
-        showToastMessage("Sending message in background...", type: .info)
+                        showToastMessage(NSLocalizedString("Sending message in background...", comment: "Chat status"), type: .info)
         
         // Process message in background
         Task.detached(priority: .background) {
