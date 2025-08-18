@@ -19,7 +19,7 @@ struct UserListView: View {
     @State private var errorMessage: String? = nil
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
-
+    
     // MARK: - Initialization
     init(
         title: String,
@@ -32,12 +32,12 @@ struct UserListView: View {
         self.onFollowToggle = onFollowToggle
         self.onUserTap = onUserTap
     }
-
+    
     // MARK: - Body
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 8) {
+                LazyVStack(spacing: 4) {
                     Color.clear.frame(height: 0).id("top")
                     ForEach(users) { user in
                         UserRowView(
@@ -82,7 +82,7 @@ struct UserListView: View {
             dismiss()
         }
     }
-
+    
     // MARK: - Methods
     func refreshUsers() async {
         isLoading = true
@@ -115,14 +115,14 @@ struct UserListView: View {
             }
         }
     }
-
+    
     func loadMoreUsers() {
         guard hasMoreUsers, !isLoadingMore else { return }
         isLoadingMore = true
-
+        
         let startIndex = users.count
         let endIndex = min(startIndex + loadMoreBatchSize, userIds.count)
-
+        
         Task {
             // If we've reached the end of the list, update state and return
             if startIndex >= userIds.count {
@@ -132,7 +132,7 @@ struct UserListView: View {
                 }
                 return
             }
-
+            
             let nextBatchIds = Array(userIds[startIndex..<endIndex])
             // Defensive: If no more IDs to load, stop
             if nextBatchIds.isEmpty {
@@ -142,7 +142,7 @@ struct UserListView: View {
                 }
                 return
             }
-
+            
             do {
                 let moreUsers = try await fetchUserObjects(for: nextBatchIds)
                 await MainActor.run {

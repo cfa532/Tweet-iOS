@@ -20,7 +20,7 @@ struct UserRowView: View {
         formatter.dateFormat = "MMMM yyyy"
         return "Since \(formatter.string(from: date))"
     }
-
+    
     var body: some View {
         Button {
             onTap?(user)
@@ -30,19 +30,19 @@ struct UserRowView: View {
                     Avatar(user: user, size: 48)
                 }
                 .buttonStyle(PlainButtonStyle())
-
+                
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text(user.name ?? "User Name")
                             .font(.subheadline)
                             .fontWeight(.semibold)
                         Text("@\(user.username ?? NSLocalizedString("Noone", comment: "Default username"))")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text("- " + formatRegistrationDate(user.timestamp))
-                            .font(.caption2)
+                            .font(.subheadline)
                             .foregroundColor(.gray)
                     }
+                    Text(formatRegistrationDate(user.timestamp))
+                        .font(.caption)
+                        .foregroundColor(.gray)
                     if let profile = user.profile, !profile.isEmpty {
                         Group {
                             if showFullProfile {
