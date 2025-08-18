@@ -199,6 +199,12 @@ struct ProfileTweetsSection<Header: View>: View {
                                         onRemove: { tweetId in
                                             // Handle pinned tweet removal if needed
                                             print("DEBUG: [ProfileTweetsSection] Pinned tweet removal requested for: \(tweetId)")
+                                            // Post notification to trigger deletion handling in ProfileView
+                                            NotificationCenter.default.post(
+                                                name: .tweetDeleted,
+                                                object: nil,
+                                                userInfo: ["tweetId": tweetId]
+                                            )
                                         }
                                     )
                                     .background(Color(UIColor.systemBackground))
@@ -225,7 +231,7 @@ struct ProfileTweetsSection<Header: View>: View {
                         onTweetTap(tweet)
                     },
                     onRemove: { tweetId in
-                        if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {
+                        if let idx = viewModel.tweets.firstIndex(where: { $0.mid == tweetId }) {
                             viewModel.tweets.remove(at: idx)
                         }
                     }

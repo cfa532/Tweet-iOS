@@ -425,6 +425,20 @@ struct ProfileView: View {
                 favoritesTweets.removeAll { $0.mid == tweet.mid }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
+            if let deletedTweetId = notification.userInfo?["tweetId"] as? String {
+                // Check if the deleted tweet was in the pinned list
+                if pinnedTweetIds.contains(deletedTweetId) {
+                    // Remove from pinned tweets
+                    pinnedTweets.removeAll { $0.mid == deletedTweetId }
+                    pinnedTweetIds.remove(deletedTweetId)
+                    print("DEBUG: [ProfileView] Removed deleted tweet \(deletedTweetId) from pinned tweets")
+                } else {
+                    // Tweet was in regular list, will be handled by ProfileTweetsViewModel
+                    print("DEBUG: [ProfileView] Deleted tweet \(deletedTweetId) was in regular tweets list")
+                }
+            }
+        }
 
     }
     
