@@ -284,8 +284,18 @@ struct CommentListContentView<RowView: View>: View {
                 .padding()
             } else {
                 // Show comments
-                ForEach(comments, id: \.mid) { comment in
-                    rowView(comment)
+                ForEach(Array(comments.enumerated()), id: \.element.mid) { index, comment in
+                    VStack(spacing: 0) {
+                        rowView(comment)
+                        
+                        // Add divider under each comment except the last one
+                        if index < comments.count - 1 {
+                            Rectangle()
+                                .padding(.horizontal, 4)
+                                .frame(height: 0.5)
+                                .foregroundColor(Color(.systemGray).opacity(0.4))
+                        }
+                    }
                 }
                 
                 // Sentinel view for infinite scroll
