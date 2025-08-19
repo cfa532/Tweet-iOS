@@ -40,6 +40,8 @@ extension Notification.Name {
     // MARK: - Navigation Related
     /// Posted to pop to root view
     static let popToRoot = Notification.Name("PopToRoot")
+    /// Posted to scroll to top of a view
+    static let scrollToTop = Notification.Name("ScrollToTop")
     
     // MARK: - System Errors
     static let backgroundUploadFailed = Notification.Name("backgroundUploadFailed")

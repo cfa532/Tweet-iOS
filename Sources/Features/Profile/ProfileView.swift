@@ -60,6 +60,14 @@ struct ProfileView: View {
                         // This should never be called since we'll use NavigationLink directly
                         print("DEBUG: [ProfileView] onTweetTap called - this should not happen")
                     },
+                    onAvatarTapInProfile: { tappedUser in
+                        // Check if the tapped avatar is the same as the profile user
+                        if tappedUser.mid == user.mid {
+                            // Same user - scroll to top
+                            scrollToTop()
+                        }
+                        // Different user navigation is handled by NavigationLink in TweetItemView
+                    },
                     onPinnedTweetsRefresh: refreshPinnedTweets,
                     onScroll: { offset in
                         previousScrollOffset = offset
@@ -310,6 +318,7 @@ struct ProfileView: View {
                 }
         }
 
+
         .onReceive(NotificationCenter.default.publisher(for: .bookmarkAdded)) { notification in
             if let tweet = notification.userInfo?["tweet"] as? Tweet,
                isAppUser {
@@ -360,6 +369,13 @@ struct ProfileView: View {
     }
     
     // MARK: - Helper Methods
+    
+    private func scrollToTop() {
+        // Scroll to top of the profile view
+        // This will be handled by the ScrollViewReader in ProfileTweetsSection
+        print("DEBUG: [ProfileView] Scroll to top requested")
+        NotificationCenter.default.post(name: .scrollToTop, object: nil)
+    }
     
     private func showToastMessage(_ message: String, type: ToastView.ToastType) {
         toastMessage = message

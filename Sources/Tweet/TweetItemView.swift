@@ -9,6 +9,8 @@ struct TweetItemView: View, Equatable {
     var showDeleteButton: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
     var onTap: ((Tweet) -> Void)? = nil
+    var onAvatarTapInProfile: ((User) -> Void)? = nil
+    var currentProfileUser: User? = nil
     var hideActions: Bool = false
     var backgroundColor: Color = Color(.systemBackground)
     @State private var showDetail = false
@@ -39,7 +41,9 @@ struct TweetItemView: View, Equatable {
         Group {
             if onTap == nil {
                 // Use NavigationLink when no onTap callback is provided
-                NavigationLink(value: tweet) {
+                // For retweets with no content, navigate to the original tweet
+                let navigationValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
+                NavigationLink(value: navigationValue) {
                     tweetContent
                 }
                 .buttonStyle(PlainButtonStyle())
@@ -48,7 +52,9 @@ struct TweetItemView: View, Equatable {
                 tweetContent
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        onTap?(tweet)
+                        // For retweets with no content, pass the original tweet to the callback
+                        let callbackValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
+                        onTap?(callbackValue)
                     }
             }
         }
@@ -110,9 +116,24 @@ struct TweetItemView: View, Equatable {
                 if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
                     if let user = originalTweet.author {
                         if isInProfile {
-                            Avatar(user: user) // Don't navigate if we're in the same profile
+                            // Check if this is the same user as the profile being viewed
+                            if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
+                                // Same user - scroll to top (handled by onAvatarTapInProfile)
+                                Avatar(user: user)
+                                    .onTapGesture {
+                                        onAvatarTapInProfile?(user)
+                                    }
+                            } else {
+                                // Different user - navigate to their profile
+                                NavigationLink(value: user) {
+                                    Avatar(user: user)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
                         } else {
-                            NavigationLink(value: user) {
+                            Button {
+                                onAvatarTap?(user)
+                            } label: {
                                 Avatar(user: user)
                             }
                             .buttonStyle(PlainButtonStyle())
@@ -147,7 +168,10 @@ struct TweetItemView: View, Equatable {
                     // Show retweet with content and embedded original tweet
                     if let user = tweet.author {
                         if isInProfile {
-                            Avatar(user: user) // Don't navigate if we're in the same profile
+                            Avatar(user: user)
+                                .onTapGesture {
+                                    onAvatarTapInProfile?(user)
+                                }
                         } else {
                             NavigationLink(value: user) {
                                 Avatar(user: user)
@@ -184,8 +208,11 @@ struct TweetItemView: View, Equatable {
             } else {
                 // Regular tweet
                 if let user = tweet.author {
-                    if isInProfile {
-                        Avatar(user: user) // Don't navigate if we're in the same profile
+                                            if isInProfile {
+                            Avatar(user: user)
+                                .onTapGesture {
+                                    onAvatarTapInProfile?(user)
+                                }
                     } else {
                         NavigationLink(value: user) {
                             Avatar(user: user)

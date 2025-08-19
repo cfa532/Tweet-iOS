@@ -111,6 +111,7 @@ struct ProfileTweetsSection<Header: View>: View {
     let hproseInstance: HproseInstance
     let onUserSelect: (User) -> Void
     let onTweetTap: (Tweet) -> Void
+    let onAvatarTapInProfile: ((User) -> Void)?
     let onPinnedTweetsRefresh: () async -> Void
     let onScroll: (CGFloat) -> Void
     @StateObject private var viewModel: ProfileTweetsViewModel
@@ -123,6 +124,7 @@ struct ProfileTweetsSection<Header: View>: View {
         hproseInstance: HproseInstance,
         onUserSelect: @escaping (User) -> Void,
         onTweetTap: @escaping (Tweet) -> Void,
+        onAvatarTapInProfile: ((User) -> Void)? = nil,
         onPinnedTweetsRefresh: @escaping () async -> Void,
         onScroll: @escaping (CGFloat) -> Void,
         @ViewBuilder header: @escaping () -> Header = { EmptyView() }
@@ -133,6 +135,7 @@ struct ProfileTweetsSection<Header: View>: View {
         self.hproseInstance = hproseInstance
         self.onUserSelect = onUserSelect
         self.onTweetTap = onTweetTap
+        self.onAvatarTapInProfile = onAvatarTapInProfile
         self.onPinnedTweetsRefresh = onPinnedTweetsRefresh
         self.onScroll = onScroll
         self.header = header
@@ -144,7 +147,8 @@ struct ProfileTweetsSection<Header: View>: View {
     }
     
     var body: some View {
-        TweetListView<TweetItemView>(
+        ScrollViewReader { proxy in
+            TweetListView<TweetItemView>(
             title: "",
             tweets: $viewModel.tweets,
             tweetFetcher: { page, size, isFromCache, shouldCache in
@@ -173,6 +177,7 @@ struct ProfileTweetsSection<Header: View>: View {
                 AnyView(
                     VStack(spacing: 0) {
                         header()
+                            .id("top")
                         if !pinnedTweets.isEmpty {
                             VStack(spacing: 0) {
                                 Text(LocalizedStringKey("Pinned"))
@@ -186,26 +191,28 @@ struct ProfileTweetsSection<Header: View>: View {
                                 
                                 // Display pinned tweets
                                 ForEach(pinnedTweets, id: \.mid) { pinnedTweet in
-                                    TweetItemView(
-                                        tweet: pinnedTweet,
-                                        isPinned: true,
-                                        isInProfile: true,
-                                        showDeleteButton: user.mid == hproseInstance.appUser.mid,
-                                        onAvatarTap: { user in
-                                            onUserSelect(user)
-                                        },
-                                        onTap: nil, // Will use NavigationLink instead
-                                        onRemove: { tweetId in
-                                            // Handle pinned tweet removal if needed
-                                            print("DEBUG: [ProfileTweetsSection] Pinned tweet removal requested for: \(tweetId)")
-                                            // Post notification to trigger deletion handling in ProfileView
-                                            NotificationCenter.default.post(
-                                                name: .tweetDeleted,
-                                                object: nil,
-                                                userInfo: ["tweetId": tweetId]
-                                            )
-                                        }
-                                    )
+                                                                    TweetItemView(
+                                    tweet: pinnedTweet,
+                                    isPinned: true,
+                                    isInProfile: true,
+                                    showDeleteButton: user.mid == hproseInstance.appUser.mid,
+                                    onAvatarTap: { user in
+                                        onUserSelect(user)
+                                    },
+                                    onTap: nil, // Will use NavigationLink instead
+                                    onAvatarTapInProfile: onAvatarTapInProfile,
+                                    currentProfileUser: user,
+                                    onRemove: { tweetId in
+                                        // Handle pinned tweet removal if needed
+                                        print("DEBUG: [ProfileTweetsSection] Pinned tweet removal requested for: \(tweetId)")
+                                        // Post notification to trigger deletion handling in ProfileView
+                                        NotificationCenter.default.post(
+                                            name: .tweetDeleted,
+                                            object: nil,
+                                            userInfo: ["tweetId": tweetId]
+                                        )
+                                    }
+                                )
                                     .background(Color(UIColor.systemBackground))
                                 }
                             }
@@ -228,6 +235,8 @@ struct ProfileTweetsSection<Header: View>: View {
                         onUserSelect(user)
                     },
                     onTap: nil, // Will use NavigationLink instead
+                    onAvatarTapInProfile: onAvatarTapInProfile,
+                    currentProfileUser: user,
                     onRemove: { tweetId in
                         if let idx = viewModel.tweets.firstIndex(where: { $0.mid == tweetId }) {
                             viewModel.tweets.remove(at: idx)
@@ -249,6 +258,12 @@ struct ProfileTweetsSection<Header: View>: View {
         }
         .onDisappear {
             print("DEBUG: [ProfileTweetsSection] Section disappeared")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .scrollToTop)) { _ in
+            withAnimation(.easeInOut(duration: 0.5)) {
+                proxy.scrollTo("top", anchor: .top)
+            }
+        }
         }
     }
     
