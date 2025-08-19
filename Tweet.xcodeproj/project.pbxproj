@@ -13,7 +13,6 @@
 		1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A27 /* ComposeTweetView.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A29 /* ComposeTweetViewModel.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A2A /* PollCreationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A2B /* PollCreationView.swift */; };
-		1A1A1A1A1A1A1A1A1A1A1A2C /* LocationPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A2D /* LocationPickerView.swift */; };
 		460680E82E16264C00D9D15A /* VideoCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680E72E16264C00D9D15A /* VideoCacheManager.swift */; };
 		460680EA2E16303100D9D15A /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680E92E16302C00D9D15A /* Constants.swift */; };
 		460680EC2E165F8300D9D15A /* LocalizationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680EB2E165F8300D9D15A /* LocalizationHelper.swift */; };
@@ -115,7 +114,6 @@
 		1A1A1A1A1A1A1A1A1A1A1A27 /* ComposeTweetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ComposeTweetView.swift; path = Sources/Features/Compose/ComposeTweetView.swift; sourceTree = SOURCE_ROOT; };
 		1A1A1A1A1A1A1A1A1A1A1A29 /* ComposeTweetViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ComposeTweetViewModel.swift; path = Sources/Features/Compose/ComposeTweetViewModel.swift; sourceTree = SOURCE_ROOT; };
 		1A1A1A1A1A1A1A1A1A1A1A2B /* PollCreationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PollCreationView.swift; path = Sources/Features/Compose/PollCreationView.swift; sourceTree = SOURCE_ROOT; };
-		1A1A1A1A1A1A1A1A1A1A1A2D /* LocationPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LocationPickerView.swift; path = Sources/Features/Compose/LocationPickerView.swift; sourceTree = SOURCE_ROOT; };
 		460680E72E16264C00D9D15A /* VideoCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCacheManager.swift; sourceTree = "<group>"; };
 		460680E92E16302C00D9D15A /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
 		460680EB2E165F8300D9D15A /* LocalizationHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizationHelper.swift; sourceTree = "<group>"; };
@@ -360,7 +358,6 @@
 				1A1A1A1A1A1A1A1A1A1A1A27 /* ComposeTweetView.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A29 /* ComposeTweetViewModel.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A2B /* PollCreationView.swift */,
-				1A1A1A1A1A1A1A1A1A1A1A2D /* LocationPickerView.swift */,
 				46E5B3562DDF74B500AEF31F /* CommentComposeView.swift */,
 				46E5B3582DE005EC00AEF31F /* ThumbnailView.swift */,
 			);
@@ -698,7 +695,6 @@
 				46E5B36D2DE3617400AEF31F /* AvatarFullScreenView.swift in Sources */,
 				469A99502DEBFBC100954049 /* Tweet.swift in Sources */,
 				46E5B3512DDCA00000AEF31F /* Settings.swift in Sources */,
-				1A1A1A1A1A1A1A1A1A1A1A2C /* LocationPickerView.swift in Sources */,
 				46E5B3672DE2DD2900AEF31F /* TweetListView.swift in Sources */,
 				46E5B33A2DDA315700AEF31F /* RecommendedTweetView.swift in Sources */,
 				46E5B33B2DDA315700AEF31F /* TweetItemView.swift in Sources */,

@@ -312,7 +312,7 @@ struct ThumbnailView: View {
         try data.write(to: tempURL)
         defer { try? FileManager.default.removeItem(at: tempURL) }
         
-        let asset = AVAsset(url: tempURL)
+        let asset = AVURLAsset(url: tempURL)
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.maximumSize = CGSize(width: 400, height: 400) // Higher resolution for better quality
@@ -323,7 +323,20 @@ struct ThumbnailView: View {
         for timePosition in timePositions {
             do {
                 let time = CMTime(seconds: timePosition, preferredTimescale: 1)
-                let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
+                
+                // Use the new async generateCGImageAsynchronouslyForTime method
+                let cgImage = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CGImage, Error>) in
+                    imageGenerator.generateCGImageAsynchronously(for: time) { cgImage, actualTime, error in
+                        if let error = error {
+                            continuation.resume(throwing: error)
+                        } else if let cgImage = cgImage {
+                            continuation.resume(returning: cgImage)
+                        } else {
+                            continuation.resume(throwing: NSError(domain: "ThumbnailGeneration", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to generate image"]))
+                        }
+                    }
+                }
+                
                 let originalImage = UIImage(cgImage: cgImage)
                 
                 // Center-crop thumbnail to fill

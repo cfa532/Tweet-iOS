@@ -117,12 +117,20 @@ struct MediaCell: View, Equatable {
                                 mode: .mediaCell
                             )
                             
-                            // Invisible overlay to prevent tap propagation to parent views
+                            // Invisible overlay to prevent tap propagation to parent views and add long press
                             Color.clear
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     // This prevents the tap from reaching parent views
                                     showFullScreen = true
+                                }
+                                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
+                                    print("DEBUG: [MEDIA CELL \(attachment.mid)] 🔄 LONG PRESS DETECTED - reloading video")
+                                    // Force reload the video by triggering a refresh
+                                    shouldLoadVideo = false
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                        shouldLoadVideo = true
+                                    }
                                 }
                         }
                         .onAppear {
@@ -180,12 +188,17 @@ struct MediaCell: View, Equatable {
                                     handleTap()
                                 }
                             
-                            // Invisible overlay to prevent tap propagation to parent views
+                            // Invisible overlay to prevent tap propagation to parent views and add long press
                             Color.clear
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     // This prevents the tap from reaching parent views
                                     handleTap()
+                                }
+                                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
+                                    print("DEBUG: [MEDIA CELL \(attachment.mid)] 🔄 LONG PRESS DETECTED on placeholder - loading video")
+                                    // Force load the video
+                                    shouldLoadVideo = true
                                 }
                         }
                     }

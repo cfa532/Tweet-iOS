@@ -65,7 +65,6 @@ struct CommentMenu: View {
         }
         // Attempt actual deletion
         if let response = try? await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid),
-           let commentId = response["commentId"] as? String,
            let count = response["count"] as? Int {
             // Update parent tweet's comment count
             await MainActor.run {

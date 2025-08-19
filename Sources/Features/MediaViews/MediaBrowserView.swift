@@ -147,8 +147,8 @@ struct MediaBrowserView: View {
             UIApplication.shared.isIdleTimerDisabled = false
             controlsTimer?.invalidate()
             
-            // No need to restore global mute state - let it remain unchanged
-            print("DEBUG: [MediaBrowserView] Exiting full-screen - preserving video playback state")
+            // Stop video playback when exiting full screen
+            print("DEBUG: [MediaBrowserView] Exiting full-screen - stopping video playback")
         }
     }
     
@@ -212,8 +212,8 @@ struct MediaBrowserView: View {
         SimpleVideoPlayer(
             url: url,
             mid: attachment.mid,
-            isVisible: index == currentIndex, // Only visible if this is the current video
-            autoPlay: index == currentIndex, // Only auto-play if this is the current video
+            isVisible: isVisible && index == currentIndex, // Consider both parent visibility and current index
+            autoPlay: isVisible && index == currentIndex, // Only auto-play if parent is visible and this is current
             contentType: attachment.type,
             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
             isMuted: isMuted, // Use local mute state

@@ -285,7 +285,7 @@ struct SimpleVideoPlayer: View {
                             onVideoTap?()
                         }
                         .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] 🔄 LONG PRESS DETECTED - reloading video")
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] 🔄 LONG PRESS DETECTED (direct) - reloading video")
                             print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Current retry count: \(retryCount)")
                             retryLoad()
                         } onPressingChanged: { pressing in
@@ -347,6 +347,7 @@ struct SimpleVideoPlayer: View {
                             
                             if retryCount < 3 {
                                 Button(NSLocalizedString("Retry", comment: "Retry button")) {
+                                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] 🔄 RETRY BUTTON TAPPED - reloading video")
                                     retryLoad()
                                 }
                                 .foregroundColor(.blue)
@@ -354,14 +355,16 @@ struct SimpleVideoPlayer: View {
                                 .padding(.vertical, 8)
                                 .background(Color.white.opacity(0.2))
                                 .cornerRadius(8)
+                                .allowsHitTesting(true) // Ensure button is tappable
                             }
                         }
                     )
                     .onTapGesture {
                         if retryCount < 3 {
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] 🔄 BACKGROUND TAP - reloading video")
                             retryLoad()
                         }
-                        }
+                    }
                     } else {
                 Color.gray.opacity(0.3)
                     .overlay(
