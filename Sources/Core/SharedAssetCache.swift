@@ -22,25 +22,6 @@ class SharedAssetCache: ObservableObject {
         setupAppLifecycleNotifications()
     }
     
-    deinit {
-        // Clean up when the cache is deallocated
-        cleanupTimer?.invalidate()
-        cleanupTimer = nil
-        
-        // Cancel all loading tasks
-        loadingTasks.values.forEach { $0.cancel() }
-        loadingTasks.removeAll()
-        
-        // Cancel all preload tasks
-        preloadTasks.values.forEach { $0.cancel() }
-        preloadTasks.removeAll()
-        
-        // Remove notification observers
-        NotificationCenter.default.removeObserver(self)
-        
-        print("DEBUG: [SHARED ASSET CACHE] Cache deallocated")
-    }
-    
     // MARK: - Cache Storage
     private var assetCache: [String: AVAsset] = [:]
     private var playerCache: [String: AVPlayer] = [:]
@@ -159,17 +140,6 @@ class SharedAssetCache: ObservableObject {
     func getCachedPlayer(for url: URL) -> AVPlayer? {
         let cacheKey = url.absoluteString
         if let player = playerCache[cacheKey] {
-            // Validate that the player is still valid before returning it
-            guard let playerItem = player.currentItem,
-                  playerItem.status != .failed else {
-                print("DEBUG: [SHARED ASSET CACHE] Cached player is invalid, removing from cache")
-                playerCache.removeValue(forKey: cacheKey)
-                cacheTimestamps.removeValue(forKey: cacheKey)
-                return nil
-            }
-            
-
-            
             cacheTimestamps[cacheKey] = Date() // Update access time
             print("DEBUG: [SHARED ASSET CACHE] Using cached player for: \(url.lastPathComponent)")
             return player
@@ -389,16 +359,6 @@ class SharedAssetCache: ObservableObject {
                 self?.handleAppDidBecomeActive()
             }
         }
-        
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.willResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleAppWillResignActive()
-            }
-        }
     }
     
     private func handleAppWillEnterForeground() {
@@ -413,25 +373,9 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
-    private func handleAppWillResignActive() {
-        print("DEBUG: [SHARED ASSET CACHE] App will resign active - pausing all cached players")
-        // Pause all cached players to prevent crashes when app goes to background
-        for (urlString, player) in playerCache {
-            player.pause()
-            print("DEBUG: [SHARED ASSET CACHE] Paused cached player for: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
-        }
-    }
-    
     private func refreshCachedPlayers() {
         // Refresh all cached players to ensure they show cached content
         for (urlString, player) in playerCache {
-            // Validate player before accessing its properties
-            guard let playerItem = player.currentItem,
-                  playerItem.status != .failed else {
-                print("DEBUG: [SHARED ASSET CACHE] Skipping invalid cached player for: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
-                continue
-            }
-            
             print("DEBUG: [SHARED ASSET CACHE] Refreshing cached player for: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
             
             // Force a seek to refresh the video layer
