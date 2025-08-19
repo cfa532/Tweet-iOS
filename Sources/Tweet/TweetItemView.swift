@@ -196,10 +196,10 @@ struct TweetItemView: View, Equatable {
                             tweet: originalTweet,
                             isPinned: isPinned,
                             onTap: onTap, // Pass onTap directly (nil when using NavigationLink)
-                            backgroundColor: Color(.systemGray4).opacity(0.7)
+                            backgroundColor: Color(.systemGray4).opacity(0.5)
                         )
-                        .cornerRadius(6)
-                        .padding(.leading, -16)
+                        .cornerRadius(8)
+                        .padding(.leading, -4)
                         
                         if !hideActions {
                             TweetActionButtonsView(tweet: tweet)
@@ -307,10 +307,10 @@ struct EmbeddedTweetView: View, Equatable {
                     TweetItemHeaderView(tweet: tweet)
                     Spacer()
                 }
-                .padding(.top, -8)
+                .padding(.top, 0)
                 
                 TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
-                .padding(.top, -12)
+                .padding(.top, 0)
             }
         }
         .padding(8)

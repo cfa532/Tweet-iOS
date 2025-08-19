@@ -466,14 +466,14 @@ struct TweetDetailView: View {
                         .padding(.horizontal)
                         .padding(.vertical, 8)
                     // If this is a retweet with content, show quoted tweet without actions
-                    if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
+                    if let _ = tweet.originalTweetId, let _ = tweet.originalAuthorId {
                         if let orig = originalTweet {
                             VStack {
                                 TweetItemView(
                                     tweet: orig,
                                     onTap: nil, // Enable NavigationLink for quoted tweet
                                     hideActions: true,
-                                    backgroundColor: Color(.systemGray4).opacity(0.7)
+                                    backgroundColor: Color(.systemGray4).opacity(0.5)
                                 )
                                 
                             }
