@@ -99,32 +99,14 @@ struct CommentListView<RowView: View>: View {
             }
             // Listen to all notifications
             .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notif in
-                print("[CommentListView] Received newCommentAdded notification")
-                print("[CommentListView] Notification userInfo: \(notif.userInfo ?? [:])")
-                
                 if let comment = notif.userInfo?["comment"] as? Tweet,
-                   let parentTweetId = notif.userInfo?["parentTweetId"] as? String {
-                    print("[CommentListView] Extracted comment: \(comment.mid)")
-                    print("[CommentListView] Parent tweet ID: \(parentTweetId)")
-                    
-                    if let notification = notifications.first(where: { $0.name == .newCommentAdded }) {
-                        print("[CommentListView] Found matching notification")
-                        // Check if this comment belongs to the current tweet
-                        if notification.shouldAccept(comment) {
-                            print("[CommentListView] Comment accepted, executing action")
-                            notification.action(comment, parentTweetId)
-                        } else {
-                            print("[CommentListView] Comment rejected by shouldAccept")
-                        }
-                    } else {
-                        print("[CommentListView] No matching notification found")
-                    }
-                } else {
-                    print("[CommentListView] Failed to extract comment or parentTweetId from notification")
+                   let parentTweetId = notif.userInfo?["parentTweetId"] as? String,
+                   let notification = notifications.first(where: { $0.name == .newCommentAdded }),
+                   notification.shouldAccept(comment) {
+                    notification.action(comment, parentTweetId)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .commentDeleted)) { notif in
-                print("[CommentListView] Received commentDeleted notification")
                 if let comment = notif.userInfo?["comment"] as? Tweet,
                    let parentTweetId = notif.userInfo?["parentTweetId"] as? String,
                    let notification = notifications.first(where: { $0.name == .commentDeleted }),
@@ -137,14 +119,12 @@ struct CommentListView<RowView: View>: View {
 
     // MARK: - Methods
     func performInitialLoad() async {
-        print("[CommentListView] Starting initial load")
         isLoading = true
         initialLoadComplete = false
         currentPage = 0
         comments = []
         
         do {
-            print("[CommentListView] Loading page 0")
             let newComments = try await commentFetcher(0, pageSize)
             let validComments = newComments.compactMap { $0 }
             
@@ -152,17 +132,13 @@ struct CommentListView<RowView: View>: View {
                 comments = validComments
                 hasMoreComments = newComments.count >= pageSize
                 initialLoadComplete = true
-                print("[CommentListView] Loaded \(comments.count) valid comments out of \(newComments.count) total, hasMoreComments: \(hasMoreComments)")
             }
         } catch {
-            print("[CommentListView] Error during initial load: \(error)")
             errorMessage = error.localizedDescription
             await MainActor.run {
                 initialLoadComplete = true
             }
         }
-        
-        print("[CommentListView] Initial load complete - total valid comments: \(comments.count), hasMoreComments: \(hasMoreComments)")
     }
 
     func refreshComments() async {
@@ -177,55 +153,41 @@ struct CommentListView<RowView: View>: View {
     }
 
     func loadMoreComments(page: UInt? = nil) {
-        print("[CommentListView] loadMoreComments called - hasMoreComments: \(hasMoreComments), isLoadingMore: \(isLoadingMore), initialLoadComplete: \(initialLoadComplete), currentPage: \(currentPage)")
         guard hasMoreComments, !isLoadingMore, initialLoadComplete else { 
-            print("[CommentListView] loadMoreComments guard failed - hasMoreComments: \(hasMoreComments), isLoadingMore: \(isLoadingMore), initialLoadComplete: \(initialLoadComplete)")
             return 
         }
         
         let nextPage = page ?? (currentPage + 1)
         let pageSize = self.pageSize
         
-        print("[CommentListView] Loading page \(nextPage) with pageSize \(pageSize), current total comments: \(comments.count)")
-        
         Task {
             isLoadingMore = true
             
             do {
-                print("[CommentListView] Starting to load more comments - page: \(nextPage)")
                 let newComments = try await commentFetcher(nextPage, pageSize)
                 let validComments = newComments.compactMap { $0 }
                 
                 await MainActor.run {
-                    print("[CommentListView] Got \(newComments.count) total comments from page \(nextPage), \(validComments.count) valid")
-                    
                     if !validComments.isEmpty {
-                        let previousCount = comments.count
                         comments.append(contentsOf: validComments)
-                        print("[CommentListView] Added \(validComments.count) comments, total now: \(comments.count) (was \(previousCount))")
                     }
                     
                     // Use the same logic as TweetListView
                     if newComments.count < pageSize {
                         hasMoreComments = false
-                        print("[CommentListView] No more comments available (count \(newComments.count) < pageSize \(pageSize))")
                     } else if validComments.isEmpty {
                         // All comments are nil, auto-increment and try again
-                        print("[CommentListView] All comments nil for page \(nextPage), auto-incrementing page")
                         isLoadingMore = false
                         loadMoreComments(page: nextPage + 1)
                         return
                     } else {
                         // We got some valid comments, continue normally
                         hasMoreComments = true
-                        print("[CommentListView] Got valid comments, continuing to next page")
                     }
                     
                     currentPage = nextPage
-                    print("[CommentListView] Updated currentPage to \(currentPage), hasMoreComments: \(hasMoreComments)")
                 }
             } catch {
-                print("[CommentListView] Error loading more comments: \(error)")
                 await MainActor.run {
                     hasMoreComments = false
                 }
@@ -303,12 +265,9 @@ struct CommentListContentView<RowView: View>: View {
                     ProgressView()
                         .frame(height: 40)
                         .onAppear {
-                            print("[CommentListContentView] ProgressView appeared - initialLoadComplete: \(initialLoadComplete), isLoadingMore: \(isLoadingMore)")
                             if initialLoadComplete && !isLoadingMore {
-                                print("[CommentListContentView] Scheduling loadMoreComments")
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                                     if initialLoadComplete && !isLoadingMore {
-                                        print("[CommentListContentView] Calling loadMoreComments")
                                         loadMoreComments()
                                     }
                                 }

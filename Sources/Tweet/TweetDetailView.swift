@@ -480,11 +480,6 @@ struct TweetDetailView: View {
                                 .padding(.horizontal)
                                 .padding(.vertical, 8)
                         }
-                    } else {
-                        Text("No quote tweet to show")
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
                     }
                 }
             }
@@ -551,8 +546,8 @@ struct TweetDetailView: View {
                     name: .commentDeleted,
                     key: "comment",
                     shouldAccept: { comment in
-                        // Only accept comment deletions that belong to this tweet
-                        comment.originalTweetId == displayTweet.mid
+                        // Accept all comment deletions - let the action function filter
+                        return true
                     },
                     action: { comment, parentTweetId in
                         if parentTweetId == displayTweet.mid {

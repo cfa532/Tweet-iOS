@@ -59,7 +59,7 @@ struct CommentMenu: View {
         NotificationCenter.default.post(
             name: .commentDeleted,
             object: nil,
-            userInfo: ["comment": comment]
+            userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
         )
         await MainActor.run {
             parentTweet.commentCount = max(0, (parentTweet.commentCount ?? 1) - 1)
@@ -79,7 +79,7 @@ struct CommentMenu: View {
             NotificationCenter.default.post(
                 name: .commentRestored,
                 object: nil,
-                userInfo: ["comment": comment]
+                userInfo: ["comment": comment, "parentTweetId": parentTweet.mid]
             )
             throw NSError(domain: "CommentService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete comment"])
         }
