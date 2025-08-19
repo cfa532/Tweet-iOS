@@ -28,7 +28,6 @@ struct CommentMenu: View {
                         do {
                             try await deleteComment(comment)
                         } catch {
-                            print("Comment deletion failed. \(comment)")
                             await MainActor.run {
                                 alertMessage = "Failed to delete comment. \(error)"
                                 showAlert = true
@@ -68,8 +67,6 @@ struct CommentMenu: View {
         if let response = try? await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: comment.mid),
            let commentId = response["commentId"] as? String,
            let count = response["count"] as? Int {
-            print("Successfully deleted comment: \(commentId) \(count)")
-            
             // Update parent tweet's comment count
             await MainActor.run {
                 parentTweet.commentCount = count

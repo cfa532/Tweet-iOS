@@ -75,7 +75,6 @@ struct DetailVideoPlayerView: View {
             detailVideoManager.currentPlayer?.isMuted = newMuteState
         }
         .onChange(of: detailVideoManager.currentPlayer) { _, player in
-            print("DEBUG: [DETAIL VIDEO PLAYER] Player changed: \(player != nil ? "available" : "nil")")
             if player != nil {
                 isLoading = false
             }
@@ -83,7 +82,6 @@ struct DetailVideoPlayerView: View {
     }
     
     private func setupPlayer() {
-        print("DEBUG: [DETAIL VIDEO PLAYER] Setting up player for: \(mid)")
         Task {
             await MainActor.run {
                 isLoading = true
@@ -97,7 +95,6 @@ struct DetailVideoPlayerView: View {
     private func cleanupPlayer() {
         // Pause the video when detail view disappears
         detailVideoManager.currentPlayer?.pause()
-        print("DEBUG: [DETAIL VIDEO PLAYER] Cleanup - paused video for: \(mid)")
     }
 }
 
@@ -405,7 +402,6 @@ struct TweetDetailView: View {
             
             // Clear the DetailVideoManager to prevent cached player issues
             DetailVideoManager.shared.clearCurrentVideo()
-            print("DEBUG: [TweetDetailView] Cleared DetailVideoManager on disappear")
         }
     }
     
@@ -490,7 +486,6 @@ struct TweetDetailView: View {
         TweetActionButtonsView(
             tweet: displayTweet,
             onCommentTap: {
-                print("DEBUG: [TweetDetailView] Comment button tapped, setting shouldShowExpandedReply = true")
                 shouldShowExpandedReply = true
             }
         )
@@ -593,7 +588,7 @@ struct TweetDetailView: View {
                     }
                 }
             } catch {
-                print("Error refreshing tweet: \(error)")
+                // Error refreshing tweet
             }
         }
     }
@@ -601,7 +596,6 @@ struct TweetDetailView: View {
     private func refreshComments() {
         Task {
             do {
-                print("[TweetDetailView] Starting comments refresh")
                 var allNewComments: [Tweet] = []
                 var currentPage: UInt = 0
                 let pageSize: UInt = 20
@@ -609,7 +603,6 @@ struct TweetDetailView: View {
                 
                 // Load pages until we find overlap with existing comments
                 while !hasOverlap {
-                    print("[TweetDetailView] Loading comments page \(currentPage)")
                     let freshComments = try await hproseInstance.fetchComments(
                         displayTweet,
                         pageNumber: currentPage,
@@ -618,7 +611,6 @@ struct TweetDetailView: View {
                     let validComments = freshComments.compactMap { $0 }
                     
                     if validComments.isEmpty {
-                        print("[TweetDetailView] No more comments found on page \(currentPage)")
                         break
                     }
                     
@@ -629,10 +621,8 @@ struct TweetDetailView: View {
                     if newCommentsOnThisPage.count < validComments.count {
                         // Found overlap - some comments on this page already exist
                         hasOverlap = true
-                        print("[TweetDetailView] Found overlap on page \(currentPage) - \(newCommentsOnThisPage.count) new out of \(validComments.count) total")
                     } else {
                         // No overlap - all comments on this page are new
-                        print("[TweetDetailView] No overlap on page \(currentPage) - all \(validComments.count) comments are new")
                     }
                     
                     // Add new comments from this page
@@ -640,7 +630,6 @@ struct TweetDetailView: View {
                     
                     // If we got fewer comments than pageSize, we've reached the end
                     if freshComments.count < pageSize {
-                        print("[TweetDetailView] Reached end of comments (page \(currentPage) has \(freshComments.count) < \(pageSize))")
                         break
                     }
                     
@@ -651,13 +640,10 @@ struct TweetDetailView: View {
                     if !allNewComments.isEmpty {
                         // Insert all new comments at the beginning (most recent first)
                         comments.insert(contentsOf: allNewComments, at: 0)
-                        print("[TweetDetailView] Merged \(allNewComments.count) new comments - total: \(comments.count)")
-                    } else {
-                        print("[TweetDetailView] No new comments found - total: \(comments.count)")
                     }
                 }
             } catch {
-                print("Error refreshing comments: \(error)")
+                // Error refreshing comments
             }
         }
     }
