@@ -63,7 +63,7 @@ struct MediaBrowserView: View {
             }
             .tabViewStyle(.page)
             .indexViewStyle(.page(backgroundDisplayMode: .always))
-            .onChange(of: currentIndex) { newIndex in
+            .onChange(of: currentIndex) { _, newIndex in
                 print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
                 previousIndex = newIndex
             }
@@ -230,7 +230,7 @@ struct MediaBrowserView: View {
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .onChange(of: isMuted) { _ in
+        .onChange(of: isMuted) { _, _ in
             // Local mute state changes will be handled by SimpleVideoPlayer's onChange
         }
     }

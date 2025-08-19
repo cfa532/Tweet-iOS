@@ -525,7 +525,7 @@ struct MediaGridView: View {
                 videoManager.stopSequentialPlayback()
             }
             // Removed duplicate .onAppear block that was causing infinite loop
-            .onChange(of: isVisible) { newVisibility in
+            .onChange(of: isVisible) { _, newVisibility in
                 // Handle visibility changes
                 if !newVisibility {
                     // Grid became invisible - stop video playback

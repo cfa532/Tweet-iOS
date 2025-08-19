@@ -106,7 +106,7 @@ struct TweetListView<RowView: View>: View {
                             .padding(.bottom, 40)
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.easeInOut, value: showToast)
+                    .animation(.easeInOut(duration: 0.3), value: showToast)
                 }
             }
             .refreshable {

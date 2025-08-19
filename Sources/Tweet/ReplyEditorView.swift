@@ -77,7 +77,7 @@ struct ReplyEditorView: View {
                 isExpanded = true
             }
         }
-        .onChange(of: initialExpanded) { newValue in
+        .onChange(of: initialExpanded) { _, newValue in
             // Respond to changes in initialExpanded parameter
             print("DEBUG: [ReplyEditorView] initialExpanded changed to: \(newValue)")
             if newValue {

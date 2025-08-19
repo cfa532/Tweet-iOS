@@ -39,7 +39,7 @@ struct SettingsView: View {
                     Toggle(NSLocalizedString("Dark Mode", comment: "Dark mode toggle"), isOn: $themeManager.isDarkMode)
                     
                     Toggle(LocalizedStringKey("Mute Videos"), isOn: $muteState.isMuted)
-                        .onChange(of: muteState.isMuted) { newValue in
+                        .onChange(of: muteState.isMuted) { _, newValue in
                             // The MuteState will automatically save to preferences
                             print("DEBUG: [SETTINGS] Mute setting changed to: \(newValue)")
                         }

@@ -86,7 +86,7 @@ struct SimpleAudioPlayer: View {
         .onDisappear {
             player?.pause()
         }
-        .onChange(of: muteState.isMuted) { newMuteState in
+        .onChange(of: muteState.isMuted) { _, newMuteState in
             // Update player mute state when global mute state changes
             player?.isMuted = newMuteState
             print("DEBUG: [AUDIO PLAYER] Global mute state changed to: \(newMuteState)")

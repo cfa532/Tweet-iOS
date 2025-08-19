@@ -64,17 +64,17 @@ struct DetailVideoPlayerView: View {
         .onDisappear {
             cleanupPlayer()
         }
-        .onChange(of: isVisible) { visible in
+        .onChange(of: isVisible) { _, visible in
             if visible {
                 detailVideoManager.currentPlayer?.play()
             } else {
                 detailVideoManager.currentPlayer?.pause()
             }
         }
-        .onChange(of: isMuted) { newMuteState in
+        .onChange(of: isMuted) { _, newMuteState in
             detailVideoManager.currentPlayer?.isMuted = newMuteState
         }
-        .onChange(of: detailVideoManager.currentPlayer) { player in
+        .onChange(of: detailVideoManager.currentPlayer) { _, player in
             print("DEBUG: [DETAIL VIDEO PLAYER] Player changed: \(player != nil ? "available" : "nil")")
             if player != nil {
                 isLoading = false
@@ -379,7 +379,7 @@ struct TweetDetailView: View {
                 dismiss()
             }
         }
-        .onChange(of: originalTweet) { _ in
+        .onChange(of: originalTweet) { _, _ in
             // Clear cache when originalTweet changes
             cachedDisplayTweet = nil
         }

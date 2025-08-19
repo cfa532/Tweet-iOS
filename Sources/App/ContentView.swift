@@ -36,7 +36,7 @@ struct ContentView: View {
                     NavigationStack(path: $chatNavigationPath) {
                         ChatListScreen()
                     }
-                    .onChange(of: chatNavigationPath.count) { count in
+                    .onChange(of: chatNavigationPath.count) { _, count in
                         isInChatScreen = count > 0
                     }
                 } else if selectedTab == 3 {

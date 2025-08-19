@@ -48,7 +48,7 @@ struct Avatar: View {
                         loadAvatar(from: avatarUrl)
                     }
                 }
-                .onChange(of: user.avatarUrl) { _ in
+                .onChange(of: user.avatarUrl) { _, _ in
                     // Reset and reload when avatar URL changes
                     cachedImage = nil
                     if let avatarUrl = user.avatarUrl {

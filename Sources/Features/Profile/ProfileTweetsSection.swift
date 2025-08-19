@@ -244,10 +244,10 @@ struct ProfileTweetsSection<Header: View>: View {
         .refreshable {
             await onPinnedTweetsRefresh()
         }
-        .onChange(of: user.mid) { _ in
+        .onChange(of: user.mid) { _, _ in
             viewModel.tweets.removeAll()
         }
-        .onChange(of: pinnedTweetIds) { newPinnedTweetIds in
+        .onChange(of: pinnedTweetIds) { _, newPinnedTweetIds in
             print("DEBUG: [ProfileTweetsSection] Pinned tweet IDs changed to: \(newPinnedTweetIds)")
             viewModel.updatePinnedTweetIds(newPinnedTweetIds)
         }

@@ -97,7 +97,7 @@ struct ProfileEditView: View {
                     }
                     .padding(.bottom, 8)
                     .photosPicker(isPresented: $showImagePicker, selection: $selectedPhoto, matching: .images)
-                    .onChange(of: selectedPhoto) { newItem in
+                    .onChange(of: selectedPhoto) { _, newItem in
                         if let item = newItem {
                             Task {
                                 isUploadingAvatar = true
@@ -210,7 +210,7 @@ struct ProfileEditView: View {
                             .focused($focusedField, equals: .hostId)
                             .contentShape(Rectangle())
                             .onTapGesture { focusedField = .hostId }
-                            .onChange(of: hostId) { newValue in
+                            .onChange(of: hostId) { _, newValue in
                                 if newValue.count > Constants.MIMEI_ID_LENGTH {
                                     hostId = String(newValue.prefix(Constants.MIMEI_ID_LENGTH))
                                 }
@@ -227,7 +227,7 @@ struct ProfileEditView: View {
                             .focused($focusedField, equals: .cloudDrivePort)
                             .contentShape(Rectangle())
                             .onTapGesture { focusedField = .cloudDrivePort }
-                            .onChange(of: cloudDrivePort) { newValue in
+                            .onChange(of: cloudDrivePort) { _, newValue in
                                 // Only allow numeric input
                                 let filtered = newValue.filter { $0.isNumber }
                                 if filtered != newValue {
@@ -303,12 +303,12 @@ struct ProfileEditView: View {
                     "cloudDrivePort": cloudDrivePort
                 ]
             }
-            .onChange(of: password) { _ in checkForChanges() }
-            .onChange(of: confirmPassword) { _ in checkForChanges() }
-            .onChange(of: alias) { _ in checkForChanges() }
-            .onChange(of: profile) { _ in checkForChanges() }
-            .onChange(of: hostId) { _ in checkForChanges() }
-            .onChange(of: cloudDrivePort) { _ in checkForChanges() }
+            .onChange(of: password) { _, _ in checkForChanges() }
+            .onChange(of: confirmPassword) { _, _ in checkForChanges() }
+            .onChange(of: alias) { _, _ in checkForChanges() }
+            .onChange(of: profile) { _, _ in checkForChanges() }
+                          .onChange(of: hostId) { _, _ in checkForChanges() }
+              .onChange(of: cloudDrivePort) { _, _ in checkForChanges() }
             .confirmationDialog(
                 NSLocalizedString("Unsaved Changes", comment: "Confirmation dialog title"),
                 isPresented: $showExitConfirmation,

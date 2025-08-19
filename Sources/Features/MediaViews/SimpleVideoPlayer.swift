@@ -166,11 +166,11 @@ struct SimpleVideoPlayer: View {
             .onDisappear {
             player?.pause()
         }
-        .onChange(of: isMuted) { newMuteState in
+        .onChange(of: isMuted) { _, newMuteState in
             print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Mute state changed to: \(newMuteState)")
             player?.isMuted = newMuteState
         }
-        .onChange(of: currentAutoPlay) { shouldAutoPlay in
+        .onChange(of: currentAutoPlay) { _, shouldAutoPlay in
             // Handle autoPlay state changes (reactive to VideoManager)
             print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] AutoPlay changed to: \(shouldAutoPlay), isVisible: \(isVisible), player exists: \(player != nil), isLoading: \(isLoading)")
             checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
@@ -179,7 +179,7 @@ struct SimpleVideoPlayer: View {
                 player?.pause()
             }
         }
-        .onChange(of: isVisible) { visible in
+        .onChange(of: isVisible) { _, visible in
             // Handle visibility changes
             print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Visibility changed to: \(visible), autoPlay: \(currentAutoPlay), player exists: \(player != nil), isLoading: \(isLoading), loadFailed: \(loadFailed)")
             
@@ -196,7 +196,7 @@ struct SimpleVideoPlayer: View {
                 player?.pause()
             }
         }
-        .onChange(of: player) { newPlayer in
+        .onChange(of: player) { _, newPlayer in
             // When player becomes available, check if we should autoplay
             if newPlayer != nil {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player became available - checking playback conditions")

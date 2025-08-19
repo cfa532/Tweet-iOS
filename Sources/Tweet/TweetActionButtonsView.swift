@@ -296,7 +296,7 @@ struct TweetActionButtonsView: View {
                 CommentComposeView(tweet: tweet, commentsVM: CommentsViewModel(hproseInstance: hproseInstance, parentTweet: tweet))
             }
         }
-        .onChange(of: showCommentCompose) { isPresented in
+        .onChange(of: showCommentCompose) { _, isPresented in
             // Video management is now handled locally per grid
         }
         .sheet(isPresented: $showShareSheet) {

@@ -69,14 +69,14 @@ struct ChatScreen: View {
                     }
                     .padding()
                 }
-                .onChange(of: messages.count) { _ in
+                .onChange(of: messages.count) { _, _ in
                     if let lastMessage = messages.last {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
                     }
                 }
-                .onChange(of: keyboardHeight) { newHeight in
+                .onChange(of: keyboardHeight) { _, newHeight in
                     // Scroll to bottom when keyboard appears/disappears
                     print("[ChatScreen] Keyboard height changed to: \(newHeight)")
                     if let lastMessage = messages.last {
@@ -248,7 +248,7 @@ struct ChatScreen: View {
             
             print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
         }
-        .onChange(of: selectedPhotos) { items in
+        .onChange(of: selectedPhotos) { _, items in
             Task {
                 await handlePhotoSelection(items)
             }

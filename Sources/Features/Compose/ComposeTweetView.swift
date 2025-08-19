@@ -93,7 +93,7 @@ struct ComposeTweetView: View {
                             .padding(.bottom, 40)
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.easeInOut, value: viewModel.showToast)
+                    .animation(.easeInOut(duration: 0.3), value: viewModel.showToast)
                 }
             }
             .navigationTitle(NSLocalizedString("New Tweet", comment: "New tweet screen title"))

@@ -128,7 +128,7 @@ struct MediaCell: View, Equatable {
                         .onAppear {
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - isVisible: \(isVisible), autoPlay: \(videoManager.shouldPlayVideo(for: attachment.mid))")
                         }
-                        .onChange(of: isVisible) { newIsVisible in
+                        .onChange(of: isVisible) { _, newIsVisible in
                             print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
                         }
 
@@ -278,12 +278,12 @@ struct MediaCell: View, Equatable {
             // Cancel any ongoing preload tasks
             cancelPreloadTask()
         }
-        .onChange(of: isVisible) { newValue in
+        .onChange(of: isVisible) { _, newValue in
             if newValue && image == nil {
                 loadImage()
             }
         }
-        .onChange(of: forceRefreshTrigger) { _ in
+        .onChange(of: forceRefreshTrigger) { _, _ in
             // Force refresh triggered by MediaGridView - update video state
             if isVideoAttachment {
                 print("DEBUG: [MEDIA CELL \(attachment.mid)] Force refresh triggered - updating video state")
@@ -311,7 +311,7 @@ struct MediaCell: View, Equatable {
                 initialIndex: attachmentIndex
             )
         }
-        .onChange(of: showFullScreen) { newValue in
+        .onChange(of: showFullScreen) { _, newValue in
             if newValue {
                 // Video is going into full-screen mode
                 VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)

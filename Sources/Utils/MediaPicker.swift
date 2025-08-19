@@ -46,7 +46,7 @@ struct MediaPicker: View {
                     .foregroundColor(.blue)
                     .font(.system(size: 20))
             }
-            .onChange(of: selectedItems) { items in
+            .onChange(of: selectedItems) { _, _ in
                 onItemAdded?()
             }
             
