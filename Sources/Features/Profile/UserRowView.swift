@@ -22,11 +22,9 @@ struct UserRowView: View {
     }
     
     var body: some View {
-        Button {
-            onTap?(user)
-        } label: {
+        VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 4) {
-                NavigationLink(destination: ProfileView(user: user, onLogout: nil)) {
+                NavigationLink(value: user) {
                     Avatar(user: user, size: 48)
                 }
                 .buttonStyle(PlainButtonStyle())
@@ -100,12 +98,12 @@ struct UserRowView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .onAppear {
+                isFollowing = hproseInstance.appUser.followingList?.contains(user.mid) ?? false
+            }
+            
+            Divider()
+                .padding(.horizontal, 8)
         }
-        .buttonStyle(PlainButtonStyle())
-        .onAppear {
-            isFollowing = hproseInstance.appUser.followingList?.contains(user.mid) ?? false
-        }
-        Divider()
-            .padding(.horizontal, 8)
     }
 }

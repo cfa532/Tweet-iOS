@@ -3,14 +3,14 @@ import SwiftUI
 @available(iOS 16.0, *)
 struct FollowingsTweetView: View {
     let onAvatarTap: (User) -> Void
-    @Binding var selectedTweet: Tweet?
+    let onTweetTap: (Tweet) -> Void
     let onScroll: ((CGFloat) -> Void)?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @StateObject private var viewModel: FollowingsTweetViewModel
 
-    init(onAvatarTap: @escaping (User) -> Void, selectedTweet: Binding<Tweet?>, onScroll: ((CGFloat) -> Void)? = nil) {
+    init(onAvatarTap: @escaping (User) -> Void, onTweetTap: @escaping (Tweet) -> Void, onScroll: ((CGFloat) -> Void)? = nil) {
         self.onAvatarTap = onAvatarTap
-        self._selectedTweet = selectedTweet
+        self.onTweetTap = onTweetTap
         self.onScroll = onScroll
         self._viewModel = StateObject(wrappedValue: FollowingsTweetViewModel(hproseInstance: HproseInstance.shared))
     }
@@ -62,7 +62,7 @@ struct FollowingsTweetView: View {
                             onAvatarTap(user)
                         },
                         onTap: { tweet in
-                            selectedTweet = tweet
+                            onTweetTap(tweet)
                         },
                         onRemove: { tweetId in
                             if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {

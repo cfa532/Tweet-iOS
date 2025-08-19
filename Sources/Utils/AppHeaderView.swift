@@ -4,20 +4,22 @@ import SwiftUI
 struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
-    @State private var showProfile = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     var body: some View {
         HStack {
             // Left: User Avatar
-            Button(action: {
-                if hproseInstance.appUser.isGuest {
+            if hproseInstance.appUser.isGuest {
+                Button(action: {
                     isLoginSheetPresented = true
-                } else {
-                    showProfile = true
+                }) {
+                    Avatar(user: hproseInstance.appUser, size: 36)
                 }
-            }) {
-                Avatar(user: hproseInstance.appUser, size: 36)
+            } else {
+                NavigationLink(value: hproseInstance.appUser) {
+                    Avatar(user: hproseInstance.appUser, size: 36)
+                }
+                .buttonStyle(PlainButtonStyle())
             }
             
             Spacer()
@@ -47,8 +49,6 @@ struct AppHeaderView: View {
         .sheet(isPresented: $isSettingsSheetPresented) {
             SettingsView()
         }
-        .navigationDestination(isPresented: $showProfile) {
-            ProfileView(user: hproseInstance.appUser, onLogout: {})
-        }
+
     }
 }

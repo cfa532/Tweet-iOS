@@ -9,10 +9,8 @@ struct ProfileView: View {
     
     /// Navigation state
     @State private var selectedUser: User? = nil
-    @State private var selectedTweet: Tweet? = nil
     @State private var showUserList = false
     @State private var showTweetList = false
-    @State private var showTweetDetail = false
 
     @State private var userListType: UserListType = .FOLLOWER
     @State private var tweetListType: TweetListType = .BOOKMARKS
@@ -58,10 +56,8 @@ struct ProfileView: View {
                     user: user,
                     hproseInstance: hproseInstance,
                     onUserSelect: { user in selectedUser = user },
-                    onTweetTap: { tweet in 
-                        print("DEBUG: [ProfileView] Tweet tapped: \(tweet.mid)")
-                        selectedTweet = tweet
-                        showTweetDetail = true
+                    onTweetTap: { tweet in
+                        // Navigation will be handled by parent
                     },
                     onPinnedTweetsRefresh: refreshPinnedTweets,
                     onScroll: { offset in
@@ -312,24 +308,7 @@ struct ProfileView: View {
                     }
                 }
         }
-        .navigationDestination(isPresented: Binding(
-            get: { selectedUser != nil },
-            set: { if !$0 { selectedUser = nil } }
-        )) {
-            if let selectedUser = selectedUser {
-                ProfileView(user: selectedUser, onLogout: nil)
-            }
-        }
-        .navigationDestination(isPresented: $showTweetDetail) {
-            if let selectedTweet = selectedTweet {
-                TweetDetailView(tweet: selectedTweet)
-                    .onDisappear {
-                        // Reset navigation state when TweetDetailView disappears
-                        print("DEBUG: [ProfileView] TweetDetailView disappeared, resetting navigation state")
-                        showTweetDetail = false
-                    }
-            }
-        }
+
         .onReceive(NotificationCenter.default.publisher(for: .bookmarkAdded)) { notification in
             if let tweet = notification.userInfo?["tweet"] as? Tweet,
                isAppUser {
@@ -518,7 +497,10 @@ struct ProfileView: View {
                         tweet: tweet,
                         showDeleteButton: isAppUser,
                         onAvatarTap: { user in selectedUser = user },
-                        onTap: { tweet in selectedTweet = tweet }
+                        onTap: { tweet in
+                            print("DEBUG: [ProfileView] Tweet tapped: \(tweet.mid)")
+                            // NavigationLink will handle this automatically
+                        }
                     )
                 }
             )
@@ -544,7 +526,10 @@ struct ProfileView: View {
                         tweet: tweet,
                         showDeleteButton: isAppUser,
                         onAvatarTap: { user in selectedUser = user },
-                        onTap: { tweet in selectedTweet = tweet }
+                        onTap: { tweet in
+                            print("DEBUG: [ProfileView] Tweet tapped: \(tweet.mid)")
+                            // NavigationLink will handle this automatically
+                        }
                     )
                 }
             )

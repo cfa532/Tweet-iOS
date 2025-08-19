@@ -131,10 +131,6 @@ struct TweetItemView: View, Equatable {
                         TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
                     }
                     .padding(.top, -8)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        onTap?(tweet)
-                    }
                     TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                     .padding(.top, -12)
                     if !hideActions {
@@ -154,6 +150,7 @@ struct TweetItemView: View, Equatable {
         .onTapGesture {
             onTap?(tweet)
         }
+
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
                 tweet: tweet,

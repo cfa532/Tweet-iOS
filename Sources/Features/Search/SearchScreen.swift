@@ -111,7 +111,7 @@ struct UserSearchResultRow: View {
     let user: User
     
     var body: some View {
-        NavigationLink(destination: ProfileView(user: user, onLogout: nil)) {
+        NavigationLink(value: user) {
             HStack {
                 Avatar(user: user, size: 40)
                 

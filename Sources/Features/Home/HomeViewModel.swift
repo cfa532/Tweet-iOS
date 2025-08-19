@@ -15,7 +15,6 @@ struct HomeView: View {
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isNavigationVisible = true
     @State private var selectedUser: User? = nil
-    @State private var selectedTweet: Tweet? = nil
     @State private var refreshKey = UUID() // Force refresh of FollowingsTweetView
     
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -65,7 +64,9 @@ struct HomeView: View {
                             navigationPath.append(user)
                             onNavigateToProfile?()
                         },
-                        selectedTweet: $selectedTweet,
+                        onTweetTap: { tweet in
+                            navigationPath.append(tweet)
+                        },
                         onScroll: { offset in
                             handleScroll(offset: offset)
                         }
@@ -98,14 +99,7 @@ struct HomeView: View {
                     TweetDetailView(tweet: tweet)
                 }
             }
-            .navigationDestination(isPresented: Binding(
-                get: { selectedTweet != nil },
-                set: { if !$0 { selectedTweet = nil } }
-            )) {
-                if let selectedTweet = selectedTweet {
-                    TweetDetailView(tweet: selectedTweet)
-                }
-            }
+
             .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
                 Task {
                     await MainActor.run {
