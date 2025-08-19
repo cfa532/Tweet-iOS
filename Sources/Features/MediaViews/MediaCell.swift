@@ -138,13 +138,6 @@ struct MediaCell: View, Equatable {
                                 VStack {
                                     Spacer()
                                     HStack {
-                                        // Video time remaining label in bottom left corner
-                                        if videoManager.shouldPlayVideo(for: attachment.mid) && isVisible {
-                                            VideoTimeRemainingLabel(mid: attachment.mid)
-                                                .padding(.leading, 8)
-                                                .padding(.bottom, 8)
-                                        }
-                                        
                                         Spacer()
                                         
                                         // Mute button in bottom right corner (only if showMuteButton is true)
@@ -463,77 +456,6 @@ struct MuteButton: View {
     }
 }
 
-// MARK: - VideoTimeRemainingLabel
-struct VideoTimeRemainingLabel: View {
-    let mid: String
-    @State private var isVisible = true
-    @State private var currentTime: Double = 0
-    @State private var duration: Double = 0
-    @State private var timeObserver: Any?
-    @State private var hideTimer: Timer?
-    
-    var body: some View {
-        Group {
-            if isVisible {
-                Text(formatTimeRemaining())
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.gray.opacity(0.4))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .transition(.opacity)
-            }
-        }
-        .onAppear {
-            setupTimeObserver()
-            startHideTimer()
-        }
-        .onDisappear {
-            removeTimeObserver()
-            stopHideTimer()
-        }
-    }
-    
-    private func setupTimeObserver() {
-        // Time observer functionality moved to SimpleVideoPlayer
-        // This component is simplified to avoid conflicts with new system
-    }
-    
-    private func removeTimeObserver() {
-        // Time observer functionality moved to SimpleVideoPlayer
-        timeObserver = nil
-    }
-    
-    private func startHideTimer() {
-        // Cancel any existing timer
-        stopHideTimer()
-        
-        // Start new timer to hide after 3 seconds
-        hideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            withAnimation(.easeInOut(duration: 0.3)) {
-                isVisible = false
-            }
-        }
-    }
-    
-    private func stopHideTimer() {
-        hideTimer?.invalidate()
-        hideTimer = nil
-    }
-    
-    private func formatTimeRemaining() -> String {
-        let remaining = max(0, duration - currentTime)
-        let hours = Int(remaining) / 3600
-        let minutes = (Int(remaining) % 3600) / 60
-        let seconds = Int(remaining) % 60
-        
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            return String(format: "%d:%02d", minutes, seconds)
-        }
-    }
-}
+
 
 
