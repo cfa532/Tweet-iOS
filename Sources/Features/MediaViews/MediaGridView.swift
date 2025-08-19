@@ -450,12 +450,12 @@ struct MediaGridView: View {
                 // Mark the grid as visible
                 isVisible = true
                 
-                // Check if running in simulator - disable complex video features to prevent crashes
-                #if targetEnvironment(simulator)
-                print("DEBUG: [MediaGridView] Running in simulator - disabling video playback to prevent crashes")
-                shouldLoadVideo = false
-                return
-                #endif
+                // Simulator video playback disabled - uncomment to re-enable
+                // #if targetEnvironment(simulator)
+                // print("DEBUG: [MediaGridView] Running in simulator - disabling video playback to prevent crashes")
+                // shouldLoadVideo = false
+                // return
+                // #endif
                 
                 // Setup sequential playback for videos
                 let videoMids = attachments.enumerated().compactMap { index, attachment in

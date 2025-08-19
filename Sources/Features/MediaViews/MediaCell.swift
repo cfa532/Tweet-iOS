@@ -79,22 +79,22 @@ struct MediaCell: View, Equatable {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
-                    // Check if running in simulator - show placeholder instead of video player
-                    #if targetEnvironment(simulator)
-                    // Show placeholder for videos in simulator to prevent crashes
-                    ZStack {
-                        Color.gray.opacity(0.3)
-                            .aspectRatio(contentMode: .fill)
-                            .overlay(
-                                Image(systemName: "play.circle.fill")
-                                    .font(.system(size: 50))
-                                    .foregroundColor(.white)
-                            )
-                            .onTapGesture {
-                                showFullScreen = true
-                            }
-                    }
-                    #else
+                    // Simulator video playback disabled - uncomment to re-enable placeholder
+                    // #if targetEnvironment(simulator)
+                    // // Show placeholder for videos in simulator to prevent crashes
+                    // ZStack {
+                    //     Color.gray.opacity(0.3)
+                    //         .aspectRatio(contentMode: .fill)
+                    //         .overlay(
+                    //             Image(systemName: "play.circle.fill")
+                    //                 .font(.system(size: 50))
+                    //                 .foregroundColor(.white)
+                    //         )
+                    //         .onTapGesture {
+                    //             showFullScreen = true
+                    //         }
+                    // }
+                    // #else
                     // Only create video player if we should load video
                     if shouldLoadVideo {
                         ZStack {
@@ -194,7 +194,7 @@ struct MediaCell: View, Equatable {
                                 }
                         }
                     }
-                    #endif
+                    // #endif
                 case "audio":
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
