@@ -4,6 +4,9 @@ import UserNotifications
 class NotificationManager: NSObject {
     static let shared = NotificationManager()
     
+    // Private property to track badge count since UNUserNotificationCenter doesn't provide a way to read it
+    private var currentBadgeCount: Int = 0
+    
     private override init() {
         super.init()
     }
@@ -35,12 +38,15 @@ class NotificationManager: NSObject {
     func scheduleChatNotification(for message: ChatMessage, senderName: String) {
         let center = UNUserNotificationCenter.current()
         
+        // Increment badge count for new notification
+        let newBadgeCount = getCurrentBadgeCount() + 1
+        
         // Create notification content
         let content = UNMutableNotificationContent()
         content.title = senderName
         content.body = message.content ?? "New message"
         content.sound = .default
-        content.badge = NSNumber(value: getCurrentBadgeCount() + 1)
+        content.badge = NSNumber(value: newBadgeCount)
         
         // Add custom data for handling notification tap
         content.userInfo = [
@@ -65,6 +71,8 @@ class NotificationManager: NSObject {
             if let error = error {
                 print("[NotificationManager] Error scheduling notification: \(error)")
             } else {
+                // Update internal badge count after successful scheduling
+                self.updateBadgeCount(newBadgeCount)
                 print("[NotificationManager] Chat notification scheduled for message: \(message.id)")
             }
         }
@@ -74,10 +82,18 @@ class NotificationManager: NSObject {
     
     func updateBadgeCount(_ count: Int) {
         DispatchQueue.main.async {
+            // Update internal counter
+            self.currentBadgeCount = count
+            
             // If count is more than 9, set to -1 to show "N" (iOS default behavior)
             let badgeNumber = count > 9 ? -1 : count
-            UIApplication.shared.applicationIconBadgeNumber = badgeNumber
-            print("[NotificationManager] Updated app badge count to: \(count > 9 ? "N" : "\(count)")")
+            UNUserNotificationCenter.current().setBadgeCount(badgeNumber) { error in
+                if let error = error {
+                    print("[NotificationManager] Error setting badge count: \(error)")
+                } else {
+                    print("[NotificationManager] Updated app badge count to: \(count > 9 ? "N" : "\(count)")")
+                }
+            }
         }
     }
     
@@ -96,9 +112,7 @@ class NotificationManager: NSObject {
     }
     
     private func getCurrentBadgeCount() -> Int {
-        let badgeNumber = UIApplication.shared.applicationIconBadgeNumber
-        // If badge shows "N" (represented as -1), return 10 as the minimum count for "N"
-        return badgeNumber == -1 ? 10 : badgeNumber
+        return currentBadgeCount
     }
     
     // MARK: - Notification Actions

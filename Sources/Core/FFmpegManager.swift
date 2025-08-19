@@ -87,7 +87,7 @@ class FFmpegManager {
         let url = URL(fileURLWithPath: filePath)
         
         do {
-            let asset = AVAsset(url: url)
+            let asset = AVURLAsset(url: url)
             let duration = try await asset.load(.duration)
             let tracks = try await asset.loadTracks(withMediaType: .video)
             
@@ -122,25 +122,45 @@ class FFmpegManager {
         // This would require implementing a C function for thumbnail extraction
         // For now, we'll use AVFoundation
         let url = URL(fileURLWithPath: videoPath)
-        let asset = AVAsset(url: url)
+        let asset = AVURLAsset(url: url)
         
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.maximumSize = CGSize(width: 320, height: 240)
         
-        do {
-            let cgImage = try imageGenerator.copyCGImage(at: CMTime(seconds: time, preferredTimescale: 1), actualTime: nil)
+        // Use a semaphore to make the async call synchronous for this method
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Result<Void, Error> = .failure(FFmpegError.thumbnailGenerationFailed)
+        
+        imageGenerator.generateCGImageAsynchronously(for: CMTime(seconds: time, preferredTimescale: 1)) { cgImage, actualTime, error in
+            defer { semaphore.signal() }
+            
+            if let error = error {
+                result = .failure(error)
+                return
+            }
+            
+            guard let cgImage = cgImage else {
+                result = .failure(FFmpegError.thumbnailGenerationFailed)
+                return
+            }
+            
             let uiImage = UIImage(cgImage: cgImage)
             
             if let data = uiImage.jpegData(compressionQuality: 0.8) {
-                try data.write(to: URL(fileURLWithPath: outputPath))
-                return .success(())
+                do {
+                    try data.write(to: URL(fileURLWithPath: outputPath))
+                    result = .success(())
+                } catch {
+                    result = .failure(error)
+                }
             } else {
-                return .failure(FFmpegError.thumbnailGenerationFailed)
+                result = .failure(FFmpegError.thumbnailGenerationFailed)
             }
-        } catch {
-            return .failure(FFmpegError.thumbnailGenerationFailed)
         }
+        
+        semaphore.wait()
+        return result
     }
     
     /// Convert video to medium quality HLS only (for testing)

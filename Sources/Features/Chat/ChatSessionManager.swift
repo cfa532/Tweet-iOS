@@ -10,6 +10,9 @@ class ChatSessionManager: ObservableObject {
     @Published var chatSessions: [ChatSession] = []
     @Published var unreadMessageCount: Int = 0
     
+    // Private property to track badge count since UNUserNotificationCenter doesn't provide a way to read it
+    private var currentBadgeCount: Int = 0
+    
     private let chatCacheManager = ChatCacheManager.shared
     private let hproseInstance = HproseInstance.shared
     
@@ -371,10 +374,14 @@ class ChatSessionManager: ObservableObject {
         }
         
         // Update badge count
-        let currentBadge = UIApplication.shared.applicationIconBadgeNumber
-        let newBadge = currentBadge > 9 ? -1 : currentBadge + 1
+        currentBadgeCount += 1
+        let newBadge = currentBadgeCount > 9 ? -1 : currentBadgeCount
         DispatchQueue.main.async {
-            UIApplication.shared.applicationIconBadgeNumber = newBadge
+            UNUserNotificationCenter.current().setBadgeCount(newBadge) { error in
+                if let error = error {
+                    print("[ChatSessionManager] Error setting badge count: \(error)")
+                }
+            }
         }
         
         print("[ChatSessionManager] Triggered notification for message from \(senderName)")

@@ -91,7 +91,7 @@ class SharedAssetCache: ObservableObject {
         let task = Task<AVAsset, Error> {
             print("DEBUG: [SHARED ASSET CACHE] Creating new asset for: \(url.lastPathComponent)")
             let resolvedURL = await resolveHLSURL(url)
-            let asset = AVAsset(url: resolvedURL)
+            let asset = AVURLAsset(url: resolvedURL)
             
             // Cache the asset
             await MainActor.run {

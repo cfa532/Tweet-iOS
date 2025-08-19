@@ -72,7 +72,11 @@ struct ChatListScreen: View {
             
             // Clear badge count when chat list is opened
             DispatchQueue.main.async {
-                UIApplication.shared.applicationIconBadgeNumber = 0
+                UNUserNotificationCenter.current().setBadgeCount(0) { error in
+                    if let error = error {
+                        print("[ChatListScreen] Error clearing badge count: \(error)")
+                    }
+                }
             }
         }
         .onDisappear {

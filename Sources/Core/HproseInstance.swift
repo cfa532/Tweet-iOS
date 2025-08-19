@@ -1403,7 +1403,7 @@ final class HproseInstance: ObservableObject {
                     try data.write(to: tempURL)
                     defer { try? FileManager.default.removeItem(at: tempURL) }
                     
-                    let asset = AVAsset(url: tempURL)
+                    let asset = AVURLAsset(url: tempURL)
                     
                     // Check if it has video tracks
                     let videoTracks = try await asset.loadTracks(withMediaType: .video)

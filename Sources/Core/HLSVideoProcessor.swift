@@ -21,7 +21,7 @@ public class HLSVideoProcessor {
     public func getVideoAspectRatio(filePath: String) async throws -> Float? {
         print("DEBUG: Getting video aspect ratio for file: \(filePath)")
         
-        let asset = AVAsset(url: URL(fileURLWithPath: filePath))
+        let asset = AVURLAsset(url: URL(fileURLWithPath: filePath))
         let tracks = try await asset.loadTracks(withMediaType: .video)
         guard let track = tracks.first else { return nil }
         
@@ -71,7 +71,7 @@ public class HLSVideoProcessor {
     public func getVideoDimensions(filePath: String) async -> CGSize {
         print("DEBUG: Getting video dimensions for file: \(filePath)")
         
-        let asset = AVAsset(url: URL(fileURLWithPath: filePath))
+        let asset = AVURLAsset(url: URL(fileURLWithPath: filePath))
         
         do {
             let tracks = try await asset.loadTracks(withMediaType: .video)
