@@ -361,6 +361,41 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
+    deinit {
+        print("DEBUG: [SHARED ASSET CACHE] Deinitializing - cleaning up resources")
+        
+        // Invalidate timer
+        cleanupTimer?.invalidate()
+        cleanupTimer = nil
+        
+        // Cancel all loading tasks
+        for (_, task) in loadingTasks {
+            task.cancel()
+        }
+        loadingTasks.removeAll()
+        
+        // Cancel all preload tasks
+        for (_, task) in preloadTasks {
+            task.cancel()
+        }
+        preloadTasks.removeAll()
+        
+        // Pause and clean up all cached players
+        for (_, player) in playerCache {
+            player.pause()
+        }
+        playerCache.removeAll()
+        
+        // Clear all caches
+        assetCache.removeAll()
+        cacheTimestamps.removeAll()
+        
+        // Remove NotificationCenter observers
+        NotificationCenter.default.removeObserver(self)
+        
+        print("DEBUG: [SHARED ASSET CACHE] Cleanup completed")
+    }
+    
     private func handleAppWillEnterForeground() {
         print("DEBUG: [SHARED ASSET CACHE] App will enter foreground - refreshing cached players")
         refreshCachedPlayers()
@@ -368,7 +403,9 @@ class SharedAssetCache: ObservableObject {
     
     private func handleAppDidBecomeActive() {
         print("DEBUG: [SHARED ASSET CACHE] App did become active - ensuring cached players are ready")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        // Use Task to avoid potential MainActor deadlock
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
             self.refreshCachedPlayers()
         }
     }

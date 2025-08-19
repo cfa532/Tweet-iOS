@@ -623,7 +623,8 @@ struct VideoLayerRefreshView: UIViewRepresentable {
             object: nil,
             queue: .main
         ) { _ in
-            self.refreshVideoLayer()
+            // Note: refreshVideoLayer is not called here to avoid retain cycles
+            // The main refresh logic is handled in the parent SimpleVideoPlayer
         }
         
         return view
@@ -631,6 +632,11 @@ struct VideoLayerRefreshView: UIViewRepresentable {
     
     func updateUIView(_ uiView: UIView, context: Context) {
         // This view is used to access the underlying video layer for refresh
+    }
+    
+    func dismantleUIView(_ uiView: UIView, coordinator: ()) {
+        // Clean up observers when view is dismantled
+        NotificationCenter.default.removeObserver(uiView)
     }
     
     private func refreshVideoLayer() {
