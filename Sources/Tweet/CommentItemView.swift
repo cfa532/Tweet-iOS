@@ -14,6 +14,7 @@ struct CommentItemView: View {
     var isInProfile: Bool = false
     var onAvatarTap: ((User) -> Void)? = nil
     var onTap: ((Tweet) -> Void)? = nil
+    var linkToComment: Bool = false // Enable NavigationLink for the comment
     var commentsVM: CommentsViewModel? = nil
     var backgroundColor: Color = Color(.systemBackground)
     @State private var showDetail = false
@@ -23,42 +24,15 @@ struct CommentItemView: View {
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if let user = comment.author {
-                Button(action: {
-                    if !isInProfile {
-                        onAvatarTap?(user)
-                    }
-                }) {
-                    Avatar(user: user)
+        Group {
+            if linkToComment {
+                NavigationLink(value: comment) {
+                    commentContent
                 }
                 .buttonStyle(PlainButtonStyle())
+            } else {
+                commentContent
             }
-            VStack(alignment: .leading) {
-                HStack {
-                    TweetItemHeaderView(tweet: comment)
-                    CommentMenu(comment: comment, parentTweet: parentTweet)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { onTap?(comment) }
-                .padding(.top, -8)
-                
-                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible)
-                .padding(.top, -12)
-                
-                TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
-                    .padding(.top, 8)
-            }
-        }
-        .padding()
-        .padding(.horizontal, -4)
-        .background(backgroundColor)
-        .if(backgroundColor != Color(.systemBackground)) { view in
-            view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onTap?(comment)
         }
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
@@ -73,6 +47,40 @@ struct CommentItemView: View {
         .onDisappear {
             isVisible = false
             comment.isVisible = false
+        }
+    }
+    
+    private var commentContent: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if let user = comment.author {
+                if isInProfile {
+                    Avatar(user: user) // Don't navigate if we're in the same profile
+                } else {
+                    NavigationLink(value: user) {
+                        Avatar(user: user)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+            VStack(alignment: .leading) {
+                HStack {
+                    TweetItemHeaderView(tweet: comment)
+                    CommentMenu(comment: comment, parentTweet: parentTweet)
+                }
+                .padding(.top, -8)
+                
+                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible)
+                .padding(.top, -12)
+                
+                TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
+                    .padding(.top, 8)
+            }
+        }
+        .padding()
+        .padding(.horizontal, -4)
+        .background(backgroundColor)
+        .if(backgroundColor != Color(.systemBackground)) { view in
+            view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
         }
     }
 }

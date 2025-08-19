@@ -88,6 +88,16 @@ struct HomeView: View {
                     onReturnToHome?()
                 })
             }
+            .navigationDestination(for: Tweet.self) { tweet in
+                // Check if this is a comment (has originalTweetId) to decide which view to show
+                if tweet.originalTweetId != nil {
+                    // This is a comment, show CommentDetailView with a parent fetcher
+                    CommentDetailViewWithParent(comment: tweet)
+                } else {
+                    // This is a regular tweet, show TweetDetailView
+                    TweetDetailView(tweet: tweet)
+                }
+            }
             .navigationDestination(isPresented: Binding(
                 get: { selectedTweet != nil },
                 set: { if !$0 { selectedTweet = nil } }

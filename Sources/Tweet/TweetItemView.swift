@@ -41,14 +41,14 @@ struct TweetItemView: View, Equatable {
                 // This is a retweet
                 if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
                     if let user = originalTweet.author {
-                        Button(action: {
-                            if !isInProfile {
-                                onAvatarTap?(user)
+                        if isInProfile {
+                            Avatar(user: user) // Don't navigate if we're in the same profile
+                        } else {
+                            NavigationLink(value: user) {
+                                Avatar(user: user)
                             }
-                        }) {
-                            Avatar(user: user)
+                            .buttonStyle(PlainButtonStyle())
                         }
-                        .buttonStyle(PlainButtonStyle())
                     }
 
                     // Show original tweet with retweet menu.
@@ -78,14 +78,14 @@ struct TweetItemView: View, Equatable {
                 } else {
                     // Show retweet with content and embedded original tweet
                     if let user = tweet.author {
-                        Button(action: {
-                            if !isInProfile {
-                                onAvatarTap?(user)
+                        if isInProfile {
+                            Avatar(user: user) // Don't navigate if we're in the same profile
+                        } else {
+                            NavigationLink(value: user) {
+                                Avatar(user: user)
                             }
-                        }) {
-                            Avatar(user: user)
+                            .buttonStyle(PlainButtonStyle())
                         }
-                        .buttonStyle(PlainButtonStyle())
                     }
 
                     VStack(alignment: .leading) {
@@ -116,14 +116,14 @@ struct TweetItemView: View, Equatable {
             } else {
                 // Regular tweet
                 if let user = tweet.author {
-                    Button(action: {
-                        if !isInProfile {
-                            onAvatarTap?(user)
+                    if isInProfile {
+                        Avatar(user: user) // Don't navigate if we're in the same profile
+                    } else {
+                        NavigationLink(value: user) {
+                            Avatar(user: user)
                         }
-                    }) {
-                        Avatar(user: user)
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    .buttonStyle(PlainButtonStyle())
                 }
                 VStack(alignment: .leading) {
                     HStack {

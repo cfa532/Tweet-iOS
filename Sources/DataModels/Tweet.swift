@@ -539,3 +539,9 @@ extension Tweet: Equatable {
         return lhs.mid == rhs.mid
     }
 }
+
+extension Tweet: Hashable {
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(mid)
+    }
+}

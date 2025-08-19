@@ -272,8 +272,6 @@ struct TweetDetailView: View {
     @State private var showLoginSheet = false
     @State private var pinnedTweets: [[String: Any]] = []
     @State private var originalTweet: Tweet?
-    @State private var selectedUser: User? = nil
-    @State private var selectedComment: Tweet? = nil
     @State private var refreshTimer: Timer?
     @State private var comments: [Tweet] = []
     @State private var showToast = false
@@ -393,22 +391,7 @@ struct TweetDetailView: View {
             DetailVideoManager.shared.clearCurrentVideo()
             print("DEBUG: [TweetDetailView] Cleared DetailVideoManager on disappear")
         }
-        .navigationDestination(isPresented: Binding(
-            get: { selectedUser != nil },
-            set: { if !$0 { selectedUser = nil } }
-        )) {
-            if let selectedUser = selectedUser {
-                ProfileView(user: selectedUser, onLogout: nil)
-            }
-        }
-        .navigationDestination(isPresented: Binding(
-            get: { selectedComment != nil },
-            set: { if !$0 { selectedComment = nil } }
-        )) {
-            if let selectedComment = selectedComment {
-                TweetDetailView(tweet: selectedComment)
-            }
-        }
+
 
 
 
@@ -444,8 +427,10 @@ struct TweetDetailView: View {
     private var tweetHeader: some View {
         HStack(alignment: .top, spacing: 12) {
             if let user = displayTweet.author {
-                Avatar(user: user)
-                    .onTapGesture { selectedUser = user }
+                NavigationLink(value: user) {
+                    Avatar(user: user)
+                }
+                .buttonStyle(PlainButtonStyle())
             }
             TweetItemHeaderView(tweet: displayTweet)
             TweetMenu(tweet: displayTweet, isPinned: displayTweet.isPinned(in: pinnedTweets))
@@ -556,10 +541,9 @@ struct TweetDetailView: View {
                 CommentItemView(
                     parentTweet: displayTweet,
                     comment: comment,
-                    onAvatarTap: { user in selectedUser = user },
-                    onTap: { comment in
-                        selectedComment = comment
-                    }
+                    isInProfile: false,
+                    onAvatarTap: nil, // NavigationLink will be handled inside CommentItemView
+                    linkToComment: true // Enable NavigationLink wrapping
                 )
             }
         )

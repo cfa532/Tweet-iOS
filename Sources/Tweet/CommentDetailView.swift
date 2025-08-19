@@ -10,13 +10,72 @@ import AVKit
 
 @MainActor
 @available(iOS 16.0, *)
+struct CommentDetailViewWithParent: View {
+    @ObservedObject var comment: Tweet
+    @State private var parentTweet: Tweet?
+    @State private var isLoading = true
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        Group {
+            if let parentTweet = parentTweet {
+                CommentDetailView(comment: comment, parentTweet: parentTweet)
+            } else if isLoading {
+                ProgressView("Loading...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemBackground))
+            } else {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.largeTitle)
+                        .foregroundColor(.orange)
+                    Text("Could not load parent tweet")
+                        .font(.headline)
+                    Button("Go Back") {
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(.systemBackground))
+            }
+        }
+        .task {
+            await fetchParentTweet()
+        }
+    }
+    
+    private func fetchParentTweet() async {
+        guard let originalTweetId = comment.originalTweetId,
+              let originalAuthorId = comment.originalAuthorId else {
+            isLoading = false
+            return
+        }
+        
+        do {
+            let parent = try await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
+            await MainActor.run {
+                self.parentTweet = parent
+                self.isLoading = false
+            }
+        } catch {
+            print("Failed to fetch parent tweet: \(error)")
+            await MainActor.run {
+                self.isLoading = false
+            }
+        }
+    }
+}
+
+@MainActor
+@available(iOS 16.0, *)
 struct CommentDetailView: View {
     @ObservedObject var comment: Tweet
     @ObservedObject var parentTweet: Tweet
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
     @State private var showLoginSheet = false
-    @State private var selectedUser: User? = nil
     @State private var replies: [Tweet] = []
     
     // Toast states
@@ -72,14 +131,7 @@ struct CommentDetailView: View {
             try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
             await refreshComment()
         }
-        .navigationDestination(isPresented: Binding(
-            get: { selectedUser != nil },
-            set: { if !$0 { selectedUser = nil } }
-        )) {
-            if let selectedUser = selectedUser {
-                ProfileView(user: selectedUser, onLogout: nil)
-            }
-        }
+
     }
     
     private var mediaSection: some View {
@@ -198,12 +250,9 @@ struct CommentDetailView: View {
                 CommentItemView(
                     parentTweet: comment,
                     comment: reply,
-                    onAvatarTap: { user in selectedUser = user },
-                    onTap: { reply in
-                        // Handle reply tap - navigate to reply detail
-                        // For now, we'll just print since this view doesn't have navigation state
-                        print("Reply tapped: \(reply.mid)")
-                    }
+                    isInProfile: false,
+                    onAvatarTap: nil, // NavigationLink will be handled inside CommentItemView
+                    linkToComment: true // Enable NavigationLink wrapping
                 )
             }
         )
