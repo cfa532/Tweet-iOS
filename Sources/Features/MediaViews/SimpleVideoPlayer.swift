@@ -242,6 +242,9 @@ struct SimpleVideoPlayer: View {
                 NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: player.currentItem)
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] View disappeared - cleaned up observers")
             }
+            
+            // Cancel any pending video loading requests
+            VideoLoadingManager.shared.cancelLoading(mid: mid)
         }
     }
     
@@ -398,21 +401,39 @@ struct SimpleVideoPlayer: View {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Using cached player")
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player item status: \(cachedPlayer.currentItem?.status.rawValue ?? -1)")
                     
-                    // Validate cached player - only reject if explicitly failed
+                    // Validate cached player - check for common failure conditions
                     guard let playerItem = cachedPlayer.currentItem else {
                         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player has no item, removing")
                         SharedAssetCache.shared.removeInvalidPlayer(for: url)
                         throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
                     }
                     
-                    // Only reject if the player item is explicitly failed
+                    // Check for explicit failure
                     if playerItem.status == .failed {
                         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player item failed, removing")
                         SharedAssetCache.shared.removeInvalidPlayer(for: url)
                         throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
                     }
                     
-                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player validation passed - status: \(playerItem.status.rawValue)")
+                    // Check if player item has valid duration (indicates it's properly loaded)
+                    let duration = playerItem.duration
+                    if !duration.isValid || duration.seconds.isNaN || duration.seconds.isInfinite || duration.seconds <= 0 {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player has invalid duration (\(duration.seconds)), removing asset and player")
+                        SharedAssetCache.shared.removeInvalidAsset(for: url)
+                        throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
+                    }
+                    
+                    // Check if player can actually play (test seek operation)
+                    do {
+                        let currentTime = cachedPlayer.currentTime()
+                        if !currentTime.isValid || currentTime.seconds.isNaN || currentTime.seconds.isInfinite {
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player has invalid current time, removing asset and player")
+                            SharedAssetCache.shared.removeInvalidAsset(for: url)
+                            throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
+                        }
+                    }
+                    
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player validation passed - status: \(playerItem.status.rawValue), duration: \(duration.seconds)")
                     
                     await MainActor.run {
                         self.configurePlayer(cachedPlayer)
@@ -420,13 +441,46 @@ struct SimpleVideoPlayer: View {
                     return
                 }
                 
-                // Create new player
-                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Creating new player")
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url)
-                
-                await MainActor.run {
-                    self.configurePlayer(newPlayer)
+                // Use priority-based loading system
+                let priority: VideoLoadingPriority
+                if isVisible && currentAutoPlay {
+                    priority = .high
+                } else if isVisible {
+                    priority = .normal
+                } else {
+                    priority = .low
                 }
+                
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Requesting video load with priority: \(priority)")
+                
+                // Request video loading with appropriate priority
+                VideoLoadingManager.shared.requestVideoLoad(url: url, mid: mid, priority: priority)
+                
+                // Wait for the video to be loaded by the manager
+                // We'll poll for the cached player
+                var attempts = 0
+                let maxAttempts = 50 // 5 seconds with 0.1s intervals
+                
+                while attempts < maxAttempts {
+                    try Task.checkCancellation()
+                    
+                    // Check if player is now cached
+                    if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: url) {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Player loaded by manager")
+                        await MainActor.run {
+                            self.configurePlayer(cachedPlayer)
+                        }
+                        return
+                    }
+                    
+                    // Wait a bit before checking again
+                    try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    attempts += 1
+                }
+                
+                // If we reach here, the video didn't load in time
+                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Video loading timeout")
+                throw NSError(domain: "VideoPlayer", code: -3, userInfo: [NSLocalizedDescriptionKey: "Video loading timeout"])
                 
             } catch {
                 print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Setup failed: \(error)")
@@ -559,8 +613,11 @@ struct SimpleVideoPlayer: View {
         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] URL: \(url)")
         print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Current state - isLoading: \(isLoading), loadFailed: \(loadFailed), player exists: \(player != nil)")
         
-        // Clear any cached player that might be causing issues
-        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        // Clear any cached asset and player that might be causing issues
+        SharedAssetCache.shared.removeInvalidAsset(for: url)
+        
+        // Cancel any existing loading request
+        VideoLoadingManager.shared.cancelLoading(mid: mid)
         
         setupPlayer()
     }

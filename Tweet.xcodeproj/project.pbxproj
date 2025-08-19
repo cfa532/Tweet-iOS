@@ -51,6 +51,7 @@
 		468CF22A2E39FBBC00D49038 /* ChatSessionRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2292E39FBBC00D49038 /* ChatSessionRepository.swift */; };
 		468CF22C2E3A619A00D49038 /* ChatSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22B2E3A619A00D49038 /* ChatSessionManager.swift */; };
 		468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22D2E3A69F700D49038 /* StartChatView.swift */; };
+		4699B46F2E54C316002F01B3 /* VideoLoadingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4699B46E2E54C316002F01B3 /* VideoLoadingManager.swift */; };
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
 		469A99502DEBFBC100954049 /* Tweet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994F2DEBFBC100954049 /* Tweet.swift */; };
@@ -154,6 +155,7 @@
 		468CF2292E39FBBC00D49038 /* ChatSessionRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionRepository.swift; sourceTree = "<group>"; };
 		468CF22B2E3A619A00D49038 /* ChatSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionManager.swift; sourceTree = "<group>"; };
 		468CF22D2E3A69F700D49038 /* StartChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartChatView.swift; sourceTree = "<group>"; };
+		4699B46E2E54C316002F01B3 /* VideoLoadingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoLoadingManager.swift; sourceTree = "<group>"; };
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
 		469A994F2DEBFBC100954049 /* Tweet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tweet.swift; sourceTree = "<group>"; };
@@ -294,6 +296,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				4699B46E2E54C316002F01B3 /* VideoLoadingManager.swift */,
 				46B03D9A2E4D7336000E08DF /* NotificationManager.swift */,
 				46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */,
 				46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */,
@@ -702,6 +705,7 @@
 				461438172E3E426A002D1B22 /* ChatCacheManager.swift in Sources */,
 				46E5B33C2DDA315700AEF31F /* FollowingsTweetView.swift in Sources */,
 				46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */,
+				4699B46F2E54C316002F01B3 /* VideoLoadingManager.swift in Sources */,
 				46E8A7D32DE9D0E700A30FBA /* CommentItemView.swift in Sources */,
 				46E5B3532DDD6A7A00AEF31F /* TweetDetailView.swift in Sources */,
 				46B03D852E486D3B000E08DF /* MuteState.swift in Sources */,

@@ -154,6 +154,25 @@ class SharedAssetCache: ObservableObject {
         print("DEBUG: [SHARED ASSET CACHE] Removed invalid cached player for: \(url.lastPathComponent)")
     }
     
+    /// Remove invalid asset and player from cache (for corrupted assets)
+    func removeInvalidAsset(for url: URL) {
+        let cacheKey = url.absoluteString
+        
+        // Remove player
+        if let player = playerCache[cacheKey] {
+            player.pause()
+        }
+        playerCache.removeValue(forKey: cacheKey)
+        
+        // Remove asset
+        assetCache.removeValue(forKey: cacheKey)
+        
+        // Remove timestamp
+        cacheTimestamps.removeValue(forKey: cacheKey)
+        
+        print("DEBUG: [SHARED ASSET CACHE] Removed invalid cached asset and player for: \(url.lastPathComponent)")
+    }
+    
     /// Get cached player or create new one with asset
     @MainActor func getOrCreatePlayer(for url: URL) async throws -> AVPlayer {
         // Try to get cached player first
@@ -221,6 +240,16 @@ class SharedAssetCache: ObservableObject {
         preloadTasks.values.forEach { $0.cancel() }
         preloadTasks.removeAll()
         print("DEBUG: [SHARED ASSET CACHE] Cache cleared")
+    }
+    
+    /// Clear only cached players (keep assets)
+    @MainActor private func clearCachedPlayers() {
+        // Pause and remove all cached players
+        for (_, player) in playerCache {
+            player.pause()
+        }
+        playerCache.removeAll()
+        print("DEBUG: [SHARED ASSET CACHE] Cached players cleared")
     }
     
     // MARK: - Enhanced Preloading Methods
@@ -341,6 +370,16 @@ class SharedAssetCache: ObservableObject {
     
     private func setupAppLifecycleNotifications() {
         NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleAppDidEnterBackground()
+            }
+        }
+        
+        NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
             queue: .main
@@ -396,9 +435,14 @@ class SharedAssetCache: ObservableObject {
         print("DEBUG: [SHARED ASSET CACHE] Cleanup completed")
     }
     
+    private func handleAppDidEnterBackground() {
+        print("DEBUG: [SHARED ASSET CACHE] App did enter background - clearing cached players to prevent corruption")
+        clearCachedPlayers()
+    }
+    
     private func handleAppWillEnterForeground() {
-        print("DEBUG: [SHARED ASSET CACHE] App will enter foreground - refreshing cached players")
-        refreshCachedPlayers()
+        print("DEBUG: [SHARED ASSET CACHE] App will enter foreground - validating cached players")
+        validateAndCleanupCachedPlayers()
     }
     
     private func handleAppDidBecomeActive() {
@@ -406,21 +450,69 @@ class SharedAssetCache: ObservableObject {
         // Use Task to avoid potential MainActor deadlock
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
-            self.refreshCachedPlayers()
+            self.validateAndCleanupCachedPlayers()
         }
     }
     
-    private func refreshCachedPlayers() {
-        // Refresh all cached players to ensure they show cached content
-        for (urlString, player) in playerCache {
-            print("DEBUG: [SHARED ASSET CACHE] Refreshing cached player for: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
-            
-            // Force a seek to refresh the video layer
-            let currentTime = player.currentTime()
-            player.seek(to: currentTime) { _ in
-                // Video layer should now be refreshed and showing cached content
-                print("DEBUG: [SHARED ASSET CACHE] Refreshed cached player for: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
+    private func validateAndCleanupCachedPlayers() {
+        // Validate and clean up cached players that may have become invalid
+        let invalidKeys = playerCache.compactMap { (urlString, player) -> String? in
+            guard let playerItem = player.currentItem else {
+                print("DEBUG: [SHARED ASSET CACHE] Removing cached player with no item: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
+                return urlString
             }
+            
+            // Check if player item is failed
+            if playerItem.status == .failed {
+                print("DEBUG: [SHARED ASSET CACHE] Removing failed cached player: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
+                return urlString
+            }
+            
+            // Check if player item has valid duration
+            let duration = playerItem.duration
+            if !duration.isValid || duration.seconds.isNaN || duration.seconds.isInfinite || duration.seconds <= 0 {
+                print("DEBUG: [SHARED ASSET CACHE] Removing cached player with invalid duration: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
+                // Also remove the underlying asset as it's corrupted
+                if let url = URL(string: urlString) {
+                    assetCache.removeValue(forKey: urlString)
+                    print("DEBUG: [SHARED ASSET CACHE] Also removed corrupted asset: \(url.lastPathComponent)")
+                }
+                return urlString
+            }
+            
+            // Check if player can actually play
+            let currentTime = player.currentTime()
+            if !currentTime.isValid || currentTime.seconds.isNaN || currentTime.seconds.isInfinite {
+                print("DEBUG: [SHARED ASSET CACHE] Removing cached player with invalid current time: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
+                // Also remove the underlying asset as it's corrupted
+                if let url = URL(string: urlString) {
+                    assetCache.removeValue(forKey: urlString)
+                    print("DEBUG: [SHARED ASSET CACHE] Also removed corrupted asset: \(url.lastPathComponent)")
+                }
+                return urlString
+            }
+            
+            // Player is valid, refresh it
+            print("DEBUG: [SHARED ASSET CACHE] Refreshing valid cached player: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
+            let seekTime = currentTime
+            player.seek(to: seekTime) { _ in
+                print("DEBUG: [SHARED ASSET CACHE] Refreshed cached player: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
+            }
+            
+            return nil
+        }
+        
+        // Remove invalid players
+        for key in invalidKeys {
+            if let player = playerCache[key] {
+                player.pause()
+            }
+            playerCache.removeValue(forKey: key)
+            cacheTimestamps.removeValue(forKey: key)
+        }
+        
+        if !invalidKeys.isEmpty {
+            print("DEBUG: [SHARED ASSET CACHE] Removed \(invalidKeys.count) invalid cached players")
         }
     }
 }
