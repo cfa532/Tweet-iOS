@@ -90,12 +90,12 @@ struct HomeView: View {
                 })
             }
             .navigationDestination(for: Tweet.self) { tweet in
-                // Check if this is a comment (has originalTweetId) to decide which view to show
-                if tweet.originalTweetId != nil {
-                    // This is a comment, show CommentDetailView with a parent fetcher
+                // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
+                if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
+                    // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
                     CommentDetailViewWithParent(comment: tweet)
                 } else {
-                    // This is a regular tweet, show TweetDetailView
+                    // This is a regular tweet or quote tweet, show TweetDetailView
                     TweetDetailView(tweet: tweet)
                 }
             }

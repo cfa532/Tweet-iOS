@@ -282,12 +282,14 @@ struct TweetDetailView: View {
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
     @State private var cachedDisplayTweet: Tweet?
+    @State private var hasLoadedOriginalTweet = false
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
 
     init(tweet: Tweet) {
         self.tweet = tweet
+        print("DEBUG: [TweetDetailView] init - tweet.mid: \(tweet.mid), tweet.originalTweetId: \(tweet.originalTweetId ?? "nil"), tweet.originalAuthorId: \(tweet.originalAuthorId ?? "nil")")
     }
 
     private var displayTweet: Tweet {
@@ -377,6 +379,32 @@ struct TweetDetailView: View {
                 dismiss()
             }
         }
+        .onAppear {
+            print("DEBUG: [TweetDetailView] onAppear - tweet.originalTweetId: \(tweet.originalTweetId ?? "nil"), tweet.originalAuthorId: \(tweet.originalAuthorId ?? "nil"), hasLoadedOriginalTweet: \(hasLoadedOriginalTweet)")
+            
+            // Load original tweet immediately when view appears (like TweetItemView)
+            if !hasLoadedOriginalTweet,
+               let originalTweetId = tweet.originalTweetId,
+               let originalAuthorId = tweet.originalAuthorId {
+                hasLoadedOriginalTweet = true
+                print("DEBUG: [TweetDetailView] onAppear - Loading original tweet with ID: \(originalTweetId), authorId: \(originalAuthorId)")
+                Task {
+                    if let originalTweet = try? await hproseInstance.getTweet(
+                        tweetId: originalTweetId,
+                        authorId: originalAuthorId
+                    ) {
+                        await MainActor.run {
+                            self.originalTweet = originalTweet
+                            print("DEBUG: [TweetDetailView] onAppear - Successfully loaded original tweet: \(originalTweet.mid)")
+                        }
+                    } else {
+                        print("DEBUG: [TweetDetailView] onAppear - Failed to load original tweet")
+                    }
+                }
+            } else {
+                print("DEBUG: [TweetDetailView] onAppear - Skipping original tweet load: hasLoadedOriginalTweet=\(hasLoadedOriginalTweet), originalTweetId=\(tweet.originalTweetId ?? "nil"), originalAuthorId=\(tweet.originalAuthorId ?? "nil")")
+            }
+        }
         .onChange(of: originalTweet) { _, _ in
             // Clear cache when originalTweet changes
             cachedDisplayTweet = nil
@@ -449,7 +477,7 @@ struct TweetDetailView: View {
                         .padding(.horizontal)
                         .padding(.vertical, 8)
                     // If this is a retweet with content, show quoted tweet without actions
-                    if let _ = displayTweet.originalTweetId, let _ = displayTweet.originalAuthorId {
+                    if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
                         if let orig = originalTweet {
                             TweetItemView(
                                 tweet: orig,
@@ -460,7 +488,26 @@ struct TweetDetailView: View {
                             .cornerRadius(6)
                             .padding(.horizontal)
                             .padding(.vertical, 2)
+                            .onAppear {
+                                print("DEBUG: [TweetDetailView] Showing quoted tweet: \(orig.mid)")
+                            }
+                        } else {
+                            Text("Loading quoted tweet...")
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                                .onAppear {
+                                    print("DEBUG: [TweetDetailView] originalTweet is nil, trying to load...")
+                                }
                         }
+                    } else {
+                        Text("No quote tweet to show")
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                            .onAppear {
+                                print("DEBUG: [TweetDetailView] No originalTweetId or originalAuthorId found")
+                            }
                     }
                 }
             }
@@ -550,17 +597,7 @@ struct TweetDetailView: View {
     }
 
     private func setupInitialData() {
-        if let originalTweetId = tweet.originalTweetId,
-           let originalAuthorId = tweet.originalAuthorId {
-            Task {
-                if let originalTweet = try? await hproseInstance.getTweet(
-                    tweetId: originalTweetId,
-                    authorId: originalAuthorId
-                ) {
-                    self.originalTweet = originalTweet
-                }
-            }
-        }
+        print("DEBUG: [TweetDetailView] setupInitialData - original tweet loading moved to onAppear")
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             refreshTweet()
