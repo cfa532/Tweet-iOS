@@ -112,7 +112,7 @@ struct TweetItemView: View, Equatable {
     }
     
     private var tweetContent: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: 4) {
             if let originalTweet = originalTweet {
                 // This is a retweet
                 if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
@@ -141,7 +141,7 @@ struct TweetItemView: View, Equatable {
                             .buttonStyle(PlainButtonStyle())
                         }
                     }
-
+                    
                     // Show original tweet with retweet menu.
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 4) {
@@ -161,7 +161,7 @@ struct TweetItemView: View, Equatable {
                         }
                         
                         TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
-                        .padding(.top, -12)
+                            .padding(.top, -12)
                         
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
@@ -181,7 +181,7 @@ struct TweetItemView: View, Equatable {
                             .buttonStyle(PlainButtonStyle())
                         }
                     }
-
+                    
                     VStack(alignment: .leading) {
                         HStack {
                             TweetItemHeaderView(tweet: tweet)
@@ -189,7 +189,7 @@ struct TweetItemView: View, Equatable {
                         }
                         .padding(.top, -8)
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
-                        .padding(.top, -12)
+                            .padding(.top, -12)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
                         EmbeddedTweetView(
@@ -210,11 +210,11 @@ struct TweetItemView: View, Equatable {
             } else {
                 // Regular tweet
                 if let user = tweet.author {
-                                            if isInProfile {
-                            Avatar(user: user)
-                                .onTapGesture {
-                                    onAvatarTapInProfile?(user)
-                                }
+                    if isInProfile {
+                        Avatar(user: user)
+                            .onTapGesture {
+                                onAvatarTapInProfile?(user)
+                            }
                     } else {
                         NavigationLink(value: user) {
                             Avatar(user: user)
@@ -229,7 +229,7 @@ struct TweetItemView: View, Equatable {
                     }
                     .padding(.top, -8)
                     TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
-                    .padding(.top, -12)
+                        .padding(.top, -12)
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)
@@ -238,7 +238,8 @@ struct TweetItemView: View, Equatable {
             }
         }
         .padding()
-        .padding(.horizontal, -8)
+        .padding(.leading, -4)
+        .padding(.trailing, -8)
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)

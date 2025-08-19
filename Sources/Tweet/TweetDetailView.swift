@@ -437,7 +437,7 @@ struct TweetDetailView: View {
     }
     
     private var tweetHeader: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 4) {
             if let user = displayTweet.author {
                 NavigationLink(value: user) {
                     Avatar(user: user)
@@ -447,7 +447,7 @@ struct TweetDetailView: View {
             TweetItemHeaderView(tweet: displayTweet)
             TweetMenu(tweet: displayTweet, isPinned: displayTweet.isPinned(in: pinnedTweets))
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 8)
         .padding(.top)
     }
     
