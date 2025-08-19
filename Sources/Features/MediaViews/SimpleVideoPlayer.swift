@@ -331,7 +331,7 @@ struct SimpleVideoPlayer: View {
                 }
             } else if isLoading {
                 ProgressView("Loading video...")
-                    .frame(maxWidth: .infinity, maxHeight: 200)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.gray.opacity(0.3))
             } else if loadFailed {
                 Color.gray.opacity(0.3)
@@ -396,14 +396,23 @@ struct SimpleVideoPlayer: View {
                 // Try to get cached player first
                 if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: url) {
                     print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Using cached player")
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player item status: \(cachedPlayer.currentItem?.status.rawValue ?? -1)")
                     
                     // Validate cached player - only reject if explicitly failed
-                    guard let playerItem = cachedPlayer.currentItem,
-                          playerItem.status != .failed else {
-                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player invalid, removing")
+                    guard let playerItem = cachedPlayer.currentItem else {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player has no item, removing")
                         SharedAssetCache.shared.removeInvalidPlayer(for: url)
                         throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
                     }
+                    
+                    // Only reject if the player item is explicitly failed
+                    if playerItem.status == .failed {
+                        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player item failed, removing")
+                        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+                        throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
+                    }
+                    
+                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Cached player validation passed - status: \(playerItem.status.rawValue)")
                     
                     await MainActor.run {
                         self.configurePlayer(cachedPlayer)
