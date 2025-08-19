@@ -285,10 +285,16 @@ struct SimpleVideoPlayer: View {
                             onVideoTap?()
                         }
                         .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press detected - reloading video")
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] 🔄 LONG PRESS DETECTED - reloading video")
+                            print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Current retry count: \(retryCount)")
                             retryLoad()
                         } onPressingChanged: { pressing in
                             isLongPressing = pressing
+                            if pressing {
+                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press started")
+                            } else {
+                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press ended")
+                            }
                         }
                         .background(
                             // Hidden view to access the underlying layer for refresh
@@ -305,10 +311,16 @@ struct SimpleVideoPlayer: View {
                                 onVideoTap?()
                             }
                             .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press detected - reloading video")
+                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] 🔄 LONG PRESS DETECTED (custom overlay) - reloading video")
+                                print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Current retry count: \(retryCount)")
                                 retryLoad()
                             } onPressingChanged: { pressing in
                                 isLongPressing = pressing
+                                if pressing {
+                                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press started (custom overlay)")
+                                } else {
+                                    print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Long press ended (custom overlay)")
+                                }
                             }
                     })
                     .clipped()
@@ -531,7 +543,13 @@ struct SimpleVideoPlayer: View {
         isLoading = true
         hasFinishedPlaying = false
         
-        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Retrying load, attempt \(retryCount)")
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] 🔄 RETRY LOAD - Attempt \(retryCount)/3")
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] URL: \(url)")
+        print("DEBUG: [SIMPLE VIDEO PLAYER \(mid):\(instanceId)] Current state - isLoading: \(isLoading), loadFailed: \(loadFailed), player exists: \(player != nil)")
+        
+        // Clear any cached player that might be causing issues
+        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        
         setupPlayer()
     }
     
