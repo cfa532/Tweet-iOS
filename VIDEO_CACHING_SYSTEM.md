@@ -84,7 +84,7 @@ let player = VideoCacheManager.shared.getVideoPlayer(for: videoMid, url: url)
 ### Use VideoCacheManager when:
 - ✅ You have a video `mid` and want to cache by ID
 - ✅ You need to identify videos by their unique ID
-- ✅ You're working with VideoTimeRemainingLabel
+
 - ✅ You need MID-based player lookup
 
 ## Integration Points
@@ -93,9 +93,7 @@ let player = VideoCacheManager.shared.getVideoPlayer(for: videoMid, url: url)
 - Uses **SharedAssetCache** for URL-based caching
 - Benefits from preloading and background cleanup
 
-### VideoTimeRemainingLabel  
-- Uses **VideoCacheManager** for MID-based player lookup
-- Needs to find players by video ID, not URL
+
 
 ### MediaCell & MediaGridView
 - Use **SharedAssetCache** for preloading

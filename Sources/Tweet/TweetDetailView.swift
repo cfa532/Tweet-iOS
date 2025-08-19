@@ -26,12 +26,7 @@ struct DetailVideoPlayerView: View {
                             VStack {
                                 Spacer()
                                 HStack {
-                                    // Video time remaining label in bottom left corner
-                                    if showMuteButton {
-                                        VideoTimeRemainingLabel(mid: mid)
-                                            .padding(.leading, 8)
-                                            .padding(.bottom, 8)
-                                    }
+
                                     
                                     Spacer()
                                     
