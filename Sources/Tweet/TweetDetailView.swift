@@ -336,7 +336,6 @@ struct TweetDetailView: View {
                     commentsListView
                         .padding(.leading, -4)
                 }
-                .padding(.top, 2)
                 .task {
                     setupInitialData()
                 }
@@ -408,10 +407,6 @@ struct TweetDetailView: View {
             DetailVideoManager.shared.clearCurrentVideo()
             print("DEBUG: [TweetDetailView] Cleared DetailVideoManager on disappear")
         }
-        
-        
-        
-        
     }
     
     private var mediaSection: some View {
@@ -461,7 +456,7 @@ struct TweetDetailView: View {
             if let content = displayTweet.content, !content.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(content)
-                        .font(.title3)
+//                        .font(.body)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
                         .padding(.vertical, 8)
@@ -473,14 +468,12 @@ struct TweetDetailView: View {
                                     tweet: orig,
                                     onTap: nil, // Enable NavigationLink for quoted tweet
                                     hideActions: true,
-                                    backgroundColor: Color(.systemGray4).opacity(0.5)
+                                    backgroundColor: Color(.systemGray6).opacity(0.5)
                                 )
                                 
                             }
-                            .background(Color(.systemGray4))
-                            .cornerRadius(6)
+                            .cornerRadius(8)
                             .padding(.horizontal)
-                            .padding(.vertical, 2)
                         } else {
                             Text("Loading quoted tweet...")
                                 .foregroundColor(.secondary)

@@ -196,7 +196,7 @@ struct TweetItemView: View, Equatable {
                             tweet: originalTweet,
                             isPinned: isPinned,
                             onTap: onTap, // Pass onTap directly (nil when using NavigationLink)
-                            backgroundColor: Color(.systemGray4).opacity(0.5)
+                            backgroundColor: Color(.systemGray4).opacity(0.6)
                         )
                         .cornerRadius(8)
                         .padding(.leading, -4)
