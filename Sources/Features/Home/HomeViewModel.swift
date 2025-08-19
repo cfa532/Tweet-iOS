@@ -93,17 +93,11 @@ struct HomeView: View {
             if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
                 // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
                 CommentDetailViewWithParent(comment: tweet)
-                    .onAppear {
-                        print("DEBUG: [HomeView] navigationDestination(for: Tweet.self) called with tweet: \(tweet.mid), originalTweetId: \(tweet.originalTweetId ?? "nil"), hasContent: \(!(tweet.content?.isEmpty ?? true)), hasAttachments: \(!(tweet.attachments?.isEmpty ?? true))")
-                        print("DEBUG: [HomeView] Routing to CommentDetailViewWithParent")
-                    }
+
             } else {
                 // This is a regular tweet or quote tweet, show TweetDetailView
                 TweetDetailView(tweet: tweet)
-                    .onAppear {
-                        print("DEBUG: [HomeView] navigationDestination(for: Tweet.self) called with tweet: \(tweet.mid), originalTweetId: \(tweet.originalTweetId ?? "nil"), hasContent: \(!(tweet.content?.isEmpty ?? true)), hasAttachments: \(!(tweet.attachments?.isEmpty ?? true))")
-                        print("DEBUG: [HomeView] Routing to TweetDetailView")
-                    }
+
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in

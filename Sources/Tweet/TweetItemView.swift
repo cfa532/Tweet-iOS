@@ -47,9 +47,7 @@ struct TweetItemView: View, Equatable {
                     tweetContent
                 }
                 .buttonStyle(PlainButtonStyle())
-                .onAppear {
-                    print("DEBUG: [TweetItemView] NavigationLink created for tweet: \(tweet.mid), navigationValue: \(navigationValue.mid), originalTweetId: \(tweet.originalTweetId ?? "nil"), hasContent: \(!(tweet.content?.isEmpty ?? true)), hasAttachments: \(!(tweet.attachments?.isEmpty ?? true))")
-                }
+
 
             } else {
                 // Use tap gesture when onTap callback is provided
@@ -58,7 +56,6 @@ struct TweetItemView: View, Equatable {
                     .onTapGesture {
                         // For retweets with no content, pass the original tweet to the callback
                         let callbackValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
-                        print("DEBUG: [TweetItemView] onTapGesture triggered for tweet: \(tweet.mid), callbackValue: \(callbackValue.mid)")
                         onTap?(callbackValue)
                     }
             }
@@ -278,9 +275,7 @@ struct EmbeddedTweetView: View, Equatable {
                     embeddedContent
                 }
                 .buttonStyle(PlainButtonStyle())
-                .onAppear {
-                    print("DEBUG: [EmbeddedTweetView] NavigationLink created for embedded tweet: \(tweet.mid)")
-                }
+
             } else {
                 // Use tap gesture when onTap callback is provided
                 embeddedContent

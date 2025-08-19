@@ -71,9 +71,9 @@ struct MediaGridView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            let gridWidth: CGFloat = geometry.size.width
+            let gridWidth: CGFloat = max(10, geometry.size.width)
             let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-            let gridHeight = gridWidth / gridAspectRatio
+            let gridHeight = max(10, gridWidth / gridAspectRatio)
             
             ZStack {
                 switch attachments.count {
@@ -525,7 +525,7 @@ struct MediaGridView: View {
                 videoManager.stopSequentialPlayback()
             }
             // Removed duplicate .onAppear block that was causing infinite loop
-            .onChange(of: isVisible) { _, newVisibility in
+            .onChange(of: isVisible) { newVisibility in
                 // Handle visibility changes
                 if !newVisibility {
                     // Grid became invisible - stop video playback

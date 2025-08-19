@@ -259,8 +259,6 @@ struct DetailMediaCell: View {
         // Set local mute state to false (unmuted) immediately
         isMuted = false
     }
-    
-
 }
 
 @MainActor
@@ -286,22 +284,21 @@ struct TweetDetailView: View {
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
-
+    
     init(tweet: Tweet) {
         self.tweet = tweet
-        print("DEBUG: [TweetDetailView] init - tweet.mid: \(tweet.mid), tweet.originalTweetId: \(tweet.originalTweetId ?? "nil"), tweet.originalAuthorId: \(tweet.originalAuthorId ?? "nil")")
     }
-
+    
     private var displayTweet: Tweet {
         // Check if we need to update the cached value
         let isRetweet = (tweet.content == nil || tweet.content?.isEmpty == true) &&
-                       (tweet.attachments == nil || tweet.attachments?.isEmpty == true)
+        (tweet.attachments == nil || tweet.attachments?.isEmpty == true)
         let shouldUseOriginal = isRetweet && originalTweet != nil
         
         // If we have a cached value and the conditions haven't changed, return it
         if let cached = cachedDisplayTweet {
             let cachedIsRetweet = (cached.content == nil || cached.content?.isEmpty == true) &&
-                                 (cached.attachments == nil || cached.attachments?.isEmpty == true)
+            (cached.attachments == nil || cached.attachments?.isEmpty == true)
             let cachedShouldUseOriginal = cachedIsRetweet && originalTweet != nil
             
             if shouldUseOriginal == cachedShouldUseOriginal {
@@ -324,7 +321,7 @@ struct TweetDetailView: View {
         
         return result
     }
-
+    
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
@@ -355,7 +352,7 @@ struct TweetDetailView: View {
                     },
                     onExpandedClose: {
                         shouldShowExpandedReply = false
-                    }, 
+                    },
                     initialExpanded: shouldShowExpandedReply
                 )
                 .padding(.bottom, 48) // Add padding to avoid navigation bar
@@ -380,14 +377,11 @@ struct TweetDetailView: View {
             }
         }
         .onAppear {
-            print("DEBUG: [TweetDetailView] onAppear - tweet.originalTweetId: \(tweet.originalTweetId ?? "nil"), tweet.originalAuthorId: \(tweet.originalAuthorId ?? "nil"), hasLoadedOriginalTweet: \(hasLoadedOriginalTweet)")
-            
             // Load original tweet immediately when view appears (like TweetItemView)
             if !hasLoadedOriginalTweet,
                let originalTweetId = tweet.originalTweetId,
                let originalAuthorId = tweet.originalAuthorId {
                 hasLoadedOriginalTweet = true
-                print("DEBUG: [TweetDetailView] onAppear - Loading original tweet with ID: \(originalTweetId), authorId: \(originalAuthorId)")
                 Task {
                     if let originalTweet = try? await hproseInstance.getTweet(
                         tweetId: originalTweetId,
@@ -395,14 +389,9 @@ struct TweetDetailView: View {
                     ) {
                         await MainActor.run {
                             self.originalTweet = originalTweet
-                            print("DEBUG: [TweetDetailView] onAppear - Successfully loaded original tweet: \(originalTweet.mid)")
                         }
-                    } else {
-                        print("DEBUG: [TweetDetailView] onAppear - Failed to load original tweet")
                     }
                 }
-            } else {
-                print("DEBUG: [TweetDetailView] onAppear - Skipping original tweet load: hasLoadedOriginalTweet=\(hasLoadedOriginalTweet), originalTweetId=\(tweet.originalTweetId ?? "nil"), originalAuthorId=\(tweet.originalAuthorId ?? "nil")")
             }
         }
         .onChange(of: originalTweet) { _, _ in
@@ -419,10 +408,10 @@ struct TweetDetailView: View {
             DetailVideoManager.shared.clearCurrentVideo()
             print("DEBUG: [TweetDetailView] Cleared DetailVideoManager on disappear")
         }
-
-
-
-
+        
+        
+        
+        
     }
     
     private var mediaSection: some View {
@@ -486,9 +475,7 @@ struct TweetDetailView: View {
                                     hideActions: true,
                                     backgroundColor: Color(.systemGray4).opacity(0.7)
                                 )
-                                .onAppear {
-                                    print("DEBUG: [TweetDetailView] Showing quoted tweet: \(orig.mid)")
-                                }
+                                
                             }
                             .background(Color(.systemGray4))
                             .cornerRadius(6)
@@ -499,18 +486,12 @@ struct TweetDetailView: View {
                                 .foregroundColor(.secondary)
                                 .padding(.horizontal)
                                 .padding(.vertical, 8)
-                                .onAppear {
-                                    print("DEBUG: [TweetDetailView] originalTweet is nil, trying to load...")
-                                }
                         }
                     } else {
                         Text("No quote tweet to show")
                             .foregroundColor(.secondary)
                             .padding(.horizontal)
                             .padding(.vertical, 8)
-                            .onAppear {
-                                print("DEBUG: [TweetDetailView] No originalTweetId or originalAuthorId found")
-                            }
                     }
                 }
             }
@@ -566,7 +547,7 @@ struct TweetDetailView: View {
                         // This will be handled by the notification system using the parentTweetId
                         return true // We'll filter in the action
                     },
-                    action: { comment, parentTweetId in 
+                    action: { comment, parentTweetId in
                         // Only add comment if it belongs to this tweet
                         if parentTweetId == displayTweet.mid {
                             comments.insert(comment, at: 0)
@@ -580,7 +561,7 @@ struct TweetDetailView: View {
                         // Only accept comment deletions that belong to this tweet
                         comment.originalTweetId == displayTweet.mid
                     },
-                    action: { comment, parentTweetId in 
+                    action: { comment, parentTweetId in
                         if parentTweetId == displayTweet.mid {
                             comments.removeAll { $0.mid == comment.mid }
                         }
@@ -598,10 +579,8 @@ struct TweetDetailView: View {
             }
         )
     }
-
+    
     private func setupInitialData() {
-        print("DEBUG: [TweetDetailView] setupInitialData - original tweet loading moved to onAppear")
-        
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             refreshTweet()
         }
@@ -613,7 +592,7 @@ struct TweetDetailView: View {
             }
         }
     }
-
+    
     private func refreshTweet() {
         Task {
             do {
@@ -694,7 +673,7 @@ struct TweetDetailView: View {
             }
         }
     }
-
+    
     private func showToast(message: String, type: ToastView.ToastType) {
         toastMessage = message
         toastType = type
@@ -707,7 +686,7 @@ struct TweetDetailView: View {
             }
         }
     }
-
+    
     private func aspectRatio(for attachment: MimeiFileType, at index: Int) -> CGFloat {
         let type = attachment.type.lowercased()
         if type == "video" || type == "hls_video" {
@@ -734,7 +713,7 @@ struct TweetDetailView: View {
             return 4.0/3.0
         }
     }
-
+    
     private func loadImageAspectRatio(from url: URL, for index: Int) {
         // Only load if not already loaded
         guard imageAspectRatios[index] == nil else { return }
