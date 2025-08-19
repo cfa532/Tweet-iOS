@@ -57,7 +57,8 @@ struct ProfileView: View {
                     hproseInstance: hproseInstance,
                     onUserSelect: { user in selectedUser = user },
                     onTweetTap: { tweet in
-                        // Navigation will be handled by parent
+                        // This should never be called since we'll use NavigationLink directly
+                        print("DEBUG: [ProfileView] onTweetTap called - this should not happen")
                     },
                     onPinnedTweetsRefresh: refreshPinnedTweets,
                     onScroll: { offset in
@@ -493,15 +494,15 @@ struct ProfileView: View {
                 },
                 shouldCacheServerTweets: false,
                 rowView: { tweet in
-                    TweetItemView(
-                        tweet: tweet,
-                        showDeleteButton: isAppUser,
-                        onAvatarTap: { user in selectedUser = user },
-                        onTap: { tweet in
-                            print("DEBUG: [ProfileView] Tweet tapped: \(tweet.mid)")
-                            // NavigationLink will handle this automatically
-                        }
-                    )
+                    NavigationLink(value: tweet) {
+                        TweetItemView(
+                            tweet: tweet,
+                            showDeleteButton: isAppUser,
+                            onAvatarTap: { user in selectedUser = user },
+                            onTap: nil // NavigationLink will handle the tap
+                        )
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
             )
         } else {
@@ -522,15 +523,15 @@ struct ProfileView: View {
                 },
                 shouldCacheServerTweets: false,
                 rowView: { tweet in
-                    TweetItemView(
-                        tweet: tweet,
-                        showDeleteButton: isAppUser,
-                        onAvatarTap: { user in selectedUser = user },
-                        onTap: { tweet in
-                            print("DEBUG: [ProfileView] Tweet tapped: \(tweet.mid)")
-                            // NavigationLink will handle this automatically
-                        }
-                    )
+                    NavigationLink(value: tweet) {
+                        TweetItemView(
+                            tweet: tweet,
+                            showDeleteButton: isAppUser,
+                            onAvatarTap: { user in selectedUser = user },
+                            onTap: nil // NavigationLink will handle the tap
+                        )
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
             )
         }

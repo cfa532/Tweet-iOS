@@ -194,9 +194,7 @@ struct ProfileTweetsSection<Header: View>: View {
                                         onAvatarTap: { user in
                                             onUserSelect(user)
                                         },
-                                        onTap: { tweet in
-                                            onTweetTap(tweet)
-                                        },
+                                        onTap: nil, // Will use NavigationLink instead
                                         onRemove: { tweetId in
                                             // Handle pinned tweet removal if needed
                                             print("DEBUG: [ProfileTweetsSection] Pinned tweet removal requested for: \(tweetId)")
@@ -229,9 +227,7 @@ struct ProfileTweetsSection<Header: View>: View {
                     onAvatarTap: { user in
                         onUserSelect(user)
                     },
-                    onTap: { tweet in
-                        onTweetTap(tweet)
-                    },
+                    onTap: nil, // Will use NavigationLink instead
                     onRemove: { tweetId in
                         if let idx = viewModel.tweets.firstIndex(where: { $0.mid == tweetId }) {
                             viewModel.tweets.remove(at: idx)

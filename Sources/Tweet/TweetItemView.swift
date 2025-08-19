@@ -36,6 +36,74 @@ struct TweetItemView: View, Equatable {
     }
 
     var body: some View {
+        Group {
+            if onTap == nil {
+                // Use NavigationLink when no onTap callback is provided
+                NavigationLink(value: tweet) {
+                    tweetContent
+                }
+                .buttonStyle(PlainButtonStyle())
+            } else {
+                // Use tap gesture when onTap callback is provided
+                tweetContent
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onTap?(tweet)
+                    }
+            }
+        }
+        .fullScreenCover(isPresented: $showBrowser) {
+            MediaBrowserView(
+                tweet: tweet,
+                initialIndex: selectedMediaIndex
+            )
+        }
+        .fullScreenCover(isPresented: $showEmbeddedBrowser) {
+            MediaBrowserView(
+                tweet: originalTweet ?? tweet,
+                initialIndex: selectedEmbeddedMediaIndex
+            )
+        }
+        .task {
+            isVisible = true
+            tweet.isVisible = true
+            // Usually TweetDetailView is not orignalTweet
+            detailTweet = tweet
+        }
+        .onAppear {
+            // Defer original tweet loading to reduce async operations during scrolling
+            if !hasLoadedOriginalTweet, 
+               let originalTweetId = tweet.originalTweetId, 
+               let originalAuthorId = tweet.originalAuthorId {
+                hasLoadedOriginalTweet = true
+                // TweetCacheManager already handles caching, so this will be fast
+                Task {
+                    if let t = try? await hproseInstance.getTweet(
+                        tweetId: originalTweetId,
+                        authorId: originalAuthorId
+                    ) {
+                        await MainActor.run {
+                            originalTweet = t
+                            detailTweet = t
+                        }
+                    } else {
+                        // Could not fetch original tweet, remove this tweet from the list
+                        await MainActor.run {
+                            onRemove?(tweet.mid)
+                        }
+                    }
+                }
+            }
+        }
+        .onDisappear {
+            isVisible = false
+            tweet.isVisible = false
+        }
+        // Add stable identity to prevent unnecessary re-composition
+        .id("\(tweet.mid)_\(originalTweet?.mid ?? "none")")
+    }
+    
+    private var tweetContent: some View {
         HStack(alignment: .top, spacing: 8) {
             if let originalTweet = originalTweet {
                 // This is a retweet
@@ -146,60 +214,6 @@ struct TweetItemView: View, Equatable {
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onTap?(tweet)
-        }
-
-        .fullScreenCover(isPresented: $showBrowser) {
-            MediaBrowserView(
-                tweet: tweet,
-                initialIndex: selectedMediaIndex
-            )
-        }
-        .fullScreenCover(isPresented: $showEmbeddedBrowser) {
-            MediaBrowserView(
-                tweet: originalTweet ?? tweet,
-                initialIndex: selectedEmbeddedMediaIndex
-            )
-        }
-        .task {
-            isVisible = true
-            tweet.isVisible = true
-            // Usually TweetDetailView is not orignalTweet
-            detailTweet = tweet
-        }
-        .onAppear {
-            // Defer original tweet loading to reduce async operations during scrolling
-            if !hasLoadedOriginalTweet, 
-               let originalTweetId = tweet.originalTweetId, 
-               let originalAuthorId = tweet.originalAuthorId {
-                hasLoadedOriginalTweet = true
-                // TweetCacheManager already handles caching, so this will be fast
-                Task {
-                    if let t = try? await hproseInstance.getTweet(
-                        tweetId: originalTweetId,
-                        authorId: originalAuthorId
-                    ) {
-                        await MainActor.run {
-                            originalTweet = t
-                            detailTweet = t
-                        }
-                    } else {
-                        // Could not fetch original tweet, remove this tweet from the list
-                        await MainActor.run {
-                            onRemove?(tweet.mid)
-                        }
-                    }
-                }
-            }
-        }
-        .onDisappear {
-            isVisible = false
-            tweet.isVisible = false
-        }
-        // Add stable identity to prevent unnecessary re-composition
-        .id("\(tweet.mid)_\(originalTweet?.mid ?? "none")")
     }
     
     // MARK: - Equatable Implementation
