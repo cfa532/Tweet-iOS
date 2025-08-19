@@ -321,12 +321,10 @@ struct TweetListView<RowView: View>: View {
                     hasMoreTweets = false
                     print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
                 } else {
-                    // All tweets are nil, auto-increment and try again
-                    print("[TweetListView] All tweets nil for page \(page), auto-incrementing page")
-                    isLoadingMore = false
-                    loadMoreTweets(page: page + 1)
-                    completion(false)
-                    return
+                    // All tweets are nil but we got a full page, continue to next page
+                    print("[TweetListView] All tweets nil for page \(page), but got full page size (\(tweetsFromServer.count)), continuing to next page")
+                    currentPage = page
+                    // Don't call loadMoreTweets recursively here, let the normal flow continue
                 }
             }
             
