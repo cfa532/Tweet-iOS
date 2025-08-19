@@ -47,6 +47,10 @@ struct TweetItemView: View, Equatable {
                     tweetContent
                 }
                 .buttonStyle(PlainButtonStyle())
+                .onAppear {
+                    print("DEBUG: [TweetItemView] NavigationLink created for tweet: \(tweet.mid), navigationValue: \(navigationValue.mid), originalTweetId: \(tweet.originalTweetId ?? "nil"), hasContent: \(!(tweet.content?.isEmpty ?? true)), hasAttachments: \(!(tweet.attachments?.isEmpty ?? true))")
+                }
+
             } else {
                 // Use tap gesture when onTap callback is provided
                 tweetContent
@@ -54,6 +58,7 @@ struct TweetItemView: View, Equatable {
                     .onTapGesture {
                         // For retweets with no content, pass the original tweet to the callback
                         let callbackValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
+                        print("DEBUG: [TweetItemView] onTapGesture triggered for tweet: \(tweet.mid), callbackValue: \(callbackValue.mid)")
                         onTap?(callbackValue)
                     }
             }
@@ -193,7 +198,7 @@ struct TweetItemView: View, Equatable {
                         EmbeddedTweetView(
                             tweet: originalTweet,
                             isPinned: isPinned,
-                            onTap: { t in onTap?(t) },
+                            onTap: onTap, // Pass onTap directly (nil when using NavigationLink)
                             backgroundColor: Color(.systemGray4).opacity(0.7)
                         )
                         .cornerRadius(6)
@@ -266,6 +271,38 @@ struct EmbeddedTweetView: View, Equatable {
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
+        Group {
+            if onTap == nil {
+                // Use NavigationLink when no onTap callback is provided
+                NavigationLink(value: tweet) {
+                    embeddedContent
+                }
+                .buttonStyle(PlainButtonStyle())
+                .onAppear {
+                    print("DEBUG: [EmbeddedTweetView] NavigationLink created for embedded tweet: \(tweet.mid)")
+                }
+            } else {
+                // Use tap gesture when onTap callback is provided
+                embeddedContent
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onTap?(tweet)
+                    }
+            }
+        }
+        .onAppear {
+            isVisible = true
+            tweet.isVisible = true
+        }
+        .onDisappear {
+            isVisible = false
+            tweet.isVisible = false
+        }
+        // Add stable identity for embedded tweets
+        .id("embedded_\(tweet.mid)")
+    }
+    
+    private var embeddedContent: some View {
         HStack(alignment: .top, spacing: 8) {
             if let user = tweet.author {
                 Avatar(user: user)
@@ -283,20 +320,6 @@ struct EmbeddedTweetView: View, Equatable {
         }
         .padding(8)
         .background(backgroundColor)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onTap?(tweet)
-        }
-        .onAppear {
-            isVisible = true
-            tweet.isVisible = true
-        }
-        .onDisappear {
-            isVisible = false
-            tweet.isVisible = false
-        }
-        // Add stable identity for embedded tweets
-        .id("embedded_\(tweet.mid)")
     }
     
     // MARK: - Equatable Implementation

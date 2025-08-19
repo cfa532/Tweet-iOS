@@ -479,18 +479,21 @@ struct TweetDetailView: View {
                     // If this is a retweet with content, show quoted tweet without actions
                     if let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
                         if let orig = originalTweet {
-                            TweetItemView(
-                                tweet: orig,
-                                hideActions: true,
-                                backgroundColor: Color(.systemGray4).opacity(0.7)
-                            )
+                            VStack {
+                                TweetItemView(
+                                    tweet: orig,
+                                    onTap: nil, // Enable NavigationLink for quoted tweet
+                                    hideActions: true,
+                                    backgroundColor: Color(.systemGray4).opacity(0.7)
+                                )
+                                .onAppear {
+                                    print("DEBUG: [TweetDetailView] Showing quoted tweet: \(orig.mid)")
+                                }
+                            }
                             .background(Color(.systemGray4))
                             .cornerRadius(6)
                             .padding(.horizontal)
                             .padding(.vertical, 2)
-                            .onAppear {
-                                print("DEBUG: [TweetDetailView] Showing quoted tweet: \(orig.mid)")
-                            }
                         } else {
                             Text("Loading quoted tweet...")
                                 .foregroundColor(.secondary)

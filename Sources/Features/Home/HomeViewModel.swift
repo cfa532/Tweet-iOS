@@ -32,105 +32,108 @@ struct HomeView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            // Header section
             VStack(spacing: 0) {
-                // Header section
-                VStack(spacing: 0) {
-                    AppHeaderView()
-                        .padding(.vertical, 8)
-                    // Tab bar
-                    HStack(spacing: 0) {
-                        TabButton(title: LocalizedStringKey("Followings"), isSelected: selectedTab == 0) {
-                            withAnimation { selectedTab = 0 }
-                        }
-                        TabButton(title: LocalizedStringKey("Recommendation"), isSelected: selectedTab == 1) {
-                            withAnimation { selectedTab = 1 }
-                        }
+                AppHeaderView()
+                    .padding(.vertical, 8)
+                // Tab bar
+                HStack(spacing: 0) {
+                    TabButton(title: LocalizedStringKey("Followings"), isSelected: selectedTab == 0) {
+                        withAnimation { selectedTab = 0 }
                     }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
-                    .padding(.leading, -4)
+                    TabButton(title: LocalizedStringKey("Recommendation"), isSelected: selectedTab == 1) {
+                        withAnimation { selectedTab = 1 }
+                    }
                 }
-                .opacity(isNavigationVisible ? 1 : 0)
-                .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
-                .offset(y: isNavigationVisible ? 0 : -100)
-                .frame(height: isNavigationVisible ? nil : 0)
-                .clipped()
-
-                // Tab Content
-                TabView(selection: $selectedTab) {
-                    FollowingsTweetView(
-                        onAvatarTap: { user in
-                            navigationPath.append(user)
-                            onNavigateToProfile?()
-                        },
-                        onTweetTap: { tweet in
-                            navigationPath.append(tweet)
-                        },
-                        onScroll: { offset in
-                            handleScroll(offset: offset)
-                        }
-                    )
-                    .id(refreshKey) // Force recreation when refreshKey changes
-                    .tag(0)
-
-                    RecommendedTweetView(onScroll: { offset in
-                        handleScroll(offset: offset)
-                    })
-                        .tag(1)
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
+                .padding(.horizontal)
+                .padding(.top, 8)
                 .padding(.leading, -4)
             }
-            .navigationBarHidden(true) // Hide the system navigation bar
-            .navigationDestination(for: User.self) { user in
-                ProfileView(user: user, onLogout: {
-                    navigationPath.removeLast(navigationPath.count)
-                    onReturnToHome?()
-                })
-            }
-            .navigationDestination(for: Tweet.self) { tweet in
-                // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
-                if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
-                    // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
-                    CommentDetailViewWithParent(comment: tweet)
-                } else {
-                    // This is a regular tweet or quote tweet, show TweetDetailView
-                    TweetDetailView(tweet: tweet)
-                }
-            }
+            .opacity(isNavigationVisible ? 1 : 0)
+            .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
+            .offset(y: isNavigationVisible ? 0 : -100)
+            .frame(height: isNavigationVisible ? nil : 0)
+            .clipped()
 
-            .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
-                Task {
-                    await MainActor.run {
-                        TweetCacheManager.shared.clearAllCache()
-                        print("DEBUG: Cleared all cache on user login")
+            // Tab Content
+            TabView(selection: $selectedTab) {
+                FollowingsTweetView(
+                    onAvatarTap: { user in
+                        navigationPath.append(user)
+                        onNavigateToProfile?()
+                    },
+                    onTweetTap: { tweet in
+                        navigationPath.append(tweet)
+                    },
+                    onScroll: { offset in
+                        handleScroll(offset: offset)
                     }
-                    try await HproseInstance.shared.initialize()
-                }
+                )
+                .id(refreshKey) // Force recreation when refreshKey changes
+                .tag(0)
+
+                RecommendedTweetView(onScroll: { offset in
+                    handleScroll(offset: offset)
+                })
+                    .tag(1)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
-                Task {
-                    await MainActor.run {
-                        TweetCacheManager.shared.clearAllCache()
-                        print("DEBUG: Cleared all cache on user logout")
-                        // Force refresh of FollowingsTweetView
-                        refreshKey = UUID()
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .padding(.leading, -4)
+        }
+        .navigationBarHidden(true) // Hide the system navigation bar
+        .navigationDestination(for: User.self) { user in
+            ProfileView(user: user, onLogout: {
+                navigationPath.removeLast(navigationPath.count)
+                onReturnToHome?()
+            })
+        }
+        .navigationDestination(for: Tweet.self) { tweet in
+            // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
+            if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
+                // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
+                CommentDetailViewWithParent(comment: tweet)
+                    .onAppear {
+                        print("DEBUG: [HomeView] navigationDestination(for: Tweet.self) called with tweet: \(tweet.mid), originalTweetId: \(tweet.originalTweetId ?? "nil"), hasContent: \(!(tweet.content?.isEmpty ?? true)), hasAttachments: \(!(tweet.attachments?.isEmpty ?? true))")
+                        print("DEBUG: [HomeView] Routing to CommentDetailViewWithParent")
                     }
-                    try await HproseInstance.shared.initialize()
-                }
-            }
-            .onDisappear {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    isNavigationVisible = true
-                }
-                onNavigationVisibilityChanged?(true)
-                
-                print("DEBUG: [HomeView] View disappeared")
+            } else {
+                // This is a regular tweet or quote tweet, show TweetDetailView
+                TweetDetailView(tweet: tweet)
+                    .onAppear {
+                        print("DEBUG: [HomeView] navigationDestination(for: Tweet.self) called with tweet: \(tweet.mid), originalTweetId: \(tweet.originalTweetId ?? "nil"), hasContent: \(!(tweet.content?.isEmpty ?? true)), hasAttachments: \(!(tweet.attachments?.isEmpty ?? true))")
+                        print("DEBUG: [HomeView] Routing to TweetDetailView")
+                    }
             }
         }
-        
-        // Start initial refresh timer (3 seconds)
+        .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
+            Task {
+                await MainActor.run {
+                    TweetCacheManager.shared.clearAllCache()
+                    print("DEBUG: Cleared all cache on user login")
+                }
+                try await HproseInstance.shared.initialize()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
+            Task {
+                await MainActor.run {
+                    TweetCacheManager.shared.clearAllCache()
+                    print("DEBUG: Cleared all cache on user logout")
+                    // Force refresh of FollowingsTweetView
+                    refreshKey = UUID()
+                }
+                try await HproseInstance.shared.initialize()
+            }
+        }
+        .onDisappear {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isNavigationVisible = true
+            }
+            onNavigationVisibilityChanged?(true)
+            
+            print("DEBUG: [HomeView] View disappeared")
+        }
     }
     
     // MARK: - Scroll Handling
