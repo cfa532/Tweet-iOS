@@ -276,12 +276,6 @@ extension TweetCacheManager {
     }
 
     func saveUser(_ user: User) {
-        if let userData = try? JSONEncoder().encode(user),
-           let userJson = String(data: userData, encoding: .utf8) {
-            print("Saving coredata user: \(userJson)")
-        } else {
-            print("Saving coredata user: <failed to encode user>")
-        }
         context.performAndWait {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
             request.predicate = NSPredicate(format: "mid == %@", user.mid)
