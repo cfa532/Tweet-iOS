@@ -24,10 +24,7 @@ struct UserRowView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 4) {
-                NavigationLink(value: user) {
-                    Avatar(user: user, size: 48)
-                }
-                .buttonStyle(PlainButtonStyle())
+                Avatar(user: user, size: 48)
                 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -98,6 +95,10 @@ struct UserRowView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onTap?(user)
+            }
             .onAppear {
                 isFollowing = hproseInstance.appUser.followingList?.contains(user.mid) ?? false
             }

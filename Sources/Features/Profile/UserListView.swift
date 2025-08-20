@@ -19,16 +19,19 @@ struct UserListView: View {
     @State private var errorMessage: String? = nil
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
+    @Binding var navigationPath: NavigationPath
     
     // MARK: - Initialization
     init(
         title: String,
         userFetcher: @escaping @Sendable (Int, Int) async throws -> [String],
+        navigationPath: Binding<NavigationPath>,
         onFollowToggle: ((User) async -> Void)? = nil,
         onUserTap: ((User) -> Void)? = nil
     ) {
         self.title = title
         self.userFetcher = userFetcher
+        self._navigationPath = navigationPath
         self.onFollowToggle = onFollowToggle
         self.onUserTap = onUserTap
     }
@@ -44,7 +47,7 @@ struct UserListView: View {
                             user: user,
                             onFollowToggle: onFollowToggle,
                             onTap: { selectedUser in
-                                onUserTap?(selectedUser)
+                                navigationPath.append(selectedUser)
                             }
                         )
                         .id(user.mid)

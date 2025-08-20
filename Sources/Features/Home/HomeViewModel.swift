@@ -86,7 +86,7 @@ struct HomeView: View {
             ProfileView(user: user, onLogout: {
                 navigationPath.removeLast(navigationPath.count)
                 onReturnToHome?()
-            })
+            }, navigationPath: $navigationPath)
         }
         .navigationDestination(for: Tweet.self) { tweet in
             // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)

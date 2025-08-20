@@ -3,6 +3,7 @@ import SwiftUI
 struct ProfileView: View {
     let user: User
     let onLogout: (() -> Void)?
+    @Binding var navigationPath: NavigationPath
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
@@ -299,6 +300,7 @@ struct ProfileView: View {
                     guard startIndex < endIndex else { return [] }
                     return Array(ids[startIndex..<endIndex])
                 },
+                navigationPath: $navigationPath,
                 onFollowToggle: { user in
                     Task {
                         await handleToggleFollowing(for: user)
