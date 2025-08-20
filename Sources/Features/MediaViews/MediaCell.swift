@@ -79,23 +79,7 @@ struct MediaCell: View, Equatable {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type.lowercased() {
                 case "video", "hls_video":
-                    // Simulator video playback disabled - uncomment to re-enable placeholder
-                    // #if targetEnvironment(simulator)
-                    // // Show placeholder for videos in simulator to prevent crashes
-                    // ZStack {
-                    //     Color.gray.opacity(0.3)
-                    //         .aspectRatio(contentMode: .fill)
-                    //         .overlay(
-                    //             Image(systemName: "play.circle.fill")
-                    //                 .font(.system(size: 50))
-                    //                 .foregroundColor(.white)
-                    //         )
-                    //         .onTapGesture {
-                    //             showFullScreen = true
-                    //         }
-                    // }
-                    // #else
-                    // Only create video player if we should load video
+                    
                     if shouldLoadVideo {
                         ZStack {
                             SimpleVideoPlayer(
@@ -125,7 +109,6 @@ struct MediaCell: View, Equatable {
                                     showFullScreen = true
                                 }
                                 .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                                    print("DEBUG: [MEDIA CELL \(attachment.mid)] 🔄 LONG PRESS DETECTED - reloading video")
                                     // Force reload the video by triggering a refresh
                                     shouldLoadVideo = false
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -134,22 +117,19 @@ struct MediaCell: View, Equatable {
                                 }
                         }
                         .onAppear {
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] SimpleVideoPlayer appeared - isVisible: \(isVisible), autoPlay: \(videoManager.shouldPlayVideo(for: attachment.mid))")
+                            // SimpleVideoPlayer appeared
                         }
                         .onChange(of: isVisible) { _, newIsVisible in
-                            print("DEBUG: [MEDIA CELL \(attachment.mid)] isVisible changed to: \(newIsVisible)")
+                            // isVisible changed
                         }
-
+                        
                         .overlay(
                             // Video controls overlay
                             Group {
                                 VStack {
                                     Spacer()
                                     HStack {
-
-                                        
                                         Spacer()
-                                        
                                         // Mute button in bottom right corner (only if showMuteButton is true)
                                         if showMuteButton {
                                             MuteButton()
@@ -196,7 +176,6 @@ struct MediaCell: View, Equatable {
                                     handleTap()
                                 }
                                 .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                                    print("DEBUG: [MEDIA CELL \(attachment.mid)] 🔄 LONG PRESS DETECTED on placeholder - loading video")
                                     // Force load the video
                                     shouldLoadVideo = true
                                 }
@@ -294,7 +273,6 @@ struct MediaCell: View, Equatable {
         .onChange(of: forceRefreshTrigger) { _, _ in
             // Force refresh triggered by MediaGridView - update video state
             if isVideoAttachment {
-                print("DEBUG: [MEDIA CELL \(attachment.mid)] Force refresh triggered - updating video state")
                 // The SimpleVideoPlayer will automatically update its autoPlay state
                 // based on the videoManager.shouldPlayVideo() call
             }
@@ -303,7 +281,6 @@ struct MediaCell: View, Equatable {
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Restore video state when app becomes active
             if isVideoAttachment {
-                print("DEBUG: [MEDIA CELL \(attachment.mid)] App became active - ensuring video is loaded")
                 shouldLoadVideo = true
                 
                 // Resume background preloading if needed
@@ -328,7 +305,6 @@ struct MediaCell: View, Equatable {
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)
             }
         }
-        
     }
     
     // MARK: - Video Preloading Methods
@@ -342,7 +318,6 @@ struct MediaCell: View, Equatable {
             return
         }
         
-        print("DEBUG: [MEDIA CELL \(attachment.mid)] Starting background preloading")
         isPreloading = true
         
         preloadTask = Task {
@@ -352,7 +327,6 @@ struct MediaCell: View, Equatable {
                 
                 // Check if we should still preload (cell might have disappeared)
                 guard !Task.isCancelled else {
-                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Preload cancelled")
                     return
                 }
                 
@@ -365,7 +339,6 @@ struct MediaCell: View, Equatable {
                 try await Task.sleep(nanoseconds: 200_000_000) // 0.2 second delay
                 
                 guard !Task.isCancelled else {
-                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Preload cancelled before player creation")
                     return
                 }
                 
@@ -376,13 +349,11 @@ struct MediaCell: View, Equatable {
                 
                 await MainActor.run {
                     isPreloading = false
-                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Background preloading completed")
                 }
                 
             } catch {
                 await MainActor.run {
                     isPreloading = false
-                    print("DEBUG: [MEDIA CELL \(attachment.mid)] Background preloading failed: \(error)")
                 }
             }
         }
@@ -467,7 +438,6 @@ struct MuteButton: View {
                 .clipShape(Circle())
                 .contentShape(Circle())
         }
-
     }
 }
 

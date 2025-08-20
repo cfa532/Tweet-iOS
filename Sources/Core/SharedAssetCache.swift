@@ -53,7 +53,6 @@ class SharedAssetCache: ObservableObject {
             assetCache.removeValue(forKey: key)
             playerCache.removeValue(forKey: key)
             cacheTimestamps.removeValue(forKey: key)
-            print("DEBUG: [SHARED ASSET CACHE] Cleaned up expired asset: \(key)")
         }
         
         // Manage cache size
@@ -68,20 +67,17 @@ class SharedAssetCache: ObservableObject {
         
         // Check if we have a cached asset
         if let cachedAsset = assetCache[cacheKey] {
-            print("DEBUG: [SHARED ASSET CACHE] Using cached asset for: \(url.lastPathComponent)")
             cacheTimestamps[cacheKey] = Date() // Update access time
             return cachedAsset
         }
         
         // Check if there's already a loading task
         if let existingTask = loadingTasks[cacheKey] {
-            print("DEBUG: [SHARED ASSET CACHE] Waiting for existing loading task for: \(url.lastPathComponent)")
             do {
                 let asset = try await existingTask.value
                 cacheTimestamps[cacheKey] = Date() // Update access time
                 return asset
             } catch {
-                print("DEBUG: [SHARED ASSET CACHE] Error waiting for existing task: \(error)")
                 loadingTasks.removeValue(forKey: cacheKey)
                 // Fall through to create new task
             }
@@ -89,7 +85,6 @@ class SharedAssetCache: ObservableObject {
         
         // Create new loading task
         let task = Task<AVAsset, Error> {
-            print("DEBUG: [SHARED ASSET CACHE] Creating new asset for: \(url.lastPathComponent)")
             let resolvedURL = await resolveHLSURL(url)
             let asset = AVURLAsset(url: resolvedURL)
             
@@ -100,7 +95,6 @@ class SharedAssetCache: ObservableObject {
                 self.loadingTasks.removeValue(forKey: cacheKey)
             }
             
-            print("DEBUG: [SHARED ASSET CACHE] Cached asset for: \(url.lastPathComponent)")
             return asset
         }
         
@@ -111,7 +105,6 @@ class SharedAssetCache: ObservableObject {
             let asset = try await task.value
             return asset
         } catch {
-            print("DEBUG: [SHARED ASSET CACHE] Error creating asset: \(error)")
             loadingTasks.removeValue(forKey: cacheKey)
             throw error
         }
@@ -124,7 +117,6 @@ class SharedAssetCache: ObservableObject {
         // Remove old player if exists
         if let oldPlayer = playerCache[cacheKey] {
             oldPlayer.pause()
-            print("DEBUG: [SHARED ASSET CACHE] Replacing cached player for: \(url.lastPathComponent)")
         }
         
         playerCache[cacheKey] = player
@@ -132,8 +124,6 @@ class SharedAssetCache: ObservableObject {
         
         // Manage cache size
         managePlayerCacheSize()
-        
-        print("DEBUG: [SHARED ASSET CACHE] Cached player for: \(url.lastPathComponent)")
     }
     
     /// Get cached player if available
@@ -141,7 +131,6 @@ class SharedAssetCache: ObservableObject {
         let cacheKey = url.absoluteString
         if let player = playerCache[cacheKey] {
             cacheTimestamps[cacheKey] = Date() // Update access time
-            print("DEBUG: [SHARED ASSET CACHE] Using cached player for: \(url.lastPathComponent)")
             return player
         }
         return nil
@@ -151,14 +140,12 @@ class SharedAssetCache: ObservableObject {
     func removeInvalidPlayer(for url: URL) {
         let cacheKey = url.absoluteString
         playerCache.removeValue(forKey: cacheKey)
-        print("DEBUG: [SHARED ASSET CACHE] Removed invalid cached player for: \(url.lastPathComponent)")
     }
     
     /// Get cached player or create new one with asset
     @MainActor func getOrCreatePlayer(for url: URL) async throws -> AVPlayer {
         // Try to get cached player first
         if let cachedPlayer = getCachedPlayer(for: url) {
-            print("DEBUG: [SHARED ASSET CACHE] Using cached player for: \(url.lastPathComponent)")
             return cachedPlayer
         }
         
@@ -187,12 +174,10 @@ class SharedAssetCache: ObservableObject {
         let playlistURL = url.appendingPathComponent("playlist.m3u8")
         
         if await urlExists(masterURL) {
-            print("DEBUG: [SHARED ASSET CACHE] Found master.m3u8 for: \(url.lastPathComponent)")
             return masterURL
         }
         
         if await urlExists(playlistURL) {
-            print("DEBUG: [SHARED ASSET CACHE] Found playlist.m3u8 for: \(url.lastPathComponent)")
             return playlistURL
         }
         return url
@@ -220,7 +205,6 @@ class SharedAssetCache: ObservableObject {
         loadingTasks.removeAll()
         preloadTasks.values.forEach { $0.cancel() }
         preloadTasks.removeAll()
-        print("DEBUG: [SHARED ASSET CACHE] Cache cleared")
     }
     
     // MARK: - Enhanced Preloading Methods
@@ -234,11 +218,9 @@ class SharedAssetCache: ObservableObject {
         
         let task = Task {
             do {
-                print("DEBUG: [SHARED ASSET CACHE] Starting high-priority video preload for: \(url.lastPathComponent)")
                 _ = try await getOrCreatePlayer(for: url)
-                print("DEBUG: [SHARED ASSET CACHE] High-priority video preload completed for: \(url.lastPathComponent)")
             } catch {
-                print("DEBUG: [SHARED ASSET CACHE] Error in high-priority video preload: \(error)")
+                // Handle error silently
             }
         }
         
@@ -254,11 +236,9 @@ class SharedAssetCache: ObservableObject {
         
         let task = Task {
             do {
-                print("DEBUG: [SHARED ASSET CACHE] Starting background asset preload for: \(url.lastPathComponent)")
                 _ = try await getAsset(for: url)
-                print("DEBUG: [SHARED ASSET CACHE] Background asset preload completed for: \(url.lastPathComponent)")
             } catch {
-                print("DEBUG: [SHARED ASSET CACHE] Error in background asset preload: \(error)")
+                // Handle error silently
             }
         }
         
@@ -270,7 +250,6 @@ class SharedAssetCache: ObservableObject {
         let cacheKey = url.absoluteString
         preloadTasks[cacheKey]?.cancel()
         preloadTasks.removeValue(forKey: cacheKey)
-        print("DEBUG: [SHARED ASSET CACHE] Cancelled preload for: \(url.lastPathComponent)")
     }
     
     /// Preload multiple videos with priority management
@@ -310,7 +289,6 @@ class SharedAssetCache: ObservableObject {
             for key in keysToRemove {
                 assetCache.removeValue(forKey: key)
                 cacheTimestamps.removeValue(forKey: key)
-                print("DEBUG: [SHARED ASSET CACHE] Removed LRU asset: \(key)")
             }
         }
     }
@@ -326,7 +304,6 @@ class SharedAssetCache: ObservableObject {
                     player.pause()
                     playerCache.removeValue(forKey: key)
                     cacheTimestamps.removeValue(forKey: key)
-                    print("DEBUG: [SHARED ASSET CACHE] Removed LRU player: \(key)")
                 }
             }
         }
@@ -362,8 +339,6 @@ class SharedAssetCache: ObservableObject {
     }
     
     deinit {
-        print("DEBUG: [SHARED ASSET CACHE] Deinitializing - cleaning up resources")
-        
         // Invalidate timer
         cleanupTimer?.invalidate()
         cleanupTimer = nil
@@ -392,17 +367,13 @@ class SharedAssetCache: ObservableObject {
         
         // Remove NotificationCenter observers
         NotificationCenter.default.removeObserver(self)
-        
-        print("DEBUG: [SHARED ASSET CACHE] Cleanup completed")
     }
     
     private func handleAppWillEnterForeground() {
-        print("DEBUG: [SHARED ASSET CACHE] App will enter foreground - refreshing cached players")
         refreshCachedPlayers()
     }
     
     private func handleAppDidBecomeActive() {
-        print("DEBUG: [SHARED ASSET CACHE] App did become active - ensuring cached players are ready")
         // Use Task to avoid potential MainActor deadlock
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
@@ -412,14 +383,11 @@ class SharedAssetCache: ObservableObject {
     
     private func refreshCachedPlayers() {
         // Refresh all cached players to ensure they show cached content
-        for (urlString, player) in playerCache {
-            print("DEBUG: [SHARED ASSET CACHE] Refreshing cached player for: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
-            
+        for (_, player) in playerCache {
             // Force a seek to refresh the video layer
             let currentTime = player.currentTime()
             player.seek(to: currentTime) { _ in
                 // Video layer should now be refreshed and showing cached content
-                print("DEBUG: [SHARED ASSET CACHE] Refreshed cached player for: \(URL(string: urlString)?.lastPathComponent ?? "unknown")")
             }
         }
     }

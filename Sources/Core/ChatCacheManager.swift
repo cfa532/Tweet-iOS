@@ -7,7 +7,6 @@ class ChatCacheManager {
     private let coreDataManager = CoreDataManager.shared
 
     private init() {
-        print("[ChatCacheManager] Initializing ChatCacheManager")
         // No periodic cleanup needed - messages are only removed manually by user
     }
     
@@ -22,8 +21,6 @@ extension ChatCacheManager {
             request.predicate = NSPredicate(format: "id == %@", session.id)
             let cdSession = (try? context.fetch(request).first) ?? CDChatSession(context: context)
             
-            print("[ChatCacheManager] Before saving - cdSession.id: \(cdSession.id ?? "nil"), cdSession.userId: \(cdSession.userId ?? "nil")")
-            
             cdSession.id = session.id
             cdSession.userId = session.userId
             cdSession.receiptId = session.receiptId
@@ -35,34 +32,12 @@ extension ChatCacheManager {
             // Encode the entire lastMessage as JSON and store it
             if let messageData = try? JSONEncoder().encode(session.lastMessage) {
                 cdSession.lastMessageData = messageData
-                print("[ChatCacheManager] Successfully encoded lastMessage data")
-            } else {
-                print("[ChatCacheManager] Failed to encode lastMessage data")
             }
-            
-            print("[ChatCacheManager] After setting - cdSession.id: \(cdSession.id ?? "nil"), cdSession.userId: \(cdSession.userId ?? "nil")")
-            print("[ChatCacheManager] Saving chat session: id=\(session.id), userId=\(session.userId), receiptId=\(session.receiptId), lastMessageId=\(session.lastMessage.id)")
             
             do {
                 try context.save()
-                print("[ChatCacheManager] Successfully saved chat session to Core Data")
-                
-                // Check if there are any Core Data errors
-                if context.hasChanges {
-                    print("[ChatCacheManager] Warning: Context still has changes after save")
-                }
-                
-                // Verify the session was actually saved
-                let verifyRequest: NSFetchRequest<CDChatSession> = CDChatSession.fetchRequest()
-                verifyRequest.predicate = NSPredicate(format: "id == %@", session.id)
-                if let savedSession = try? context.fetch(verifyRequest).first {
-                    print("[ChatCacheManager] Verification: Found saved session with id=\(savedSession.id ?? "nil"), userId=\(savedSession.userId ?? "nil")")
-                } else {
-                    print("[ChatCacheManager] Verification: Failed to find saved session!")
-                }
             } catch {
-                print("[ChatCacheManager] Error saving chat session: \(error)")
-                print("[ChatCacheManager] Error details: \(error.localizedDescription)")
+                // Handle save error silently
             }
         }
     }
@@ -74,53 +49,16 @@ extension ChatCacheManager {
             request.predicate = NSPredicate(format: "userId == %@", userId)
             request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
             
-            print("[ChatCacheManager] Fetching chat sessions for userId: \(userId)")
-            
             if let cdSessions = try? context.fetch(request) {
-                print("[ChatCacheManager] Found \(cdSessions.count) CDChatSession objects")
                 for cdSession in cdSessions {
-                    print("[ChatCacheManager] CDSession: id=\(cdSession.id ?? "nil"), userId=\(cdSession.userId ?? "nil"), receiptId=\(cdSession.receiptId ?? "nil"), lastMessageId=\(cdSession.lastMessageId ?? "nil")")
                     if let session = convertToChatSession(cdSession) {
                         sessions.append(session)
-                        print("[ChatCacheManager] Successfully converted session for \(session.receiptId)")
-                    } else {
-                        print("[ChatCacheManager] Failed to convert session")
                     }
                 }
-            } else {
-                print("[ChatCacheManager] No CDChatSession objects found")
             }
             
-            // Debug: Check if there are any sessions with different user IDs
-            let allSessionsRequest: NSFetchRequest<CDChatSession> = CDChatSession.fetchRequest()
-            if let allSessions = try? context.fetch(allSessionsRequest) {
-                print("[ChatCacheManager] Total sessions in Core Data: \(allSessions.count)")
-                for session in allSessions {
-                    print("[ChatCacheManager] All session: userId=\(session.userId ?? "nil"), receiptId=\(session.receiptId ?? "nil")")
-                }
-            }
             
-            // Debug: Check Core Data store file
-            if let coordinator = context.persistentStoreCoordinator,
-               let firstStore = coordinator.persistentStores.first,
-               let storeURL = firstStore.url {
-                let fileManager = FileManager.default
-                if fileManager.fileExists(atPath: storeURL.path) {
-                    let attributes = try? fileManager.attributesOfItem(atPath: storeURL.path)
-                    let fileSize = attributes?[.size] as? Int64 ?? 0
-                    print("[ChatCacheManager] Core Data store exists at: \(storeURL.path)")
-                    print("[ChatCacheManager] Core Data store size: \(fileSize) bytes")
-                } else {
-                    print("[ChatCacheManager] Core Data store file does not exist at: \(storeURL.path)")
-                }
-            }
         }
-        print("[ChatCacheManager] Returning \(sessions.count) chat sessions")
-        
-        // Simple Core Data store check
-        print("[ChatCacheManager] Core Data context: \(context)")
-        print("[ChatCacheManager] Core Data coordinator: \(context.persistentStoreCoordinator?.description ?? "nil")")
-        
         return sessions
     }
     
@@ -139,7 +77,6 @@ extension ChatCacheManager {
                 
                 context.delete(cdSession)
                 try? context.save()
-                print("[ChatCacheManager] Deleted chat session and all associated messages for id: \(id)")
             }
         }
     }
@@ -159,7 +96,6 @@ extension ChatCacheManager {
                 
                 context.delete(cdSession)
                 try? context.save()
-                print("[ChatCacheManager] Deleted chat session and all associated messages for userId: \(userId), receiptId: \(receiptId)")
             }
         }
     }
@@ -169,14 +105,12 @@ extension ChatCacheManager {
               let userId = cdSession.userId,
               let receiptId = cdSession.receiptId,
               let timestamp = cdSession.timestamp else {
-            print("[ChatCacheManager] Failed to convert session - missing required fields: id=\(cdSession.id ?? "nil"), userId=\(cdSession.userId ?? "nil"), receiptId=\(cdSession.receiptId ?? "nil"), timestamp=\(cdSession.timestamp?.description ?? "nil")")
             return nil
         }
         
         // Try to decode the lastMessage from lastMessageData first
         if let messageData = cdSession.lastMessageData,
            let lastMessage = try? JSONDecoder().decode(ChatMessage.self, from: messageData) {
-            print("[ChatCacheManager] Successfully decoded lastMessage from lastMessageData for session: \(id)")
             return ChatSession(
                 id: id,
                 userId: userId,
@@ -189,7 +123,6 @@ extension ChatCacheManager {
         
         // Fallback: try to fetch from lastMessageId (for backward compatibility)
         if let lastMessageId = cdSession.lastMessageId {
-            print("[ChatCacheManager] Converting session with lastMessageId: \(lastMessageId)")
             let lastMessage = fetchLastMessage(for: lastMessageId)
             return ChatSession(
                 id: id,
@@ -200,7 +133,6 @@ extension ChatCacheManager {
                 hasNews: cdSession.hasNews
             )
         } else {
-            print("[ChatCacheManager] Failed to convert session - missing lastMessageId for session: \(id)")
             return nil
         }
     }
@@ -269,8 +201,8 @@ extension ChatCacheManager {
         var messages: [ChatMessage] = []
         context.performAndWait {
             let request: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
-            request.predicate = NSPredicate(format: "(authorId == %@ AND receiptId == %@) OR (authorId == %@ AND receiptId == %@)", 
-                                          userId, receiptId, receiptId, userId)
+            request.predicate = NSPredicate(format: "(authorId == %@ AND receiptId == %@) OR (authorId == %@ AND receiptId == %@)",
+                                            userId, receiptId, receiptId, userId)
             request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: true)]
             
             if let cdMessages = try? context.fetch(request) {
@@ -287,15 +219,14 @@ extension ChatCacheManager {
     func deleteMessagesForConversation(authorId: String, receiptId: String) {
         context.performAndWait {
             let request: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
-            request.predicate = NSPredicate(format: "(authorId == %@ AND receiptId == %@) OR (authorId == %@ AND receiptId == %@)", 
-                                          authorId, receiptId, receiptId, authorId)
+            request.predicate = NSPredicate(format: "(authorId == %@ AND receiptId == %@) OR (authorId == %@ AND receiptId == %@)",
+                                            authorId, receiptId, receiptId, authorId)
             
             if let cdMessages = try? context.fetch(request) {
                 for message in cdMessages {
                     context.delete(message)
                 }
                 try? context.save()
-                print("[ChatCacheManager] Deleted \(cdMessages.count) messages for conversation between \(authorId) and \(receiptId)")
             }
         }
     }
@@ -313,14 +244,12 @@ extension ChatCacheManager {
                 let results = try context.fetch(request) as? [[String: Any]] ?? []
                 messageIds = results.compactMap { $0["id"] as? String }
             } catch {
-                print("[ChatCacheManager] Error fetching message IDs: \(error)")
+                // Handle error silently
             }
         }
         
         return messageIds
     }
-    
-
     
     private func convertToChatMessage(_ cdMessage: CDChatMessage) -> ChatMessage? {
         guard let id = cdMessage.id,
@@ -360,7 +289,6 @@ extension ChatCacheManager {
                 context.delete(message)
             }
             try? context.save()
-            print("[ChatCacheManager] Deleted \(expiredMessages.count) expired messages")
         }
     }
-} 
+}

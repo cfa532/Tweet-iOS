@@ -44,13 +44,11 @@ class VideoCacheManager: ObservableObject {
         
         // Check if we already have a cached player for this video mid
         if let cachedPlayer = videoCache[videoMid] {
-            print("DEBUG: [VIDEO CACHE] Found cached player for video mid: \(videoMid)")
             cachedPlayer.lastAccessed = Date()
             return cachedPlayer.player
         }
         
         // Create new player and cache it
-        print("DEBUG: [VIDEO CACHE] Creating new player for video mid: \(videoMid), isHLS: \(isHLS)")
         let player = createVideoPlayer(for: url, isHLS: isHLS)
         let cachedPlayer = CachedVideoPlayer(player: player, videoMid: videoMid, url: url)
         videoCache[videoMid] = cachedPlayer
@@ -102,7 +100,6 @@ class VideoCacheManager: ObservableObject {
         defer { cacheLock.unlock() }
         
         if let cachedPlayer = videoCache[videoMid] {
-            print("DEBUG: [VIDEO CACHE] Resetting player for video mid: \(videoMid)")
             cachedPlayer.player.seek(to: CMTime.zero)
             cachedPlayer.lastAccessed = Date()
         }
@@ -114,7 +111,6 @@ class VideoCacheManager: ObservableObject {
         defer { cacheLock.unlock() }
         
         if let cachedPlayer = videoCache[videoMid] {
-            print("DEBUG: [VIDEO CACHE] Pausing player for video mid: \(videoMid)")
             cachedPlayer.player.pause()
             cachedPlayer.lastAccessed = Date()
         }
@@ -125,10 +121,8 @@ class VideoCacheManager: ObservableObject {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        print("DEBUG: [VIDEO CACHE] Pausing all videos except: \(videoMid)")
         for (mid, cachedPlayer) in videoCache {
             if mid != videoMid {
-                print("DEBUG: [VIDEO CACHE] Pausing video: \(mid)")
                 cachedPlayer.player.pause()
                 cachedPlayer.lastAccessed = Date()
             }
@@ -141,7 +135,6 @@ class VideoCacheManager: ObservableObject {
         defer { cacheLock.unlock() }
         
         if let cachedPlayer = videoCache[videoMid] {
-            print("DEBUG: [VIDEO CACHE] Setting mute state for video mid: \(videoMid) to: \(isMuted)")
             cachedPlayer.player.isMuted = isMuted
             cachedPlayer.lastAccessed = Date()
         }
@@ -176,7 +169,6 @@ class VideoCacheManager: ObservableObject {
             cachedPlayer.resolvedPlaylistURL = playlistURL
             cachedPlayer.isHLSMode = isHLS
             cachedPlayer.lastAccessed = Date()
-            print("DEBUG: [VIDEO CACHE] Cached playlist URL for \(videoMid): \(playlistURL?.absoluteString ?? "nil"), isHLS: \(isHLS)")
         }
     }
     
@@ -199,7 +191,6 @@ class VideoCacheManager: ObservableObject {
         defer { cacheLock.unlock() }
         
         if let cachedPlayer = videoCache.removeValue(forKey: videoMid) {
-            print("DEBUG: [VIDEO CACHE] Removed player for video mid: \(videoMid)")
             cachedPlayer.player.pause()
             // Player will be deallocated when no references remain
         }
@@ -209,22 +200,17 @@ class VideoCacheManager: ObservableObject {
     private func cleanupCacheIfNeeded() {
         guard videoCache.count > maxCacheSize else { return }
         
-        print("DEBUG: [VIDEO CACHE] Cache size (\(videoCache.count)) exceeds limit (\(maxCacheSize)), cleaning up")
-        
         // Sort by last accessed time and remove oldest entries
         let sortedEntries = videoCache.sorted { $0.value.lastAccessed < $1.value.lastAccessed }
         let entriesToRemove = sortedEntries.prefix(videoCache.count - maxCacheSize)
         
         for (mid, _) in entriesToRemove {
             videoCache.removeValue(forKey: mid)
-            print("DEBUG: [VIDEO CACHE] Removed old cached player for mid: \(mid)")
         }
     }
     
     /// Handle memory warning by cleaning up cache
     @objc private func handleMemoryWarning() {
-        print("DEBUG: [VIDEO CACHE] Memory warning received, cleaning up cache")
-        
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
@@ -233,7 +219,6 @@ class VideoCacheManager: ObservableObject {
         for mid in midsToRemove {
             if let cachedPlayer = videoCache.removeValue(forKey: mid) {
                 cachedPlayer.player.pause()
-                print("DEBUG: [VIDEO CACHE] Removed player for mid: \(mid) due to memory warning")
             }
         }
     }
@@ -242,7 +227,6 @@ class VideoCacheManager: ObservableObject {
     private func checkVideoLayerHealthUnsafe(for videoMid: String) -> Bool {
         // This method assumes cacheLock is already held by caller
         guard let cachedPlayer = videoCache[videoMid] else {
-            print("DEBUG: [VIDEO CACHE] No cached player for health check: \(videoMid)")
             return false
         }
         
@@ -251,14 +235,11 @@ class VideoCacheManager: ObservableObject {
         // Check if player has content and is ready
         guard let playerItem = player.currentItem,
               playerItem.status == .readyToPlay else {
-            print("DEBUG: [VIDEO CACHE] Player not ready for health check: \(videoMid)")
             return false
         }
         
         // Get timing information first
-        let currentTime = player.currentTime().seconds
         let duration = playerItem.duration.seconds
-        let isPlaying = player.rate > 0
         
         // Check if video has video tracks (not just audio)
         let hasVideoTracks: Bool
@@ -270,8 +251,6 @@ class VideoCacheManager: ObservableObject {
         } else {
             hasVideoTracks = playerItem.asset.tracks(withMediaType: .video).count > 0
         }
-        
-        print("DEBUG: [VIDEO CACHE] Health check for \(videoMid) - hasVideo: \(hasVideoTracks), time: \(currentTime), duration: \(duration), playing: \(isPlaying)")
         
         return hasVideoTracks && duration > 0
     }
@@ -285,8 +264,6 @@ class VideoCacheManager: ObservableObject {
     
     /// Nuclear option: Force recreation of VideoPlayer view for a specific video
     func recreateVideoPlayerView(for videoMid: String) {
-        print("DEBUG: [VIDEO CACHE] Nuclear option - recreating VideoPlayer view for \(videoMid)")
-        
         // Post notification to trigger VideoPlayer recreation
         NotificationCenter.default.post(
             name: NSNotification.Name("RecreateVideoPlayer"),
@@ -300,14 +277,12 @@ class VideoCacheManager: ObservableObject {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        print("DEBUG: [VIDEO CACHE] Immediate video player restoration initiated")
         let now = Date()
         
         for (mid, cachedPlayer) in videoCache {
             // Check per-video cooldown to prevent excessive restoration of individual videos
             if let lastRestoration = videoRestorationTimestamps[mid],
                now.timeIntervalSince(lastRestoration) < perVideoRestorationCooldown {
-                print("DEBUG: [VIDEO CACHE] Skipping restoration for \(mid) - too recent")
                 continue
             }
             
@@ -318,13 +293,10 @@ class VideoCacheManager: ObservableObject {
             
             // Simple restoration without preserved state
             let currentTime = player.currentTime()
-            print("DEBUG: [VIDEO CACHE] Restoring \(mid) with current time: \(currentTime.seconds)")
             
             // Basic restoration
             player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { completed in
-                if completed {
-                    print("DEBUG: [VIDEO CACHE] Restoration completed for \(mid)")
-                }
+                // Restoration completed
             }
             
             cachedPlayer.lastAccessed = Date()
@@ -339,14 +311,11 @@ class VideoCacheManager: ObservableObject {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        print("DEBUG: [VIDEO CACHE] Checking all cached videos for layer health")
-        
         var unhealthyVideos: [String] = []
         
         for (mid, _) in videoCache {
             let isHealthy = checkVideoLayerHealthUnsafe(for: mid) // Use lock-free version
             if !isHealthy {
-                print("DEBUG: [VIDEO CACHE] Found unhealthy video \(mid) - will schedule recreation")
                 unhealthyVideos.append(mid)
             }
         }
@@ -372,7 +341,6 @@ class VideoCacheManager: ObservableObject {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         
-        print("DEBUG: [VIDEO CACHE] Clearing entire cache")
         let midsToRemove = Array(videoCache.keys)
         for mid in midsToRemove {
             if let cachedPlayer = videoCache.removeValue(forKey: mid) {
