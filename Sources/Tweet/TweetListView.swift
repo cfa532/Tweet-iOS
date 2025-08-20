@@ -134,6 +134,13 @@ struct TweetListView<RowView: View>: View {
                             tweets.removeAll { $0.id == tweetId }
                             TweetCacheManager.shared.deleteTweet(mid: tweetId)
                         }
+                        // Special case: blockUser may send blockedUserId to remove all tweets from that user
+                        if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
+                            let originalCount = tweets.count
+                            tweets.removeAll { $0.authorId == blockedUserId }
+                            let removedCount = originalCount - tweets.count
+                            print("[TweetListView] Removed \(removedCount) tweets from blocked user: \(blockedUserId)")
+                        }
                     }
             }
         }

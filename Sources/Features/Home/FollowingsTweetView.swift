@@ -72,6 +72,15 @@ struct FollowingsTweetView: View {
                     )
                 }
             )
+            .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
+                // Handle blocked user tweets removal
+                if let blockedUserId = notification.userInfo?["blockedUserId"] as? String {
+                    let originalCount = viewModel.tweets.count
+                    viewModel.tweets.removeAll { $0.authorId == blockedUserId }
+                    let removedCount = originalCount - viewModel.tweets.count
+                    print("[FollowingsTweetView] Removed \(removedCount) tweets from blocked user: \(blockedUserId)")
+                }
+            }
             .onDisappear {
                 print("DEBUG: [FollowingsTweetView] View disappeared")
             }

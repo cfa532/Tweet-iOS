@@ -307,6 +307,51 @@
 "Accept" = "Accept";
 "Cancel" = "Cancel";
 
+// MARK: - Content Moderation
+"Filter Content" = "Filter Content";
+"Report Tweet" = "Report Tweet";
+"Content Filtering" = "Content Filtering";
+"Control what content you see on your timeline" = "Control what content you see on your timeline";
+"User Actions" = "User Actions";
+"Block this user" = "Block this user";
+"Hide posts with keywords" = "Hide posts with keywords";
+"Enter keywords separated by commas" = "Enter keywords separated by commas";
+"Content Types" = "Content Types";
+"Filter profanity" = "Filter profanity";
+"Filter violent content" = "Filter violent content";
+"Filter adult content" = "Filter adult content";
+"How Content Filtering Works" = "How Content Filtering Works";
+"Filtered content will be hidden from your timeline" = "Filtered content will be hidden from your timeline";
+"You can always change these settings later" = "You can always change these settings later";
+"Blocking users prevents them from interacting with you" = "Blocking users prevents them from interacting with you";
+"Apply Filters" = "Apply Filters";
+"User blocked successfully" = "User blocked successfully";
+"Content filters applied" = "Content filters applied";
+"Failed to apply filters" = "Failed to apply filters";
+
+// MARK: - Reporting
+"Help us maintain a safe community by reporting inappropriate content" = "Help us maintain a safe community by reporting inappropriate content";
+"Reported Tweet" = "Reported Tweet";
+"Why are you reporting this tweet?" = "Why are you reporting this tweet?";
+"Spam" = "Spam";
+"Harassment or bullying" = "Harassment or bullying";
+"Hate speech or discrimination" = "Hate speech or discrimination";
+"Violence or threats" = "Violence or threats";
+"Adult or sexual content" = "Adult or sexual content";
+"Misinformation" = "Misinformation";
+"Copyright violation" = "Copyright violation";
+"Other" = "Other";
+"Additional Comments (Optional)" = "Additional Comments (Optional)";
+"Provide additional details about this report" = "Provide additional details about this report";
+"What happens next?" = "What happens next?";
+"Our team will review your report within 24 hours" = "Our team will review your report within 24 hours";
+"The content may be removed if it violates our guidelines" = "The content may be removed if it violates our guidelines";
+"You'll receive a notification about the outcome" = "You'll receive a notification about the outcome";
+"False reports may result in account restrictions" = "False reports may result in account restrictions";
+"Submit Report" = "Submit Report";
+"Report submitted successfully. Thank you for helping keep our community safe." = "Report submitted successfully. Thank you for helping keep our community safe.";
+"Failed to submit report. Please try again." = "Failed to submit report. Please try again.";
+
 // MARK: - Status Messages
 "Offline - Showing cached content" = "Offline - Showing cached content";
 "Creating Account..." = "Creating Account...";

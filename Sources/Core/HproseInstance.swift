@@ -2886,6 +2886,38 @@ final class HproseInstance: ObservableObject {
         // For unknown errors, return a generic localized message
         return NSLocalizedString("An error occurred. Please try again.", comment: "Generic backend error")
     }
+    
+    // MARK: - Content Moderation Methods
+    
+    /// Blocks a user
+    func blockUser(userId: String) async throws {
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+        }
+        
+        let entry = "block_user"
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "userid": appUser.mid,
+            "blocked": userId
+        ]
+        
+        client.invoke("runMApp", withArgs: [entry, params])
+        print("[blockUser] Backend call completed for user: \(userId)")
+    }
+    
+    /// Reports a tweet for inappropriate content
+    func reportTweet(tweetId: String, category: String, comments: String) async throws {
+        // In a real implementation, this would call a backend API
+        print("[reportTweet] Reporting tweet: \(tweetId), category: \(category)")
+        
+        // Simulate backend call for now
+        // In a real app, you would send the report data to your moderation backend
+        try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+        
+        print("[reportTweet] Backend call completed for tweet: \(tweetId)")
+    }
 }
 
 

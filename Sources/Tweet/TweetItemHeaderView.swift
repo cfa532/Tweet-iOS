@@ -1,5 +1,9 @@
 import SwiftUI
 
+
+
+
+
 struct TweetItemHeaderView: View {
     @ObservedObject var tweet: Tweet
     
@@ -64,6 +68,8 @@ struct TweetMenu: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     @State private var isPressed = false
+    @State private var showReportSheet = false
+    @State private var showFilterSheet = false
     
     init(tweet: Tweet, isPinned: Bool, showDeleteButton: Bool = false) {
         self.tweet = tweet
@@ -78,7 +84,23 @@ struct TweetMenu: View {
                 Button(action: {
                     UIPasteboard.general.string = tweet.mid
                 }) {
-                    Label("\(tweet.mid)", systemImage: "doc.on.clipboard")
+                    Label(truncatedTweetId(tweet.mid), systemImage: "doc.on.clipboard")
+                }
+                
+                // Content filtering option
+                Button(action: {
+                    showFilterSheet = true
+                }) {
+                    Label(LocalizedStringKey("Filter Content"), systemImage: "line.3.horizontal.decrease.circle")
+                }
+                
+                // Report tweet option (only show for tweets not authored by current user)
+                if tweet.authorId != appUser.mid {
+                    Button(action: {
+                        showReportSheet = true
+                    }) {
+                        Label(LocalizedStringKey("Report Tweet"), systemImage: "flag")
+                    }
                 }
                 
                 if tweet.authorId == appUser.mid {
@@ -156,6 +178,12 @@ struct TweetMenu: View {
                 .animation(.easeInOut(duration: 0.3), value: showToast)
             }
         }
+        .sheet(isPresented: $showFilterSheet) {
+            ContentFilterView(tweet: tweet)
+        }
+        .sheet(isPresented: $showReportSheet) {
+            ReportTweetView(tweet: tweet)
+        }
     }
     
     private func deleteTweet(_ tweet: Tweet) async throws {
@@ -199,5 +227,14 @@ struct TweetMenu: View {
                 showToast = true
             }
         }
+    }
+    
+    /// Truncates a tweet ID to show first 8 and last 4 characters with ellipsis in the middle
+    private func truncatedTweetId(_ id: String) -> String {
+        guard id.count > 12 else { return id }
+        
+        let prefix = String(id.prefix(8))
+        let suffix = String(id.suffix(4))
+        return "\(prefix)...\(suffix)"
     }
 }

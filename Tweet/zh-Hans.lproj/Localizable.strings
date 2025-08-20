@@ -309,6 +309,51 @@
 "Accept" = "接受";
 "Cancel" = "取消";
 
+// MARK: - Content Moderation
+"Filter Content" = "过滤内容";
+"Report Tweet" = "举报推文";
+"Content Filtering" = "内容过滤";
+"Control what content you see on your timeline" = "控制您在时间线上看到的内容";
+"User Actions" = "用户操作";
+"Block this user" = "屏蔽此用户";
+"Hide posts with keywords" = "隐藏包含关键词的帖子";
+"Enter keywords separated by commas" = "输入关键词，用逗号分隔";
+"Content Types" = "内容类型";
+"Filter profanity" = "过滤脏话";
+"Filter violent content" = "过滤暴力内容";
+"Filter adult content" = "过滤成人内容";
+"How Content Filtering Works" = "内容过滤如何工作";
+"Filtered content will be hidden from your timeline" = "过滤的内容将从您的时间线中隐藏";
+"You can always change these settings later" = "您可以随时更改这些设置";
+"Blocking users prevents them from interacting with you" = "屏蔽用户可防止他们与您互动";
+"Apply Filters" = "应用过滤器";
+"User blocked successfully" = "用户屏蔽成功";
+"Content filters applied" = "内容过滤器已应用";
+"Failed to apply filters" = "应用过滤器失败";
+
+// MARK: - Reporting
+"Help us maintain a safe community by reporting inappropriate content" = "通过举报不当内容帮助我们维护安全的社区";
+"Reported Tweet" = "被举报的推文";
+"Why are you reporting this tweet?" = "您为什么要举报此推文？";
+"Spam" = "垃圾信息";
+"Harassment or bullying" = "骚扰或欺凌";
+"Hate speech or discrimination" = "仇恨言论或歧视";
+"Violence or threats" = "暴力或威胁";
+"Adult or sexual content" = "成人或性内容";
+"Misinformation" = "虚假信息";
+"Copyright violation" = "版权侵犯";
+"Other" = "其他";
+"Additional Comments (Optional)" = "补充评论（可选）";
+"Provide additional details about this report" = "提供有关此举报的更多详细信息";
+"What happens next?" = "接下来会发生什么？";
+"Our team will review your report within 24 hours" = "我们的团队将在24小时内审核您的举报";
+"The content may be removed if it violates our guidelines" = "如果内容违反我们的准则，可能会被删除";
+"You'll receive a notification about the outcome" = "您将收到有关结果的通知";
+"False reports may result in account restrictions" = "虚假举报可能导致账户限制";
+"Submit Report" = "提交举报";
+"Report submitted successfully. Thank you for helping keep our community safe." = "举报提交成功。感谢您帮助维护社区安全。";
+"Failed to submit report. Please try again." = "提交举报失败。请重试。";
+
 // MARK: - Status Messages
 "Offline - Showing cached content" = "离线 - 显示缓存内容";
 "Creating Account..." = "创建账户中...";
