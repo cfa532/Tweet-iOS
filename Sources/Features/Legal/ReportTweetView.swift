@@ -224,22 +224,20 @@ struct ReportTweetView: View {
                 )
                 
                 await MainActor.run {
-                    // After successful report submission, delete the tweet from the list
-                    NotificationCenter.default.post(
-                        name: .tweetDeleted,
-                        object: nil,
-                        userInfo: ["tweetId": tweet.mid]
-                    )
-                    print("[ReportTweetView] Posted notification to remove reported tweet: \(tweet.mid)")
-                    
                     toastMessage = NSLocalizedString("Report submitted successfully. Thank you for helping keep our community safe.", comment: "Report success")
                     toastType = .success
                     showToast = true
                     isSubmitting = false
                 }
                 
-                // Dismiss after showing success message
+                // Wait a moment for user to read the message, then delete the tweet and dismiss
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    NotificationCenter.default.post(
+                        name: .tweetDeleted,
+                        object: nil,
+                        userInfo: ["tweetId": tweet.mid]
+                    )
+                    print("[ReportTweetView] Posted notification to remove reported tweet: \(tweet.mid)")
                     dismiss()
                 }
                 
