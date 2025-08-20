@@ -45,7 +45,6 @@ class ComposeTweetViewModel: ObservableObject {
     init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
         #if !DEBUG
-        // Always set isPrivate to false on release builds
         self.isPrivate = false
         #endif
     }

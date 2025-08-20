@@ -559,73 +559,15 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
         ]
         
-        // Safety check for release builds
-        guard let client = user.hproseClient else {
+        // Call runMApp following the sample code pattern
+        guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
             print("DEBUG: [updateUserFromServer] No hprose client available for user: \(user.mid)")
             return
         }
         
-        // Call runMApp following the sample code pattern
-        let response = client.invoke("runMApp", withArgs: [entry, params])
-        
-        // Immediately copy the response to prevent deallocation issues
         if let userDict = response as? [String: Any] {
-            // Create a copy of the dictionary to ensure it stays alive
-            let safeUserDict = userDict
             do {
-                // Use MainActor to ensure thread safety
-                await MainActor.run {
-                    // Update user properties directly instead of using User.from(dict:)
-                    if let name = safeUserDict["name"] as? String {
-                        user.name = name
-                    }
-                    if let username = safeUserDict["username"] as? String {
-                        user.username = username
-                    }
-                    if let avatar = safeUserDict["avatar"] as? String {
-                        user.avatar = avatar
-                    }
-                    if let email = safeUserDict["email"] as? String {
-                        user.email = email
-                    }
-                    if let profile = safeUserDict["profile"] as? String {
-                        user.profile = profile
-                    }
-                    if let lastLogin = safeUserDict["lastLogin"] as? Double {
-                        user.lastLogin = Date(timeIntervalSince1970: lastLogin)
-                    }
-                    if let cloudDrivePort = safeUserDict["cloudDrivePort"] as? Int {
-                        user.cloudDrivePort = cloudDrivePort
-                    }
-                    if let hostIds = safeUserDict["hostIds"] as? [String] {
-                        user.hostIds = hostIds
-                    }
-                    if let baseUrl = safeUserDict["baseUrl"] as? String {
-                        user.baseUrl = URL(string: baseUrl)
-                    }
-                    if let writableUrl = safeUserDict["writableUrl"] as? String {
-                        user.writableUrl = URL(string: writableUrl)
-                    }
-                    if let tweetCount = safeUserDict["tweetCount"] as? Int {
-                        user.tweetCount = tweetCount
-                    }
-                    if let followingCount = safeUserDict["followingCount"] as? Int {
-                        user.followingCount = followingCount
-                    }
-                    if let followersCount = safeUserDict["followersCount"] as? Int {
-                        user.followersCount = followersCount
-                    }
-                    if let bookmarksCount = safeUserDict["bookmarksCount"] as? Int {
-                        user.bookmarksCount = bookmarksCount
-                    }
-                    if let favoritesCount = safeUserDict["favoritesCount"] as? Int {
-                        user.favoritesCount = favoritesCount
-                    }
-                    if let commentsCount = safeUserDict["commentsCount"] as? Int {
-                        user.commentsCount = commentsCount
-                    }
-                }
-                TweetCacheManager.shared.saveUser(user)
+                _ = try User.from(dict: userDict)
             } catch {
                 print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
             }
@@ -645,62 +587,8 @@ final class HproseInstance: ObservableObject {
         let newResponse = newClient.invoke("runMApp", withArgs: [entry, params])
             
             if let newUserDict = newResponse as? [String: Any] {
-                // Create a copy of the dictionary to ensure it stays alive
-                let safeNewUserDict = newUserDict
                 do {
-                    // Use MainActor to ensure thread safety
-                    await MainActor.run {
-                        // Update user properties directly instead of using User.from(dict:)
-                        if let name = safeNewUserDict["name"] as? String {
-                            user.name = name
-                        }
-                        if let username = safeNewUserDict["username"] as? String {
-                            user.username = username
-                        }
-                        if let avatar = safeNewUserDict["avatar"] as? String {
-                            user.avatar = avatar
-                        }
-                        if let email = safeNewUserDict["email"] as? String {
-                            user.email = email
-                        }
-                        if let profile = safeNewUserDict["profile"] as? String {
-                            user.profile = profile
-                        }
-                        if let lastLogin = safeNewUserDict["lastLogin"] as? Double {
-                            user.lastLogin = Date(timeIntervalSince1970: lastLogin)
-                        }
-                        if let cloudDrivePort = safeNewUserDict["cloudDrivePort"] as? Int {
-                            user.cloudDrivePort = cloudDrivePort
-                        }
-                        if let hostIds = safeNewUserDict["hostIds"] as? [String] {
-                            user.hostIds = hostIds
-                        }
-                        if let baseUrl = safeNewUserDict["baseUrl"] as? String {
-                            user.baseUrl = URL(string: baseUrl)
-                        }
-                        if let writableUrl = safeNewUserDict["writableUrl"] as? String {
-                            user.writableUrl = URL(string: writableUrl)
-                        }
-                        if let tweetCount = safeNewUserDict["tweetCount"] as? Int {
-                            user.tweetCount = tweetCount
-                        }
-                        if let followingCount = safeNewUserDict["followingCount"] as? Int {
-                            user.followingCount = followingCount
-                        }
-                        if let followersCount = safeNewUserDict["followersCount"] as? Int {
-                            user.followersCount = followersCount
-                        }
-                        if let bookmarksCount = safeNewUserDict["bookmarksCount"] as? Int {
-                            user.bookmarksCount = bookmarksCount
-                        }
-                        if let favoritesCount = safeNewUserDict["favoritesCount"] as? Int {
-                            user.favoritesCount = favoritesCount
-                        }
-                        if let commentsCount = safeNewUserDict["commentsCount"] as? Int {
-                            user.commentsCount = commentsCount
-                        }
-                    }
-                    TweetCacheManager.shared.saveUser(user)
+                    _ = try User.from(dict: newUserDict)
                 } catch {
                     print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
                 }
