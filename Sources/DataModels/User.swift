@@ -138,12 +138,10 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 if writableUrl == HproseInstance.shared.appUser.baseUrl {
                     // Use the main hprose client if available, otherwise create a new one
                     // Create a new client for upload
-                    print("DEBUG: uploadClient - creating new client for upload")
                     let client = HproseHttpClient()
                     client.timeout = 180000
                     client.uri = "\(writableUrl)/webapi/"
                     _uploadClient = client
-                    print("DEBUG: uploadClient - new client created: \(client != nil)")
                     return client
                 } else {
                     print("DEBUG: uploadClient - creating client for different baseUrl")
@@ -151,7 +149,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     client.timeout = 180000
                     client.uri = "\(writableUrl)/webapi/"
                     _uploadClient = client
-                    print("DEBUG: uploadClient - new client created: \(client != nil)")
                     return client
                 }
             }

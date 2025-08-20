@@ -7,19 +7,12 @@ import AVFoundation
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
 }
 
-// MARK: - HproseService Extension
-extension HproseService {
-    func runMApp(_ entry: String, _ request: [String: Any]) -> Any? {
-        return runMApp(entry, request, nil)
-    }
-}
-
 // MARK: - HproseInstance
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
     static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
-    // Removed _hproseService as we now use client directly
+    // Removed _HproseClient as we now use client directly
     private var _domainToShare: String = AppConfig.baseUrl
     
     /// The domain to use for sharing links
@@ -224,7 +217,7 @@ final class HproseInstance: ObservableObject {
                 continue
             }
         }
-        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize app entry with any URL"])
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to initialize app entry with any URL"])
     }
     
     func fetchComments(
@@ -242,10 +235,10 @@ final class HproseInstance: ObservableObject {
             "ps": pageSize,
         ] as [String : Any]
         guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]?] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in fetchComments"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in fetchComments"])
         }
         
         // Process each item in the response array, preserving nil positions
@@ -285,7 +278,7 @@ final class HproseInstance: ObservableObject {
         entry: String = "get_tweet_feed"
     ) async throws -> [Tweet?] {
         guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         var params = [
             "aid": appId,
@@ -300,7 +293,7 @@ final class HproseInstance: ObservableObject {
             params["hostid"] = appUser.hostIds?.first
         }
         guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchTweetFeed"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchTweetFeed"])
         }
         
         // Check success status first
@@ -309,7 +302,7 @@ final class HproseInstance: ObservableObject {
             print("[fetchTweetFeed] Tweet feed loading failed: \(errorMessage)")
             print("[fetchTweetFeed] Response: \(response)")
             
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: localizeBackendError(errorMessage)])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: localizeBackendError(errorMessage)])
         }
         
         // Extract tweets and originalTweets from the new response format
@@ -381,7 +374,7 @@ final class HproseInstance: ObservableObject {
         entry: String = "get_tweets_by_user"
     ) async throws -> [Tweet?] {
         guard let client = user.hproseClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         let params = [
             "aid": appId,
@@ -393,7 +386,7 @@ final class HproseInstance: ObservableObject {
         ] as [String : Any]
         
         guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
         }
         
         // Check success status first
@@ -402,7 +395,7 @@ final class HproseInstance: ObservableObject {
             print("[fetchUserTweet] Tweets loading failed for user \(user.mid): \(errorMessage)")
             print("[fetchUserTweet] Response: \(response)")
             
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
         }
         
         // Extract tweets and originalTweets from the new response format
@@ -472,7 +465,7 @@ final class HproseInstance: ObservableObject {
         authorId: String,
     ) async throws -> Tweet? {
         guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         let entry = "get_tweet"
         let params = [
@@ -494,13 +487,13 @@ final class HproseInstance: ObservableObject {
                 print("Error processing tweet: \(error)")
             }
         }
-        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tweet not found"])
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tweet not found"])
     }
     
     func getUserId(_ username: String) async throws -> String? {
         try await withRetry {
             guard let client = appUser.hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
             let entry = "get_userid"
             let params = [
@@ -509,7 +502,7 @@ final class HproseInstance: ObservableObject {
                 "username": username,
             ]
             guard let response = client.invoke("runMApp", withArgs: [entry, params]) else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserId"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserId"])
             }
             return response as? String
         }
@@ -535,7 +528,7 @@ final class HproseInstance: ObservableObject {
         // Step 2: Fetch from server. No instance available in memory or cache.
         if baseUrl.isEmpty {
             guard let providerIP = try await getProviderIP(userId) else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provide not found"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provide not found"])
             }
             await MainActor.run {
                 user.baseUrl = URL(string: "http://\(providerIP)")!
@@ -612,7 +605,7 @@ final class HproseInstance: ObservableObject {
         newClient.uri = "\(loginUser.baseUrl!.absoluteString)/webapi/"
         guard let response = newClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             newClient.close()
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in login"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in login"])
         }
         newClient.close()
         
@@ -663,11 +656,11 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
         ]
         guard let client = user.hproseClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
 
         guard let response = client.invoke("runMApp", withArgs: [entry.rawValue, params]) as? [[String: Any]] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFollows: No response"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFollows: No response"])
         }
         
         let sorted = response.sorted {
@@ -693,11 +686,11 @@ final class HproseInstance: ObservableObject {
         
         do {
             guard let client = user.hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
             
             guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFollowings: No response"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFollowings: No response"])
             }
             
             let sorted = response.sorted { (lhs, rhs) in
@@ -752,11 +745,11 @@ final class HproseInstance: ObservableObject {
         
         do {
             guard let client = user.hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
             
             guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFans: No response"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFans: No response"])
             }
             
             let sorted = response.sorted { (lhs, rhs) in
@@ -792,7 +785,7 @@ final class HproseInstance: ObservableObject {
         
         guard var client = user.hproseClient else {
             print("DEBUG: [HproseInstance] getUserTweetsByType - Client not initialized for user: \(user.mid)")
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         
         var newClient: HproseClient? = nil
@@ -808,7 +801,7 @@ final class HproseInstance: ObservableObject {
         guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]?] else {
             newClient?.close()
             print("DEBUG: [HproseInstance] getUserTweetsByType - Invalid response format")
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
         }
         
         print("DEBUG: [HproseInstance] getUserTweetsByType - Got response with \(response.count) items")
@@ -865,10 +858,10 @@ final class HproseInstance: ObservableObject {
                 "userid": appUser.mid,
             ]
             guard let client = appUser.hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
                     guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFollowing: No response"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFollowing: No response"])
             }
             return response
         }
@@ -889,16 +882,16 @@ final class HproseInstance: ObservableObject {
                 "userhostid": appUser.hostIds?.first as Any
             ]
             guard let client = appUser.hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
             guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: Invalid response"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: Invalid response"])
             }
             
             // Check if the operation was successful
             guard let success = response["success"] as? Bool, success else {
                 let errorMessage = response["error"] as? String ?? "toggleFavorite: Operation failed"
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
             
             var updatedUser: User?
@@ -932,16 +925,16 @@ final class HproseInstance: ObservableObject {
                 "userhostid": appUser.hostIds?.first as Any
             ]
             guard let client = appUser.hproseClient else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
             guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: Invalid response"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: Invalid response"])
             }
             
             // Check if the operation was successful
             guard let success = response["success"] as? Bool, success else {
                 let errorMessage = response["error"] as? String ?? "toggleBookmark: Operation failed"
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
             
             var updatedUser: User?
@@ -976,7 +969,7 @@ final class HproseInstance: ObservableObject {
         ) {
             return retweet
         }
-        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "retweet: Upload failed"])
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "retweet: Upload failed"])
     }
     
     /**
@@ -1001,14 +994,14 @@ final class HproseInstance: ObservableObject {
             "authorid": tweet.authorId,
         ]
         guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         if let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] {
             try await MainActor.run { try tweet.update(from: tweetDict) }
             // Cache the updated tweet for main feed
             TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
         } else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "updateRetweetCount: No response"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "updateRetweetCount: No response"])
         }
     }
     
@@ -1024,27 +1017,27 @@ final class HproseInstance: ObservableObject {
             "tweetid": tweetId
         ]
         guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Invalid response format"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Invalid response format"])
         }
         
         // Handle the new JSON response format
         guard let success = response["success"] as? Bool else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Invalid response format: missing success field"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Invalid response format: missing success field"])
         }
         
         if success {
             // Success case: return the tweet ID
             guard let deletedTweetId = response["tweetid"] as? String else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Success response missing tweet ID"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Success response missing tweet ID"])
             }
             return deletedTweetId
         } else {
             // Failure case: extract error message
             let errorMessage = response["message"] as? String ?? "Unknown tweet deletion error"
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
         }
     }
         
@@ -1052,11 +1045,11 @@ final class HproseInstance: ObservableObject {
         // Wait for writableUrl to be resolved
         let resolvedUrl = try await appUser.resolveWritableUrl()
         guard resolvedUrl != nil else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve writable URL"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve writable URL"])
         }
         
         guard let uploadClient = appUser.uploadClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload client not available"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload client not available"])
         }
         
         comment.author = nil
@@ -1070,22 +1063,22 @@ final class HproseInstance: ObservableObject {
         ]
         let entry = "add_comment"
         guard let response = uploadClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Invalid response format"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Invalid response format"])
         }
         
         // Handle the new JSON response format
         guard let success = response["success"] as? Bool else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Invalid response format: missing success field"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Invalid response format: missing success field"])
         }
         
         if success {
             // Success case: extract comment ID and count
             guard let commentId = response["mid"] as? String else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Success response missing comment ID"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Success response missing comment ID"])
             }
             
             guard let count = response["count"] as? Int else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Success response missing comment count"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Success response missing comment count"])
             }
             
             await MainActor.run {
@@ -1152,7 +1145,7 @@ final class HproseInstance: ObservableObject {
         } else {
             // Failure case: extract error message
             let errorMessage = response["message"] as? String ?? "Unknown comment upload error"
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
         }
     }
 
@@ -1168,25 +1161,25 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid
         ]
         guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Invalid response format"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Invalid response format"])
         }
         
         // Handle the new JSON response format
         guard let success = response["success"] as? Bool else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Invalid response format: missing success field"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Invalid response format: missing success field"])
         }
         
         if success {
             // Success case: return the response with commentId and count
             guard let deletedCommentId = response["commentId"] as? String else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Success response missing comment ID"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Success response missing comment ID"])
             }
             
             guard let count = response["count"] as? Int else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Success response missing comment count"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Success response missing comment count"])
             }
             
             return [
@@ -1196,7 +1189,7 @@ final class HproseInstance: ObservableObject {
         } else {
             // Failure case: extract error message
             let errorMessage = response["message"] as? String ?? "Unknown comment deletion error"
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
         }
     }
     
@@ -2149,7 +2142,7 @@ final class HproseInstance: ObservableObject {
                 try await initAppEntry()
             }
         }
-        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Network error: All retries failed."])
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Network error: All retries failed."])
     }
     
     // MARK: - Background Upload
@@ -2204,17 +2197,17 @@ final class HproseInstance: ObservableObject {
             
             // Handle the JSON response format
             guard let responseDict = rawResponse as? [String: Any] else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
             }
             
             guard let success = responseDict["success"] as? Bool else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format: missing success field"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format: missing success field"])
             }
             
             if success {
                 // Success case: extract the tweet ID
                 guard let newTweetId = responseDict["mid"] as? String else {
-                    throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
                 }
                 
                 let uploadedTweet = tweet
@@ -2224,7 +2217,7 @@ final class HproseInstance: ObservableObject {
             } else {
                 // Failure case: extract error message
                 let errorMessage = responseDict["message"] as? String ?? "Unknown upload error"
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
         }
     }
@@ -2254,7 +2247,7 @@ final class HproseInstance: ObservableObject {
             }
             
             if uploadResults.contains(where: { $0 == nil }) {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment upload failure in pair"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment upload failure in pair"])
             }
             
             return uploadResults.compactMap { $0 }
@@ -2294,7 +2287,7 @@ final class HproseInstance: ObservableObject {
                     )
                 }
             } else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
             }
         } catch {
             print("Error uploading tweet (attempt \(retryCount + 1)/\(maxRetryAttempts)): \(error)")
@@ -2332,7 +2325,7 @@ final class HproseInstance: ObservableObject {
         }
         
         if itemData.count != uploadedAttachments.count {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
         }
         
         return uploadedAttachments
@@ -2417,7 +2410,7 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 if itemData.count != uploadedAttachments.count {
-                    let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
+                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
                     await MainActor.run {
                         NotificationCenter.default.post(
                             name: .backgroundUploadFailed,
@@ -2440,7 +2433,7 @@ final class HproseInstance: ObservableObject {
                         // No need to post notifications here as they're handled in addComment
                     }
                 } else {
-                    let error = NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment returned nil"])
+                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment returned nil"])
                     await MainActor.run {
                         NotificationCenter.default.post(
                             name: .backgroundUploadFailed,
@@ -2473,7 +2466,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid,
         ]
         guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "togglePinnedTweet: No response"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "togglePinnedTweet: No response"])
         }
         return response
     }
@@ -2491,7 +2484,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid
         ]
         guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getPinnedTweets: No response"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "getPinnedTweets: No response"])
         }
         var result: [[String: Any]] = []
         for dict in response {
@@ -2531,13 +2524,13 @@ final class HproseInstance: ObservableObject {
         ]
         
         guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
         }
         if let result = response["status"] as? String {
             if result == "success" {
                 return true
             } else {
-                throw NSError(domain: "hproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: response["reason"] as? String ?? "Unknown registration error."])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: response["reason"] as? String ?? "Unknown registration error."])
             }
         }
         return false
@@ -2567,7 +2560,7 @@ final class HproseInstance: ObservableObject {
         print("DEBUG: updateUserCore - sending request to server with user data")
         guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             print("DEBUG: updateUserCore - failed to get response from server")
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
         }
         
         print("DEBUG: updateUserCore - server response: \(response)")
@@ -2583,7 +2576,7 @@ final class HproseInstance: ObservableObject {
             } else {
                 let errorMessage = response["reason"] as? String ?? "Unknown registration error."
                 print("DEBUG: updateUserCore - server returned error: \(errorMessage)")
-                throw NSError(domain: "hproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
         }
         
@@ -2738,7 +2731,7 @@ final class HproseInstance: ObservableObject {
     /// Fetch recent unread messages from a sender (incoming messages only)
     func fetchMessages(senderId: String) async throws -> [ChatMessage] {
         guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         
         let entry = "message_fetch"
@@ -2755,7 +2748,7 @@ final class HproseInstance: ObservableObject {
         if let responseDict = response as? [String: Any] {
             if let success = responseDict["success"] as? Bool, !success {
                 let errorMessage = responseDict["error"] as? String ?? "Unknown error"
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
         }
         
@@ -2797,7 +2790,7 @@ final class HproseInstance: ObservableObject {
         guard !appUser.isGuest else { return [] }
         
         guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         
         let entry = "message_check"

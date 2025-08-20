@@ -197,9 +197,6 @@ struct SimpleVideoPlayer: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             // App entering background - preserve current state
-            if let player = player {
-                // wasPlayingBeforeBackground = player.rate > 0 // This line is removed
-            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             // App returning from background - force refresh video layer to show cached content
@@ -446,7 +443,6 @@ struct SimpleVideoPlayer: View {
             object: playerItem,
             queue: .main
         ) { notification in
-            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
             self.handleLoadFailure()
         }
     }
