@@ -30,6 +30,8 @@ struct RegistrationView: View {
     @State private var toastType: ToastView.ToastType = .error
     @State private var showExitConfirmation = false
     @State private var hasUnsavedChanges = false
+    @State private var hasAcceptedTerms = false
+    @State private var showTermsOfService = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
@@ -147,11 +149,42 @@ struct RegistrationView: View {
                         }
                     }
 
-                    if let errorMessage = errorMessage {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                            .font(.caption)
+                    // Terms of Service Acceptance
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top, spacing: 12) {
+                            Button(action: {
+                                hasAcceptedTerms.toggle()
+                            }) {
+                                Image(systemName: hasAcceptedTerms ? "checkmark.square.fill" : "square")
+                                    .foregroundColor(hasAcceptedTerms ? .blue : .gray)
+                                    .font(.title2)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 0) {
+                                    Text(LocalizedStringKey("I agree to the "))
+                                        .font(.body) +
+                                    Text(LocalizedStringKey("Terms of Service"))
+                                        .font(.body)
+                                        .foregroundColor(.blue)
+                                        .underline() +
+                                    Text(LocalizedStringKey(" and acknowledge that there is no tolerance for objectionable content or abusive users."))
+                                        .font(.body)
+                                }
+                            }
+                            .onTapGesture {
+                                showTermsOfService = true
+                            }
+                        }
+                        
+                        if !hasAcceptedTerms && errorMessage != nil {
+                            Text(LocalizedStringKey("You must accept the Terms of Service to continue."))
+                                .foregroundColor(.red)
+                                .font(.caption)
+                        }
                     }
+                    .padding(.vertical, 8)
 
                     DebounceButton(
                         cooldownDuration: 1.0,
@@ -207,6 +240,14 @@ struct RegistrationView: View {
             .onChange(of: profile) { _, _ in checkForChanges() }
             .onChange(of: hostId) { _, _ in checkForChanges() }
             .onChange(of: cloudDrivePort) { _, _ in checkForChanges() }
+            .sheet(isPresented: $showTermsOfService) {
+                TermsOfServiceView(
+                    hasAcceptedTerms: $hasAcceptedTerms,
+                    onAccept: {
+                        // Terms accepted, no additional action needed
+                    }
+                )
+            }
             .confirmationDialog(
                 NSLocalizedString("Unsaved Changes", comment: "Confirmation dialog title"),
                 isPresented: $showExitConfirmation,
@@ -251,6 +292,13 @@ struct RegistrationView: View {
             errorMessage = NSLocalizedString("Cloud Drive Port must be between 8000 and 9000.", comment: "Validation error")
             return
         }
+        
+        // Validate terms acceptance
+        if !hasAcceptedTerms {
+            errorMessage = NSLocalizedString("You must accept the Terms of Service to continue.", comment: "Validation error")
+            return
+        }
+        
         errorMessage = nil
         
         // Set loading state
@@ -307,7 +355,8 @@ struct RegistrationView: View {
                         !alias.isEmpty || 
                         !profile.isEmpty || 
                         !hostId.isEmpty || 
-                        cloudDrivePort != "8010"
+                        cloudDrivePort != "8010" ||
+                        hasAcceptedTerms
         
         hasUnsavedChanges = hasChanges
     }

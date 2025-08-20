@@ -300,6 +300,15 @@
 "Failed to add bookmark" = "添加到书签失败";
 "Failed to remove bookmark" = "从书签中移除失败";
 
+// MARK: - Terms of Service
+"Terms of Service" = "服务条款";
+"I agree to the " = "我同意";
+" and acknowledge that there is no tolerance for objectionable content or abusive users." = "并承认对不当内容或滥用用户零容忍。";
+"I agree to the Terms of Service and acknowledge that there is no tolerance for objectionable content or abusive users." = "我同意服务条款并承认对不当内容或滥用用户零容忍。";
+"You must accept the Terms of Service to continue." = "您必须接受服务条款才能继续。";
+"Accept" = "接受";
+"Cancel" = "取消";
+
 // MARK: - Status Messages
 "Offline - Showing cached content" = "离线 - 显示缓存内容";
 "Creating Account..." = "创建账户中...";

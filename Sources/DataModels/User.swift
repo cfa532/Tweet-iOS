@@ -98,6 +98,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var commentsCount: Int?
     
     @Published var hostIds: [MimeiId]? // List of MimeiId
+    @Published var hasAcceptedTerms: Bool = false // Terms of Service acceptance
     @Published var publicKey: String?
     private var _hproseClient: HproseClient?
     public var hproseClient: HproseClient? {
@@ -180,7 +181,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         profile: String? = nil,
         cloudDrivePort: Int? = nil,
         hostIds: [MimeiId]? = nil,
-        publicKey: String? = nil
+        publicKey: String? = nil,
+        hasAcceptedTerms: Bool = false
     ) {
         self.mid = mid
         self.baseUrl = baseUrl
@@ -201,6 +203,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.commentsCount = nil
         self.hostIds = hostIds
         self.publicKey = publicKey
+        self.hasAcceptedTerms = hasAcceptedTerms
         // Observe baseUrl changes to clear cached clients
         baseUrlCancellable = $baseUrl
             .sink { [weak self] _ in
