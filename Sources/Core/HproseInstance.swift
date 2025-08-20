@@ -2917,6 +2917,47 @@ final class HproseInstance: ObservableObject {
         try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
         
         print("[reportTweet] Backend call completed for tweet: \(tweetId)")
+        
+        // Send notification to system admin
+        await notifySystemAdmin(tweetId: tweetId, category: category, comments: comments)
+    }
+    
+    /// Send notification to system admin about reported content
+    private func notifySystemAdmin(tweetId: String, category: String, comments: String) async {
+        let adminUserId = "developer" // System admin user ID
+        
+        // Create notification message
+        let notificationContent = """
+        🚨 CONTENT REPORT ALERT 🚨
+        
+        Tweet ID: \(tweetId)
+        Category: \(category)
+        Reporter: \(appUser.mid)
+        Comments: \(comments.isEmpty ? "None" : comments)
+        Time: \(Date().formatted())
+        
+        Please review this content within 24 hours as per App Store compliance requirements.
+        """
+        
+        // Create chat message
+        let sessionId = ChatMessage.generateSessionId(userId: appUser.mid, receiptId: adminUserId)
+        let notificationMessage = ChatMessage(
+            authorId: appUser.mid,
+            receiptId: adminUserId,
+            chatSessionId: sessionId,
+            content: notificationContent
+        )
+        
+        do {
+            let result = try await sendMessage(receiptId: adminUserId, message: notificationMessage)
+            if result.success == true {
+                print("[notifySystemAdmin] Successfully sent notification to admin for tweet: \(tweetId)")
+            } else {
+                print("[notifySystemAdmin] Failed to send notification to admin: \(result.errorMsg ?? "Unknown error")")
+            }
+        } catch {
+            print("[notifySystemAdmin] Error sending notification to admin: \(error)")
+        }
     }
 }
 
