@@ -7,12 +7,19 @@ import AVFoundation
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
 }
 
-// MARK: - HproseService
+// MARK: - HproseService Extension
+extension HproseService {
+    func runMApp(_ entry: String, _ request: [String: Any]) -> Any? {
+        return runMApp(entry, request, nil)
+    }
+}
+
+// MARK: - HproseInstance
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
     static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
-    var _hproseService: AnyObject?
+    // Removed _hproseService as we now use client directly
     private var _domainToShare: String = AppConfig.baseUrl
     
     /// The domain to use for sharing links
@@ -151,9 +158,9 @@ final class HproseInstance: ObservableObject {
                     
                     HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                    _hproseService = client.useService(HproseService.self) as AnyObject
                     
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
+                        print("provider ip:  \(providerIp)")
                         // Try to fetch user with retry logic
                         var user: User? = nil
                         
@@ -178,7 +185,6 @@ final class HproseInstance: ObservableObject {
                             // Valid login user is found, use its provider IP as base.
                             HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
                             client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                            _hproseService = client.useService(HproseService.self) as AnyObject
                             let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
                             await MainActor.run {
                                 // Update the appUser to the fetched user with all properties
@@ -235,10 +241,10 @@ final class HproseInstance: ObservableObject {
             "pn": pageNumber,
             "ps": pageSize,
         ] as [String : Any]
-        guard let service = appUser.hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
-        guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
+        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]?] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in fetchComments"])
         }
         
@@ -278,8 +284,8 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweet_feed"
     ) async throws -> [Tweet?] {
-        guard let service = appUser.hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         var params = [
             "aid": appId,
@@ -293,7 +299,7 @@ final class HproseInstance: ObservableObject {
         if entry == "update_following_tweets" {
             params["hostid"] = appUser.hostIds?.first
         }
-        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchTweetFeed"])
         }
         
@@ -374,8 +380,8 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweets_by_user"
     ) async throws -> [Tweet?] {
-        guard let service = user.hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard let client = user.hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         let params = [
             "aid": appId,
@@ -386,7 +392,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid,
         ] as [String : Any]
         
-        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
         }
         
@@ -465,8 +471,8 @@ final class HproseInstance: ObservableObject {
         tweetId: String,
         authorId: String,
     ) async throws -> Tweet? {
-        guard let service = appUser.hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         let entry = "get_tweet"
         let params = [
@@ -475,7 +481,7 @@ final class HproseInstance: ObservableObject {
             "tweetid": tweetId,
             "appuserid": appUser.mid
         ]
-        if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
+        if let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] {
             do {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 tweet.author = try? await fetchUser(authorId)
@@ -493,8 +499,8 @@ final class HproseInstance: ObservableObject {
     
     func getUserId(_ username: String) async throws -> String? {
         try await withRetry {
-            guard let service = appUser.hproseService else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            guard let client = appUser.hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
             let entry = "get_userid"
             let params = [
@@ -502,7 +508,7 @@ final class HproseInstance: ObservableObject {
                 "ver": "last",
                 "username": username,
             ]
-            guard let response = service.runMApp(entry, params, nil) else {
+            guard let response = client.invoke("runMApp", withArgs: [entry, params]) else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserId"])
             }
             return response as? String
@@ -552,23 +558,156 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "userid": user.mid,
         ]
-        if let service = user.hproseService, let response = service.runMApp(entry, params, nil) {
-            if let userDict = response as? [String: Any]
-            {
-                // user instance of the given mid is updated.
-                _ = try User.from(dict: userDict)
-                TweetCacheManager.shared.saveUser(user)
-            } else if let ipAddress = response as? String {
-                // the user is not found on this node, a provider IP of the user is returned.
-                // point server to this new IP.
+        
+        // Safety check for release builds
+        guard let client = user.hproseClient else {
+            print("DEBUG: [updateUserFromServer] No hprose client available for user: \(user.mid)")
+            return
+        }
+        
+        // Call runMApp following the sample code pattern
+        let response = client.invoke("runMApp", withArgs: [entry, params])
+        
+        // Immediately copy the response to prevent deallocation issues
+        if let userDict = response as? [String: Any] {
+            // Create a copy of the dictionary to ensure it stays alive
+            let safeUserDict = userDict
+            do {
+                // Use MainActor to ensure thread safety
                 await MainActor.run {
-                    user.baseUrl = URL(string: "http://\(ipAddress)")!
+                    // Update user properties directly instead of using User.from(dict:)
+                    if let name = safeUserDict["name"] as? String {
+                        user.name = name
+                    }
+                    if let username = safeUserDict["username"] as? String {
+                        user.username = username
+                    }
+                    if let avatar = safeUserDict["avatar"] as? String {
+                        user.avatar = avatar
+                    }
+                    if let email = safeUserDict["email"] as? String {
+                        user.email = email
+                    }
+                    if let profile = safeUserDict["profile"] as? String {
+                        user.profile = profile
+                    }
+                    if let lastLogin = safeUserDict["lastLogin"] as? Double {
+                        user.lastLogin = Date(timeIntervalSince1970: lastLogin)
+                    }
+                    if let cloudDrivePort = safeUserDict["cloudDrivePort"] as? Int {
+                        user.cloudDrivePort = cloudDrivePort
+                    }
+                    if let hostIds = safeUserDict["hostIds"] as? [String] {
+                        user.hostIds = hostIds
+                    }
+                    if let baseUrl = safeUserDict["baseUrl"] as? String {
+                        user.baseUrl = URL(string: baseUrl)
+                    }
+                    if let writableUrl = safeUserDict["writableUrl"] as? String {
+                        user.writableUrl = URL(string: writableUrl)
+                    }
+                    if let tweetCount = safeUserDict["tweetCount"] as? Int {
+                        user.tweetCount = tweetCount
+                    }
+                    if let followingCount = safeUserDict["followingCount"] as? Int {
+                        user.followingCount = followingCount
+                    }
+                    if let followersCount = safeUserDict["followersCount"] as? Int {
+                        user.followersCount = followersCount
+                    }
+                    if let bookmarksCount = safeUserDict["bookmarksCount"] as? Int {
+                        user.bookmarksCount = bookmarksCount
+                    }
+                    if let favoritesCount = safeUserDict["favoritesCount"] as? Int {
+                        user.favoritesCount = favoritesCount
+                    }
+                    if let commentsCount = safeUserDict["commentsCount"] as? Int {
+                        user.commentsCount = commentsCount
+                    }
                 }
-                if let newService = user.hproseService, let userDict = newService.runMApp(entry, params, nil) as? [String: Any] {
-                    _ = try User.from(dict: userDict)
+                TweetCacheManager.shared.saveUser(user)
+            } catch {
+                print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
+            }
+        } else if let ipAddress = response as? String {
+            // the user is not found on this node, a provider IP of the user is returned.
+            // point server to this new IP.
+            await MainActor.run {
+                user.baseUrl = URL(string: "http://\(ipAddress)")!
+            }
+            
+            // Create a new client for the new IP
+            let newClient = HproseHttpClient()
+            newClient.timeout = 300
+            newClient.uri = "\(user.baseUrl?.absoluteString ?? "")/webapi/"
+            
+                    // Call runMApp with the new client following the sample code pattern
+        let newResponse = newClient.invoke("runMApp", withArgs: [entry, params])
+            
+            if let newUserDict = newResponse as? [String: Any] {
+                // Create a copy of the dictionary to ensure it stays alive
+                let safeNewUserDict = newUserDict
+                do {
+                    // Use MainActor to ensure thread safety
+                    await MainActor.run {
+                        // Update user properties directly instead of using User.from(dict:)
+                        if let name = safeNewUserDict["name"] as? String {
+                            user.name = name
+                        }
+                        if let username = safeNewUserDict["username"] as? String {
+                            user.username = username
+                        }
+                        if let avatar = safeNewUserDict["avatar"] as? String {
+                            user.avatar = avatar
+                        }
+                        if let email = safeNewUserDict["email"] as? String {
+                            user.email = email
+                        }
+                        if let profile = safeNewUserDict["profile"] as? String {
+                            user.profile = profile
+                        }
+                        if let lastLogin = safeNewUserDict["lastLogin"] as? Double {
+                            user.lastLogin = Date(timeIntervalSince1970: lastLogin)
+                        }
+                        if let cloudDrivePort = safeNewUserDict["cloudDrivePort"] as? Int {
+                            user.cloudDrivePort = cloudDrivePort
+                        }
+                        if let hostIds = safeNewUserDict["hostIds"] as? [String] {
+                            user.hostIds = hostIds
+                        }
+                        if let baseUrl = safeNewUserDict["baseUrl"] as? String {
+                            user.baseUrl = URL(string: baseUrl)
+                        }
+                        if let writableUrl = safeNewUserDict["writableUrl"] as? String {
+                            user.writableUrl = URL(string: writableUrl)
+                        }
+                        if let tweetCount = safeNewUserDict["tweetCount"] as? Int {
+                            user.tweetCount = tweetCount
+                        }
+                        if let followingCount = safeNewUserDict["followingCount"] as? Int {
+                            user.followingCount = followingCount
+                        }
+                        if let followersCount = safeNewUserDict["followersCount"] as? Int {
+                            user.followersCount = followersCount
+                        }
+                        if let bookmarksCount = safeNewUserDict["bookmarksCount"] as? Int {
+                            user.bookmarksCount = bookmarksCount
+                        }
+                        if let favoritesCount = safeNewUserDict["favoritesCount"] as? Int {
+                            user.favoritesCount = favoritesCount
+                        }
+                        if let commentsCount = safeNewUserDict["commentsCount"] as? Int {
+                            user.commentsCount = commentsCount
+                        }
+                    }
                     TweetCacheManager.shared.saveUser(user)
+                } catch {
+                    print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
                 }
             }
+            
+            // Close the new client
+            newClient.close()
         }
     }
     
@@ -583,8 +722,7 @@ final class HproseInstance: ObservableObject {
         let newClient = HproseHttpClient()
         newClient.timeout = 300  // Increased from 60 to 300 seconds for large uploads
         newClient.uri = "\(loginUser.baseUrl!.absoluteString)/webapi/"
-        let newService = newClient.useService(HproseService.self) as AnyObject
-        guard let response = newService.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = newClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             newClient.close()
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in login"])
         }
@@ -636,11 +774,11 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "userid": user.mid,
         ]
-        guard let service = user.hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard let client = user.hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
 
-        guard let response = service.runMApp(entry.rawValue, params, nil) as? [[String: Any]] else {
+        guard let response = client.invoke("runMApp", withArgs: [entry.rawValue, params]) as? [[String: Any]] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFollows: No response"])
         }
         
@@ -666,11 +804,11 @@ final class HproseInstance: ObservableObject {
         ]
         
         do {
-            guard let service = user.hproseService else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            guard let client = user.hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
             
-            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFollowings: No response"])
             }
             
@@ -725,11 +863,11 @@ final class HproseInstance: ObservableObject {
         ]
         
         do {
-            guard let service = user.hproseService else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            guard let client = user.hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
             
-            guard let response = service.runMApp(entry, params, nil) as? [[String: Any]] else {
+            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFans: No response"])
             }
             
@@ -764,22 +902,22 @@ final class HproseInstance: ObservableObject {
         ] as [String : Any]
         print("DEBUG: [HproseInstance] getUserTweetsByType params: \(params)")
         
-        guard var service = user.hproseService else {
-            print("DEBUG: [HproseInstance] getUserTweetsByType - Service not initialized for user: \(user.mid)")
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard var client = user.hproseClient else {
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Client not initialized for user: \(user.mid)")
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         
         var newClient: HproseClient? = nil
         if let baseUrl = user.baseUrl, baseUrl != appUser.baseUrl {
             print("DEBUG: [HproseInstance] getUserTweetsByType - Creating new client for different baseUrl: \(baseUrl)")
-            let client = HproseHttpClient()
-            client.timeout = 300
-            client.uri = "\(baseUrl)/webapi/"
-            service = client.useService(HproseService.self) as AnyObject
-            newClient = client
+            let newHproseClient = HproseHttpClient()
+            newHproseClient.timeout = 300
+            newHproseClient.uri = "\(baseUrl)/webapi/"
+            client = newHproseClient
+            newClient = newHproseClient
         }
         
-        guard let response = service.runMApp(entry, params, nil) as? [[String: Any]?] else {
+        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]?] else {
             newClient?.close()
             print("DEBUG: [HproseInstance] getUserTweetsByType - Invalid response format")
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
@@ -838,10 +976,10 @@ final class HproseInstance: ObservableObject {
                 "followingid": followingId,
                 "userid": appUser.mid,
             ]
-            guard let service = appUser.hproseService else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            guard let client = appUser.hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
-            guard let response = service.runMApp(entry, params, nil) as? Bool else {
+                    guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFollowing: No response"])
             }
             return response
@@ -862,10 +1000,10 @@ final class HproseInstance: ObservableObject {
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
             ]
-            guard let service = appUser.hproseService else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            guard let client = appUser.hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
-            guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFavorite: Invalid response"])
             }
             
@@ -905,10 +1043,10 @@ final class HproseInstance: ObservableObject {
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
             ]
-            guard let service = appUser.hproseService else {
-                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+            guard let client = appUser.hproseClient else {
+                throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
-            guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
                 throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleBookmark: Invalid response"])
             }
             
@@ -974,10 +1112,10 @@ final class HproseInstance: ObservableObject {
             "tweetid": tweet.mid,
             "authorid": tweet.authorId,
         ]
-        guard let service = appUser.hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
-        if let tweetDict = service.runMApp(entry, params, nil) as? [String: Any] {
+        if let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] {
             try await MainActor.run { try tweet.update(from: tweetDict) }
             // Cache the updated tweet for main feed
             TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
@@ -997,10 +1135,10 @@ final class HproseInstance: ObservableObject {
             "userid": appUser.mid,
             "tweetid": tweetId
         ]
-        guard let service = appUser.hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
-        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteTweet: Invalid response format"])
         }
         
@@ -1029,8 +1167,8 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve writable URL"])
         }
         
-        guard let uploadService = appUser.uploadService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
+        guard let uploadClient = appUser.uploadClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload client not available"])
         }
         
         comment.author = nil
@@ -1043,7 +1181,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid
         ]
         let entry = "add_comment"
-        guard let response = uploadService.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = uploadClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Invalid response format"])
         }
         
@@ -1141,10 +1279,10 @@ final class HproseInstance: ObservableObject {
             "commentid": commentId,
             "appuserid": appUser.mid
         ]
-        guard let service = appUser.hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
-        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "deleteComment: Invalid response format"])
         }
         
@@ -1186,7 +1324,7 @@ final class HproseInstance: ObservableObject {
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
         
         // Force refresh upload service to ensure we have a fresh connection
-        appUser.refreshUploadService()
+        appUser.refreshUploadClient()
         
         // Use VideoProcessor to determine media type and handle upload
         let videoProcessor = VideoProcessor()
@@ -1747,13 +1885,13 @@ final class HproseInstance: ObservableObject {
         ) async throws -> MimeiFileType {
             print("Uploading regular file: type=\(mediaType.rawValue), size=\(data.count) bytes")
             
-            // Get upload service
-            var uploadService = appUser.uploadService
-            if uploadService == nil {
+            // Get upload client
+            var uploadClient = appUser.uploadClient
+            if uploadClient == nil {
                 _ = try await appUser.resolveWritableUrl()
-                uploadService = appUser.uploadService
-                if uploadService == nil {
-                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload service not available"])
+                uploadClient = appUser.uploadClient
+                if uploadClient == nil {
+                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload client not available"])
                 }
             }
             
@@ -1783,7 +1921,7 @@ final class HproseInstance: ObservableObject {
                 
                 let nsData = chunkData as NSData
                 let response = try await uploadChunkWithRetry(
-                    uploadService: uploadService!,
+                    uploadClient: uploadClient!,
                     request: request,
                     data: nsData,
                     chunkNumber: chunkCount
@@ -1804,7 +1942,7 @@ final class HproseInstance: ObservableObject {
                 request["referenceid"] = referenceId
             }
             
-            let finalResponse = uploadService!.runMApp("upload_ipfs", request, nil)
+            let finalResponse = uploadClient!.invoke("runMApp", withArgs: ["upload_ipfs", request])
             
             guard let cid = finalResponse as? String else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get CID from final upload response"])
@@ -2006,14 +2144,14 @@ final class HproseInstance: ObservableObject {
         
         /// Upload chunk with retry for regular files
         private func uploadChunkWithRetry(
-            uploadService: AnyObject,
+            uploadClient: HproseClient,
             request: [String: Any],
             data: NSData,
             chunkNumber: Int,
             maxRetries: Int = 3
         ) async throws -> Any {
             for _ in 1...maxRetries {
-                let response = uploadService.runMApp("upload_ipfs", request, [data]) as Any
+                let response = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]]) as Any
                 return response
             }
             
@@ -2174,7 +2312,7 @@ final class HproseInstance: ObservableObject {
                 "tweet": String(data: try JSONEncoder().encode(tweet), encoding: .utf8) ?? ""
             ]
             
-            let rawResponse = appUser.hproseService?.runMApp("add_tweet", params, nil)
+            let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: ["add_tweet", params])
             
             // Handle the JSON response format
             guard let responseDict = rawResponse as? [String: Any] else {
@@ -2446,7 +2584,7 @@ final class HproseInstance: ObservableObject {
             "tweetid": tweetId,
             "appuserid": appUser.mid,
         ]
-        guard let response = appUser.hproseService?.runMApp(entry, params, nil) as? Bool else {
+        guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "togglePinnedTweet: No response"])
         }
         return response
@@ -2464,7 +2602,7 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "appuserid": appUser.mid
         ]
-        guard let response = user.hproseService?.runMApp(entry, params, nil) as? [[String: Any]] else {
+        guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "getPinnedTweets: No response"])
         }
         var result: [[String: Any]] = []
@@ -2504,7 +2642,7 @@ final class HproseInstance: ObservableObject {
             "followings": String(data: try JSONEncoder().encode(Gadget.getAlphaIds()), encoding: .utf8) ?? ""
         ]
         
-        guard let response = appUser.hproseService?.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
         }
         if let result = response["status"] as? String {
@@ -2539,7 +2677,7 @@ final class HproseInstance: ObservableObject {
         ]
         
         print("DEBUG: updateUserCore - sending request to server with user data")
-        guard let response = appUser.hproseService?.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             print("DEBUG: updateUserCore - failed to get response from server")
             throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Registration failure."])
         }
@@ -2575,7 +2713,7 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "avatar": avatar
         ]
-        _ = appUser.hproseService?.runMApp(entry, params, nil)
+        _ = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
     }
 
     private func getProviderIP(_ mid: String) async throws -> String? {
@@ -2584,7 +2722,7 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "mid": mid
         ]
-        if let response = appUser.hproseService?.runMApp("get_provider_ip", params, []) {
+        if let response = client.invoke("runMApp", withArgs: ["get_provider_ip", params]) {
             return response as? String
         }
         return nil
@@ -2597,7 +2735,7 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "nodeid": nodeId
         ]
-        if let response = appUser.hproseService?.runMApp("get_node_ip", params, []) {
+        if let response = client.invoke("runMApp", withArgs: ["get_node_ip", params]) {
             return response as? String
         }
         return nil
@@ -2617,7 +2755,7 @@ final class HproseInstance: ObservableObject {
             "msg": message.toJSONString()
         ]
         
-        let response = appUser.hproseService?.runMApp(entry, params, nil)
+        let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
         
         // Handle new response format: {success: false, error: e.message}
         if let responseDict = response as? [String: Any] {
@@ -2653,7 +2791,7 @@ final class HproseInstance: ObservableObject {
                     "msg": message.toJSONString()
                 ]
                 
-                let receiptResponse = receiptUser.hproseService?.runMApp(receiptEntry, receiptParams, nil)
+                let receiptResponse = receiptUser.hproseClient?.invoke("runMApp", withArgs: [receiptEntry, receiptParams])
                 
                 // Handle new response format for message_incoming
                 if let receiptResponseDict = receiptResponse as? [String: Any] {
@@ -2711,8 +2849,8 @@ final class HproseInstance: ObservableObject {
     
     /// Fetch recent unread messages from a sender (incoming messages only)
     func fetchMessages(senderId: String) async throws -> [ChatMessage] {
-        guard let service = appUser.hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         
         let entry = "message_fetch"
@@ -2723,7 +2861,7 @@ final class HproseInstance: ObservableObject {
             "senderid": senderId
         ]
         
-        let response = service.runMApp(entry, params, nil)
+        let response = client.invoke("runMApp", withArgs: [entry, params])
         
         // Handle new response format: {success: false, error: e.message}
         if let responseDict = response as? [String: Any] {
@@ -2770,8 +2908,8 @@ final class HproseInstance: ObservableObject {
     func checkNewMessages() async throws -> [ChatMessage] {
         guard !appUser.isGuest else { return [] }
         
-        guard let service = appUser.hproseService else {
-            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Service not initialized"])
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
         
         let entry = "message_check"
@@ -2781,7 +2919,7 @@ final class HproseInstance: ObservableObject {
             "userid": appUser.mid
         ]
         
-        let response = service.runMApp(entry, params, nil) as? [[String: Any]] ?? []
+        let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] ?? []
         
         return response.compactMap { messageData in
             do {
@@ -2824,12 +2962,12 @@ final class HproseInstance: ObservableObject {
             "entry": entry
         ]
         
-        guard let service = appUser.hproseService else {
-            print("[checkAndUpdateDomain] Service not initialized")
+        guard let client = appUser.hproseClient else {
+            print("[checkAndUpdateDomain] Client not initialized")
             return
         }
         
-        guard let response = service.runMApp(entry, params, nil) as? [String: Any] else {
+        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             print("[checkAndUpdateDomain] Invalid response format")
             return
         }

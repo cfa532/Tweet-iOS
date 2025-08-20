@@ -2,10 +2,8 @@
 //  Use this file to import your target's public headers that you would like to expose to Swift.
 //
 
-#include "hprose.h"
+#ifndef BridgingHeader_h
+#define BridgingHeader_h
+// Hprose is imported via Swift module, no need for bridging header import
 #include "FFmpegWrapper.h"
-
-#ifndef Bridging_Header_h
-#define Bridging_Header_h
-
-#endif /* Bridging_Header_h */ 
+#endif 

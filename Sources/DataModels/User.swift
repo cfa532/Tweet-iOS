@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import hprose
 
 class User: ObservableObject, Codable, Identifiable, Hashable {
     // MARK: - Singleton Dictionary
@@ -98,63 +99,60 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     @Published var hostIds: [MimeiId]? // List of MimeiId
     @Published var publicKey: String?
-    private var _hproseService: AnyObject?
-    public var hproseService: AnyObject? {
+    private var _hproseClient: HproseClient?
+    public var hproseClient: HproseClient? {
         get {
             guard let baseUrl = baseUrl else { return nil }
 
-            if let cached = _hproseService {
+            if let cached = _hproseClient {
                 return cached
             } else {
                 if baseUrl == HproseInstance.shared.appUser.baseUrl {
-                    return HproseInstance.shared._hproseService
+                    // Create a new client since the shared one is private
+                    let client = HproseHttpClient()
+                    client.timeout = 30000
+                    client.uri = "\(baseUrl)/webapi/"
+                    _hproseClient = client
+                    return client
                 } else {
                     let client = HproseHttpClient()
                     client.timeout = 30000
                     client.uri = "\(baseUrl)/webapi/"
-                    let service = client.useService(HproseService.self) as? AnyObject
-                    _hproseService = service
-                    return service
+                    _hproseClient = client
+                    return client
                 }
             }
         }
     }
-    private var _uploadService: AnyObject?
-    public var uploadService: AnyObject? {
+    private var _uploadClient: HproseClient?
+    public var uploadClient: HproseClient? {
         get {
             guard let writableUrl = writableUrl else { 
-                print("DEBUG: uploadService - writableUrl is nil")
+                print("DEBUG: uploadClient - writableUrl is nil")
                 return nil 
             }
 
-            if let cached = _uploadService {
+            if let cached = _uploadClient {
                 return cached
             } else {
                 if writableUrl == HproseInstance.shared.appUser.baseUrl {
-                    // Use the main hprose service if available, otherwise create a new one
-                    if let mainService = HproseInstance.shared.appUser._hproseService {
-                        _uploadService = mainService
-                        return mainService
-                    } else {
-                        // Fallback to creating a new service
-                        print("DEBUG: uploadService - main service not available, creating new one")
-                        let client = HproseHttpClient()
-                        client.timeout = 180000
-                        client.uri = "\(writableUrl)/webapi/"
-                        let service = client.useService(HproseService.self) as? AnyObject
-                        _uploadService = service
-                        print("DEBUG: uploadService - new service created: \(service != nil)")
-                        return service
-                    }
-                } else {
-                    print("DEBUG: uploadService - creating service for different baseUrl")
+                    // Use the main hprose client if available, otherwise create a new one
+                    // Create a new client for upload
+                    print("DEBUG: uploadClient - creating new client for upload")
                     let client = HproseHttpClient()
                     client.timeout = 180000
                     client.uri = "\(writableUrl)/webapi/"
-                    let service = client.useService(HproseService.self) as? AnyObject
-                    _uploadService = service
-                    print("DEBUG: uploadService - new service created: \(service != nil)")
-                    return service
+                    _uploadClient = client
+                    print("DEBUG: uploadClient - new client created: \(client != nil)")
+                    return client
+                } else {
+                    print("DEBUG: uploadClient - creating client for different baseUrl")
+                    let client = HproseHttpClient()
+                    client.timeout = 180000
+                    client.uri = "\(writableUrl)/webapi/"
+                    _uploadClient = client
+                    print("DEBUG: uploadClient - new client created: \(client != nil)")
+                    return client
                 }
             }
         }
@@ -209,14 +207,14 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         // Observe baseUrl changes to clear cached clients
         baseUrlCancellable = $baseUrl
             .sink { [weak self] _ in
-                self?._hproseService = nil
-                self?._uploadService = nil
+                self?._hproseClient = nil
+                self?._uploadClient = nil
             }
         
-        // Observe writableUrl changes to clear upload service cache
+        // Observe writableUrl changes to clear upload client cache
         writableUrlCancellable = $writableUrl
             .sink { [weak self] _ in
-                self?._uploadService = nil
+                self?._uploadClient = nil
             }
     }
     
@@ -406,8 +404,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No writable url available"])
     }
 
-    /// Force refresh the upload service cache
-    func refreshUploadService() {
-        _uploadService = nil
+    /// Force refresh the upload client cache
+    func refreshUploadClient() {
+        _uploadClient = nil
     }
 }

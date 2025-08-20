@@ -5,6 +5,8 @@
 //  Created by 超方 on 2025/5/30.
 //
 
+import SwiftUI
+
 @MainActor
 @available(iOS 16.0, *)
 class CommentsViewModel: ObservableObject {
