@@ -425,8 +425,8 @@ struct TweetListContentView<RowView: View>: View {
                             print("[TweetListContentView] Setting hasMoreTweets to true")
                             hasMoreTweets = true
                             print("[TweetListContentView] Scheduling batch load of next two pages")
-                            // Use shorter delay like ProfileView
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            // Use longer delay to improve scrolling performance
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                                 if initialLoadComplete && !isLoadingMore {
                                     print("[TweetListContentView] Calling loadMoreTweets (batch mode)")
                                     loadMoreTweets()

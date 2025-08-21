@@ -285,9 +285,14 @@ struct MediaCell: View, Equatable {
             // Set visibility to true immediately when cell appears
             isVisible = true
             
-            // Start background preloading for videos
+            // Start background preloading for videos with a delay to improve scrolling performance
             if isVideoAttachment {
-                startBackgroundPreloading()
+                // Delay preloading to avoid performance impact during scrolling
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    if isVisible {
+                        startBackgroundPreloading()
+                    }
+                }
             }
         }
         .onDisappear {

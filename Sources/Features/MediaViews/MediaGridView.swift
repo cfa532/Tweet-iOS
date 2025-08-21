@@ -12,10 +12,11 @@ struct MediaGridView: View {
     let parentTweet: Tweet
     let attachments: [MimeiFileType]
     let maxImages: Int = 4
-    @State private var shouldLoadVideo = true
+    @State private var shouldLoadVideo = true // Start with true so videos can display immediately
     @State private var videoLoadTimer: Timer?
     @State private var isVisible = false
     @State private var forceRefreshTrigger = 0
+    @State private var hasStartedPreloading = false // Track if preloading has started
     @StateObject private var videoManager = VideoManager()
     
     init(parentTweet: Tweet, attachments: [MimeiFileType]) {
@@ -457,60 +458,22 @@ struct MediaGridView: View {
                 // return
                 // #endif
                 
-                // Setup sequential playback for videos
-                let videoMids = attachments.enumerated().compactMap { index, attachment in
-                    if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
-                        return attachment.mid
-                    }
-                    return nil
-                }
-                
-                // Always stop any existing playback first to handle reuse scenarios
-                videoManager.stopSequentialPlayback()
-                
-                if videoMids.count > 1 {
-                    videoManager.setupSequentialPlayback(for: videoMids)
-                    print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
-                } else if videoMids.count == 1 {
-                    // For single videos, set up the video MID but don't enable sequential playback
-                    let wasEmpty = videoManager.videoMids.isEmpty
-                    let isNewSequence = videoManager.videoMids != videoMids && !wasEmpty
-                    videoManager.videoMids = videoMids
-                    videoManager.isSequentialPlaybackEnabled = false
-                    videoManager.currentVideoIndex = 0
-                    
-                    if isNewSequence {
-                        print("DEBUG: [MediaGridView] Setup NEW single video playback for \(videoMids[0])")
-                        // Reset handled by SimpleVideoPlayer's internal state management
-                    } else {
-                        print("DEBUG: [MediaGridView] Setup \(wasEmpty ? "FIRST TIME" : "EXISTING") single video playback for \(videoMids[0])")
-                    }
-                }
-                
-                // Start video loading timer if this grid contains videos
+                // Check if this grid contains videos
                 let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
                 
                 if hasVideos {
-                    print("DEBUG: [MediaGridView] Grid contains videos - starting loading process")
+                    print("DEBUG: [MediaGridView] Grid contains videos - starting lazy loading process")
                     
-                    // Start background preloading for all videos in the grid
-                    startBackgroundPreloading()
+                    // Setup VideoManager immediately so it knows which videos to play
+                    setupVideoManager()
                     
-                    // Balanced delay - enough to let UI settle without feeling slow
-                    #if targetEnvironment(simulator)
-                    let timerInterval: TimeInterval = 0.1 // Faster in simulator for testing
-                    #else
-                    let timerInterval: TimeInterval = 0.3
-                    #endif
-                    
-                    videoLoadTimer = Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: false) { _ in
-                        print("DEBUG: [MediaGridView] Video load timer fired - enabling video loading")
-                        shouldLoadVideo = true
-                        
-                        // Force refresh all cells to update their play states
-                        forceRefreshTrigger += 1
-                        print("DEBUG: [MediaGridView] Force refresh trigger incremented to: \(forceRefreshTrigger)")
+                    // Start background preloading only once per grid
+                    if !hasStartedPreloading {
+                        hasStartedPreloading = true
+                        startBackgroundPreloading()
                     }
+                    
+                    print("DEBUG: [MediaGridView] Video grid appeared - videos should be immediately visible")
                 } else {
                     print("DEBUG: [MediaGridView] Grid contains no videos")
                 }
@@ -518,10 +481,10 @@ struct MediaGridView: View {
             .onDisappear {
                 // Mark the grid as not visible
                 isVisible = false
+                print("DEBUG: [MediaGridView] Grid disappeared for tweets with \(attachments.count) attachments")
                 
                 videoLoadTimer?.invalidate()
                 videoLoadTimer = nil
-                shouldLoadVideo = false
                 videoManager.stopSequentialPlayback()
             }
             // Removed duplicate .onAppear block that was causing infinite loop
@@ -605,6 +568,70 @@ struct ZoomableView<Content: View>: View {
 // MARK: - Background Preloading
 
 extension MediaGridView {
+    /// Setup VideoManager with video MIDs immediately (without starting playback)
+    private func setupVideoManager() {
+        let videoMids = attachments.enumerated().compactMap { index, attachment in
+            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                return attachment.mid
+            }
+            return nil
+        }
+        
+        // Always stop any existing playback first to handle reuse scenarios
+        videoManager.stopSequentialPlayback()
+        
+        if videoMids.count > 1 {
+            videoManager.setupSequentialPlayback(for: videoMids)
+            print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
+        } else if videoMids.count == 1 {
+            // For single videos, set up the video MID but don't enable sequential playback
+            let wasEmpty = videoManager.videoMids.isEmpty
+            let isNewSequence = videoManager.videoMids != videoMids && !wasEmpty
+            videoManager.videoMids = videoMids
+            videoManager.isSequentialPlaybackEnabled = false
+            videoManager.currentVideoIndex = 0
+            
+            if isNewSequence {
+                print("DEBUG: [MediaGridView] Setup NEW single video playback for \(videoMids[0])")
+                // Reset handled by SimpleVideoPlayer's internal state management
+            } else {
+                print("DEBUG: [MediaGridView] Setup \(wasEmpty ? "FIRST TIME" : "EXISTING") single video playback for \(videoMids[0])")
+            }
+        }
+    }
+    
+    /// Setup sequential playback for videos in the grid
+    private func setupSequentialPlayback() {
+        let videoMids = attachments.enumerated().compactMap { index, attachment in
+            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                return attachment.mid
+            }
+            return nil
+        }
+        
+        // Always stop any existing playback first to handle reuse scenarios
+        videoManager.stopSequentialPlayback()
+        
+        if videoMids.count > 1 {
+            videoManager.setupSequentialPlayback(for: videoMids)
+            print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
+        } else if videoMids.count == 1 {
+            // For single videos, set up the video MID but don't enable sequential playback
+            let wasEmpty = videoManager.videoMids.isEmpty
+            let isNewSequence = videoManager.videoMids != videoMids && !wasEmpty
+            videoManager.videoMids = videoMids
+            videoManager.isSequentialPlaybackEnabled = false
+            videoManager.currentVideoIndex = 0
+            
+            if isNewSequence {
+                print("DEBUG: [MediaGridView] Setup NEW single video playback for \(videoMids[0])")
+                // Reset handled by SimpleVideoPlayer's internal state management
+            } else {
+                print("DEBUG: [MediaGridView] Setup \(wasEmpty ? "FIRST TIME" : "EXISTING") single video playback for \(videoMids[0])")
+            }
+        }
+    }
+    
     /// Start background preloading for all videos in the grid
     private func startBackgroundPreloading() {
         let videoAttachments = attachments.enumerated().compactMap { index, attachment in
@@ -624,16 +651,23 @@ extension MediaGridView {
             attachment.getUrl(baseUrl)
         }
         
-        // Start preloading with priority based on position
-        // First video gets high priority, others get normal priority
+        // Only preload the first video initially for better scrolling performance
+        // Additional videos will be preloaded when the first video starts playing
         if let firstURL = videoURLs.first {
-            // High priority for first video
+            // High priority for first video only
             SharedAssetCache.shared.preloadVideo(for: firstURL)
+            print("DEBUG: [MediaGridView] Preloaded first video: \(firstURL)")
             
-            // Normal priority for remaining videos
+            // Schedule preloading of remaining videos with a delay
             let remainingURLs = Array(videoURLs.dropFirst())
             if !remainingURLs.isEmpty {
-                SharedAssetCache.shared.preloadVideos(remainingURLs, priority: .normal)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    // Only preload remaining videos if the grid is still visible
+                    if self.isVisible {
+                        print("DEBUG: [MediaGridView] Preloading remaining \(remainingURLs.count) videos")
+                        SharedAssetCache.shared.preloadVideos(remainingURLs, priority: .low)
+                    }
+                }
             }
         }
     }
