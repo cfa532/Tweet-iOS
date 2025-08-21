@@ -308,24 +308,11 @@ struct SimpleVideoPlayer: View {
                                 .foregroundColor(.white)
                                 .font(.caption)
                             
-                            if retryCount < 3 {
-                                Button(NSLocalizedString("Retry", comment: "Retry button")) {
-                                    retryLoad()
-                                }
-                                .foregroundColor(.blue)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(Color.white.opacity(0.2))
-                                .cornerRadius(8)
-                                .allowsHitTesting(true) // Ensure button is tappable
-                            }
+                            Text(NSLocalizedString("Long press to retry", comment: "Long press retry hint"))
+                                .foregroundColor(.white.opacity(0.7))
+                                .font(.caption2)
                         }
                     )
-                    .onTapGesture {
-                        if retryCount < 3 {
-                            retryLoad()
-                        }
-                    }
                     } else {
                 Color.gray.opacity(0.3)
                     .overlay(
@@ -487,16 +474,28 @@ struct SimpleVideoPlayer: View {
     
     private func retryLoad() {
         guard retryCount < 3 else {
+            print("DEBUG: [VIDEO RETRY] Max retry count reached for \(mid)")
             return
         }
         
+        print("DEBUG: [VIDEO RETRY] Attempting retry \(retryCount + 1) for \(mid)")
+        
+        // FIRST: Clear all caches immediately
+        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        
+        // Clear asset cache to force fresh network request
+        Task {
+            await MainActor.run {
+                SharedAssetCache.shared.clearAssetCache(for: url)
+                print("DEBUG: [VIDEO RETRY] Cleared all caches for \(mid)")
+            }
+        }
+        
+        // THEN: Reset state and retry
         retryCount += 1
         loadFailed = false
         isLoading = true
         hasFinishedPlaying = false
-        
-        // Clear any cached player that might be causing issues
-        SharedAssetCache.shared.removeInvalidPlayer(for: url)
         
         setupPlayer()
     }

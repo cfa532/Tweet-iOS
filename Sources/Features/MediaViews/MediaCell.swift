@@ -109,9 +109,25 @@ struct MediaCell: View, Equatable {
                                     showFullScreen = true
                                 }
                                 .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                                    // Force reload the video by triggering a refresh
+                                    // FIRST: Clear all caches immediately
+                                    print("DEBUG: [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
+                                    
+                                    if let url = attachment.getUrl(baseUrl) {
+                                        // Clear player cache
+                                        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+                                        
+                                        // Clear asset cache
+                                        Task {
+                                            await MainActor.run {
+                                                SharedAssetCache.shared.clearAssetCache(for: url)
+                                                print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
+                                            }
+                                        }
+                                    }
+                                    
+                                    // THEN: Force a complete reload
                                     shouldLoadVideo = false
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                                         shouldLoadVideo = true
                                     }
                                 }
@@ -176,7 +192,23 @@ struct MediaCell: View, Equatable {
                                     handleTap()
                                 }
                                 .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                                    // Force load the video
+                                    // FIRST: Clear all caches immediately
+                                    print("DEBUG: [VIDEO RELOAD] Long press load triggered for \(attachment.mid)")
+                                    
+                                    if let url = attachment.getUrl(baseUrl) {
+                                        // Clear player cache
+                                        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+                                        
+                                        // Clear asset cache
+                                        Task {
+                                            await MainActor.run {
+                                                SharedAssetCache.shared.clearAssetCache(for: url)
+                                                print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
+                                            }
+                                        }
+                                    }
+                                    
+                                    // THEN: Force load the video
                                     shouldLoadVideo = true
                                 }
                         }

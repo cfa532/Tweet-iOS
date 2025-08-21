@@ -142,6 +142,14 @@ class SharedAssetCache: ObservableObject {
         playerCache.removeValue(forKey: cacheKey)
     }
     
+    /// Clear asset cache for a specific URL
+    @MainActor func clearAssetCache(for url: URL) {
+        let cacheKey = url.absoluteString
+        assetCache.removeValue(forKey: cacheKey)
+        cacheTimestamps.removeValue(forKey: cacheKey)
+        print("DEBUG: [SHARED ASSET CACHE] Cleared asset cache for URL: \(url)")
+    }
+    
     /// Get cached player or create new one with asset
     @MainActor func getOrCreatePlayer(for url: URL) async throws -> AVPlayer {
         // Try to get cached player first
