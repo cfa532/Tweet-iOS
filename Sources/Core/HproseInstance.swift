@@ -145,9 +145,6 @@ final class HproseInstance: ObservableObject {
                 print("Initializing with addresses: \(addrs)")
                 
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
-                    #if DEBUG
-//                        let firstIp = "36.24.162.94"  // for testing
-                    #endif
                     
                     HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
@@ -165,7 +162,7 @@ final class HproseInstance: ObservableObject {
                             
                             // Retry once after a short delay
                             do {
-                                try await Task.sleep(nanoseconds: 3_000_000_000) // 3on  second delay
+                                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
                                 print("DEBUG: [initAppEntry] Retrying fetchUser...")
                                 user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
                                 print("DEBUG: [initAppEntry] fetchUser retry successful")
@@ -2924,7 +2921,7 @@ final class HproseInstance: ObservableObject {
     
     /// Send notification to system admin about reported content
     private func notifySystemAdmin(tweetId: String, category: String, comments: String) async {
-        let adminUserId = "developer" // System admin user ID
+        let adminUserId = "pcadmin" // System admin user ID
         
         // Create notification message
         let notificationContent = """

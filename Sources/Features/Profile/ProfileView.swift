@@ -293,12 +293,26 @@ struct ProfileView: View {
             UserListView(
                 title: userListType == .FOLLOWER ? "Fans@\(displayName)" : "Followings@\(displayName)",
                 userFetcher: { page, size in
-                    let entry: UserContentType = userListType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
-                    let ids = try await hproseInstance.getFollows(user: user, entry: entry)
-                    let startIndex = page * size
-                    let endIndex = min(startIndex + size, ids.count)
-                    guard startIndex < endIndex else { return [] }
-                    return Array(ids[startIndex..<endIndex])
+                    // Only fetch all IDs once when page is 0
+                    if page == 0 {
+                        let entry: UserContentType = userListType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                        let ids = try await hproseInstance.getFollows(user: user, entry: entry)
+                        // Update user properties on main thread to avoid publishing changes from background thread
+                        await MainActor.run {
+                            if userListType == .FOLLOWER {
+                                user.fansList = ids
+                            } else {
+                                user.followingList = ids
+                            }
+                        }
+                        return ids
+                    } else {
+                        return if userListType == .FOLLOWER {
+                            user.fansList ?? []
+                        } else {
+                            user.followingList ?? []
+                        }
+                    }
                 },
                 navigationPath: $navigationPath,
                 onFollowToggle: { user in

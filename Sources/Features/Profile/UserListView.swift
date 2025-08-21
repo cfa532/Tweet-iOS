@@ -52,15 +52,16 @@ struct UserListView: View {
                         )
                         .id(user.mid)
                     }
-                    if hasMoreUsers {
+                    if isLoading {
+                        ProgressView()
+                            .padding()
+                    } else if hasMoreUsers && !isLoadingMore {
                         ProgressView()
                             .padding()
                             .onAppear {
-                                if !isLoadingMore {
-                                    loadMoreUsers()
-                                }
+                                loadMoreUsers()
                             }
-                    } else if isLoading || isLoadingMore {
+                    } else if isLoadingMore {
                         ProgressView()
                             .padding()
                     }
