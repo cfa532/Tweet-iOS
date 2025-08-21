@@ -367,6 +367,15 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         return mid == Constants.GUEST_ID
     }
     
+    /**
+     * Check if the app user is in this user's blacklist
+     * @param appUserId The app user's ID to check
+     * @return true if app user is blacklisted, false otherwise
+     */
+    func isUserBlacklisted(_ appUserId: MimeiId) -> Bool {
+        return userBlackList?.contains(appUserId) ?? false
+    }
+    
     var avatarUrl: String? {
         if let avatar = avatar, let baseUrl = baseUrl {
             return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(baseUrl)/ipfs/\(avatar)" :  "\(baseUrl)/mm/\(avatar)"

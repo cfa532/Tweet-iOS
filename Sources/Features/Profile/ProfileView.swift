@@ -178,21 +178,22 @@ struct ProfileView: View {
                         }
                     }
                     
-                                            Menu {
-                            if !isAppUser {
-                                Button(role: .destructive) {
-                                    Task {
-                                        await handleBlockUser()
-                                    }
-                                } label: {
-                                    Label("Block User", systemImage: "slash.circle")
+                    Menu {
+                        if !isAppUser {
+                            Button(role: .destructive) {
+                                Task {
+                                    await handleBlockUser()
                                 }
+                            } label: {
+                                Label("Block User", systemImage: "slash.circle")
                             }
+                        }
                         
                         if isAppUser {
                             Button(role: .destructive) {
-                                // TODO: Implement logout functionality
-                                print("Logout tapped")
+                                Task {
+                                    await handleLogout()
+                                }
                             } label: {
                                 Label("Logout", systemImage: "rectangle.portrait.and.arrow.right")
                             }
@@ -565,6 +566,23 @@ struct ProfileView: View {
             // Show error message
             await MainActor.run {
                 showToastMessage("Failed to block user: \(error.localizedDescription)", type: .error)
+            }
+        }
+    }
+    
+    // MARK: - Logout Handling
+    private func handleLogout() async {
+        await MainActor.run {
+            // Use the same logout logic as Settings
+            hproseInstance.logout()
+            NotificationCenter.default.post(name: .userDidLogout, object: nil)
+            
+            // Show success message
+            showToastMessage("Logged out successfully", type: .success)
+            
+            // Call the onLogout callback if provided
+            if let onLogout = onLogout {
+                onLogout()
             }
         }
     }

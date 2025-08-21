@@ -705,6 +705,25 @@ final class HproseInstance: ObservableObject {
     }
     
     /**
+     * Check if the app user is in the target user's blacklist
+     * @param targetUserId The user ID to check against
+     * @return true if app user is blacklisted, false otherwise
+     */
+    func isAppUserBlacklisted(by targetUserId: MimeiId) async -> Bool {
+        do {
+            guard let targetUser = try await fetchUser(targetUserId) else {
+                print("DEBUG: [HproseInstance] Target user not found: \(targetUserId)")
+                return false
+            }
+            let blackList = (try? await getListByType(user: targetUser, entry: .BLACK_LIST)) ?? []
+            return blackList.contains(appUser.mid)
+        } catch {
+            print("DEBUG: [HproseInstance] Error checking blacklist for user \(targetUserId): \(error)")
+            return false
+        }
+    }
+    
+    /**
      * Populate fans and following lists for a given user
      */
     func populateUserLists(user: User) async {
@@ -848,7 +867,15 @@ final class HproseInstance: ObservableObject {
     func toggleFollowing(
         followingId: MimeiId
     )  async throws -> Bool? {
-        try await withRetry {
+        // Check if app user is blacklisted by the target user
+        guard let targetUser = try await fetchUser(followingId) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Target user not found"])
+        }
+        if targetUser.isUserBlacklisted(appUser.mid) {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot follow this user because you are blocked"])
+        }
+        
+        return try await withRetry {
             let entry = "toggle_following"
             let params = [
                 "aid": appId,
@@ -1041,6 +1068,13 @@ final class HproseInstance: ObservableObject {
     }
         
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
+        // Check if app user is blacklisted by the tweet author
+        if let tweetAuthor = tweet.author {
+            if tweetAuthor.isUserBlacklisted(appUser.mid) {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot comment on this tweet because you are blocked by the author"])
+            }
+        }
+        
         // Wait for writableUrl to be resolved
         let resolvedUrl = try await appUser.resolveWritableUrl()
         guard resolvedUrl != nil else {
@@ -2625,6 +2659,13 @@ final class HproseInstance: ObservableObject {
     
     /// Send a chat message to a recipient
     func sendMessage(receiptId: String, message: ChatMessage) async throws -> ChatMessage {
+        // Check if app user is blacklisted by the recipient
+        guard let recipient = try await fetchUser(receiptId) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Recipient user not found"])
+        }
+        if recipient.isUserBlacklisted(appUser.mid) {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot send a message to this user because you are blocked"])
+        }
 
         let entry = "message_outgoing"
         let params: [String: Any] = [
