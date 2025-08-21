@@ -2904,36 +2904,36 @@ final class HproseInstance: ObservableObject {
         print("[blockUser] Backend call completed for user: \(userId)")
     }
     
-    /// Reports a tweet for inappropriate content
+    /// Reports a tweet for inappropriate content and deletes it from backend
     func reportTweet(tweetId: String, category: String, comments: String) async throws {
-        // In a real implementation, this would call a backend API
-        print("[reportTweet] Reporting tweet: \(tweetId), category: \(category)")
+        // First, delete the tweet from backend
+        if let deletedTweetId = try await deleteTweet(tweetId) {
+            print("[reportTweet] Successfully deleted tweet from backend: \(deletedTweetId)")
+        } else {
+            print("[reportTweet] Failed to delete tweet from backend: \(tweetId)")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete reported tweet from backend"])
+        }
         
-        // Simulate backend call for now
-        // In a real app, you would send the report data to your moderation backend
-        try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-        
-        print("[reportTweet] Backend call completed for tweet: \(tweetId)")
-        
-        // Send notification to system admin
+        // Send notification to system admin about the reported and deleted content
         await notifySystemAdmin(tweetId: tweetId, category: category, comments: comments)
     }
     
-    /// Send notification to system admin about reported content
+    /// Send notification to system admin about reported and deleted content
     private func notifySystemAdmin(tweetId: String, category: String, comments: String) async {
         let adminUserId = "pcadmin" // System admin user ID
         
         // Create notification message
         let notificationContent = """
-        🚨 CONTENT REPORT ALERT 🚨
+        🚨 CONTENT REPORT & DELETION ALERT 🚨
         
-        Tweet ID: \(tweetId)
+        Tweet ID: \(tweetId) - DELETED
         Category: \(category)
         Reporter: \(appUser.mid)
         Comments: \(comments.isEmpty ? "None" : comments)
         Time: \(Date().formatted())
         
-        Please review this content within 24 hours as per App Store compliance requirements.
+        Tweet has been automatically deleted from the platform due to reported content.
+        Please review this action within 24 hours as per App Store compliance requirements.
         """
         
         // Create chat message
