@@ -175,11 +175,13 @@ final class HproseInstance: ObservableObject {
                             // Valid login user is found, use its provider IP as base.
                             HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
                             client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                            let followings = (try? await getFollows(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                            let followings = (try? await getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                            let blackList = (try? await getListByType(user: user, entry: .BLACK_LIST)) ?? []
                             await MainActor.run {
                                 // Update the appUser to the fetched user with all properties
                                 user.baseUrl = HproseInstance.baseUrl
                                 user.followingList = followings
+                                user.userBlackList = blackList
                                 self.appUser = user
                                 // Update domain to share with the new base URL
                                 self._domainToShare = HproseInstance.baseUrl.absoluteString
@@ -643,7 +645,7 @@ final class HproseInstance: ObservableObject {
     /*
      Get the UserId list of followers or followings of given user.
      */
-    func getFollows(
+    func getListByType(
         user: User,
         entry: UserContentType
     ) async throws -> [String] {

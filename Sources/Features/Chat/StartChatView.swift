@@ -88,7 +88,7 @@ struct StartChatView: View {
         isLoading = true
         do {
             // Get current user's followings
-            let followingIds = try await hproseInstance.getFollows(
+            let followingIds = try await hproseInstance.getListByType(
                 user: hproseInstance.appUser,
                 entry: .FOLLOWING
             )

@@ -20,4 +20,5 @@ enum UserContentType: String {
     case COMMENTS = "comment_list"       // comments made by an user
     case FOLLOWER = "get_followers_sorted"      // follower list of an user
     case FOLLOWING = "get_followings_sorted"    // following list
+    case BLACK_LIST = "get_black_list"          // blocked user list
 }

@@ -158,11 +158,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     @Published var fansList: [MimeiId]? // List of MimeiId
     @Published var followingList: [MimeiId]? // List of MimeiId
-    @Published var bookmarkedTweets: [String]? // List of MimeiId
-    @Published var favoriteTweets: [String]? // List of MimeiId
-    @Published var repliedTweets: [String]? // List of MimeiId
-    @Published var commentsList: [String]? // List of MimeiId
-    @Published var topTweets: [String]? // List of MimeiId
+    @Published var bookmarkedTweets: [MimeiId]? // List of MimeiId
+    @Published var favoriteTweets: [MimeiId]? // List of MimeiId
+    @Published var repliedTweets: [MimeiId]? // List of MimeiId
+    @Published var commentsList: [MimeiId]? // List of MimeiId
+    @Published var topTweets: [MimeiId]? // List of MimeiId
+    @Published var userBlackList: [MimeiId]? // List of MimeiId
     
     var id: String { mid }  // Computed property that returns mid
     
@@ -285,7 +286,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile, timestamp, lastLogin, cloudDrivePort
         case tweetCount, followingCount, followersCount, bookmarksCount, favoritesCount, commentsCount
-        case hostIds, publicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets
+        case hostIds, publicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets, userBlackList
     }
     
     // Required initializer for Codable
@@ -322,6 +323,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         repliedTweets = try container.decodeIfPresent([String].self, forKey: .repliedTweets)
         commentsList = try container.decodeIfPresent([String].self, forKey: .commentsList)
         topTweets = try container.decodeIfPresent([String].self, forKey: .topTweets)
+        userBlackList = try container.decodeIfPresent([String].self, forKey: .userBlackList)
     }
     
     // Encode method for Codable
@@ -358,6 +360,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         try container.encodeIfPresent(repliedTweets, forKey: .repliedTweets)
         try container.encodeIfPresent(commentsList, forKey: .commentsList)
         try container.encodeIfPresent(topTweets, forKey: .topTweets)
+        try container.encodeIfPresent(userBlackList, forKey: .userBlackList)
     }
     
     var isGuest: Bool {

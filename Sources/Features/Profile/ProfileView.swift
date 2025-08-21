@@ -20,6 +20,7 @@ struct ProfileView: View {
     @State private var showEditSheet = false
     @State private var showAvatarFullScreen = false
     @State private var showChatScreen = false
+    @State private var showBlockUserMenu = false
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isLoading = false
     @State private var didLoad = false
@@ -177,8 +178,29 @@ struct ProfileView: View {
                         }
                     }
                     
-                    if isAppUser {
-                        // show nothing for now.
+                                            Menu {
+                            if !isAppUser {
+                                Button(role: .destructive) {
+                                    Task {
+                                        await handleBlockUser()
+                                    }
+                                } label: {
+                                    Label("Block User", systemImage: "slash.circle")
+                                }
+                            }
+                        
+                        if isAppUser {
+                            Button(role: .destructive) {
+                                // TODO: Implement logout functionality
+                                print("Logout tapped")
+                            } label: {
+                                Label("Logout", systemImage: "rectangle.portrait.and.arrow.right")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .rotationEffect(.degrees(90))
+                            .foregroundColor(.primary)
                     }
                 }
             }
@@ -296,7 +318,7 @@ struct ProfileView: View {
                     // Only fetch all IDs once when page is 0
                     if page == 0 {
                         let entry: UserContentType = userListType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
-                        let ids = try await hproseInstance.getFollows(user: user, entry: entry)
+                        let ids = try await hproseInstance.getListByType(user: user, entry: entry)
                         // Update user properties on main thread to avoid publishing changes from background thread
                         await MainActor.run {
                             if userListType == .FOLLOWER {
@@ -503,6 +525,47 @@ struct ProfileView: View {
             }
         } catch {
             print("DEBUG: [ProfileView] Failed to refresh pinned tweets: \(error)")
+        }
+    }
+    
+    // MARK: - Block User Handling
+    private func handleBlockUser() async {
+        do {
+            // Call the backend to block the user
+            try await hproseInstance.blockUser(userId: user.mid)
+            
+            await MainActor.run {
+                // Remove the user from following list if they are being followed
+                if let followingList = hproseInstance.appUser.followingList,
+                   followingList.contains(user.mid) {
+                    hproseInstance.appUser.followingList = followingList.filter { $0 != user.mid }
+                    // Update the following count
+                    hproseInstance.appUser.followingCount = (hproseInstance.appUser.followingCount ?? 0) - 1
+                }
+                
+                // Add the user to the blacklist
+                var currentBlackList = hproseInstance.appUser.userBlackList ?? []
+                if !currentBlackList.contains(user.mid) {
+                    currentBlackList.append(user.mid)
+                    hproseInstance.appUser.userBlackList = currentBlackList
+                }
+            }
+            
+            // Show success message
+            await MainActor.run {
+                showToastMessage("User blocked successfully", type: .success)
+            }
+            
+            // Navigate back to previous screen
+            await MainActor.run {
+                dismiss()
+            }
+            
+        } catch {
+            // Show error message
+            await MainActor.run {
+                showToastMessage("Failed to block user: \(error.localizedDescription)", type: .error)
+            }
         }
     }
     
