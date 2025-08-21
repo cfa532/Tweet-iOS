@@ -18,7 +18,7 @@ struct SimpleVideoPlayer: View {
     
     // MARK: Optional Parameters
     var autoPlay: Bool = true
-    var videoManager: VideoManager? = nil // Optional VideoManager for reactive playback
+    var globalVideoManager: GlobalVideoManager? = nil // Optional GlobalVideoManager for reactive playback
     var onVideoFinished: (() -> Void)? = nil
     var contentType: String? = nil
     var cellAspectRatio: CGFloat? = nil
@@ -56,10 +56,10 @@ struct SimpleVideoPlayer: View {
         return ar > 1.0
     }
     
-    // Reactive autoPlay state - use VideoManager if available, otherwise use static autoPlay
+    // Reactive autoPlay state - use GlobalVideoManager if available, otherwise use static autoPlay
     private var currentAutoPlay: Bool {
-        if let videoManager = videoManager {
-            return videoManager.shouldPlayVideo(for: mid)
+        if let globalVideoManager = globalVideoManager {
+            return globalVideoManager.shouldPlayVideo(mid: mid)
         }
         return autoPlay
     }
@@ -225,6 +225,22 @@ struct SimpleVideoPlayer: View {
             if let player = player {
                 NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: player.currentItem)
                 NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: player.currentItem)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .playSpecificVideo)) { notification in
+            if let mid = notification.userInfo?["mid"] as? String, mid == self.mid {
+                print("DEBUG: [SimpleVideoPlayer] Received play command for \(mid)")
+                // Start playing this specific video
+                if let player = player {
+                    player.play()
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stopAllVideoPlayback)) { _ in
+            print("DEBUG: [SimpleVideoPlayer] Received stop all command for \(mid)")
+            // Stop this video
+            if let player = player {
+                player.pause()
             }
         }
     }
@@ -421,6 +437,11 @@ struct SimpleVideoPlayer: View {
             // Call external callback
             if let onVideoFinished = onVideoFinished {
                 onVideoFinished()
+            }
+            
+            // Notify GlobalVideoManager if available
+            if let globalVideoManager = globalVideoManager {
+                globalVideoManager.onVideoFinished(mid: mid)
             }
         }
         

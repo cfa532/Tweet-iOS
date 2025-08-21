@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 
 struct TweetListNotification {
     let name: Notification.Name
@@ -34,6 +35,9 @@ struct TweetListView<RowView: View>: View {
     @State private var toastType: ToastView.ToastType = .info
     @State private var initialLoadComplete = false
     @State private var deletedTweetIds = Set<String>()
+    
+    // Global Video Manager for managing all videos in this tweet list
+    @StateObject private var globalVideoManager = GlobalVideoManager()
 
     // MARK: - Initialization
     init(
@@ -88,6 +92,7 @@ struct TweetListView<RowView: View>: View {
                             header: header,
                             rowView: { tweet in
                                 rowView(tweet)
+                                    .environmentObject(globalVideoManager)
                             },
                             hasMoreTweets: $hasMoreTweets,
                             isLoadingMore: isLoadingMore,

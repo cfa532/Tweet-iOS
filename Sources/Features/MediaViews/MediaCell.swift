@@ -40,10 +40,10 @@ struct MediaCell: View, Equatable {
     @State private var isPreloading = false
     let showMuteButton: Bool
     let forceRefreshTrigger: Int
-    @ObservedObject var videoManager: VideoManager
+    @EnvironmentObject private var globalVideoManager: GlobalVideoManager
     @ObservedObject private var muteState = MuteState.shared
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, forceRefreshTrigger: Int = 0) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -51,7 +51,6 @@ struct MediaCell: View, Equatable {
         self.onVideoFinished = onVideoFinished
         self.showMuteButton = showMuteButton
         self._isVisible = State(initialValue: isVisible)
-        self.videoManager = videoManager
         self.forceRefreshTrigger = forceRefreshTrigger
     }
     
@@ -86,8 +85,8 @@ struct MediaCell: View, Equatable {
                                 url: url,
                                 mid: attachment.mid,
                                 isVisible: isVisible,
-                                autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
-                                videoManager: videoManager, // Pass VideoManager for reactive playback
+                                autoPlay: globalVideoManager.shouldPlayVideo(mid: attachment.mid),
+                                globalVideoManager: globalVideoManager, // Pass GlobalVideoManager for reactive playback
                                 onVideoFinished: onVideoFinished,
                                 contentType: attachment.type,
                                 cellAspectRatio: CGFloat(aspectRatio),
@@ -215,7 +214,7 @@ struct MediaCell: View, Equatable {
                     }
                     // #endif
                 case "audio":
-                    SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
+                    SimpleAudioPlayer(url: url, autoPlay: globalVideoManager.shouldPlayVideo(mid: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
                         .onTapGesture {
                             handleTap()
@@ -285,8 +284,10 @@ struct MediaCell: View, Equatable {
             // Set visibility to true immediately when cell appears
             isVisible = true
             
-            // Start background preloading for videos with a delay to improve scrolling performance
+            // Notify GlobalVideoManager about video visibility
             if isVideoAttachment {
+                globalVideoManager.setVideoVisibility(mid: attachment.mid, isVisible: true)
+                
                 // Delay preloading to avoid performance impact during scrolling
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     if isVisible {
@@ -298,6 +299,11 @@ struct MediaCell: View, Equatable {
         .onDisappear {
             // Set visibility to false when cell disappears
             isVisible = false
+            
+            // Notify GlobalVideoManager about video visibility
+            if isVideoAttachment {
+                globalVideoManager.setVideoVisibility(mid: attachment.mid, isVisible: false)
+            }
             
             // Cancel any ongoing preload tasks
             cancelPreloadTask()
