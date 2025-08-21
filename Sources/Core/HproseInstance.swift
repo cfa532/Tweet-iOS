@@ -2695,6 +2695,18 @@ final class HproseInstance: ObservableObject {
                         print("[sendMessage] Warning: Failed to send to recipient node")
                     }
                 }
+            } else {
+                return ChatMessage(
+                    id: message.id,
+                    authorId: message.authorId,
+                    receiptId: message.receiptId,
+                    chatSessionId: message.chatSessionId,
+                    content: message.content,
+                    timestamp: message.timestamp,
+                    attachments: message.attachments,
+                    success: false,
+                    errorMsg: "Failed to send message"
+                )
             }
             
             // Return message with success status
@@ -2915,12 +2927,13 @@ final class HproseInstance: ObservableObject {
         }
         
         // Send notification to system admin about the reported and deleted content
+        // Note: Admin notification failure won't affect tweet deletion success
         await notifySystemAdmin(tweetId: tweetId, category: category, comments: comments)
     }
     
     /// Send notification to system admin about reported and deleted content
     private func notifySystemAdmin(tweetId: String, category: String, comments: String) async {
-        let adminUserId = "pcadmin" // System admin user ID
+        let adminUserId = AppConfig.alphaId // System admin user ID
         
         // Create notification message
         let notificationContent = """
@@ -2951,9 +2964,12 @@ final class HproseInstance: ObservableObject {
                 print("[notifySystemAdmin] Successfully sent notification to admin for tweet: \(tweetId)")
             } else {
                 print("[notifySystemAdmin] Failed to send notification to admin: \(result.errorMsg ?? "Unknown error")")
+                // Log the failure but don't throw error - admin notification is not critical for tweet deletion
             }
         } catch {
             print("[notifySystemAdmin] Error sending notification to admin: \(error)")
+            // Log the error but don't throw - admin notification is not critical for tweet deletion
+            // The tweet has already been deleted successfully, so we don't want to fail the entire operation
         }
     }
 }
