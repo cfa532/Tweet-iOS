@@ -208,6 +208,9 @@ struct ProfileView: View {
                         Image(systemName: "ellipsis")
                             .rotationEffect(.degrees(90))
                             .foregroundColor(.primary)
+                            .font(.system(size: 16, weight: .medium))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
                 }
             }

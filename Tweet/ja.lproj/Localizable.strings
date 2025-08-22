@@ -321,5 +321,17 @@
 // MARK: - Media Grid
 "+%d more" = "+%d個追加";
 
+// MARK: - Profile Menu
+"Delete Account" = "アカウント削除";
+"Block User" = "ユーザーをブロック";
+"Are you sure you want to logout?" = "ログアウトしてもよろしいですか？";
+"Are you sure you want to delete your account?" = "アカウントを削除してもよろしいですか？";
+"This action cannot be undone." = "この操作は元に戻せません。";
+"Account deleted successfully" = "アカウントが正常に削除されました";
+"User blocked successfully" = "ユーザーが正常にブロックされました";
+"Failed to delete account: %@" = "アカウント削除に失敗しました: %@";
+"Failed to logout: %@" = "ログアウトに失敗しました: %@";
+"Failed to block user: %@" = "ユーザーのブロックに失敗しました: %@";
+
 // MARK: - Badge
 "99+" = "99+";

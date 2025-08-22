@@ -418,3 +418,15 @@
 "Discard Changes" = "丢弃更改";
 "Continue Editing" = "继续编辑";
 "You have unsaved changes. Are you sure you want to exit without saving?" = "您有未保存的更改。确定要退出而不保存吗？";
+
+// MARK: - Profile Menu
+"Delete Account" = "删除账户";
+"Block User" = "屏蔽用户";
+"Are you sure you want to logout?" = "您确定要登出吗？";
+"Are you sure you want to delete your account?" = "您确定要删除您的账户吗？";
+"This action cannot be undone." = "此操作无法撤销。";
+"Account deleted successfully" = "账户删除成功";
+"User blocked successfully" = "用户屏蔽成功";
+"Failed to delete account: %@" = "删除账户失败：%@";
+"Failed to logout: %@" = "注销失败：%@";
+"Failed to block user: %@" = "屏蔽用户失败：%@";
