@@ -635,6 +635,16 @@ final class HproseInstance: ObservableObject {
     
     func logout() {
         preferenceHelper?.setUserId(nil as String?)
+        
+        // Clear all caches
+        TweetCacheManager.shared.clearAllCache()
+        ImageCacheManager.shared.clearAllCache()
+        VideoCacheManager.shared.clearCache()
+        ChatCacheManager.shared.clearAllCache()
+        Task { @MainActor in
+            SharedAssetCache.shared.clearCache()
+        }
+        
         // Reset appUser to guest user
         let guestUser = User.getInstance(mid: Constants.GUEST_ID)
         guestUser.baseUrl = HproseInstance.baseUrl
@@ -2957,6 +2967,21 @@ final class HproseInstance: ObservableObject {
         
         client.invoke("runMApp", withArgs: [entry, params])
         print("[blockUser] Backend call completed for user: \(userId)")
+    }
+    
+    /// Deletes the current user's account
+    func deleteAccount() async throws -> [String: Any] {
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+        }
+        
+        let entry = "delete_account"
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "userid": appUser.mid
+        ]
+        return client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] ?? [:]
     }
     
     /// Reports a tweet for inappropriate content and deletes it from backend

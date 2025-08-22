@@ -48,6 +48,8 @@ struct ProfileView: View {
     }
     
     @State private var isFollowing: Bool = false
+    @State private var showLogoutConfirmation = false
+    @State private var showDeleteAccountConfirmation = false
     
     var body: some View {
         ZStack {
@@ -185,17 +187,21 @@ struct ProfileView: View {
                                     await handleBlockUser()
                                 }
                             } label: {
-                                Label("Block User", systemImage: "slash.circle")
+                                Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
                             }
                         }
                         
                         if isAppUser {
                             Button(role: .destructive) {
-                                Task {
-                                    await handleLogout()
-                                }
+                                showLogoutConfirmation = true
                             } label: {
-                                Label("Logout", systemImage: "rectangle.portrait.and.arrow.right")
+                                Label(NSLocalizedString("Logout", comment: "Logout menu item"), systemImage: "rectangle.portrait.and.arrow.right")
+                            }
+                            
+                            Button(role: .destructive) {
+                                showDeleteAccountConfirmation = true
+                            } label: {
+                                Label(NSLocalizedString("Delete Account", comment: "Delete account menu item"), systemImage: "trash")
                             }
                         }
                     } label: {
@@ -404,6 +410,26 @@ struct ProfileView: View {
                 }
             }
         }
+        .alert(NSLocalizedString("Are you sure you want to logout?", comment: "Logout confirmation alert title"), isPresented: $showLogoutConfirmation) {
+            Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
+            Button(NSLocalizedString("Logout", comment: "Logout button"), role: .destructive) {
+                Task {
+                    await handleLogout()
+                }
+            }
+        } message: {
+            Text(NSLocalizedString("This action cannot be undone.", comment: "Logout confirmation message"))
+        }
+        .alert(NSLocalizedString("Are you sure you want to delete your account?", comment: "Delete account confirmation alert title"), isPresented: $showDeleteAccountConfirmation) {
+            Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
+            Button(NSLocalizedString("Delete Account", comment: "Delete account button"), role: .destructive) {
+                Task {
+                    await handleDeleteAccount()
+                }
+            }
+        } message: {
+            Text(NSLocalizedString("This action cannot be undone.", comment: "Delete account confirmation message"))
+        }
 
     }
     
@@ -554,7 +580,7 @@ struct ProfileView: View {
             
             // Show success message
             await MainActor.run {
-                showToastMessage("User blocked successfully", type: .success)
+                showToastMessage(NSLocalizedString("User blocked successfully", comment: "User blocked success message"), type: .success)
             }
             
             // Navigate back to previous screen
@@ -565,7 +591,7 @@ struct ProfileView: View {
         } catch {
             // Show error message
             await MainActor.run {
-                showToastMessage("Failed to block user: \(error.localizedDescription)", type: .error)
+                showToastMessage(String(format: NSLocalizedString("Failed to block user: %@", comment: "Block user error message"), error.localizedDescription), type: .error)
             }
         }
     }
@@ -578,11 +604,49 @@ struct ProfileView: View {
             NotificationCenter.default.post(name: .userDidLogout, object: nil)
             
             // Show success message
-            showToastMessage("Logged out successfully", type: .success)
+            showToastMessage(NSLocalizedString("Logged out successfully", comment: "Logout success message"), type: .success)
             
             // Call the onLogout callback if provided
             if let onLogout = onLogout {
                 onLogout()
+            }
+        }
+    }
+    
+    // MARK: - Delete Account Handling
+    private func handleDeleteAccount() async {
+        do {
+            // Call the backend to delete the account
+            let result = try await hproseInstance.deleteAccount()
+            
+            await MainActor.run {
+                if let success = result["success"] as? Bool, success {
+                    // Show success message first
+                    showToastMessage(NSLocalizedString("Account deleted successfully", comment: "Account deletion success message"), type: .success)
+                    
+                    // Clear all cached data
+                    TweetCacheManager.shared.clearAllCache()
+                    ImageCacheManager.shared.clearAllCache()
+                    
+                    // Use the same logout logic as Settings to reset the app state
+                    hproseInstance.logout()
+                    NotificationCenter.default.post(name: .userDidLogout, object: nil)
+                    
+                    // Call the onLogout callback if provided
+                    if let onLogout = onLogout {
+                        onLogout()
+                    }
+                } else {
+                    // Handle failure case
+                    let errorMessage = result["message"] as? String ?? "Unknown error occurred"
+                    showToastMessage(String(format: NSLocalizedString("Failed to delete account: %@", comment: "Delete account error message"), errorMessage), type: .error)
+                }
+            }
+            
+        } catch {
+            // Show error message
+            await MainActor.run {
+                showToastMessage(String(format: NSLocalizedString("Failed to delete account: %@", comment: "Delete account error message"), error.localizedDescription), type: .error)
             }
         }
     }

@@ -19,21 +19,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             List {
-                Section(header: Text(LocalizedStringKey("Account"))) {
-                    if !hproseInstance.appUser.isGuest {
-                        DebounceButton(
-                            "Logout",
-                            cooldownDuration: 0.5,
-                            enableAnimation: true,
-                            enableVibration: false
-                        ) {
-                            hproseInstance.logout()
-                            NotificationCenter.default.post(name: .userDidLogout, object: nil)
-                            dismiss()
-                        }
-                        .foregroundColor(.red)
-                    }
-                }
+
                 
                 Section(header: Text(LocalizedStringKey("App Settings"))) {
                     Toggle(NSLocalizedString("Dark Mode", comment: "Dark mode toggle"), isOn: $themeManager.isDarkMode)

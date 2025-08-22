@@ -52,6 +52,18 @@
 "Logout" = "Logout";
 "Dark Mode" = "Dark Mode";
 
+// MARK: - Profile Menu
+"Delete Account" = "Delete Account";
+"Block User" = "Block User";
+"Are you sure you want to logout?" = "Are you sure you want to logout?";
+"Are you sure you want to delete your account?" = "Are you sure you want to delete your account?";
+"This action cannot be undone." = "This action cannot be undone.";
+"Account deleted successfully" = "Account deleted successfully";
+"User blocked successfully" = "User blocked successfully";
+"Failed to delete account: %@" = "Failed to delete account: %@";
+"Failed to logout: %@" = "Failed to logout: %@";
+"Failed to block user: %@" = "Failed to block user: %@";
+
 // MARK: - Profile Screen
 "Fans" = "Fans";
 "Followings" = "Followings";

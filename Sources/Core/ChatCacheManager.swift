@@ -291,4 +291,27 @@ extension ChatCacheManager {
             try? context.save()
         }
     }
+    
+    // MARK: - Clear All Cache
+    func clearAllCache() {
+        context.performAndWait {
+            // Delete all chat messages
+            let messageRequest: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
+            if let allMessages = try? context.fetch(messageRequest) {
+                for message in allMessages {
+                    context.delete(message)
+                }
+            }
+            
+            // Delete all chat sessions
+            let sessionRequest: NSFetchRequest<CDChatSession> = CDChatSession.fetchRequest()
+            if let allSessions = try? context.fetch(sessionRequest) {
+                for session in allSessions {
+                    context.delete(session)
+                }
+            }
+            
+            try? context.save()
+        }
+    }
 }
