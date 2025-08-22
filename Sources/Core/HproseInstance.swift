@@ -69,6 +69,39 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - Helper Methods
     
+    /// Print detailed app user content for debugging
+    private func printAppUserContent(_ context: String) {
+        print("=== APP USER CONTENT [\(context)] ===")
+        print("MID: \(appUser.mid)")
+        print("Username: \(appUser.username ?? "nil")")
+        print("Name: \(appUser.name ?? "nil")")
+        print("Profile: \(appUser.profile ?? "nil")")
+        print("Avatar: \(appUser.avatar ?? "nil")")
+        print("Base URL: \(appUser.baseUrl?.absoluteString ?? "nil")")
+        print("Writable URL: \(appUser.writableUrl?.absoluteString ?? "nil")")
+        print("Cloud Drive Port: \(appUser.cloudDrivePort?.description ?? "nil")")
+        print("Host IDs: \(appUser.hostIds ?? [])")
+        print("Tweet Count: \(appUser.tweetCount?.description ?? "nil")")
+        print("Following Count: \(appUser.followingCount?.description ?? "nil")")
+        print("Followers Count: \(appUser.followersCount?.description ?? "nil")")
+        print("Bookmarks Count: \(appUser.bookmarksCount?.description ?? "nil")")
+        print("Favorites Count: \(appUser.favoritesCount?.description ?? "nil")")
+        print("Comments Count: \(appUser.commentsCount?.description ?? "nil")")
+        print("Following List: \(appUser.followingList ?? [])")
+        print("Fans List: \(appUser.fansList ?? [])")
+        print("User Black List: \(appUser.userBlackList ?? [])")
+        print("Bookmarked Tweets: \(appUser.bookmarkedTweets ?? [])")
+        print("Favorite Tweets: \(appUser.favoriteTweets ?? [])")
+        print("Replied Tweets: \(appUser.repliedTweets ?? [])")
+        print("Comments List: \(appUser.commentsList ?? [])")
+        print("Top Tweets: \(appUser.topTweets ?? [])")
+        print("Has Accepted Terms: \(appUser.hasAcceptedTerms)")
+        print("Is Guest: \(appUser.isGuest)")
+        print("Timestamp: \(appUser.timestamp)")
+        print("Last Login: \(appUser.lastLogin?.description ?? "nil")")
+        print("=====================================")
+    }
+    
     // MARK: - Initialization
     private init() {}
     
@@ -117,6 +150,9 @@ final class HproseInstance: ObservableObject {
             _domainToShare = baseUrlString
             
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(baseUrlString)")
+            
+            // Print detailed app user content after initialization
+            printAppUserContent("After initializeAppUser")
         }
     }
     
@@ -135,7 +171,7 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    private func initAppEntry() async throws {
+    func initAppEntry() async throws {
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
                 let html = try await fetchHTML(from: url)
@@ -185,6 +221,9 @@ final class HproseInstance: ObservableObject {
                                 self.appUser = user
                                 // Update domain to share with the new base URL
                                 self._domainToShare = HproseInstance.baseUrl.absoluteString
+                                
+                                // Print detailed app user content after successful login
+                                self.printAppUserContent("After successful login")
                             }
                             return
                         } else {
@@ -196,6 +235,9 @@ final class HproseInstance: ObservableObject {
                                 _appUser = user
                                 // Update domain to share with the new base URL
                                 self._domainToShare = HproseInstance.baseUrl.absoluteString
+                                
+                                // Print detailed app user content after fallback to guest
+                                self.printAppUserContent("After fallback to guest user")
                             }
                             return
                         }
@@ -207,6 +249,9 @@ final class HproseInstance: ObservableObject {
                             _appUser = user
                             // Update domain to share with the new base URL
                             self._domainToShare = HproseInstance.baseUrl.absoluteString
+                            
+                            // Print detailed app user content after guest user setup
+                            self.printAppUserContent("After guest user setup")
                         }
                         return
                     }

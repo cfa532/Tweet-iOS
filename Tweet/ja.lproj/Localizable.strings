@@ -44,7 +44,7 @@
 "Clear Media Cache" = "メディアキャッシュをクリア";
 "About" = "アプリについて";
 "Version" = "バージョン";
-"All image and tweet caches have been cleared successfully." = "すべての画像とツイートキャッシュが正常にクリアされました。";
+"All caches, users, and tweets have been cleared successfully." = "すべてのキャッシュ、ユーザー、ツイートが正常にクリアされました。";
 "Cache Cleared" = "キャッシュがクリアされました";
 "Logout" = "ログアウト";
 "Dark Mode" = "ダークモード";

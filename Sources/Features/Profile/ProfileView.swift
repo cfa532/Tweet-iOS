@@ -167,6 +167,16 @@ struct ProfileView: View {
         .onAppear {
             // Calculate isFollowing by checking if the user's mid is in the app user's followingList
             isFollowing = hproseInstance.appUser.followingList?.contains(user.mid) ?? false
+            
+            // Refresh user data from backend every time profile is opened
+            Task {
+                do {
+                    _ = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
+                    print("DEBUG: [ProfileView] Refreshed user data from backend for user: \(user.mid)")
+                } catch {
+                    print("DEBUG: [ProfileView] Failed to refresh user data: \(error)")
+                }
+            }
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {

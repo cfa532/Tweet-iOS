@@ -47,7 +47,7 @@
 "Clear Media Cache" = "清除媒体缓存";
 "About" = "关于";
 "Version" = "版本";
-"All image and tweet caches have been cleared successfully." = "所有图片和推文缓存已成功清除。";
+"All caches, users, and tweets have been cleared successfully." = "所有缓存、用户和推文已成功清除。";
 "Cache Cleared" = "缓存已清除";
 "Logout" = "退出登录";
 "Dark Mode" = "深色模式";

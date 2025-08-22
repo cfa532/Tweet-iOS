@@ -65,7 +65,7 @@ struct SettingsView: View {
             .alert(LocalizedStringKey("Cache Cleared"), isPresented: $showCacheCleanedAlert) {
                 Button(LocalizedStringKey("OK")) { }
             } message: {
-                Text(LocalizedStringKey("All image and tweet caches have been cleared successfully."))
+                Text(LocalizedStringKey("All caches, users, and tweets have been cleared successfully."))
             }
         }
     }
@@ -73,11 +73,23 @@ struct SettingsView: View {
     private func cleanupCache() {
         isCleaningCache = true
         Task.detached(priority: .background) {
-            // Clear image cache completely
+            // Clear all caches completely
             ImageCacheManager.shared.clearAllCache()
-            
-            // Clear tweet cache completely
             TweetCacheManager.shared.clearAllCache()
+            VideoCacheManager.shared.clearCache()
+            ChatCacheManager.shared.clearAllCache()
+            
+            // Clear shared asset cache
+            await MainActor.run {
+                SharedAssetCache.shared.clearCache()
+            }
+            
+            // Reinitialize app entry to refresh user and tweet data
+            do {
+                try await hproseInstance.initAppEntry()
+            } catch {
+                print("Failed to reinitialize app entry: \(error)")
+            }
             
             await MainActor.run {
                 isCleaningCache = false
