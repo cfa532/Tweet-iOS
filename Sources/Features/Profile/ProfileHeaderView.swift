@@ -8,6 +8,7 @@ struct ProfileHeaderView: View {
     let onEditTap: () -> Void
     let onFollowToggle: () -> Void
     let onAvatarTap: () -> Void
+    @EnvironmentObject private var hproseInstance: HproseInstance
     
     private func formatRegistrationDate(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -52,7 +53,8 @@ struct ProfileHeaderView: View {
                             .fill(Color(.systemGray6))
                     )
                     .foregroundColor(.primary)
-                } else {
+                } else if !hproseInstance.appUser.isGuest {
+                    // Only show follow/unfollow button if app user is not a guest
                     DebounceButton(
                         isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"),
                         cooldownDuration: 0.5,

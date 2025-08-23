@@ -144,7 +144,7 @@ struct UserRowView: View {
                     print("DEBUG: [UserRowView] Successfully fetched user: \(fetchedUser.mid)")
                     await MainActor.run {
                         self.user = fetchedUser
-                        self.isFollowing = hproseInstance.appUser.followingList?.contains(userId) ?? false
+                        self.isFollowing = (hproseInstance.appUser.followingList as? [String])?.contains(userId) ?? false
                         self.isLoading = false
                     }
                 } else {
