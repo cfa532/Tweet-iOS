@@ -161,7 +161,7 @@ struct ProfileView: View {
         }
         .onAppear {
             // Calculate isFollowing by checking if the user's mid is in the app user's followingList
-            isFollowing = (hproseInstance.appUser.followingList as? [String])?.contains(user.mid) ?? false
+            isFollowing = (hproseInstance.appUser.followingList)?.contains(user.mid) ?? false
             
             // Refresh user data from backend every time profile is opened
             Task {

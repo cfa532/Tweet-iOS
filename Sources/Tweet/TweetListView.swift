@@ -179,6 +179,14 @@ struct TweetListView<RowView: View>: View {
                 initialLoadComplete = true
             }
             
+            // Trigger preloading after initial load completes
+            if hasMoreTweets {
+                print("[TweetListView] Initial load complete, triggering preloading of next two pages")
+                await MainActor.run {
+                    loadNextTwoPages(startingFrom: 1)
+                }
+            }
+            
         } catch {
             print("[TweetListView] Error during initial load for user \(hproseInstance.appUser.mid): \(error)")
             errorMessage = error.localizedDescription

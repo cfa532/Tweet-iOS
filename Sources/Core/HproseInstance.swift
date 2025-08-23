@@ -630,14 +630,11 @@ final class HproseInstance: ObservableObject {
                     _ = try User.from(dict: newUserDict)
                 } catch {
                     print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
-                    print("DEBUG: [updateUserFromServer] Response that caused error: \(newResponse)")
                 }
             } else if let newIpAddress = newResponse as? String {
                 print("DEBUG: [updateUserFromServer] User still not found on redirected IP: \(newIpAddress)")
                 // If we get another IP address, it means the user is not found on the redirected server either
                 // This could happen if the user has moved to a different server
-            } else {
-                print("DEBUG: [updateUserFromServer] Unexpected response type from redirected server: \(type(of: newResponse)), value: \(newResponse)")
             }
             
             // Close the new client
