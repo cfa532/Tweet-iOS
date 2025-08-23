@@ -153,7 +153,7 @@ struct ProfileView: View {
                 Spacer()
                 if showToast {
                     ToastView(message: toastMessage, type: toastType)
-                        .padding(.bottom, 40)
+                        .padding(.bottom, 48)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
