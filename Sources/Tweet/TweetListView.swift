@@ -154,7 +154,6 @@ struct TweetListView<RowView: View>: View {
         isLoading = true
         initialLoadComplete = false
         currentPage = 0
-        tweets = []
         let page: UInt = 0
 
         do {
