@@ -15,6 +15,7 @@ struct UserRowView: View {
     @State private var isFollowing: Bool = false
     @State private var showFullProfile: Bool = false
     @State private var isLoading: Bool = true
+    @State private var loadingTask: Task<Void, Never>?
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     private func formatRegistrationDate(_ date: Date) -> String {
@@ -134,15 +135,25 @@ struct UserRowView: View {
         .onAppear {
             loadUser()
         }
+        .onDisappear {
+            // Cancel any ongoing loading task when view disappears
+            loadingTask?.cancel()
+        }
     }
     
     private func loadUser() {
-        Task {
+        // Cancel any existing loading task
+        loadingTask?.cancel()
+        
+        // Create a new loading task
+        loadingTask = Task {
             do {
                 print("DEBUG: [UserRowView] Loading user with ID: \(userId)")
                 if let fetchedUser = try await hproseInstance.fetchUser(userId) {
                     print("DEBUG: [UserRowView] Successfully fetched user: \(fetchedUser.mid)")
                     await MainActor.run {
+                        // Check if task was cancelled before updating UI
+                        guard !Task.isCancelled else { return }
                         self.user = fetchedUser
                         self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
                         self.isLoading = false
@@ -150,13 +161,19 @@ struct UserRowView: View {
                 } else {
                     print("DEBUG: [UserRowView] No user found for ID: \(userId)")
                     await MainActor.run {
+                        // Check if task was cancelled before updating UI
+                        guard !Task.isCancelled else { return }
                         self.user = nil
                         self.isLoading = false
                     }
                 }
+            } catch is CancellationError {
+                print("DEBUG: [UserRowView] Loading cancelled for user \(userId)")
             } catch {
                 print("DEBUG: [UserRowView] Error loading user \(userId): \(error)")
                 await MainActor.run {
+                    // Check if task was cancelled before updating UI
+                    guard !Task.isCancelled else { return }
                     self.user = nil
                     self.isLoading = false
                 }

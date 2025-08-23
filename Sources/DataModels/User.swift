@@ -5,6 +5,7 @@ import hprose
 class User: ObservableObject, Codable, Identifiable, Hashable {
     // MARK: - Singleton Dictionary
     private static var userInstances: [MimeiId: User] = [:]
+    private static let userInstancesQueue = DispatchQueue(label: "user.instances.queue")
     
     // MARK: - Properties
     @Published var mid: MimeiId
@@ -221,12 +222,14 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // MARK: - Factory Methods
     static func getInstance(mid: MimeiId) -> User {
-        if let existingUser = User.userInstances[mid] {
-            return existingUser
+        return userInstancesQueue.sync {
+            if let existingUser = User.userInstances[mid] {
+                return existingUser
+            }
+            let newUser = User(mid: mid)
+            User.userInstances[mid] = newUser
+            return newUser
         }
-        let newUser = User(mid: mid)
-        User.userInstances[mid] = newUser
-        return newUser
     }
     
     /// Update user instance with backend data. Keep current baseUrl
@@ -252,7 +255,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             decodedUser.writableUrl = instance.writableUrl
             
             updateUserInstance(with: decodedUser)
-            return User.userInstances[decodedUser.mid]!
+            return userInstancesQueue.sync {
+                User.userInstances[decodedUser.mid]!
+            }
         } catch {
             print("DEBUG: [User.from] Error decoding user dict: \(error)")
             print("DEBUG: [User.from] Dict content: \(dict)")

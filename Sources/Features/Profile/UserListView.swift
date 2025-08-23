@@ -16,6 +16,8 @@ struct UserListView: View {
     @State private var currentPage: Int = 0
     private let pageSize: Int = 10
     @State private var errorMessage: String? = nil
+    @State private var refreshTask: Task<Void, Never>?
+    @State private var loadMoreTask: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var navigationPath: NavigationPath
@@ -84,47 +86,71 @@ struct UserListView: View {
         .onReceive(NotificationCenter.default.publisher(for: .popToRoot)) { _ in
             dismiss()
         }
+        .onDisappear {
+            // Cancel any ongoing tasks when view disappears
+            refreshTask?.cancel()
+            loadMoreTask?.cancel()
+        }
     }
     
     // MARK: - Methods
     func refreshUsers() async {
-        isLoading = true
-        currentPage = 0
-        hasMoreUsers = true
-        do {
-            // Fetch all user IDs
-            let allIds = try await userFetcher(0, Int.max)
-            // Deduplicate user IDs
-            let uniqueUserIds = Array(Set(allIds))
-            
-            await MainActor.run {
-                allUserIds = uniqueUserIds
-                // Load initial page
-                let initialUserIds = Array(uniqueUserIds.prefix(pageSize))
-                displayedUserIds = initialUserIds
-                hasMoreUsers = uniqueUserIds.count > pageSize
-                isLoading = false
-            }
-        } catch {
-            print("Error refreshing users: \(error)")
-            await MainActor.run {
-                isLoading = false
-                errorMessage = error.localizedDescription
+        // Cancel any existing refresh task
+        refreshTask?.cancel()
+        
+        // Create a new refresh task
+        refreshTask = Task {
+            isLoading = true
+            currentPage = 0
+            hasMoreUsers = true
+            do {
+                // Fetch all user IDs
+                let allIds = try await userFetcher(0, Int.max)
+                // Deduplicate user IDs
+                let uniqueUserIds = Array(Set(allIds))
+                
+                await MainActor.run {
+                    // Check if task was cancelled before updating UI
+                    guard !Task.isCancelled else { return }
+                    allUserIds = uniqueUserIds
+                    // Load initial page
+                    let initialUserIds = Array(uniqueUserIds.prefix(pageSize))
+                    displayedUserIds = initialUserIds
+                    hasMoreUsers = uniqueUserIds.count > pageSize
+                    isLoading = false
+                }
+            } catch is CancellationError {
+                print("DEBUG: [UserListView] Refresh cancelled")
+            } catch {
+                print("Error refreshing users: \(error)")
+                await MainActor.run {
+                    // Check if task was cancelled before updating UI
+                    guard !Task.isCancelled else { return }
+                    isLoading = false
+                    errorMessage = error.localizedDescription
+                }
             }
         }
     }
     
     func loadMoreUsers() {
         guard hasMoreUsers, !isLoadingMore else { return }
-        isLoadingMore = true
         
-        let startIndex = displayedUserIds.count
-        let endIndex = min(startIndex + pageSize, allUserIds.count)
+        // Cancel any existing load more task
+        loadMoreTask?.cancel()
         
-        Task {
+        // Create a new load more task
+        loadMoreTask = Task {
+            isLoadingMore = true
+            
+            let startIndex = displayedUserIds.count
+            let endIndex = min(startIndex + pageSize, allUserIds.count)
+            
             // If we've reached the end of the list, update state and return
             if startIndex >= allUserIds.count {
                 await MainActor.run {
+                    // Check if task was cancelled before updating UI
+                    guard !Task.isCancelled else { return }
                     hasMoreUsers = false
                     isLoadingMore = false
                 }
@@ -135,6 +161,8 @@ struct UserListView: View {
             // Defensive: If no more IDs to load, stop
             if nextBatchIds.isEmpty {
                 await MainActor.run {
+                    // Check if task was cancelled before updating UI
+                    guard !Task.isCancelled else { return }
                     hasMoreUsers = false
                     isLoadingMore = false
                 }
@@ -142,6 +170,8 @@ struct UserListView: View {
             }
             
             await MainActor.run {
+                // Check if task was cancelled before updating UI
+                guard !Task.isCancelled else { return }
                 displayedUserIds.append(contentsOf: nextBatchIds)
                 // If we loaded fewer users than requested, or none, stop loading more
                 if nextBatchIds.isEmpty || endIndex >= allUserIds.count {
