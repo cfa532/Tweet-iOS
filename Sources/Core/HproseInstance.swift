@@ -566,33 +566,46 @@ final class HproseInstance: ObservableObject {
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
+        print("DEBUG: [HproseInstance] fetchUser called for: \(userId), baseUrl: \(baseUrl)")
         // Step 1: Check user cache in Core Data.
         let user = User.getInstance(mid: userId)
         if !user.hasExpired {
+            print("DEBUG: [HproseInstance] User \(userId) found in cache, fetching cached user asynchronously")
             // get cached user instance if it is not expired.
-            return TweetCacheManager.shared.fetchUser(mid: userId)
+            // Make cache access asynchronous to prevent blocking
+            return await Task.detached {
+                return TweetCacheManager.shared.fetchUser(mid: userId)
+            }.value
         }
         
         // Step 2: Fetch from server. No instance available in memory or cache.
+        print("DEBUG: [HproseInstance] User \(userId) not in cache or expired, fetching from server")
         if baseUrl.isEmpty {
+            print("DEBUG: [HproseInstance] Getting provider IP for user: \(userId)")
             guard let providerIP = try await getProviderIP(userId) else {
+                print("DEBUG: [HproseInstance] Provider IP not found for user: \(userId)")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provide not found"])
             }
+            print("DEBUG: [HproseInstance] Got provider IP: \(providerIP) for user: \(userId)")
             await MainActor.run {
                 user.baseUrl = URL(string: "http://\(providerIP)")!
             }
+            print("DEBUG: [HproseInstance] Updating user from server for: \(userId)")
             try await updateUserFromServer(user)
             return user
         } else {
+            print("DEBUG: [HproseInstance] Using provided baseUrl: \(baseUrl) for user: \(userId)")
             await MainActor.run {
                 user.baseUrl = URL(string: baseUrl)!
             }
+            print("DEBUG: [HproseInstance] Updating user from server for: \(userId)")
             try await updateUserFromServer(user)
             return user
         }
     }
     
     func updateUserFromServer(_ user: User) async throws {
+        print("DEBUG: [HproseInstance] updateUserFromServer called for user: \(user.mid)")
         let entry = "get_user"
         let params = [
             "aid": appId,
@@ -600,11 +613,13 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
         ]
         
+        print("DEBUG: [HproseInstance] Calling runMApp with get_user for user: \(user.mid)")
         // Call runMApp following the sample code pattern
         guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
             print("DEBUG: [updateUserFromServer] No hprose client available for user: \(user.mid)")
             return
         }
+        print("DEBUG: [HproseInstance] updateUserFromServer response received for user: \(user.mid)")
         
         if let userDict = response as? [String: Any] {
             do {
@@ -2690,14 +2705,18 @@ final class HproseInstance: ObservableObject {
     }
 
     private func getProviderIP(_ mid: String) async throws -> String? {
+        print("DEBUG: [HproseInstance] getProviderIP called for mid: \(mid)")
         let params = [
             "aid": appId,
             "ver": "last",
             "mid": mid
         ]
+        print("DEBUG: [HproseInstance] Calling runMApp with get_provider_ip for mid: \(mid)")
         if let response = client.invoke("runMApp", withArgs: ["get_provider_ip", params]) {
+            print("DEBUG: [HproseInstance] getProviderIP response received: \(response)")
             return response as? String
         }
+        print("DEBUG: [HproseInstance] getProviderIP returned nil for mid: \(mid)")
         return nil
     }
     

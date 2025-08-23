@@ -100,14 +100,14 @@ struct UserListView: View {
             await MainActor.run {
                 userIds = uniqueUserIds
                 users = []
+                print("DEBUG: [UserListView] Loaded \(uniqueUserIds.count) user IDs: \(uniqueUserIds)")
             }
             
-            // Then fetch initial batch of user objects
+            // Start fetching initial batch of user objects in parallel
             let initialUserIds = Array(uniqueUserIds.prefix(initialBatchSize))
-            let initialUsers = try await fetchUserObjects(for: initialUserIds)
+            await fetchUsersInParallel(for: initialUserIds)
             
             await MainActor.run {
-                users = initialUsers
                 hasMoreUsers = uniqueUserIds.count > initialBatchSize
                 isLoading = false
             }
@@ -147,55 +147,47 @@ struct UserListView: View {
                 return
             }
             
-            do {
-                let moreUsers = try await fetchUserObjects(for: nextBatchIds)
-                await MainActor.run {
-                    let existingIds = Set(users.map { $0.mid })
-                    let uniqueNewUsers = moreUsers.filter { !existingIds.contains($0.mid) }
-                    users.append(contentsOf: uniqueNewUsers)
-                    // If we loaded fewer users than requested, or none, stop loading more
-                    if uniqueNewUsers.isEmpty || moreUsers.count < nextBatchIds.count || endIndex >= userIds.count {
-                        hasMoreUsers = false
-                    } else {
-                        hasMoreUsers = true
-                    }
-                    isLoadingMore = false
-                }
-            } catch {
-                print("Error loading more users: \(error)")
-                await MainActor.run {
-                    isLoadingMore = false
-                    errorMessage = error.localizedDescription
-                    hasMoreUsers = false // Stop spinner on error
-                }
+            await fetchUsersInParallel(for: nextBatchIds)
+            
+            await MainActor.run {
+                hasMoreUsers = endIndex < userIds.count
+                isLoadingMore = false
             }
         }
     }
     
-    private func fetchUserObjects(for userIds: [String]) async throws -> [User] {
-        var fetchedUsers: [User] = []
-        var processedIds = Set<String>()
-        
-        for userId in userIds {
-            // Skip if we've already processed this ID
-            guard !processedIds.contains(userId) else { continue }
-            processedIds.insert(userId)
-            
-            do {
-                // Fetch user using HproseInstance's improved fetchUser method
-                if let user = try await hproseInstance.fetchUser(userId) {
-                    // Only add if we haven't already added this user
-                    if !fetchedUsers.contains(where: { $0.mid == userId }) {
-                        fetchedUsers.append(user)
+    // New method: Fetch users in parallel and add them individually as they complete
+    private func fetchUsersInParallel(for userIds: [String]) async {
+        await withTaskGroup(of: (String, User?).self) { group in
+            for userId in userIds {
+                group.addTask {
+                    do {
+                        if let user = try await hproseInstance.fetchUser(userId) {
+                            print("DEBUG: [UserListView] Successfully fetched user: \(userId)")
+                            return (userId, user)
+                        } else {
+                            print("DEBUG: [UserListView] Failed to fetch user: \(userId)")
+                            return (userId, nil)
+                        }
+                    } catch {
+                        print("DEBUG: [UserListView] Error fetching user \(userId): \(error)")
+                        return (userId, nil)
                     }
                 }
-            } catch {
-                print("Error fetching user \(userId): \(error)")
-                // Continue with next user ID
-                continue
+            }
+            
+            // Process results as they complete
+            for await (userId, user) in group {
+                if let user = user {
+                    await MainActor.run {
+                        // Only add if not already present
+                        if !users.contains(where: { $0.mid == userId }) {
+                            users.append(user)
+                            print("DEBUG: [UserListView] Added user to display: \(userId)")
+                        }
+                    }
+                }
             }
         }
-        
-        return fetchedUsers
     }
 }
