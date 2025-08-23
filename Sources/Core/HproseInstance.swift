@@ -150,9 +150,6 @@ final class HproseInstance: ObservableObject {
             _domainToShare = baseUrlString
             
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(baseUrlString)")
-            
-            // Print detailed app user content after initialization
-            printAppUserContent("After initializeAppUser")
         }
     }
     
@@ -235,9 +232,6 @@ final class HproseInstance: ObservableObject {
                                 _appUser = user
                                 // Update domain to share with the new base URL
                                 self._domainToShare = HproseInstance.baseUrl.absoluteString
-                                
-                                // Print detailed app user content after fallback to guest
-                                self.printAppUserContent("After fallback to guest user")
                             }
                             return
                         }
@@ -249,9 +243,6 @@ final class HproseInstance: ObservableObject {
                             _appUser = user
                             // Update domain to share with the new base URL
                             self._domainToShare = HproseInstance.baseUrl.absoluteString
-                            
-                            // Print detailed app user content after guest user setup
-                            self.printAppUserContent("After guest user setup")
                         }
                         return
                     }
