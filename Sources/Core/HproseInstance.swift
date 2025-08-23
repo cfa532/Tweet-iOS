@@ -449,16 +449,18 @@ final class HproseInstance: ObservableObject {
         print("[fetchUserTweet] Fetching tweets for user: \(user.mid), page: \(pageNumber), size: \(pageSize)")
         print("[fetchUserTweet] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
         
-        // Cache original tweets first (memory cache only for profile tweets)
-        for originalTweetDict in originalTweetsData {
-            if let dict = originalTweetDict {
-                do {
-                    let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                    originalTweet.author = try? await fetchUser(originalTweet.authorId)
-                    TweetCacheManager.shared.saveTweet(originalTweet, userId: appUser.mid)
-                    print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid)")
-                } catch {
-                    print("[fetchUserTweet] Error caching original tweet: \(error)")
+        // Cache original tweets first (only if the user is appUser)
+        if user.mid == appUser.mid {
+            for originalTweetDict in originalTweetsData {
+                if let dict = originalTweetDict {
+                    do {
+                        let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
+                        originalTweet.author = try? await fetchUser(originalTweet.authorId)
+                        TweetCacheManager.shared.saveTweet(originalTweet, userId: appUser.mid)
+                        print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid)")
+                    } catch {
+                        print("[fetchUserTweet] Error caching original tweet: \(error)")
+                    }
                 }
             }
         }
@@ -476,8 +478,10 @@ final class HproseInstance: ObservableObject {
                         continue
                     }
                     
-                    // Keep tweets only in memory cache (not database cache) for profile views
-                    TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                    // Cache tweets only if the user is appUser
+                    if user.mid == appUser.mid {
+                        TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                    }
                     tweets.append(tweet)
                 } catch {
                     print("[fetchUserTweet] Error processing tweet: \(error)")

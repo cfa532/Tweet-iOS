@@ -153,7 +153,15 @@ struct ProfileTweetsSection<Header: View>: View {
             tweets: $viewModel.tweets,
             tweetFetcher: { page, size, isFromCache, shouldCache in
                 if isFromCache {
-                    return []
+                    // Fetch from cache for profile tweets (only if it's the appUser's profile)
+                    if user.mid == hproseInstance.appUser.mid {
+                        let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+                            for: hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
+                        return cachedTweets
+                    } else {
+                        // Don't cache other users' tweets
+                        return []
+                    }
                 } else {
                     return try await viewModel.fetchTweets(page: page, pageSize: size, shouldCache: shouldCache)
                 }
