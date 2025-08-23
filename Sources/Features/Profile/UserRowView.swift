@@ -84,7 +84,8 @@ struct UserRowView: View {
                         }
                     }
                     Spacer()
-                    if let onFollowToggle = onFollowToggle {
+                    // Only show follow/unfollow button if app user is not a guest and onFollowToggle is provided
+                    if let onFollowToggle = onFollowToggle, !hproseInstance.appUser.isGuest {
                         DebounceButton(
                             cooldownDuration: 0.5,
                             enableVibration: false
@@ -138,20 +139,23 @@ struct UserRowView: View {
     private func loadUser() {
         Task {
             do {
+                print("DEBUG: [UserRowView] Loading user with ID: \(userId)")
                 if let fetchedUser = try await hproseInstance.fetchUser(userId) {
+                    print("DEBUG: [UserRowView] Successfully fetched user: \(fetchedUser.mid)")
                     await MainActor.run {
                         self.user = fetchedUser
                         self.isFollowing = hproseInstance.appUser.followingList?.contains(userId) ?? false
                         self.isLoading = false
                     }
                 } else {
+                    print("DEBUG: [UserRowView] No user found for ID: \(userId)")
                     await MainActor.run {
                         self.user = nil
                         self.isLoading = false
                     }
                 }
             } catch {
-                print("Error loading user \(userId): \(error)")
+                print("DEBUG: [UserRowView] Error loading user \(userId): \(error)")
                 await MainActor.run {
                     self.user = nil
                     self.isLoading = false

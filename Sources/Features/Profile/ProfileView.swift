@@ -152,14 +152,9 @@ struct ProfileView: View {
             VStack {
                 Spacer()
                 if showToast {
-                    Text(toastMessage)
-                        .font(.subheadline)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(8)
-                        .padding(.bottom, 20)
+                    ToastView(message: toastMessage, type: toastType)
+                        .padding(.bottom, 40)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)

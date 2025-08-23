@@ -232,6 +232,15 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     /// Update user instance with backend data. Keep current baseUrl
     static func from(dict: [String: Any]) throws -> User {
         do {
+            print("DEBUG: [User.from] Starting to decode user dict: \(dict)")
+            
+            // Check for non-JSON-serializable values
+            for (key, value) in dict {
+                if !JSONSerialization.isValidJSONObject([key: value]) {
+                    print("DEBUG: [User.from] Non-JSON-serializable value for key '\(key)': \(value) (type: \(type(of: value)))")
+                }
+            }
+            
             let jsonData = try JSONSerialization.data(withJSONObject: dict, options: [])
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .millisecondsSince1970
@@ -245,7 +254,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             updateUserInstance(with: decodedUser)
             return userInstances[decodedUser.mid]!
         } catch {
-            throw NSError(domain: "User", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot decode dict to user"])
+            print("DEBUG: [User.from] Error decoding user dict: \(error)")
+            print("DEBUG: [User.from] Dict content: \(dict)")
+            throw NSError(domain: "User", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot decode dict to user: \(error.localizedDescription)"])
         }
     }
     
