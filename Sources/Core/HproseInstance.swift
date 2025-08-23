@@ -606,13 +606,9 @@ final class HproseInstance: ObservableObject {
             return
         }
         
-        if let userDict = response as? [String: Any] {
-            do {
-                _ = try User.from(dict: userDict)
-            } catch {
-                print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
-            }
-        } else if let ipAddress = response as? String {
+        // Check for IP address response first (user not found on this node)
+        if let ipAddress = response as? String {
+            print("DEBUG: [updateUserFromServer] User not found on current node, redirecting to IP: \(ipAddress)")
             // the user is not found on this node, a provider IP of the user is returned.
             // point server to this new IP.
             await MainActor.run {
@@ -624,8 +620,8 @@ final class HproseInstance: ObservableObject {
             newClient.timeout = 300
             newClient.uri = "\(user.baseUrl?.absoluteString ?? "")/webapi/"
             
-                    // Call runMApp with the new client following the sample code pattern
-        let newResponse = newClient.invoke("runMApp", withArgs: [entry, params])
+            // Call runMApp with the new client following the sample code pattern
+            let newResponse = newClient.invoke("runMApp", withArgs: [entry, params])
             
             if let newUserDict = newResponse as? [String: Any] {
                 do {
@@ -633,10 +629,23 @@ final class HproseInstance: ObservableObject {
                 } catch {
                     print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
                 }
+            } else if let newIpAddress = newResponse as? String {
+                print("DEBUG: [updateUserFromServer] User still not found on redirected IP: \(newIpAddress)")
+                // If we get another IP address, it means the user is not found on the redirected server either
+                // This could happen if the user has moved to a different server
             }
             
             // Close the new client
             newClient.close()
+        } else if let userDict = response as? [String: Any] {
+            // User found on current node
+            do {
+                _ = try User.from(dict: userDict)
+            } catch {
+                print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
+            }
+        } else {
+            print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: response))")
         }
     }
     

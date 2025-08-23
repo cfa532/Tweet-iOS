@@ -176,14 +176,18 @@ struct LoginView: View {
             if let userId = try await hproseInstance.getUserId(username) {
                 // retrieve user object from the net.
                 if let user = try await hproseInstance.fetchUser(userId) {
-                    user.password = password
-                    let result = try await hproseInstance.login(user)
-                    if result["status"] as? String == "success" {
-                        // Post notification for successful login
-                        NotificationCenter.default.post(name: .userDidLogin, object: nil)
-                        dismiss()
+                    if (user.username == nil) {
+                        errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), userId)
                     } else {
-                        errorMessage = result["reason"] as? String
+                        user.password = password
+                        let result = try await hproseInstance.login(user)
+                        if result["status"] as? String == "success" {
+                            // Post notification for successful login
+                            NotificationCenter.default.post(name: .userDidLogin, object: nil)
+                            dismiss()
+                        } else {
+                            errorMessage = result["reason"] as? String
+                        }
                     }
                 } else {
                     errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), userId)
