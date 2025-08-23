@@ -617,10 +617,12 @@ final class HproseInstance: ObservableObject {
             let newResponse = newClient.invoke("runMApp", withArgs: [entry, params])
             
             if let newUserDict = newResponse as? [String: Any] {
-                do {
-                    _ = try User.from(dict: newUserDict)
-                } catch {
-                    print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
+                await MainActor.run {
+                    do {
+                        _ = try User.from(dict: newUserDict)
+                    } catch {
+                        print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
+                    }
                 }
             } else if let newIpAddress = newResponse as? String {
                 print("DEBUG: [updateUserFromServer] User still not found on redirected IP: \(newIpAddress)")
@@ -632,11 +634,13 @@ final class HproseInstance: ObservableObject {
             newClient.close()
         } else if let userDict = response as? [String: Any] {
             // User found on current node
-            do {
-                _ = try User.from(dict: userDict)
-            } catch {
-                print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
-                print("DEBUG: [updateUserFromServer] Response that caused error: \(response)")
+            await MainActor.run {
+                do {
+                    _ = try User.from(dict: userDict)
+                } catch {
+                    print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
+                    print("DEBUG: [updateUserFromServer] Response that caused error: \(response)")
+                }
             }
         } else {
             print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: response)), value: \(response)")

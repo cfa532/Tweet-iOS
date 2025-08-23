@@ -221,11 +221,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // MARK: - Factory Methods
     static func getInstance(mid: MimeiId) -> User {
-        if let existingUser = userInstances[mid] {
+        if let existingUser = User.userInstances[mid] {
             return existingUser
         }
         let newUser = User(mid: mid)
-        userInstances[mid] = newUser
+        User.userInstances[mid] = newUser
         return newUser
     }
     
@@ -252,7 +252,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             decodedUser.writableUrl = instance.writableUrl
             
             updateUserInstance(with: decodedUser)
-            return userInstances[decodedUser.mid]!
+            return User.userInstances[decodedUser.mid]!
         } catch {
             print("DEBUG: [User.from] Error decoding user dict: \(error)")
             print("DEBUG: [User.from] Dict content: \(dict)")
