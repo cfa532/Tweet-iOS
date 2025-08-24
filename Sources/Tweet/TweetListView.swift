@@ -98,6 +98,14 @@ struct TweetListView<RowView: View>: View {
                     }
                 }
                 .coordinateSpace(name: "scroll")
+                .simultaneousGesture(
+                    DragGesture()
+                        .onChanged { value in
+                            let offset = value.translation.height
+                            print("[TweetListView] Drag gesture offset: \(offset)")
+                            onScroll?(offset)
+                        }
+                )
                 
                 if showToast {
                     VStack {
@@ -366,6 +374,14 @@ struct TweetListView<RowView: View>: View {
     }
     
     func removeTweet(_ tweet: Tweet) async -> Void {
+    }
+}
+
+// MARK: - Scroll Offset Preference Key
+struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 

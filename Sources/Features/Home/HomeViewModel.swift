@@ -12,8 +12,8 @@ struct HomeView: View {
     @State private var selectedTab = 0
     @State private var isScrolling = false
     @State private var scrollOffset: CGFloat = 0
-    @State private var previousScrollOffset: CGFloat = 0
     @State private var isNavigationVisible = true
+    @State private var previousScrollOffset: CGFloat = 0
     @State private var selectedUser: User? = nil
     
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -125,41 +125,58 @@ struct HomeView: View {
             
             print("DEBUG: [HomeView] View disappeared")
         }
+        .onAppear {
+            // Ensure navigation is visible when view appears
+            isNavigationVisible = true
+            onNavigationVisibilityChanged?(true)
+            print("DEBUG: [HomeView] View appeared, navigation set to visible")
+        }
     }
     
     // MARK: - Scroll Handling
     private func handleScroll(offset: CGFloat) {
+        print("[HomeView] handleScroll called with offset: \(offset)")
+        
         // Calculate scroll direction and threshold
         let scrollDelta = offset - previousScrollOffset
-        let scrollThreshold: CGFloat = 20 // Increased threshold for less sensitivity
+        let scrollThreshold: CGFloat = 50 // Increased threshold for more stable detection
         
-        // Show navigation if:
-        // 1. At the top (offset >= 0)
-        // 2. Scrolling down significantly (negative delta < -threshold) when navigation is currently hidden
-        // Hide navigation if:
-        // 3. Scrolling down significantly (negative delta < -threshold) when navigation is currently visible
+        print("[HomeView] Scroll delta: \(scrollDelta), previous offset: \(previousScrollOffset)")
+        
+        // Determine scroll direction with threshold
+        let isScrollingDown = scrollDelta < -scrollThreshold
+        let isScrollingUp = scrollDelta > scrollThreshold
+        
+        print("[HomeView] isScrollingDown: \(isScrollingDown), isScrollingUp: \(isScrollingUp)")
+        
+        // Determine if we should show navigation
         let shouldShowNavigation: Bool
         
         if offset >= 0 {
-            // Always show when at the top
+            // Always show when at the top (or initial state)
             shouldShowNavigation = true
-        } else if scrollDelta < -scrollThreshold {
-            // Scrolling down - hide navigation if it's currently visible
+        } else if isScrollingDown && isNavigationVisible {
+            // Scrolling down and navigation is visible - hide it
             shouldShowNavigation = false
-        } else if scrollDelta > scrollThreshold && !isNavigationVisible {
-            // Scrolling up AND navigation is currently hidden - show it
+        } else if isScrollingUp && !isNavigationVisible {
+            // Scrolling up and navigation is hidden - show it
             shouldShowNavigation = true
         } else {
-            // Keep current state for small movements or when scrolling up but navigation is already visible
+            // Keep current state for small movements or when already in desired state
             shouldShowNavigation = isNavigationVisible
         }
         
+        print("[HomeView] Current isNavigationVisible: \(isNavigationVisible), shouldShowNavigation: \(shouldShowNavigation)")
+        
+        // Only update if the state actually changed
         if shouldShowNavigation != isNavigationVisible {
             withAnimation(.easeInOut(duration: 0.3)) {
                 isNavigationVisible = shouldShowNavigation
             }
             // Notify parent about navigation visibility change
             onNavigationVisibilityChanged?(shouldShowNavigation)
+            
+            print("[HomeView] Navigation visibility changed to: \(shouldShowNavigation) - Scroll delta: \(scrollDelta), offset: \(offset)")
         }
         
         previousScrollOffset = offset

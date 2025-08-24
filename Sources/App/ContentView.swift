@@ -25,6 +25,7 @@ struct ContentView: View {
                         HomeView(
                             navigationPath: $navigationPath,
                             onNavigationVisibilityChanged: { isVisible in
+                                print("[ContentView] Navigation visibility changed to: \(isVisible)")
                                 isNavigationVisible = isVisible
                             },
                             onReturnToHome: {
@@ -105,9 +106,8 @@ struct ContentView: View {
             .padding(.top, 16)
             .padding(.bottom, 2)
             .background(
-                isNavigationVisible ? 
-                Color(.systemBackground).opacity(1.0) : 
-                Color.clear
+                Color(.systemBackground)
+                    .opacity(isNavigationVisible ? 1.0 : 0.0)
             )
             .shadow(color: Color(.systemBlue).opacity(0.3), radius: 1, x: 0, y: -1)
             .opacity(isNavigationVisible ? 1.0 : 0.3)
