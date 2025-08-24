@@ -12,6 +12,7 @@ struct ProfileView: View {
     @State private var selectedUser: User? = nil
     @State private var showUserList = false
     @State private var showTweetList = false
+    @State private var selectedTweetForNavigation: Tweet? = nil
 
     @State private var userListType: UserListType = .FOLLOWER
     @State private var tweetListType: TweetListType = .BOOKMARKS
@@ -373,6 +374,17 @@ struct ProfileView: View {
                     }
                 }
         }
+        .navigationDestination(item: $selectedTweetForNavigation) { tweet in
+            // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
+            if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
+                // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
+                CommentDetailViewWithParent(comment: tweet)
+            } else {
+                // This is a regular tweet or quote tweet, show TweetDetailView
+                TweetDetailView(tweet: tweet)
+            }
+        }
+
 
 
         .onReceive(NotificationCenter.default.publisher(for: .bookmarkAdded)) { notification in
@@ -758,15 +770,14 @@ struct ProfileView: View {
                 },
                 shouldCacheServerTweets: false,
                 rowView: { tweet in
-                    NavigationLink(value: tweet) {
-                        TweetItemView(
-                            tweet: tweet,
-                            showDeleteButton: isAppUser,
-                            onAvatarTap: { user in selectedUser = user },
-                            onTap: nil // NavigationLink will handle the tap
-                        )
-                    }
-                    .buttonStyle(PlainButtonStyle())
+                    TweetItemView(
+                        tweet: tweet,
+                        showDeleteButton: isAppUser,
+                        onAvatarTap: { user in selectedUser = user },
+                        onTap: { selectedTweet in
+                            selectedTweetForNavigation = selectedTweet
+                        }
+                    )
                 }
             )
         } else {
@@ -787,15 +798,14 @@ struct ProfileView: View {
                 },
                 shouldCacheServerTweets: false,
                 rowView: { tweet in
-                    NavigationLink(value: tweet) {
-                        TweetItemView(
-                            tweet: tweet,
-                            showDeleteButton: isAppUser,
-                            onAvatarTap: { user in selectedUser = user },
-                            onTap: nil // NavigationLink will handle the tap
-                        )
-                    }
-                    .buttonStyle(PlainButtonStyle())
+                    TweetItemView(
+                        tweet: tweet,
+                        showDeleteButton: isAppUser,
+                        onAvatarTap: { user in selectedUser = user },
+                        onTap: { selectedTweet in
+                            selectedTweetForNavigation = selectedTweet
+                        }
+                    )
                 }
             )
         }
