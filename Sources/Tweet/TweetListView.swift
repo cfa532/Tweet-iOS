@@ -106,6 +106,9 @@ struct TweetListView<RowView: View>: View {
                             onScroll?(offset)
                         }
                 )
+                .onAppear {
+                    onScroll?(0)
+                }
                 
                 if showToast {
                     VStack {
