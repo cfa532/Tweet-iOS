@@ -130,6 +130,12 @@ struct ContentView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .navigationVisibilityChanged)) { notification in
+            if let isVisible = notification.userInfo?["isVisible"] as? Bool {
+                print("[ContentView] Navigation visibility changed to: \(isVisible)")
+                isNavigationVisible = isVisible
+            }
+        }
         .overlay(
             // Toast message overlay
             VStack {

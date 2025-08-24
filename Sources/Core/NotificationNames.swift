@@ -42,6 +42,8 @@ extension Notification.Name {
     static let popToRoot = Notification.Name("PopToRoot")
     /// Posted to scroll to top of a view
     static let scrollToTop = Notification.Name("ScrollToTop")
+    /// Posted when navigation visibility changes (for scroll-based hiding/showing)
+    static let navigationVisibilityChanged = Notification.Name("NavigationVisibilityChanged")
     
     // MARK: - System Errors
     static let backgroundUploadFailed = Notification.Name("backgroundUploadFailed")

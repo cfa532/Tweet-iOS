@@ -51,6 +51,9 @@ struct ProfileView: View {
     @State private var showLogoutConfirmation = false
     @State private var showDeleteAccountConfirmation = false
     
+    // Scroll detection state
+    @State private var isNavigationVisible = true
+    
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
@@ -74,7 +77,7 @@ struct ProfileView: View {
                     },
                     onPinnedTweetsRefresh: refreshPinnedTweets,
                     onScroll: { offset in
-                        previousScrollOffset = offset
+                        handleScroll(offset: offset)
                     },
                     header: {
                         VStack(spacing: 0) {
@@ -418,6 +421,28 @@ struct ProfileView: View {
                 }
             }
         }
+        .onAppear {
+            // Ensure navigation is visible when view appears
+            isNavigationVisible = true
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
+            print("DEBUG: [ProfileView] View appeared, navigation set to visible")
+        }
+        .onDisappear {
+            // Reset navigation visibility when view disappears
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isNavigationVisible = true
+            }
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
+            print("DEBUG: [ProfileView] View disappeared, navigation reset to visible")
+        }
         .alert(NSLocalizedString("Are you sure you want to logout?", comment: "Logout confirmation alert title"), isPresented: $showLogoutConfirmation) {
             Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
             Button(NSLocalizedString("Logout", comment: "Logout button"), role: .destructive) {
@@ -439,6 +464,60 @@ struct ProfileView: View {
             Text(NSLocalizedString("This action cannot be undone.", comment: "Delete account confirmation message"))
         }
 
+    }
+    
+    // MARK: - Scroll Handling
+    private func handleScroll(offset: CGFloat) {
+        print("[ProfileView] handleScroll called with offset: \(offset)")
+        
+        // Calculate scroll direction and threshold
+        let scrollDelta = offset - previousScrollOffset
+        let scrollThreshold: CGFloat = 30 // Lower threshold for scroll down detection
+        let scrollUpThreshold: CGFloat = 50 // Higher threshold for scroll up detection
+        
+        print("[ProfileView] Scroll delta: \(scrollDelta), previous offset: \(previousScrollOffset)")
+        
+        // Determine scroll direction with threshold
+        let isScrollingDown = scrollDelta < -scrollThreshold
+        let isScrollingUp = scrollDelta > scrollUpThreshold
+        
+        print("[ProfileView] isScrollingDown: \(isScrollingDown), isScrollingUp: \(isScrollingUp)")
+        
+        // Determine if we should show navigation
+        let shouldShowNavigation: Bool
+        
+        if offset >= 0 {
+            // Always show when at the top (or initial state)
+            shouldShowNavigation = true
+        } else if isScrollingDown && isNavigationVisible {
+            // Scrolling down and navigation is visible - hide it
+            shouldShowNavigation = false
+        } else if isScrollingUp && !isNavigationVisible {
+            // Scrolling up and navigation is hidden - show it
+            shouldShowNavigation = true
+        } else {
+            // Keep current state for small movements or when already in desired state
+            shouldShowNavigation = isNavigationVisible
+        }
+        
+        print("[ProfileView] Current isNavigationVisible: \(isNavigationVisible), shouldShowNavigation: \(shouldShowNavigation)")
+        
+        // Only update if the state actually changed
+        if shouldShowNavigation != isNavigationVisible {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isNavigationVisible = shouldShowNavigation
+            }
+            // Notify parent about navigation visibility change
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": shouldShowNavigation]
+            )
+            
+            print("[ProfileView] Navigation visibility changed to: \(shouldShowNavigation) - Scroll delta: \(scrollDelta), offset: \(offset)")
+        }
+        
+        previousScrollOffset = offset
     }
     
     // MARK: - Helper Methods

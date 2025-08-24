@@ -1,6 +1,12 @@
 import SwiftUI
 import AVKit
 
+// MARK: - Scroll Detection
+private enum ScrollDirection {
+    case up
+    case down
+}
+
 // MARK: - Detail Video Player View
 @available(iOS 16.0, *)
 struct DetailVideoPlayerView: View {
@@ -274,6 +280,10 @@ struct TweetDetailView: View {
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
     
+    // Scroll detection state for top navigation bar
+    @State private var isTopNavigationVisible = true
+    @State private var previousScrollOffset: CGFloat = 0
+    
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     
@@ -332,6 +342,18 @@ struct TweetDetailView: View {
                     setupInitialData()
                 }
             }
+            .coordinateSpace(name: "scroll")
+            .simultaneousGesture(
+                DragGesture()
+                    .onChanged { value in
+                        let offset = value.translation.height
+                        print("[TweetDetailView] Drag gesture offset: \(offset)")
+                        handleScroll(offset: offset)
+                    }
+            )
+            .onAppear {
+                handleScroll(offset: 0)
+            }
             
             // ReplyEditor as a component at the bottom
             if showReplyEditor {
@@ -352,6 +374,8 @@ struct TweetDetailView: View {
         .background(Color(.systemBackground))
         .navigationTitle(NSLocalizedString("Tweet", comment: "Tweet detail screen title"))
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(!isTopNavigationVisible)
+        .animation(.easeInOut(duration: 0.3), value: isTopNavigationVisible)
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
                 tweet: displayTweet,
@@ -384,6 +408,17 @@ struct TweetDetailView: View {
                     }
                 }
             }
+            
+            // Ensure top navigation is visible when view appears
+            isTopNavigationVisible = true
+            print("DEBUG: [TweetDetailView] View appeared, top navigation set to visible")
+        }
+        .onDisappear {
+            // Reset top navigation visibility when view disappears
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isTopNavigationVisible = true
+            }
+            print("DEBUG: [TweetDetailView] View disappeared, top navigation reset to visible")
         }
         .onChange(of: originalTweet) { _, _ in
             // Clear cache when originalTweet changes
@@ -695,5 +730,52 @@ struct TweetDetailView: View {
                 }
             }
         }
+    }
+    
+    private func handleScroll(offset: CGFloat) {
+        print("[TweetDetailView] handleScroll called with offset: \(offset)")
+        
+        // Calculate scroll direction and threshold
+        let scrollDelta = offset - previousScrollOffset
+        let scrollThreshold: CGFloat = 30 // Lower threshold for scroll down detection
+        let scrollUpThreshold: CGFloat = 50 // Higher threshold for scroll up detection
+        
+        print("[TweetDetailView] Scroll delta: \(scrollDelta), previous offset: \(previousScrollOffset)")
+        
+        // Determine scroll direction with threshold
+        let isScrollingDown = scrollDelta < -scrollThreshold
+        let isScrollingUp = scrollDelta > scrollUpThreshold
+        
+        print("[TweetDetailView] isScrollingDown: \(isScrollingDown), isScrollingUp: \(isScrollingUp)")
+        
+        // Determine if we should show top navigation
+        let shouldShowTopNavigation: Bool
+        
+        if offset >= 0 {
+            // Always show when at the top (or initial state)
+            shouldShowTopNavigation = true
+        } else if isScrollingDown && isTopNavigationVisible {
+            // Scrolling down and navigation is visible - hide it
+            shouldShowTopNavigation = false
+        } else if isScrollingUp && !isTopNavigationVisible {
+            // Scrolling up and navigation is hidden - show it
+            shouldShowTopNavigation = true
+        } else {
+            // Keep current state for small movements or when already in desired state
+            shouldShowTopNavigation = isTopNavigationVisible
+        }
+        
+        print("[TweetDetailView] Current isTopNavigationVisible: \(isTopNavigationVisible), shouldShowTopNavigation: \(shouldShowTopNavigation)")
+        
+        // Only update if the state actually changed
+        if shouldShowTopNavigation != isTopNavigationVisible {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isTopNavigationVisible = shouldShowTopNavigation
+            }
+            
+            print("[TweetDetailView] Top navigation visibility changed to: \(shouldShowTopNavigation) - Scroll delta: \(scrollDelta), offset: \(offset)")
+        }
+        
+        previousScrollOffset = offset
     }
 }

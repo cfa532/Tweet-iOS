@@ -180,7 +180,7 @@ struct ProfileTweetsSection<Header: View>: View {
                     shouldAccept: { _ in true },
                     action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
                 )
-            ],
+            ], onScroll: onScroll,
             header: {
                 AnyView(
                     VStack(spacing: 0) {
