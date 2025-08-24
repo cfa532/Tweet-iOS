@@ -139,13 +139,14 @@ struct HomeView: View {
         
         // Calculate scroll direction and threshold
         let scrollDelta = offset - previousScrollOffset
-        let scrollThreshold: CGFloat = 50 // Increased threshold for more stable detection
+        let scrollThreshold: CGFloat = 30 // Lower threshold for scroll down detection
+        let scrollUpThreshold: CGFloat = 50 // Higher threshold for scroll up detection
         
         print("[HomeView] Scroll delta: \(scrollDelta), previous offset: \(previousScrollOffset)")
         
         // Determine scroll direction with threshold
         let isScrollingDown = scrollDelta < -scrollThreshold
-        let isScrollingUp = scrollDelta > scrollThreshold
+        let isScrollingUp = scrollDelta > scrollUpThreshold
         
         print("[HomeView] isScrollingDown: \(isScrollingDown), isScrollingUp: \(isScrollingUp)")
         
