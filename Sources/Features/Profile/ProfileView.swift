@@ -484,14 +484,13 @@ struct ProfileView: View {
         
         // Calculate scroll direction and threshold
         let scrollDelta = offset - previousScrollOffset
-        let scrollThreshold: CGFloat = 30 // Lower threshold for scroll down detection
-        let scrollUpThreshold: CGFloat = 50 // Higher threshold for scroll up detection
+        let scrollThreshold: CGFloat = 30 // Single threshold for both scroll directions
         
         print("[ProfileView] Scroll delta: \(scrollDelta), previous offset: \(previousScrollOffset)")
         
         // Determine scroll direction with threshold
         let isScrollingDown = scrollDelta < -scrollThreshold
-        let isScrollingUp = scrollDelta > scrollUpThreshold
+        let isScrollingUp = scrollDelta > scrollThreshold
         
         print("[ProfileView] isScrollingDown: \(isScrollingDown), isScrollingUp: \(isScrollingUp)")
         
