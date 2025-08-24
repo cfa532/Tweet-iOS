@@ -160,7 +160,6 @@ struct HomeView: View {
         
         // Determine if we're actively scrolling (significant movement within short time)
         let isSignificantMovement = abs(scrollDelta) > scrollThreshold
-        let isRecentMovement = timeSinceLastScroll < 0.1 // Within 100ms
         
         // Track consecutive small movements (potential inertia stop attempts)
         if isSignificantMovement {
@@ -226,12 +225,14 @@ struct HomeView: View {
         // Set a timer to handle scroll end - if no more scroll events come in for 0.3 seconds,
         // we can assume the scroll has ended and maintain the current state
         scrollEndTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
-            print("[HomeView] Scroll end timer fired - maintaining current navigation state")
-            isActivelyScrolling = false
-            consecutiveSmallMovements = 0
-            hasStartedInertiaScrolling = false
-            // Don't change the navigation state when scroll ends
-            // Let it remain in its current state
+            Task { @MainActor in
+                print("[HomeView] Scroll end timer fired - maintaining current navigation state")
+                isActivelyScrolling = false
+                consecutiveSmallMovements = 0
+                hasStartedInertiaScrolling = false
+                // Don't change the navigation state when scroll ends
+                // Let it remain in its current state
+            }
         }
     }
 }
