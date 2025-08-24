@@ -98,14 +98,7 @@ struct TweetListView<RowView: View>: View {
                     }
                 }
                 .coordinateSpace(name: "scroll")
-                .simultaneousGesture(
-                    DragGesture()
-                        .onChanged { value in
-                            let offset = value.translation.height
-                            print("[TweetListView] Drag gesture offset: \(offset)")
-                            onScroll?(offset)
-                        }
-                )
+                .modifier(ScrollDetectionModifier(onScroll: onScroll))
                 .onAppear {
                     onScroll?(0)
                 }
@@ -385,6 +378,26 @@ struct ScrollOffsetPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+// MARK: - Scroll Detection Modifier
+private struct ScrollDetectionModifier: ViewModifier {
+    let onScroll: ((CGFloat) -> Void)?
+    
+    func body(content: Content) -> some View {
+        if let onScroll = onScroll {
+            content.simultaneousGesture(
+                DragGesture()
+                    .onChanged { value in
+                        let offset = value.translation.height
+                        print("[TweetListView] Drag gesture offset: \(offset)")
+                        onScroll(offset)
+                    }
+            )
+        } else {
+            content
+        }
     }
 }
 

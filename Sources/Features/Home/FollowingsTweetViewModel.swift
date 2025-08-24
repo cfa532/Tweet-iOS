@@ -14,7 +14,7 @@ class FollowingsTweetViewModel: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var showTweetDetail: Bool = false
     @Published var selectedTweet: Tweet?
-    private let hproseInstance: HproseInstance
+    let hproseInstance: HproseInstance
     
     // Shared instance to keep tweets in memory across navigation
     static let shared = FollowingsTweetViewModel(hproseInstance: HproseInstance.shared)
@@ -52,8 +52,9 @@ class FollowingsTweetViewModel: ObservableObject {
                 pageNumber: page,
                 pageSize: pageSize
             )
+            let filteredTweets = serverTweets.compactMap{ $0 }
             await MainActor.run {
-                tweets.mergeTweets(serverTweets.compactMap{ $0 })
+                tweets.mergeTweets(filteredTweets)
             }
             
             // Cache tweets if shouldCache is true
@@ -107,4 +108,6 @@ class FollowingsTweetViewModel: ObservableObject {
     func clearTweets() {
         tweets.removeAll()
     }
+    
+
 }

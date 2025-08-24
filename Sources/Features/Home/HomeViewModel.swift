@@ -65,9 +65,7 @@ struct HomeView: View {
                     onTweetTap: { tweet in
                         navigationPath.append(tweet)
                     },
-                    onScroll: { offset in
-                        handleScroll(offset: offset)
-                    }
+                    onScroll: nil // FollowingsTweetView now handles its own scroll detection
                 )
                 // Remove the .id(refreshKey) that forces recreation
                 .tag(0)
