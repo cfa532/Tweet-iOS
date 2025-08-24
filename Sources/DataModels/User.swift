@@ -235,8 +235,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     /// Update user instance with backend data. Keep current baseUrl
     static func from(dict: [String: Any]) throws -> User {
         do {
-            print("DEBUG: [User.from] Starting to decode user dict: \(dict)")
-            
             // Check for non-JSON-serializable values
             for (key, value) in dict {
                 if !JSONSerialization.isValidJSONObject([key: value]) {
@@ -259,8 +257,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 User.userInstances[decodedUser.mid]!
             }
         } catch {
-            print("DEBUG: [User.from] Error decoding user dict: \(error)")
-            print("DEBUG: [User.from] Dict content: \(dict)")
+            print("DEBUG: [User.from] Error decoding user dict: \(dict)")
             throw NSError(domain: "User", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot decode dict to user: \(error.localizedDescription)"])
         }
     }

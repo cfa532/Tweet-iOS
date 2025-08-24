@@ -597,8 +597,6 @@ final class HproseInstance: ObservableObject {
             return
         }
         
-        print("DEBUG: [updateUserFromServer] Response type: \(type(of: response)), value: \(response)")
-        
         // Check for IP address response first (user not found on this node)
         if let ipAddress = response as? String {
             print("DEBUG: [updateUserFromServer] User not found on current node, redirecting to IP: \(ipAddress)")
@@ -626,8 +624,6 @@ final class HproseInstance: ObservableObject {
                 }
             } else if let newIpAddress = newResponse as? String {
                 print("DEBUG: [updateUserFromServer] User still not found on redirected IP: \(newIpAddress)")
-                // If we get another IP address, it means the user is not found on the redirected server either
-                // This could happen if the user has moved to a different server
             }
             
             // Close the new client
