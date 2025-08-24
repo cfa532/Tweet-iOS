@@ -246,10 +246,11 @@ struct MediaBrowserView: View {
     
     @ViewBuilder
     private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
-        ZoomableImageView(
-            imageURL: url,
-            placeholderImage: getCachedPlaceholder(for: attachment),
-            contentMode: .fit
+        ImageViewWithPlaceholder(
+            attachment: attachment,
+            baseUrl: baseUrl,
+            url: url,
+            imageState: imageStates[index] ?? .loading
         )
         .onAppear {
             loadImageIfNeeded(for: attachment, at: index)
@@ -276,45 +277,99 @@ struct ImageViewWithPlaceholder: View {
     let url: URL
     let imageState: ImageState
     
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    
     var body: some View {
-        Group {
-            switch imageState {
-            case .loading:
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.5)
+        GeometryReader { geometry in
+            ZStack {
+                Color.black
                 
-            case .placeholder(let placeholderImage):
-                Image(uiImage: placeholderImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .overlay(
+                Group {
+                    switch imageState {
+                    case .loading:
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.0)
-                            .background(Color.black.opacity(0.3))
-                            .clipShape(Circle())
-                            .padding(),
-                        alignment: .topTrailing
-                    )
-                
-            case .loaded(let image):
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                
-            case .error:
-                VStack {
-                    Image(systemName: "photo")
-                        .font(.system(size: 50))
-                        .foregroundColor(.gray)
-                    Text(LocalizedStringKey("Failed to load image"))
-                        .foregroundColor(.gray)
-                        .font(.caption)
+                            .scaleEffect(1.5)
+                        
+                    case .placeholder(let placeholderImage):
+                        Image(uiImage: placeholderImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                        
+                    case .loaded(let image):
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                        
+                    case .error:
+                        VStack {
+                            Image(systemName: "photo")
+                                .font(.system(size: 50))
+                                .foregroundColor(.gray)
+                            Text(LocalizedStringKey("Failed to load image"))
+                                .foregroundColor(.gray)
+                                .font(.caption)
+                        }
+                    }
+                }
+                .scaleEffect(scale)
+                .offset(offset)
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            let delta = value / lastScale
+                            lastScale = value
+                            scale = min(max(scale * delta, 1.0), 4.0)
+                        }
+                        .onEnded { _ in
+                            lastScale = 1.0
+                            // Snap back to bounds if needed
+                            if scale < 1.0 {
+                                withAnimation(.easeOut(duration: 0.3)) {
+                                    scale = 1.0
+                                    offset = .zero
+                                }
+                            }
+                        }
+                )
+                .gesture(
+                    scale > 1.0 ? 
+                    DragGesture(minimumDistance: 15)
+                        .onChanged { value in
+                            let delta = CGSize(
+                                width: value.translation.width - lastOffset.width,
+                                height: value.translation.height - lastOffset.height
+                            )
+                            lastOffset = value.translation
+                            
+                            let maxOffsetX = (geometry.size.width * (scale - 1.0)) / 2
+                            let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
+                            
+                            offset = CGSize(
+                                width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
+                                height: max(-maxOffsetY, min(maxOffsetY, offset.height + delta.height))
+                            )
+                        }
+                        .onEnded { _ in
+                            lastOffset = .zero
+                        } : nil
+                )
+                .onTapGesture(count: 2) {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        if scale > 1.0 {
+                            scale = 1.0
+                            offset = .zero
+                        } else {
+                            scale = 2.0
+                        }
+                    }
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
     }
 }
 
