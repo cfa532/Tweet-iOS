@@ -318,44 +318,45 @@ struct ImageViewWithPlaceholder: View {
                 .scaleEffect(scale)
                 .offset(offset)
                 .gesture(
-                    MagnificationGesture()
-                        .onChanged { value in
-                            let delta = value / lastScale
-                            lastScale = value
-                            scale = min(max(scale * delta, 1.0), 4.0)
-                        }
-                        .onEnded { _ in
-                            lastScale = 1.0
-                            // Snap back to bounds if needed
-                            if scale < 1.0 {
-                                withAnimation(.easeOut(duration: 0.3)) {
-                                    scale = 1.0
-                                    offset = .zero
+                    SimultaneousGesture(
+                        MagnificationGesture()
+                            .onChanged { value in
+                                let delta = value / lastScale
+                                lastScale = value
+                                scale = min(max(scale * delta, 1.0), 4.0)
+                            }
+                            .onEnded { _ in
+                                lastScale = 1.0
+                                // Snap back to bounds if needed
+                                if scale < 1.0 {
+                                    withAnimation(.easeOut(duration: 0.3)) {
+                                        scale = 1.0
+                                        offset = .zero
+                                    }
+                                }
+                            },
+                        DragGesture(minimumDistance: 15)
+                            .onChanged { value in
+                                if scale > 1.0 {
+                                    let delta = CGSize(
+                                        width: value.translation.width - lastOffset.width,
+                                        height: value.translation.height - lastOffset.height
+                                    )
+                                    lastOffset = value.translation
+                                    
+                                    let maxOffsetX = (geometry.size.width * (scale - 1.0)) / 2
+                                    let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
+                                    
+                                    offset = CGSize(
+                                        width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
+                                        height: max(-maxOffsetY, min(maxOffsetY, offset.height + delta.height))
+                                    )
                                 }
                             }
-                        }
-                )
-                .gesture(
-                    scale > 1.0 ? 
-                    DragGesture(minimumDistance: 15)
-                        .onChanged { value in
-                            let delta = CGSize(
-                                width: value.translation.width - lastOffset.width,
-                                height: value.translation.height - lastOffset.height
-                            )
-                            lastOffset = value.translation
-                            
-                            let maxOffsetX = (geometry.size.width * (scale - 1.0)) / 2
-                            let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
-                            
-                            offset = CGSize(
-                                width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
-                                height: max(-maxOffsetY, min(maxOffsetY, offset.height + delta.height))
-                            )
-                        }
-                        .onEnded { _ in
-                            lastOffset = .zero
-                        } : nil
+                            .onEnded { _ in
+                                lastOffset = .zero
+                            }
+                    )
                 )
                 .onTapGesture(count: 2) {
                     withAnimation(.easeInOut(duration: 0.3)) {
