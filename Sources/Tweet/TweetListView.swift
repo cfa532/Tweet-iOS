@@ -113,8 +113,13 @@ struct TweetListView<RowView: View>: View {
                 await refreshTweets()
             }
             .task {
-                if tweets.isEmpty {
+                // Only refresh if tweets are empty and we haven't completed initial load
+                if tweets.isEmpty && !initialLoadComplete {
                     await refreshTweets()
+                } else if !tweets.isEmpty {
+                    // If we already have tweets, mark as loaded
+                    initialLoadComplete = true
+                    isLoading = false
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
@@ -384,8 +389,8 @@ struct TweetListContentView<RowView: View>: View {
                 header()
             }
             
-            // Show loading state
-            if isLoading {
+            // Show loading state only if we don't have any tweets yet
+            if isLoading && tweets.compactMap({ $0 }).isEmpty {
                 VStack(spacing: 16) {
                     ProgressView()
                         .scaleEffect(1.2)

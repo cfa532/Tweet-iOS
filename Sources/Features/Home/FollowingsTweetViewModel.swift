@@ -16,6 +16,9 @@ class FollowingsTweetViewModel: ObservableObject {
     @Published var selectedTweet: Tweet?
     private let hproseInstance: HproseInstance
     
+    // Shared instance to keep tweets in memory across navigation
+    static let shared = FollowingsTweetViewModel(hproseInstance: HproseInstance.shared)
+    
     init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
     }
@@ -98,5 +101,10 @@ class FollowingsTweetViewModel: ObservableObject {
     func showTweetDetail(_ tweet: Tweet) {
         selectedTweet = tweet
         showTweetDetail = true
+    }
+    
+    // Method to clear tweets when user logs in/out
+    func clearTweets() {
+        tweets.removeAll()
     }
 }

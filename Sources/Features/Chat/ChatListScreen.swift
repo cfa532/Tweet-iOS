@@ -61,43 +61,48 @@ struct ChatListScreen: View {
                 ChatScreen(receiptId: receiptId)
             }
             .task {
-            await loadChatSessions()
-        }
-        .onAppear {
-            // Force reload sessions from Core Data when view appears
-            chatSessionManager.reloadChatSessionsFromCoreData()
-            
-            // Start periodic checking for new messages
-            startPeriodicMessageCheck()
-            
-            // Clear badge count when chat list is opened
-            DispatchQueue.main.async {
-                UNUserNotificationCenter.current().setBadgeCount(0) { error in
-                    if let error = error {
-                        print("[ChatListScreen] Error clearing badge count: \(error)")
+                // Only load chat sessions if they're empty
+                if chatSessionManager.chatSessions.isEmpty {
+                    await loadChatSessions()
+                }
+            }
+            .onAppear {
+                // Always check for new messages when view appears, but don't reload existing sessions
+                Task {
+                    await chatSessionManager.checkBackendForNewMessages()
+                }
+                
+                // Start periodic checking for new messages
+                startPeriodicMessageCheck()
+                
+                // Clear badge count when chat list is opened
+                DispatchQueue.main.async {
+                    UNUserNotificationCenter.current().setBadgeCount(0) { error in
+                        if let error = error {
+                            print("[ChatListScreen] Error clearing badge count: \(error)")
+                        }
                     }
                 }
             }
-        }
-        .onDisappear {
-            // Stop periodic checking when view disappears
-            stopPeriodicMessageCheck()
-        }
-        .sheet(isPresented: $showStartChat) {
-            StartChatView()
-        }
-        .alert(NSLocalizedString("Delete Chat", comment: "Delete chat alert title"), isPresented: $showDeleteConfirmation) {
-            Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) {
-                sessionToDelete = nil
+            .onDisappear {
+                // Stop periodic checking when view disappears
+                stopPeriodicMessageCheck()
             }
-            Button(NSLocalizedString("Delete", comment: "Delete button"), role: .destructive) {
-                confirmDeleteChatSession()
+            .sheet(isPresented: $showStartChat) {
+                StartChatView()
             }
-        } message: {
-            if let session = sessionToDelete {
-                Text(String(format: NSLocalizedString("Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation.", comment: "Delete chat confirmation"), session.receiptId))
+            .alert(NSLocalizedString("Delete Chat", comment: "Delete chat alert title"), isPresented: $showDeleteConfirmation) {
+                Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) {
+                    sessionToDelete = nil
+                }
+                Button(NSLocalizedString("Delete", comment: "Delete button"), role: .destructive) {
+                    confirmDeleteChatSession()
+                }
+            } message: {
+                if let session = sessionToDelete {
+                    Text(String(format: NSLocalizedString("Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation.", comment: "Delete chat confirmation"), session.receiptId))
+                }
             }
-        }
     }
     
     private func loadChatSessions() async {

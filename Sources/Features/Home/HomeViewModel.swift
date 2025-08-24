@@ -15,7 +15,6 @@ struct HomeView: View {
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isNavigationVisible = true
     @State private var selectedUser: User? = nil
-    @State private var refreshKey = UUID() // Force refresh of FollowingsTweetView
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     
@@ -70,7 +69,7 @@ struct HomeView: View {
                         handleScroll(offset: offset)
                     }
                 )
-                .id(refreshKey) // Force recreation when refreshKey changes
+                // Remove the .id(refreshKey) that forces recreation
                 .tag(0)
 
                 RecommendedTweetView(onScroll: { offset in
@@ -114,8 +113,6 @@ struct HomeView: View {
                 await MainActor.run {
                     TweetCacheManager.shared.clearAllCache()
                     print("DEBUG: Cleared all cache on user logout")
-                    // Force refresh of FollowingsTweetView
-                    refreshKey = UUID()
                 }
                 try await HproseInstance.shared.initialize()
             }

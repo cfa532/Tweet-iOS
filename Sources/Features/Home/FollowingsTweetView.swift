@@ -6,13 +6,15 @@ struct FollowingsTweetView: View {
     let onTweetTap: (Tweet) -> Void
     let onScroll: ((CGFloat) -> Void)?
     @EnvironmentObject private var hproseInstance: HproseInstance
+    // Use a shared view model instance to keep tweets in memory
     @StateObject private var viewModel: FollowingsTweetViewModel
 
     init(onAvatarTap: @escaping (User) -> Void, onTweetTap: @escaping (Tweet) -> Void, onScroll: ((CGFloat) -> Void)? = nil) {
         self.onAvatarTap = onAvatarTap
         self.onTweetTap = onTweetTap
         self.onScroll = onScroll
-        self._viewModel = StateObject(wrappedValue: FollowingsTweetViewModel(hproseInstance: HproseInstance.shared))
+        // Use shared instance to keep tweets in memory across navigation
+        self._viewModel = StateObject(wrappedValue: FollowingsTweetViewModel.shared)
     }
 
     var body: some View {
@@ -79,6 +81,22 @@ struct FollowingsTweetView: View {
                     viewModel.tweets.removeAll { $0.authorId == blockedUserId }
                     let removedCount = originalCount - viewModel.tweets.count
                     print("[FollowingsTweetView] Removed \(removedCount) tweets from blocked user: \(blockedUserId)")
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
+                // Clear tweets and refresh when user logs in
+                Task {
+                    await MainActor.run {
+                        viewModel.clearTweets()
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
+                // Clear tweets and refresh when user logs out
+                Task {
+                    await MainActor.run {
+                        viewModel.clearTweets()
+                    }
                 }
             }
             .onDisappear {
