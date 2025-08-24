@@ -350,6 +350,13 @@ struct TweetDetailView: View {
                         print("[TweetDetailView] Drag gesture offset: \(offset)")
                         handleScroll(offset: offset)
                     }
+                    .onEnded { _ in
+                        // When gesture ends, maintain current state for a brief period
+                        // to allow scroll inertia to settle naturally
+                        print("[TweetDetailView] Drag gesture ended")
+                        // Don't immediately change navigation state
+                        // Let the scroll view settle naturally
+                    }
             )
             .onAppear {
                 handleScroll(offset: 0)
@@ -418,6 +425,9 @@ struct TweetDetailView: View {
             withAnimation(.easeInOut(duration: 0.3)) {
                 isTopNavigationVisible = true
             }
+            // Clean up timer
+            scrollEndTimer?.invalidate()
+            scrollEndTimer = nil
             print("DEBUG: [TweetDetailView] View disappeared, top navigation reset to visible")
         }
         .onChange(of: originalTweet) { _, _ in
@@ -732,49 +742,100 @@ struct TweetDetailView: View {
         }
     }
     
+    @State private var scrollEndTimer: Timer?
+    @State private var lastScrollTime: Date = Date()
+    @State private var isActivelyScrolling: Bool = false
+    @State private var consecutiveSmallMovements: Int = 0
+    @State private var lastSignificantMovementTime: Date = Date()
+    @State private var hasStartedInertiaScrolling: Bool = false
+    
     private func handleScroll(offset: CGFloat) {
         print("[TweetDetailView] handleScroll called with offset: \(offset)")
+        
+        let currentTime = Date()
+        let timeSinceLastScroll = currentTime.timeIntervalSince(lastScrollTime)
+        let timeSinceLastSignificantMovement = currentTime.timeIntervalSince(lastSignificantMovementTime)
+        lastScrollTime = currentTime
+        
+        // Cancel any existing timer
+        scrollEndTimer?.invalidate()
         
         // Calculate scroll direction and threshold
         let scrollDelta = offset - previousScrollOffset
         let scrollThreshold: CGFloat = 30 // Single threshold for both scroll directions
         
-        print("[TweetDetailView] Scroll delta: \(scrollDelta), previous offset: \(previousScrollOffset)")
+        // Determine if we're actively scrolling (significant movement within short time)
+        let isSignificantMovement = abs(scrollDelta) > scrollThreshold
+        let isRecentMovement = timeSinceLastScroll < 0.1 // Within 100ms
+        
+        // Track consecutive small movements (potential inertia stop attempts)
+        if isSignificantMovement {
+            consecutiveSmallMovements = 0
+            lastSignificantMovementTime = currentTime
+            isActivelyScrolling = true
+            hasStartedInertiaScrolling = false
+        } else {
+            consecutiveSmallMovements += 1
+            // If we have significant movement followed by small movements, we might be in inertia scrolling
+            if isActivelyScrolling && consecutiveSmallMovements > 2 {
+                hasStartedInertiaScrolling = true
+            }
+        }
+        
+        // If we have many consecutive small movements or it's been a while since significant movement,
+        // we might be in an inertia stop scenario - don't change navigation state
+        let isInertiaStopScenario = consecutiveSmallMovements > 3 || timeSinceLastSignificantMovement > 0.5
+        
+        print("[TweetDetailView] Scroll delta: \(scrollDelta), previous offset: \(previousScrollOffset), timeSinceLastScroll: \(timeSinceLastScroll), consecutiveSmallMovements: \(consecutiveSmallMovements), isInertiaStopScenario: \(isInertiaStopScenario), hasStartedInertiaScrolling: \(hasStartedInertiaScrolling)")
         
         // Determine scroll direction with threshold
         let isScrollingDown = scrollDelta < -scrollThreshold
         let isScrollingUp = scrollDelta > scrollThreshold
         
-        print("[TweetDetailView] isScrollingDown: \(isScrollingDown), isScrollingUp: \(isScrollingUp)")
+        print("[TweetDetailView] isScrollingDown: \(isScrollingDown), isScrollingUp: \(isScrollingUp), isActivelyScrolling: \(isActivelyScrolling)")
         
-        // Determine if we should show top navigation
-        let shouldShowTopNavigation: Bool
-        
-        if offset >= 0 {
-            // Always show when at the top (or initial state)
-            shouldShowTopNavigation = true
-        } else if isScrollingDown && isTopNavigationVisible {
-            // Scrolling down and navigation is visible - hide it
-            shouldShowTopNavigation = false
-        } else if isScrollingUp && !isTopNavigationVisible {
-            // Scrolling up and navigation is hidden - show it
-            shouldShowTopNavigation = true
-        } else {
-            // Keep current state for small movements or when already in desired state
-            shouldShowTopNavigation = isTopNavigationVisible
-        }
-        
-        print("[TweetDetailView] Current isTopNavigationVisible: \(isTopNavigationVisible), shouldShowTopNavigation: \(shouldShowTopNavigation)")
-        
-        // Only update if the state actually changed
-        if shouldShowTopNavigation != isTopNavigationVisible {
-            withAnimation(.easeInOut(duration: 0.3)) {
-                isTopNavigationVisible = shouldShowTopNavigation
+        // Only change navigation state if we're actively scrolling AND not in an inertia stop scenario AND not in inertia scrolling
+        if isActivelyScrolling && !isInertiaStopScenario && !hasStartedInertiaScrolling {
+            // Determine if we should show top navigation
+            let shouldShowTopNavigation: Bool
+            
+            if offset >= 0 {
+                // Always show when at the top (or initial state)
+                shouldShowTopNavigation = true
+            } else if isScrollingDown && isTopNavigationVisible {
+                // Scrolling down and navigation is visible - hide it
+                shouldShowTopNavigation = false
+            } else if isScrollingUp && !isTopNavigationVisible {
+                // Scrolling up and navigation is hidden - show it
+                shouldShowTopNavigation = true
+            } else {
+                // Keep current state for small movements or when already in desired state
+                shouldShowTopNavigation = isTopNavigationVisible
             }
             
-            print("[TweetDetailView] Top navigation visibility changed to: \(shouldShowTopNavigation) - Scroll delta: \(scrollDelta), offset: \(offset)")
+            print("[TweetDetailView] Current isTopNavigationVisible: \(isTopNavigationVisible), shouldShowTopNavigation: \(shouldShowTopNavigation)")
+            
+            // Only update if the state actually changed
+            if shouldShowTopNavigation != isTopNavigationVisible {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isTopNavigationVisible = shouldShowTopNavigation
+                }
+                
+                print("[TweetDetailView] Top navigation visibility changed to: \(shouldShowTopNavigation) - Scroll delta: \(scrollDelta), offset: \(offset)")
+            }
         }
         
         previousScrollOffset = offset
+        
+        // Set a timer to handle scroll end - if no more scroll events come in for 0.3 seconds,
+        // we can assume the scroll has ended and maintain the current state
+        scrollEndTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
+            print("[TweetDetailView] Scroll end timer fired - maintaining current navigation state")
+            isActivelyScrolling = false
+            consecutiveSmallMovements = 0
+            hasStartedInertiaScrolling = false
+            // Don't change the navigation state when scroll ends
+            // Let it remain in its current state
+        }
     }
 }

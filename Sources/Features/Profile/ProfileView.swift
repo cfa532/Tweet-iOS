@@ -453,6 +453,9 @@ struct ProfileView: View {
                 object: nil,
                 userInfo: ["isVisible": true]
             )
+            // Clean up timer
+            scrollEndTimer?.invalidate()
+            scrollEndTimer = nil
             print("DEBUG: [ProfileView] View disappeared, navigation reset to visible")
         }
         .alert(NSLocalizedString("Are you sure you want to logout?", comment: "Logout confirmation alert title"), isPresented: $showLogoutConfirmation) {
@@ -479,56 +482,107 @@ struct ProfileView: View {
     }
     
     // MARK: - Scroll Handling
+    @State private var scrollEndTimer: Timer?
+    @State private var lastScrollTime: Date = Date()
+    @State private var isActivelyScrolling: Bool = false
+    @State private var consecutiveSmallMovements: Int = 0
+    @State private var lastSignificantMovementTime: Date = Date()
+    @State private var hasStartedInertiaScrolling: Bool = false
+    
     private func handleScroll(offset: CGFloat) {
         print("[ProfileView] handleScroll called with offset: \(offset)")
+        
+        let currentTime = Date()
+        let timeSinceLastScroll = currentTime.timeIntervalSince(lastScrollTime)
+        let timeSinceLastSignificantMovement = currentTime.timeIntervalSince(lastSignificantMovementTime)
+        lastScrollTime = currentTime
+        
+        // Cancel any existing timer
+        scrollEndTimer?.invalidate()
         
         // Calculate scroll direction and threshold
         let scrollDelta = offset - previousScrollOffset
         let scrollThreshold: CGFloat = 30 // Single threshold for both scroll directions
         
-        print("[ProfileView] Scroll delta: \(scrollDelta), previous offset: \(previousScrollOffset)")
+        // Determine if we're actively scrolling (significant movement within short time)
+        let isSignificantMovement = abs(scrollDelta) > scrollThreshold
+        let isRecentMovement = timeSinceLastScroll < 0.1 // Within 100ms
+        
+        // Track consecutive small movements (potential inertia stop attempts)
+        if isSignificantMovement {
+            consecutiveSmallMovements = 0
+            lastSignificantMovementTime = currentTime
+            isActivelyScrolling = true
+            hasStartedInertiaScrolling = false
+        } else {
+            consecutiveSmallMovements += 1
+            // If we have significant movement followed by small movements, we might be in inertia scrolling
+            if isActivelyScrolling && consecutiveSmallMovements > 2 {
+                hasStartedInertiaScrolling = true
+            }
+        }
+        
+        // If we have many consecutive small movements or it's been a while since significant movement,
+        // we might be in an inertia stop scenario - don't change navigation state
+        let isInertiaStopScenario = consecutiveSmallMovements > 3 || timeSinceLastSignificantMovement > 0.5
+        
+        print("[ProfileView] Scroll delta: \(scrollDelta), previous offset: \(previousScrollOffset), timeSinceLastScroll: \(timeSinceLastScroll), consecutiveSmallMovements: \(consecutiveSmallMovements), isInertiaStopScenario: \(isInertiaStopScenario), hasStartedInertiaScrolling: \(hasStartedInertiaScrolling)")
         
         // Determine scroll direction with threshold
         let isScrollingDown = scrollDelta < -scrollThreshold
         let isScrollingUp = scrollDelta > scrollThreshold
         
-        print("[ProfileView] isScrollingDown: \(isScrollingDown), isScrollingUp: \(isScrollingUp)")
+        print("[ProfileView] isScrollingDown: \(isScrollingDown), isScrollingUp: \(isScrollingUp), isActivelyScrolling: \(isActivelyScrolling)")
         
-        // Determine if we should show navigation
-        let shouldShowNavigation: Bool
-        
-        if offset >= 0 {
-            // Always show when at the top (or initial state)
-            shouldShowNavigation = true
-        } else if isScrollingDown && isNavigationVisible {
-            // Scrolling down and navigation is visible - hide it
-            shouldShowNavigation = false
-        } else if isScrollingUp && !isNavigationVisible {
-            // Scrolling up and navigation is hidden - show it
-            shouldShowNavigation = true
-        } else {
-            // Keep current state for small movements or when already in desired state
-            shouldShowNavigation = isNavigationVisible
-        }
-        
-        print("[ProfileView] Current isNavigationVisible: \(isNavigationVisible), shouldShowNavigation: \(shouldShowNavigation)")
-        
-        // Only update if the state actually changed
-        if shouldShowNavigation != isNavigationVisible {
-            withAnimation(.easeInOut(duration: 0.3)) {
-                isNavigationVisible = shouldShowNavigation
-            }
-            // Notify parent about navigation visibility change
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": shouldShowNavigation]
-            )
+        // Only change navigation state if we're actively scrolling AND not in an inertia stop scenario AND not in inertia scrolling
+        if isActivelyScrolling && !isInertiaStopScenario && !hasStartedInertiaScrolling {
+            // Determine if we should show navigation
+            let shouldShowNavigation: Bool
             
-            print("[ProfileView] Navigation visibility changed to: \(shouldShowNavigation) - Scroll delta: \(scrollDelta), offset: \(offset)")
+            if offset >= 0 {
+                // Always show when at the top (or initial state)
+                shouldShowNavigation = true
+            } else if isScrollingDown && isNavigationVisible {
+                // Scrolling down and navigation is visible - hide it
+                shouldShowNavigation = false
+            } else if isScrollingUp && !isNavigationVisible {
+                // Scrolling up and navigation is hidden - show it
+                shouldShowNavigation = true
+            } else {
+                // Keep current state for small movements or when already in desired state
+                shouldShowNavigation = isNavigationVisible
+            }
+            
+            print("[ProfileView] Current isNavigationVisible: \(isNavigationVisible), shouldShowNavigation: \(shouldShowNavigation)")
+            
+            // Only update if the state actually changed
+            if shouldShowNavigation != isNavigationVisible {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isNavigationVisible = shouldShowNavigation
+                }
+                // Notify parent about navigation visibility change
+                NotificationCenter.default.post(
+                    name: .navigationVisibilityChanged,
+                    object: nil,
+                    userInfo: ["isVisible": shouldShowNavigation]
+                )
+                
+                print("[ProfileView] Navigation visibility changed to: \(shouldShowNavigation) - Scroll delta: \(scrollDelta), offset: \(offset)")
+            }
         }
         
         previousScrollOffset = offset
+        
+        // Set a timer to handle scroll end - if no more scroll events come in for 0.3 seconds,
+        // we can assume the scroll has ended and maintain the current state
+        scrollEndTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
+            print("[ProfileView] Scroll end timer fired - maintaining current navigation state")
+            isActivelyScrolling = false
+            consecutiveSmallMovements = 0
+            hasStartedInertiaScrolling = false
+            // Don't change the navigation state when scroll ends
+            // Let it remain in its current state
+        }
     }
     
     // MARK: - Helper Methods
