@@ -354,7 +354,7 @@ final class HproseInstance: ObservableObject {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
                     originalTweet.author = try? await fetchUser(originalTweet.authorId)
-                    TweetCacheManager.shared.saveTweet(originalTweet, userId: appUser.mid)
+                    TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: appUser.mid)
                     print("[fetchTweetFeed] Cached original tweet: \(originalTweet.mid)")
                 } catch {
                     print("[fetchTweetFeed] Error caching original tweet: \(error)")
@@ -377,7 +377,7 @@ final class HproseInstance: ObservableObject {
                     }
                     
                     // Save tweet back to cache
-                    TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                    TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
                     tweets.append(tweet)
                 } catch {
                     print("[fetchTweetFeed] Error processing tweet: \(error)")
@@ -447,7 +447,7 @@ final class HproseInstance: ObservableObject {
                     do {
                         let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
                         originalTweet.author = try? await fetchUser(originalTweet.authorId)
-                        TweetCacheManager.shared.saveTweet(originalTweet, userId: appUser.mid)
+                        TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: appUser.mid)
                         print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid)")
                     } catch {
                         print("[fetchUserTweet] Error caching original tweet: \(error)")
@@ -471,7 +471,7 @@ final class HproseInstance: ObservableObject {
                     
                     // Cache tweets only if the user is appUser
                     if user.mid == appUser.mid {
-                        TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                        TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
                     }
                     tweets.append(tweet)
                 } catch {
@@ -519,7 +519,7 @@ final class HproseInstance: ObservableObject {
                 tweet.author = try? await fetchUser(authorId)
                 
                 // Update cached data for main feed
-                TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
                 
                 return tweet
             } catch {
@@ -994,7 +994,7 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = response["tweet"] as? [String: Any] {
                 updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 // Cache the updated tweet for main feed
-                TweetCacheManager.shared.saveTweet(updatedTweet!, userId: appUser.mid)
+                TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet!, appUserId: appUser.mid)
             }
             
             return (updatedTweet, updatedUser)
@@ -1037,7 +1037,7 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = response["tweet"] as? [String: Any] {
                 updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 // Cache the updated tweet for main feed
-                TweetCacheManager.shared.saveTweet(updatedTweet!, userId: appUser.mid)
+                TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet!, appUserId: appUser.mid)
             }
             
             return (updatedTweet, updatedUser)
@@ -1087,7 +1087,7 @@ final class HproseInstance: ObservableObject {
         if let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] {
             try await MainActor.run { try tweet.update(from: tweetDict) }
             // Cache the updated tweet for main feed
-            TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+            TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
         } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "updateRetweetCount: No response"])
         }
@@ -1182,7 +1182,7 @@ final class HproseInstance: ObservableObject {
                 tweet.commentCount = count
             }
             // Cache the updated tweet for main feed
-            TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+            TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
             
             // Check if retweetid is present and create a new tweet
             if let retweetId = response["retweetid"] as? String, !retweetId.isEmpty {

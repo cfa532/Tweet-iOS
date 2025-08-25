@@ -134,6 +134,7 @@ extension TweetCacheManager {
     }
 
     /// Save a tweet to the cache. If tweet is nil, do nothing. To remove a tweet, use deleteTweet.
+    /// If a tweet with the same mid already exists, it will be updated with new counts and favorites instead of being replaced.
     func saveTweet(_ tweet: Tweet, userId: String) {
         // Validate timestamp before caching
         if tweet.timestamp.timeIntervalSince1970 <= 0 {
@@ -145,24 +146,49 @@ extension TweetCacheManager {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
             let cdTweet: CDTweet
+            let isExistingTweet: Bool
+            
             if let existingTweet = try? context.fetch(request).first {
                 cdTweet = existingTweet
+                isExistingTweet = true
             } else {
                 cdTweet = CDTweet(context: context)
+                isExistingTweet = false
             }
+            
+            // Always save the current in-memory tweet state to cache
+            // This ensures that any updates made to the tweet in memory are preserved
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            if let tweetData = try? encoder.encode(tweet) {
+                cdTweet.tweetData = tweetData
+            }
+            
+            if isExistingTweet {
+                print("[TweetCacheManager] Updated existing tweet \(tweet.mid) in cache with current memory state")
+            } else {
+                print("[TweetCacheManager] Cached new tweet \(tweet.mid) for user \(userId)")
+            }
+            
+            // Update common fields
             cdTweet.tid = tweet.mid
             cdTweet.uid = userId
             cdTweet.timestamp = tweet.timestamp
             cdTweet.timeCached = Date()
             
-            // Save tweet data directly using JSONEncoder
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .millisecondsSince1970
-            
-            if let tweetData = try? encoder.encode(tweet) {
-                cdTweet.tweetData = tweetData
-            }
             try? context.save()
+        }
+    }
+
+    /// Update a tweet in both main_feed cache and appUser's profile cache if the tweet belongs to the appUser
+    /// This ensures that tweet updates (like count changes) are reflected in both caches
+    func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
+        // Always update in main_feed cache
+        saveTweet(tweet, userId: "main_feed")
+        
+        // Also update in appUser's profile cache if the tweet belongs to the appUser
+        if tweet.authorId == appUserId {
+            saveTweet(tweet, userId: appUserId)
         }
     }
 

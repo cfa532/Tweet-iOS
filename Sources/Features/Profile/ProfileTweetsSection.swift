@@ -63,10 +63,10 @@ class ProfileTweetsViewModel: ObservableObject {
                 tweets.mergeTweets(filteredTweets.compactMap{ $0 })
             }
             
-            // Cache tweets if shouldCache is true
-            if shouldCache {
+            // Cache tweets only if it's the appUser's profile
+            if shouldCache && user.mid == hproseInstance.appUser.mid {
                 for tweet in filteredTweets.compactMap({ $0 }) {
-                    TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
+                    TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
                 }
             }
             
@@ -156,7 +156,7 @@ struct ProfileTweetsSection<Header: View>: View {
                     // Fetch from cache for profile tweets (only if it's the appUser's profile)
                     if user.mid == hproseInstance.appUser.mid {
                         let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-                            for: hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
+                            for: user.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
                         return cachedTweets
                     } else {
                         // Don't cache other users' tweets
