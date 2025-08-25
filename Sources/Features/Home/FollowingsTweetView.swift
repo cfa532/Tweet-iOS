@@ -107,8 +107,6 @@ struct FollowingsTweetView: View {
     @State private var isInertiaScrolling: Bool = false
     
     private func handleScroll(offset: CGFloat) {
-        print("[FollowingsTweetView] handleScroll called with offset: \(offset)")
-        
         // Cancel any existing timer
         scrollEndTimer?.invalidate()
         
@@ -127,8 +125,6 @@ struct FollowingsTweetView: View {
                 isInertiaScrolling = true
             }
         }
-        
-        print("[FollowingsTweetView] Scroll delta: \(scrollDelta), consecutiveSmallMovements: \(consecutiveSmallMovements), isInertiaScrolling: \(isInertiaScrolling)")
         
         // Only change navigation state if we're not in inertia scrolling
         if !isInertiaScrolling {
