@@ -487,8 +487,6 @@ struct ProfileView: View {
     @State private var isInertiaScrolling: Bool = false
     
     private func handleScroll(offset: CGFloat) {
-        print("[ProfileView] handleScroll called with offset: \(offset)")
-        
         // Cancel any existing timer
         scrollEndTimer?.invalidate()
         
@@ -507,8 +505,6 @@ struct ProfileView: View {
                 isInertiaScrolling = true
             }
         }
-        
-        print("[ProfileView] Scroll delta: \(scrollDelta), consecutiveSmallMovements: \(consecutiveSmallMovements), isInertiaScrolling: \(isInertiaScrolling)")
         
         // Only change navigation state if we're not in inertia scrolling
         if !isInertiaScrolling {
@@ -563,7 +559,6 @@ struct ProfileView: View {
     private func scrollToTop() {
         // Scroll to top of the profile view
         // This will be handled by the ScrollViewReader in ProfileTweetsSection
-        print("DEBUG: [ProfileView] Scroll to top requested")
         NotificationCenter.default.post(name: .scrollToTop, object: nil)
     }
     

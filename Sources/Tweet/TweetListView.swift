@@ -391,13 +391,11 @@ private struct ScrollDetectionModifier: ViewModifier {
                 DragGesture()
                     .onChanged { value in
                         let offset = value.translation.height
-                        print("[TweetListView] Drag gesture offset: \(offset)")
                         onScroll(offset)
                     }
                     .onEnded { _ in
                         // When gesture ends, maintain current state for a brief period
                         // to allow scroll inertia to settle naturally
-                        print("[TweetListView] Drag gesture ended")
                         // Don't immediately change navigation state
                         // Let the scroll view settle naturally
                     }
