@@ -234,13 +234,17 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            // App returning from background - force refresh video layer to show cached content
+            // App returning from background - simple seek to refresh video layer
+            print("DEBUG: [VIDEO FOREGROUND] App entering foreground for \(mid)")
             if isVisible && player != nil {
-                forceVideoLayerRefresh()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.simpleVideoLayerRefresh()
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             // App going to background - pause all videos
+            print("DEBUG: [VIDEO BACKGROUND] App entering background for \(mid)")
             player?.pause()
         }
         .onTapGesture {
@@ -441,32 +445,22 @@ struct SimpleVideoPlayer: View {
         }
     }
     
-    /// Force refresh the video layer to show cached content
-    private func forceVideoLayerRefresh() {
-        guard let player = player else { return }
+    /// Simple video layer refresh - just a gentle seek to wake up the video layer
+    private func simpleVideoLayerRefresh() {
+        guard let player = player else { 
+            print("DEBUG: [VIDEO REFRESH] No player available for \(mid)")
+            return 
+        }
         
-        // Store current state
-        let wasPlaying = player.rate > 0
+        print("DEBUG: [VIDEO REFRESH] Simple refresh for \(mid)")
+        
+        // Just do a gentle seek to the current time to wake up the video layer
         let currentTime = player.currentTime()
-        let currentItem = player.currentItem
-        
-        // Temporarily remove and re-add the player item to force layer refresh
-        player.replaceCurrentItem(with: nil)
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-            // Re-add the same item
-            player.replaceCurrentItem(with: currentItem)
-            
-            // Seek to the same position
-            player.seek(to: currentTime) { finished in
-                if finished {
-                    // If it was playing before, resume playback
-                    if wasPlaying && isVisible && currentAutoPlay {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-                            player.play()
-                        }
-                    }
-                }
+        player.seek(to: currentTime) { finished in
+            if finished {
+                print("DEBUG: [VIDEO REFRESH] Successfully applied simple refresh for \(self.mid)")
+            } else {
+                print("DEBUG: [VIDEO REFRESH] Failed simple refresh for \(self.mid)")
             }
         }
     }
@@ -488,6 +482,8 @@ struct SimpleVideoPlayer: View {
             }
         }
     }
+    
+
     
     private func retryLoad() {
         guard retryCount < 3 else {
