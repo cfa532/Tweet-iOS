@@ -57,10 +57,10 @@ class FollowingsTweetViewModel: ObservableObject {
                 tweets.mergeTweets(filteredTweets)
             }
             
-            // Cache tweets if shouldCache is true
+            // Cache tweets if shouldCache is true - use "main_feed" as special user ID for main feed cache
             if shouldCache {
                 for tweet in serverTweets.compactMap({ $0 }) {
-                    TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
+                    TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
                 }
             }
             if page == 0 {
@@ -97,6 +97,8 @@ class FollowingsTweetViewModel: ObservableObject {
     func handleDeletedTweet(_ tweetId: String) {
         tweets.removeAll { $0.mid == tweetId }
         TweetCacheManager.shared.deleteTweet(mid: tweetId)
+        // Also remove from main feed cache if it exists there
+        // Note: deleteTweet removes by tweet ID, so it will remove from all caches
     }
     
     func showTweetDetail(_ tweet: Tweet) {
@@ -107,6 +109,8 @@ class FollowingsTweetViewModel: ObservableObject {
     // Method to clear tweets when user logs in/out
     func clearTweets() {
         tweets.removeAll()
+        // Clear main feed cache when user logs in/out
+        TweetCacheManager.shared.clearCacheForUser(userId: "main_feed")
     }
     
 

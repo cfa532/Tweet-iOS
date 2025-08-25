@@ -218,6 +218,20 @@ extension TweetCacheManager {
             }
         }
     }
+    
+    func clearCacheForUser(userId: String) {
+        context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.predicate = NSPredicate(format: "uid == %@", userId)
+            if let userTweets = try? context.fetch(request) {
+                for tweet in userTweets {
+                    context.delete(tweet)
+                }
+                try? context.save()
+                print("[TweetCacheManager] Cleared cache for user: \(userId)")
+            }
+        }
+    }
 }
 
 // MARK: - Tweet <-> Core Data Conversion

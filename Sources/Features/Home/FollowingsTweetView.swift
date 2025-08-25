@@ -16,8 +16,9 @@ struct FollowingsTweetView: View {
             tweets: $viewModel.tweets,
             tweetFetcher: { page, size, isFromCache, shouldCache in
                 if isFromCache {
+                    // Use "main_feed" as special user ID for main feed cache to separate from profile browsing
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-                        for: viewModel.hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: viewModel.hproseInstance.appUser.mid)
+                        for: "main_feed", page: page, pageSize: size, currentUserId: viewModel.hproseInstance.appUser.mid)
                     return cachedTweets
                 } else {
                     return await viewModel.fetchTweets(page: page, pageSize: size, shouldCache: shouldCache)
