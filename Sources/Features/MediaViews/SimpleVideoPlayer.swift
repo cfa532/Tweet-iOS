@@ -237,7 +237,7 @@ struct SimpleVideoPlayer: View {
             // App returning from background - simple seek to refresh video layer
             print("DEBUG: [VIDEO FOREGROUND] App entering foreground for \(mid)")
             if isVisible && player != nil {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
                     self.simpleVideoLayerRefresh()
                 }
             }
