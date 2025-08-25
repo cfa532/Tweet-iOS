@@ -1,6 +1,6 @@
 import Foundation
 
-struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
+class MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
     var id: String { mid }  // Computed property that returns mid
     var mid: MimeiId
     var type: MediaType    // Image
@@ -41,7 +41,7 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
         self.url = url
     }
     
-    init(from decoder: Decoder) throws {
+    required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mid = try container.decode(String.self, forKey: .mid)
         
@@ -71,8 +71,17 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
     }
     
     func getUrl(_ baseUrl: URL) -> URL? {
+        // If we have a cached URL path, use it directly
+        if let cachedUrlPath = url, !cachedUrlPath.isEmpty {
+            print("[MimeiFileType] Using cached URL path for \(mid): \(cachedUrlPath)")
+            return URL(string: cachedUrlPath)
+        }
+        
+        // Otherwise, construct the standard path
         let path = mid.count > Constants.MIMEI_ID_LENGTH ? "ipfs/\(mid)" : "mm/\(mid)"
-        return baseUrl.appendingPathComponent(path)
+        let constructedUrl = baseUrl.appendingPathComponent(path)
+        print("[MimeiFileType] Using constructed URL for \(mid): \(constructedUrl)")
+        return constructedUrl
     }
     
     // Implement the hash(into:) method for Hashable conformance

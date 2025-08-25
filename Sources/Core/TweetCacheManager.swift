@@ -161,8 +161,117 @@ extension TweetCacheManager {
             
             if let tweetData = try? encoder.encode(tweet) {
                 cdTweet.tweetData = tweetData
+                do {
+                    try context.save()
+                    print("[TweetCacheManager] Successfully saved tweet \(tweet.mid) to cache for user \(userId)")
+                } catch {
+                    print("[TweetCacheManager] ERROR: Failed to save tweet \(tweet.mid) to cache: \(error)")
+                }
+            } else {
+                print("[TweetCacheManager] ERROR: Failed to encode tweet \(tweet.mid) for caching")
             }
-            try? context.save()
+        }
+    }
+    
+    /// Update only specific fields of a cached tweet instead of replacing the whole object
+    func updateTweetFields(mid: String, favorites: [Bool]? = nil, favoriteCount: Int? = nil, bookmarkCount: Int? = nil, retweetCount: Int? = nil, commentCount: Int? = nil) {
+        context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.predicate = NSPredicate(format: "tid == %@", mid)
+            
+            if let cdTweet = try? context.fetch(request).first,
+               let tweetData = cdTweet.tweetData {
+                do {
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .millisecondsSince1970
+                    var tweet = try decoder.decode(Tweet.self, from: tweetData)
+                    
+                    // Update only the specified fields
+                    if let favorites = favorites {
+                        tweet.favorites = favorites
+                    }
+                    if let favoriteCount = favoriteCount {
+                        tweet.favoriteCount = favoriteCount
+                    }
+                    if let bookmarkCount = bookmarkCount {
+                        tweet.bookmarkCount = bookmarkCount
+                    }
+                    if let retweetCount = retweetCount {
+                        tweet.retweetCount = retweetCount
+                    }
+                    if let commentCount = commentCount {
+                        tweet.commentCount = commentCount
+                    }
+                    
+                    // Re-encode and save
+                    let encoder = JSONEncoder()
+                    encoder.dateEncodingStrategy = .millisecondsSince1970
+                    if let updatedTweetData = try? encoder.encode(tweet) {
+                        cdTweet.tweetData = updatedTweetData
+                        cdTweet.timeCached = Date()
+                        try? context.save()
+                        print("[TweetCacheManager] Updated fields for tweet: \(mid)")
+                    }
+                } catch {
+                    print("ERROR: [TweetCacheManager] Failed to update tweet fields for \(mid): \(error)")
+                }
+            }
+        }
+    }
+    
+    /// Update tweet fields from server data while preserving cached data
+    func updateTweetFieldsFromServer(_ serverTweet: Tweet, userId: String? = nil) {
+        context.performAndWait {
+            // Find all cached instances of this tweet (could be in main_feed and user cache)
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.predicate = NSPredicate(format: "tid == %@", serverTweet.mid)
+            
+            do {
+                let cachedTweets = try context.fetch(request)
+                
+                for cdTweet in cachedTweets {
+                    // Decode existing tweet
+                    if let tweetData = cdTweet.tweetData {
+                        let decoder = JSONDecoder()
+                        decoder.dateDecodingStrategy = .millisecondsSince1970
+                        var cachedTweet = try decoder.decode(Tweet.self, from: tweetData)
+                        
+                        // Update only the fields that might change from server
+                        cachedTweet.favorites = serverTweet.favorites
+                        cachedTweet.favoriteCount = serverTweet.favoriteCount
+                        cachedTweet.bookmarkCount = serverTweet.bookmarkCount
+                        cachedTweet.retweetCount = serverTweet.retweetCount
+                        cachedTweet.commentCount = serverTweet.commentCount
+                        
+                        // Preserve existing attachments completely - don't replace with server data
+                        // Server data doesn't contain cached URLs, so we keep the cached attachments
+                        print("[TweetCacheManager] Preserving existing attachments for tweet \(serverTweet.mid)")
+                        if let cachedAttachments = cachedTweet.attachments {
+                            for attachment in cachedAttachments {
+                                if let url = attachment.url, !url.isEmpty {
+                                    print("[TweetCacheManager] Preserved cached URL for attachment \(attachment.mid): \(url)")
+                                }
+                            }
+                        }
+                        
+                        // Re-encode and save
+                        let encoder = JSONEncoder()
+                        encoder.dateEncodingStrategy = .millisecondsSince1970
+                        if let updatedTweetData = try? encoder.encode(cachedTweet) {
+                            cdTweet.tweetData = updatedTweetData
+                            cdTweet.timeCached = Date()
+                            print("[TweetCacheManager] Updated tweet fields from server while preserving cached data: \(serverTweet.mid) in cache: \(cdTweet.uid ?? "unknown")")
+                        }
+                    }
+                }
+                
+                // Save all changes
+                try? context.save()
+                print("[TweetCacheManager] Updated tweet \(serverTweet.mid) in \(cachedTweets.count) cache(s)")
+                
+            } catch {
+                print("ERROR: [TweetCacheManager] Failed to update tweet fields from server for \(serverTweet.mid): \(error)")
+            }
         }
     }
 
@@ -231,6 +340,20 @@ extension TweetCacheManager {
                 print("[TweetCacheManager] Cleared cache for user: \(userId)")
             }
         }
+    }
+    
+    /// Check if a tweet exists in cache
+    func tweetExists(mid: String, userId: String) -> Bool {
+        var exists = false
+        context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.predicate = NSPredicate(format: "tid == %@ AND uid == %@", mid, userId)
+            request.fetchLimit = 1
+            let count = (try? context.count(for: request)) ?? 0
+            exists = count > 0
+            print("[TweetCacheManager] Checking if tweet \(mid) exists for user \(userId): \(exists) (count: \(count))")
+        }
+        return exists
     }
 }
 

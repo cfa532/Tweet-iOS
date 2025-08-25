@@ -27,6 +27,7 @@ struct SimpleVideoPlayer: View {
     var isMuted: Bool = true // Mute state controlled by caller
     var onVideoTap: (() -> Void)? = nil // Callback when video is tapped
     var disableAutoRestart: Bool = false // Disable auto-restart when video finishes
+    var attachment: MimeiFileType? = nil // Optional attachment for URL caching
     
     // MARK: Mode
     enum Mode {
@@ -355,6 +356,11 @@ struct SimpleVideoPlayer: View {
                         throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
                     }
                     
+                    // Save the detected URL path to the attachment for future use
+                    if let asset = cachedPlayer.currentItem?.asset as? AVURLAsset {
+                        await saveDetectedURLPath(asset.url, for: url)
+                    }
+                    
                     await MainActor.run {
                         self.configurePlayer(cachedPlayer)
                     }
@@ -363,6 +369,11 @@ struct SimpleVideoPlayer: View {
                 
                 // Create new player
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url)
+                
+                // Save the detected URL path to the attachment for future use
+                if let asset = newPlayer.currentItem?.asset as? AVURLAsset {
+                    await saveDetectedURLPath(asset.url, for: url)
+                }
                 
                 await MainActor.run {
                     self.configurePlayer(newPlayer)
@@ -515,16 +526,44 @@ struct SimpleVideoPlayer: View {
         
         // Check master.m3u8 first
         if await urlExists(masterURL) {
+            // Save the detected URL path to the attachment
+            await saveDetectedURLPath(masterURL, for: url)
             return masterURL
         }
         
         // Check playlist.m3u8
         if await urlExists(playlistURL) {
+            // Save the detected URL path to the attachment
+            await saveDetectedURLPath(playlistURL, for: url)
             return playlistURL
         }
         
         // Fallback to original URL
         return url
+    }
+    
+    /// Save the detected URL path to the attachment for future use
+    private func saveDetectedURLPath(_ detectedURL: URL, for originalURL: URL) async {
+        // Extract the path part (everything after the host and port)
+        guard let urlComponents = URLComponents(url: detectedURL, resolvingAgainstBaseURL: false) else {
+            return
+        }
+        
+        // Get the path and query components
+        var pathPart = urlComponents.path
+        if let query = urlComponents.query {
+            pathPart += "?" + query
+        }
+        
+        print("[SimpleVideoPlayer] Detected video URL path: \(pathPart) for original URL: \(originalURL)")
+        
+        // Update the attachment's url field with the path if available
+        if let attachment = attachment {
+            await MainActor.run {
+                attachment.url = pathPart
+                print("[SimpleVideoPlayer] Updated attachment URL field for \(attachment.mid): \(pathPart)")
+            }
+        }
     }
     
     /// Check if URL exists

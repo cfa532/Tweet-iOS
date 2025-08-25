@@ -73,6 +73,28 @@ struct MediaCell: View, Equatable {
         return attachment.type == .video || attachment.type == .hls_video
     }
     
+    private var videoPlayerView: some View {
+        SimpleVideoPlayer(
+            url: attachment.getUrl(baseUrl) ?? URL(string: "about:blank")!,
+            mid: attachment.mid,
+            isVisible: isVisible,
+            autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
+            videoManager: videoManager, // Pass VideoManager for reactive playback
+            onVideoFinished: onVideoFinished,
+            contentType: attachment.type.stringValue,
+            cellAspectRatio: CGFloat(aspectRatio),
+            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+            showNativeControls: false, // Disable native controls to allow fullscreen tap
+            isMuted: muteState.isMuted,
+            onVideoTap: {
+                showFullScreen = true
+            },
+            disableAutoRestart: true,
+            attachment: attachment, // Pass attachment for URL caching
+            mode: .mediaCell
+        )
+    }
+    
     var body: some View {
         Group {
             if let url = attachment.getUrl(baseUrl) {
@@ -81,24 +103,7 @@ struct MediaCell: View, Equatable {
                     
                     if shouldLoadVideo {
                         ZStack {
-                            SimpleVideoPlayer(
-                                url: url,
-                                mid: attachment.mid,
-                                isVisible: isVisible,
-                                autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
-                                videoManager: videoManager, // Pass VideoManager for reactive playback
-                                onVideoFinished: onVideoFinished,
-                                contentType: attachment.type.stringValue,
-                                cellAspectRatio: CGFloat(aspectRatio),
-                                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                                showNativeControls: false, // Disable native controls to allow fullscreen tap
-                                isMuted: muteState.isMuted,
-                                onVideoTap: {
-                                    showFullScreen = true
-                                },
-                                disableAutoRestart: true,
-                                mode: .mediaCell
-                            )
+                            videoPlayerView
                             
                             // Invisible overlay to prevent tap propagation to parent views and add long press
                             Color.clear

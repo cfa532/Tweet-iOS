@@ -354,8 +354,8 @@ final class HproseInstance: ObservableObject {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
                     originalTweet.author = try? await fetchUser(originalTweet.authorId)
-                    TweetCacheManager.shared.saveTweet(originalTweet, userId: appUser.mid)
-                    print("[fetchTweetFeed] Cached original tweet: \(originalTweet.mid)")
+                    TweetCacheManager.shared.saveTweet(originalTweet, userId: "main_feed")
+                    print("[fetchTweetFeed] Cached original tweet: \(originalTweet.mid) to main_feed")
                 } catch {
                     print("[fetchTweetFeed] Error caching original tweet: \(error)")
                 }
@@ -376,8 +376,23 @@ final class HproseInstance: ObservableObject {
                         continue
                     }
                     
-                    // Save tweet back to cache
-                    TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                    // Print video attachment content before caching
+                    if let attachments = tweet.attachments {
+                        for attachment in attachments {
+                            if attachment.type == .video || attachment.type == .hls_video {
+                                print("[HproseInstance] Video attachment before caching - mid: \(attachment.mid), type: \(attachment.type), url: \(attachment.url ?? "nil"), aspectRatio: \(attachment.aspectRatio ?? 0)")
+                            }
+                        }
+                    }
+                    
+                    // fetchTweetFeed always caches as main_feed
+                    if TweetCacheManager.shared.tweetExists(mid: tweet.mid, userId: "main_feed") {
+                        print("[HproseInstance] Tweet \(tweet.mid) exists in main_feed cache, updating fields selectively")
+                        TweetCacheManager.shared.updateTweetFieldsFromServer(tweet)
+                    } else {
+                        print("[HproseInstance] Tweet \(tweet.mid) is new, saving to main_feed cache")
+                        TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
+                    }
                     tweets.append(tweet)
                 } catch {
                     print("[fetchTweetFeed] Error processing tweet: \(error)")
@@ -469,9 +484,23 @@ final class HproseInstance: ObservableObject {
                         continue
                     }
                     
+                    // Print video attachment content before caching
+                    if let attachments = tweet.attachments {
+                        for attachment in attachments {
+                            if attachment.type == .video || attachment.type == .hls_video {
+                                print("[HproseInstance] Video attachment before caching - mid: \(attachment.mid), type: \(attachment.type), url: \(attachment.url ?? "nil"), aspectRatio: \(attachment.aspectRatio ?? 0)")
+                            }
+                        }
+                    }
+                    
                     // Cache tweets only if the user is appUser
                     if user.mid == appUser.mid {
-                        TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                        // Check if tweet already exists in cache and update fields selectively
+                        if TweetCacheManager.shared.tweetExists(mid: tweet.mid, userId: appUser.mid) {
+                            TweetCacheManager.shared.updateTweetFieldsFromServer(tweet)
+                        } else {
+                            TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                        }
                     }
                     tweets.append(tweet)
                 } catch {
@@ -518,8 +547,17 @@ final class HproseInstance: ObservableObject {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 tweet.author = try? await fetchUser(authorId)
                 
-                // Update cached data for main feed
-                TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                // Check both main_feed and user caches for the tweet
+                let existsInMainFeed = TweetCacheManager.shared.tweetExists(mid: tweet.mid, userId: "main_feed")
+                let existsInUserCache = TweetCacheManager.shared.tweetExists(mid: tweet.mid, userId: appUser.mid)
+                
+                if existsInMainFeed || existsInUserCache {
+                    print("[refreshTweet] Tweet \(tweet.mid) found in cache(s), updating fields selectively")
+                    TweetCacheManager.shared.updateTweetFieldsFromServer(tweet)
+                } else {
+                    print("[refreshTweet] Tweet \(tweet.mid) not found in any cache, saving to user cache")
+                    TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+                }
                 
                 return tweet
             } catch {

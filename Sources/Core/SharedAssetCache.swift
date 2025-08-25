@@ -182,10 +182,12 @@ class SharedAssetCache: ObservableObject {
         let playlistURL = url.appendingPathComponent("playlist.m3u8")
         
         if await urlExists(masterURL) {
+            print("[SharedAssetCache] Detected master.m3u8 for URL: \(url)")
             return masterURL
         }
         
         if await urlExists(playlistURL) {
+            print("[SharedAssetCache] Detected playlist.m3u8 for URL: \(url)")
             return playlistURL
         }
         return url

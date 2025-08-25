@@ -57,12 +57,7 @@ class FollowingsTweetViewModel: ObservableObject {
                 tweets.mergeTweets(filteredTweets)
             }
             
-            // Cache tweets if shouldCache is true - use "main_feed" as special user ID for main feed cache
-            if shouldCache {
-                for tweet in serverTweets.compactMap({ $0 }) {
-                    TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
-                }
-            }
+            // Note: fetchTweetFeed now handles caching with main_feed automatically
             if page == 0 {
                 // only check for new tweets from followings on initial load.
                 Task {
