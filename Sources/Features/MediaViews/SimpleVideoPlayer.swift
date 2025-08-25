@@ -9,6 +9,33 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
+// MARK: - Global Video State Cache
+class VideoStateCache {
+    static let shared = VideoStateCache()
+    private var cache: [String: (player: AVPlayer, time: CMTime, wasPlaying: Bool)] = [:]
+    
+    private init() {}
+    
+    func cacheVideoState(for mid: String, player: AVPlayer, time: CMTime, wasPlaying: Bool) {
+        print("DEBUG: [VIDEO CACHE] Caching video state for \(mid)")
+        cache[mid] = (player: player, time: time, wasPlaying: wasPlaying)
+    }
+    
+    func getCachedState(for mid: String) -> (player: AVPlayer, time: CMTime, wasPlaying: Bool)? {
+        return cache[mid]
+    }
+    
+    func clearCache(for mid: String) {
+        print("DEBUG: [VIDEO CACHE] Clearing cache for \(mid)")
+        cache.removeValue(forKey: mid)
+    }
+    
+    func clearAllCache() {
+        print("DEBUG: [VIDEO CACHE] Clearing all cache")
+        cache.removeAll()
+    }
+}
+
 // MARK: - Unified Simple Video Player
 struct SimpleVideoPlayer: View {
     // MARK: Required Parameters
@@ -97,7 +124,7 @@ struct SimpleVideoPlayer: View {
                     .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                     
                 case .fullscreen:
-                    // Fullscreen mode: direct fullscreen with orientation handling
+                    // Fullscreen mode: handle different video orientations
                     if isVideoPortrait {
                         // Portrait video: fit on full screen
                         ZStack {
@@ -155,6 +182,15 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onDisappear {
+            // Cache the current video state before pausing
+            if let player = player {
+                VideoStateCache.shared.cacheVideoState(
+                    for: mid,
+                    player: player,
+                    time: player.currentTime(),
+                    wasPlaying: player.rate > 0
+                )
+            }
             player?.pause()
         }
         .onChange(of: isMuted) { _, newMuteState in
@@ -174,9 +210,20 @@ struct SimpleVideoPlayer: View {
                 if loadFailed && retryCount < 3 {
                     retryLoad()
                 } else {
+                    // Restore cached video state if available
+                    restoreCachedVideoState()
                     checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: visible)
                 }
             } else {
+                // Cache the current video state before pausing
+                if let player = player {
+                    VideoStateCache.shared.cacheVideoState(
+                        for: mid,
+                        player: player,
+                        time: player.currentTime(),
+                        wasPlaying: player.rate > 0
+                    )
+                }
                 player?.pause()
             }
         }
@@ -188,176 +235,138 @@ struct SimpleVideoPlayer: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             // App returning from background - force refresh video layer to show cached content
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self.forceVideoLayerRefresh()
+            if isVisible && player != nil {
+                forceVideoLayerRefresh()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // App became active - additional refresh to ensure video layer is visible
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                if let player = self.player {
-                    // Force a seek to refresh the video layer
-                    let currentTime = player.currentTime()
-                    player.seek(to: currentTime) { _ in
-                        // Video layer should now be refreshed and showing cached content
-                    }
-                }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            // App going to background - pause all videos
+            player?.pause()
+        }
+        .onTapGesture {
+            if let onVideoTap = onVideoTap {
+                onVideoTap()
             }
         }
-        .onDisappear {
-            // Clean up observers when view disappears
-            if let player = player {
-                NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: player.currentItem)
-                NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: player.currentItem)
+        .onLongPressGesture(minimumDuration: 0.5) {
+            isLongPressing = true
+        } onPressingChanged: { pressing in
+            if !pressing {
+                isLongPressing = false
             }
         }
     }
     
-    // MARK: Private Methods
-    private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
-        // Check if all conditions are met for autoplay
-        if autoPlay && isVisible && player != nil && !isLoading {
-            if hasFinishedPlaying {
-                if !disableAutoRestart {
-                    // Reset to beginning and play
-                    player?.seek(to: .zero)
-                    hasFinishedPlaying = false
-                    player?.play()
-                } else {
-                    // Don't restart, keep the finished state
-                }
-            } else {
-                player?.play()
-            }
-        }
-    }
-                    
+    // MARK: - Video Player View
     @ViewBuilder
     private func videoPlayerView() -> some View {
-        Group {
-            if let player = player {
-                if showNativeControls {
-                    VideoPlayer(player: player)
-                        .clipped()
-                        .contentShape(Rectangle())
-                        .scaleEffect(isLongPressing ? 0.95 : 1.0)
-                        .animation(.easeInOut(duration: 0.1), value: isLongPressing)
-                        .onTapGesture {
-                            onVideoTap?()
+        if let player = player {
+            ZStack {
+                // Main video player
+                VideoPlayer(player: player)
+                    .disabled(showNativeControls)
+                    .onTapGesture {
+                        if let onVideoTap = onVideoTap {
+                            onVideoTap()
                         }
-                        .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                            retryLoad()
-                        } onPressingChanged: { pressing in
-                            isLongPressing = pressing
-                        }
-                        .background(
-                            // Hidden view to access the underlying layer for refresh
-                            VideoLayerRefreshView(player: player, mid: mid, instanceId: String(instanceId))
-                        )
-                } else {
-                    VideoPlayer(player: player, videoOverlay: {
-                        // Custom overlay that captures taps
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .scaleEffect(isLongPressing ? 0.95 : 1.0)
-                            .animation(.easeInOut(duration: 0.1), value: isLongPressing)
-                            .onTapGesture {
-                                onVideoTap?()
-                            }
-                            .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                                retryLoad()
-                            } onPressingChanged: { pressing in
-                                isLongPressing = pressing
-                            }
-                    })
-                    .clipped()
-                    .background(
-                        // Hidden view to access the underlying layer for refresh
-                        VideoLayerRefreshView(player: player, mid: mid, instanceId: String(instanceId))
-                    )
+                    }
+                
+                // Loading indicator
+                if isLoading {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.5)
+                        .background(Color.black.opacity(0.3))
+                        .cornerRadius(8)
                 }
-            } else if isLoading {
-                ProgressView("Loading video...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.gray.opacity(0.3))
-            } else if loadFailed {
-                Color.gray.opacity(0.3)
-                    .overlay(
-                        VStack(spacing: 12) {
-                            Image(systemName: "exclamationmark.triangle")
-                                .font(.system(size: 30))
-                                .foregroundColor(.white)
-                            
-                            Text(NSLocalizedString("Failed to load video", comment: "Video loading error"))
-                                .foregroundColor(.white)
-                                .font(.caption)
-                            
-                            Text(NSLocalizedString("Long press to retry", comment: "Long press retry hint"))
-                                .foregroundColor(.white.opacity(0.7))
-                                .font(.caption2)
-                        }
-                    )
-            } else {
-                Color.gray.opacity(0.3)
-                    .overlay(
-                        Image(systemName: "play.circle")
-                            .font(.system(size: 40))
+                
+                // Error state
+                if loadFailed {
+                    VStack {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.title)
                             .foregroundColor(.white)
-                    )
+                        Text("Failed to load video")
+                            .foregroundColor(.white)
+                            .font(.caption)
+                    }
+                    .padding()
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(8)
+                }
+                
+                // Long press indicator
+                if isLongPressing {
+                    Color.black.opacity(0.3)
+                        .onTapGesture {
+                            isLongPressing = false
+                        }
+                }
+            }
+        } else {
+            // Placeholder while loading
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .overlay(
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.5)
+                )
+        }
+    }
+    
+    // MARK: - Player Setup
+    private func setupPlayer() {
+        print("DEBUG: [VIDEO SETUP] Setting up player for \(mid)")
+        
+        // Check if we have a cached player first
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            print("DEBUG: [VIDEO CACHE] Found cached player for \(mid)")
+            restoreFromCache(cachedState)
+            return
+        }
+        
+        // Otherwise, create a new player
+        Task {
+            do {
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url)
+                await MainActor.run {
+                    configurePlayer(newPlayer)
+                }
+            } catch {
+                await MainActor.run {
+                    handleLoadFailure()
+                }
             }
         }
     }
     
-    private func setupPlayer() {
-        // Configure audio session to prevent lock screen media controls
-        do {
-            let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            try audioSession.setActive(true)
-        } catch {
-            // Handle audio session configuration error silently
+    private func restoreFromCache(_ cachedState: (player: AVPlayer, time: CMTime, wasPlaying: Bool)) {
+        print("DEBUG: [VIDEO CACHE] Restoring from cache for \(mid)")
+        
+        // Restore the cached player
+        self.player = cachedState.player
+        
+        // Seek to the cached position
+        cachedState.player.seek(to: cachedState.time) { finished in
+            if finished {
+                // If it was playing before, resume playback
+                if cachedState.wasPlaying && self.isVisible && self.currentAutoPlay {
+                    cachedState.player.play()
+                    print("DEBUG: [VIDEO CACHE] Resumed playback from cache for \(self.mid)")
+                }
+                print("DEBUG: [VIDEO CACHE] Successfully restored from cache for \(self.mid)")
+            }
         }
         
-        Task {
-            await MainActor.run {
-                self.isLoading = true
-                self.loadFailed = false
-            }
-            
-            do {
-                // Try to get cached player first
-                if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: url) {
-                    // Validate cached player - only reject if explicitly failed
-                    guard let playerItem = cachedPlayer.currentItem else {
-                        SharedAssetCache.shared.removeInvalidPlayer(for: url)
-                        throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
-                    }
-                    
-                    // Only reject if the player item is explicitly failed
-                    if playerItem.status == .failed {
-                        SharedAssetCache.shared.removeInvalidPlayer(for: url)
-                        throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
-                    }
-                    
-                    await MainActor.run {
-                        self.configurePlayer(cachedPlayer)
-                    }
-                    return
-                }
-                
-                // Create new player
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url)
-                
-                await MainActor.run {
-                    self.configurePlayer(newPlayer)
-                }
-                
-            } catch {
-                await MainActor.run {
-                    self.handleLoadFailure()
-                }
-            }
-        }
+        // Clear the cache since we've used it
+        VideoStateCache.shared.clearCache(for: mid)
+        
+        // Update state
+        self.isLoading = false
+        self.loadFailed = false
+        self.retryCount = 0
+        self.hasFinishedPlaying = false
     }
     
     private func configurePlayer(_ player: AVPlayer) {
@@ -424,6 +433,14 @@ struct SimpleVideoPlayer: View {
         player = nil
     }
     
+    private func restoreCachedVideoState() {
+        // Check if we have a cached state
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            print("DEBUG: [VIDEO CACHE] Restoring cached video state for \(mid)")
+            restoreFromCache(cachedState)
+        }
+    }
+    
     /// Force refresh the video layer to show cached content
     private func forceVideoLayerRefresh() {
         guard let player = player else { return }
@@ -454,6 +471,24 @@ struct SimpleVideoPlayer: View {
         }
     }
     
+    private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
+        // Check if all conditions are met for autoplay
+        if autoPlay && isVisible && player != nil && !isLoading {
+            if hasFinishedPlaying {
+                if !disableAutoRestart {
+                    // Reset to beginning and play
+                    player?.seek(to: .zero)
+                    hasFinishedPlaying = false
+                    player?.play()
+                } else {
+                    // Don't restart, keep the finished state
+                }
+            } else {
+                player?.play()
+            }
+        }
+    }
+    
     private func retryLoad() {
         guard retryCount < 3 else {
             print("DEBUG: [VIDEO RETRY] Max retry count reached for \(mid)")
@@ -464,6 +499,7 @@ struct SimpleVideoPlayer: View {
         
         // FIRST: Clear all caches immediately
         SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        VideoStateCache.shared.clearCache(for: mid)
         
         // Clear asset cache to force fresh network request
         Task {
