@@ -25,7 +25,7 @@ The Tweet-iOS app is designed to work seamlessly in challenging network environm
    - 500MB disk cache limit
    - Memory warning handling
 
-4. **Video Cache** (`VideoCacheManager`)
+4. **Video Cache** (`SharedAssetCache`)
    - Video player instances
    - Background restoration
    - Memory-efficient management

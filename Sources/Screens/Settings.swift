@@ -76,7 +76,6 @@ struct SettingsView: View {
             // Clear all caches completely
             ImageCacheManager.shared.clearAllCache()
             TweetCacheManager.shared.clearAllCache()
-            VideoCacheManager.shared.clearCache()
             ChatCacheManager.shared.clearAllCache()
             
             // Clear shared asset cache

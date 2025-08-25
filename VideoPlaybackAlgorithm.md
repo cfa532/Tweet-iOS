@@ -33,7 +33,7 @@ This document describes the algorithm for video playback in the Tweet-iOS app, s
 - **Key Features**:
   - KVO-based player status monitoring
   - Automatic playback when player becomes ready
-  - Shared video player instances via VideoCacheManager
+  - Shared video player instances via SharedAssetCache
 
 ## Algorithm Flow
 
@@ -86,7 +86,7 @@ MediaCell.onChange(forceRefreshTrigger):
 
 ```
 SimpleVideoPlayer Initialization:
-1. Create player using VideoCacheManager (shared instances)
+1. Create player using SharedAssetCache (shared instances)
 2. Setup KVO observer for player item status
 3. If player already ready:
    - Start playback immediately if autoPlay = true
@@ -134,7 +134,7 @@ MediaCell observes VideoManager.currentVideoIndex:
 ## Key Design Principles
 
 ### 1. Shared Video Player Instances
-- VideoCacheManager provides shared AVPlayer instances
+- SharedAssetCache provides shared AVPlayer instances
 - Same video uses same player across MediaCell and MediaBrowserView
 - Enables seamless transition between contexts
 
@@ -183,7 +183,7 @@ MediaCell observes VideoManager.currentVideoIndex:
 ## Performance Considerations
 
 ### 1. Video Player Reuse
-- VideoCacheManager maintains player instances
+- SharedAssetCache maintains player instances
 - Avoids repeated player creation/destruction
 - Faster playback start times
 

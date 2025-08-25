@@ -691,7 +691,6 @@ final class HproseInstance: ObservableObject {
         // Clear all caches
         TweetCacheManager.shared.clearAllCache()
         ImageCacheManager.shared.clearAllCache()
-        VideoCacheManager.shared.clearCache()
         ChatCacheManager.shared.clearAllCache()
         Task { @MainActor in
             SharedAssetCache.shared.clearCache()
