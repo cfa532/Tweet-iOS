@@ -191,6 +191,7 @@ struct SimpleVideoPlayer: View {
                     wasPlaying: player.rate > 0
                 )
             }
+            // Always pause when view disappears
             player?.pause()
         }
         .onChange(of: isMuted) { _, newMuteState in
@@ -215,7 +216,8 @@ struct SimpleVideoPlayer: View {
                     checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: visible)
                 }
             } else {
-                // Cache the current video state before pausing
+                // When becoming invisible, cache state but don't pause here
+                // (pause is handled in onDisappear to avoid conflicts)
                 if let player = player {
                     VideoStateCache.shared.cacheVideoState(
                         for: mid,
@@ -224,7 +226,6 @@ struct SimpleVideoPlayer: View {
                         wasPlaying: player.rate > 0
                     )
                 }
-                player?.pause()
             }
         }
         .onChange(of: player) { _, newPlayer in
