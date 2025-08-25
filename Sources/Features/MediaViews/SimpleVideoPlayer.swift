@@ -20,7 +20,6 @@ struct SimpleVideoPlayer: View {
     var autoPlay: Bool = true
     var videoManager: VideoManager? = nil // Optional VideoManager for reactive playback
     var onVideoFinished: (() -> Void)? = nil
-    var contentType: String? = nil
     var cellAspectRatio: CGFloat? = nil
     var videoAspectRatio: CGFloat? = nil
     var showNativeControls: Bool = true
@@ -107,13 +106,9 @@ struct SimpleVideoPlayer: View {
                             .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                         }
                         .onAppear {
-                            // Lock screen orientation to portrait and keep screen on
-                            // OrientationManager.shared.lockToPortrait()
                             UIApplication.shared.isIdleTimerDisabled = true
                         }
                         .onDisappear {
-                            // Re-enable screen rotation and allow screen to sleep
-                            // OrientationManager.shared.unlockOrientation()
                             UIApplication.shared.isIdleTimerDisabled = false
                         }
                     } else if isVideoLandscape {
@@ -127,11 +122,9 @@ struct SimpleVideoPlayer: View {
                             .background(Color.gray)
                         }
                         .onAppear {
-                            // OrientationManager.shared.lockToPortrait()
                             UIApplication.shared.isIdleTimerDisabled = true
                         }
                         .onDisappear {
-                            // OrientationManager.shared.unlockOrientation()
                             UIApplication.shared.isIdleTimerDisabled = false
                         }
                     } else {
@@ -142,11 +135,9 @@ struct SimpleVideoPlayer: View {
                             .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                         }
                         .onAppear {
-                            // OrientationManager.shared.lockToPortrait()
                             UIApplication.shared.isIdleTimerDisabled = true
                         }
                         .onDisappear {
-                            // OrientationManager.shared.unlockOrientation()
                             UIApplication.shared.isIdleTimerDisabled = false
                         }
                     }
@@ -161,9 +152,9 @@ struct SimpleVideoPlayer: View {
         .onAppear {
             if player == nil {
                 setupPlayer()
-                }
             }
-            .onDisappear {
+        }
+        .onDisappear {
             player?.pause()
         }
         .onChange(of: isMuted) { _, newMuteState in
@@ -195,21 +186,14 @@ struct SimpleVideoPlayer: View {
                 checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-            // App entering background - preserve current state
-        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             // App returning from background - force refresh video layer to show cached content
-            
-            // Use the more aggressive force refresh method
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 self.forceVideoLayerRefresh()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             // App became active - additional refresh to ensure video layer is visible
-            
-            // Additional refresh with a longer delay to ensure UI is fully ready
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 if let player = self.player {
                     // Force a seek to refresh the video layer
@@ -313,7 +297,7 @@ struct SimpleVideoPlayer: View {
                                 .font(.caption2)
                         }
                     )
-                    } else {
+            } else {
                 Color.gray.opacity(0.3)
                     .overlay(
                         Image(systemName: "play.circle")
@@ -324,7 +308,7 @@ struct SimpleVideoPlayer: View {
         }
     }
     
-        private func setupPlayer() {
+    private func setupPlayer() {
         // Configure audio session to prevent lock screen media controls
         do {
             let audioSession = AVAudioSession.sharedInstance()
@@ -434,8 +418,6 @@ struct SimpleVideoPlayer: View {
         }
     }
     
-
-    
     private func handleLoadFailure() {
         loadFailed = true
         isLoading = false
@@ -499,46 +481,6 @@ struct SimpleVideoPlayer: View {
         
         setupPlayer()
     }
-    
-    /// Resolve HLS URL if needed
-    private func resolveHLSURL(_ url: URL) async -> URL {
-        let urlString = url.absoluteString
-        
-        // If it's already a direct video file, return as-is
-        if urlString.hasSuffix(".mp4") || urlString.hasSuffix(".m3u8") {
-            return url
-        }
-        
-        // Try to find HLS playlist files
-        let masterURL = url.appendingPathComponent("master.m3u8")
-        let playlistURL = url.appendingPathComponent("playlist.m3u8")
-        
-        // Check master.m3u8 first
-        if await urlExists(masterURL) {
-            return masterURL
-        }
-        
-        // Check playlist.m3u8
-        if await urlExists(playlistURL) {
-            return playlistURL
-        }
-        
-        // Fallback to original URL
-        return url
-    }
-    
-    /// Check if URL exists
-    private func urlExists(_ url: URL) async -> Bool {
-        do {
-        var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
-            request.timeoutInterval = 15.0
-            let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-        return false
-        }
-    }
 }
 
 // MARK: - Video Layer Refresh View
@@ -572,26 +514,5 @@ struct VideoLayerRefreshView: UIViewRepresentable {
     func dismantleUIView(_ uiView: UIView, coordinator: ()) {
         // Clean up observers when view is dismantled
         NotificationCenter.default.removeObserver(uiView)
-    }
-    
-    private func refreshVideoLayer() {
-        // Force refresh the video layer by temporarily changing its properties
-        DispatchQueue.main.async {
-            // Find the AVPlayerLayer in the view hierarchy
-            if let playerLayer = self.findPlayerLayer(in: self.player) {
-                // Temporarily change opacity to force a redraw
-                let originalOpacity = playerLayer.opacity
-                playerLayer.opacity = 0.99
-                
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-                    playerLayer.opacity = originalOpacity
-                }
-            }
-        }
-    }
-    
-    private func findPlayerLayer(in player: AVPlayer) -> AVPlayerLayer? {
-        // This is a fallback method - the main refresh logic is in the parent view
-        return nil
     }
 } 

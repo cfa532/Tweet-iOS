@@ -213,7 +213,6 @@ struct MediaBrowserView: View {
             mid: attachment.mid,
             isVisible: isVisible && index == currentIndex, // Consider both parent visibility and current index
             autoPlay: isVisible && index == currentIndex, // Only auto-play if parent is visible and this is current
-            contentType: attachment.type.stringValue,
             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
             isMuted: isMuted, // Use local mute state
             onVideoTap: {

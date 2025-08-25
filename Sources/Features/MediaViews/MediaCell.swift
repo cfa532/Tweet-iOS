@@ -80,81 +80,7 @@ struct MediaCell: View, Equatable {
                 case .video, .hls_video:
                     
                     if shouldLoadVideo {
-                        ZStack {
-                            SimpleVideoPlayer(
-                                url: url,
-                                mid: attachment.mid,
-                                isVisible: isVisible,
-                                autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
-                                videoManager: videoManager, // Pass VideoManager for reactive playback
-                                onVideoFinished: onVideoFinished,
-                                contentType: attachment.type.stringValue,
-                                cellAspectRatio: CGFloat(aspectRatio),
-                                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                                showNativeControls: false, // Disable native controls to allow fullscreen tap
-                                isMuted: muteState.isMuted,
-                                onVideoTap: {
-                                    showFullScreen = true
-                                },
-                                disableAutoRestart: true,
-                                mode: .mediaCell
-                            )
-                            
-                            // Invisible overlay to prevent tap propagation to parent views and add long press
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    // This prevents the tap from reaching parent views
-                                    showFullScreen = true
-                                }
-                                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                                    // FIRST: Clear all caches immediately
-                                    print("DEBUG: [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
-                                    
-                                    if let url = attachment.getUrl(baseUrl) {
-                                        // Clear player cache
-                                        SharedAssetCache.shared.removeInvalidPlayer(for: url)
-                                        
-                                        // Clear asset cache
-                                        Task {
-                                            await MainActor.run {
-                                                SharedAssetCache.shared.clearAssetCache(for: url)
-                                                print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
-                                            }
-                                        }
-                                    }
-                                    
-                                    // THEN: Force a complete reload
-                                    shouldLoadVideo = false
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                        shouldLoadVideo = true
-                                    }
-                                }
-                        }
-                        .onAppear {
-                            // SimpleVideoPlayer appeared
-                        }
-                        .onChange(of: isVisible) { _, newIsVisible in
-                            // isVisible changed
-                        }
-                        
-                        .overlay(
-                            // Video controls overlay
-                            Group {
-                                VStack {
-                                    Spacer()
-                                    HStack {
-                                        Spacer()
-                                        // Mute button in bottom right corner (only if showMuteButton is true)
-                                        if showMuteButton {
-                                            MuteButton()
-                                                .padding(.trailing, 8)
-                                                .padding(.bottom, 8)
-                                        }
-                                    }
-                                }
-                            }
-                        )
+                        videoPlayerView(url: url)
                     } else {
                         // Show placeholder for videos that haven't been loaded yet
                         ZStack {
@@ -450,6 +376,86 @@ struct MediaCell: View, Equatable {
         lhs.aspectRatio == rhs.aspectRatio &&
         lhs.shouldLoadVideo == rhs.shouldLoadVideo &&
         lhs.showMuteButton == rhs.showMuteButton
+    }
+    
+    // MARK: - Video Player View
+    @ViewBuilder
+    private func videoPlayerView(url: URL) -> some View {
+        ZStack {
+            SimpleVideoPlayer(
+                url: url,
+                mid: attachment.mid,
+                isVisible: isVisible,
+                autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
+                videoManager: videoManager,
+                onVideoFinished: onVideoFinished,
+                cellAspectRatio: CGFloat(aspectRatio),
+                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                showNativeControls: false,
+                isMuted: muteState.isMuted,
+                onVideoTap: {
+                    showFullScreen = true
+                },
+                disableAutoRestart: true,
+                mode: .mediaCell
+            )
+            
+            // Invisible overlay to prevent tap propagation to parent views and add long press
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    showFullScreen = true
+                }
+                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
+                    handleVideoReload()
+                }
+        }
+        .onAppear {
+            // SimpleVideoPlayer appeared
+        }
+        .onChange(of: isVisible) { _, newIsVisible in
+            // isVisible changed
+        }
+        .overlay(
+            // Video controls overlay
+            Group {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        if showMuteButton {
+                            MuteButton()
+                                .padding(.trailing, 8)
+                                .padding(.bottom, 8)
+                        }
+                    }
+                }
+            }
+        )
+    }
+    
+    private func handleVideoReload() {
+        // FIRST: Clear all caches immediately
+        print("DEBUG: [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
+        
+        if let url = attachment.getUrl(baseUrl) {
+            // Clear player cache
+            SharedAssetCache.shared.removeInvalidPlayer(for: url)
+            
+            // Clear asset cache
+            Task {
+                await MainActor.run {
+                    SharedAssetCache.shared.clearAssetCache(for: url)
+                    print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
+                }
+            }
+        }
+        
+        // THEN: Force a complete reload
+        shouldLoadVideo = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            shouldLoadVideo = true
+        }
     }
 }
 
