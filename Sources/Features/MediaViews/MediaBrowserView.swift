@@ -195,16 +195,15 @@ struct MediaBrowserView: View {
     
     // MARK: - Helper Methods
     private func isVideoAttachment(_ attachment: MimeiFileType) -> Bool {
-        let type = attachment.type.lowercased()
-        return type == "video" || type == "hls_video"
+        return attachment.type == .video || attachment.type == .hls_video
     }
     
     private func isAudioAttachment(_ attachment: MimeiFileType) -> Bool {
-        return attachment.type.lowercased() == "audio"
+        return attachment.type == .audio
     }
     
     private func isImageAttachment(_ attachment: MimeiFileType) -> Bool {
-        return attachment.type.lowercased() == "image"
+        return attachment.type == .image
     }
     
     @ViewBuilder
@@ -214,7 +213,7 @@ struct MediaBrowserView: View {
             mid: attachment.mid,
             isVisible: isVisible && index == currentIndex, // Consider both parent visibility and current index
             autoPlay: isVisible && index == currentIndex, // Only auto-play if parent is visible and this is current
-            contentType: attachment.type,
+            contentType: attachment.type.stringValue,
             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
             isMuted: isMuted, // Use local mute state
             onVideoTap: {

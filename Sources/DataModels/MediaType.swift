@@ -19,3 +19,17 @@ enum MediaType: String, Codable {
     case html = "Html"
     case unknown = "Unknown"
 }
+
+// Extension to MediaType for string conversion
+extension MediaType {
+    
+    // Convert string to MediaType with fallback to unknown
+    static func fromString(_ string: String) -> MediaType {
+        return MediaType(rawValue: string) ?? .unknown
+    }
+    
+    // Convert MediaType to string
+    var stringValue: String {
+        return self.rawValue
+    }
+}

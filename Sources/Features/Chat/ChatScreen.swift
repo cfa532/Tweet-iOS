@@ -379,7 +379,7 @@ struct ChatScreen: View {
                     print("[ChatScreen] Uploading attachment to IPFS in background...")
                     if let uploadedAttachment = try await HproseInstance.shared.uploadToIPFS(
                         data: photoData,
-                        typeIdentifier: attachment.type == "image" ? "public.image" : "public.movie",
+                        typeIdentifier: attachment.type == .image ? "public.image" : "public.movie",
                         fileName: attachment.fileName
                     ) {
                         uploadedAttachments = [uploadedAttachment]
@@ -531,17 +531,19 @@ struct ChatScreen: View {
         !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedAttachment != nil
     }
     
-    private func getAttachmentIcon(for type: String) -> String {
-        switch type.lowercased() {
-        case "image", "jpg", "jpeg", "png", "gif", "webp":
+    private func getAttachmentIcon(for type: MediaType) -> String {
+        switch type {
+        case .image:
             return "photo"
-        case "video", "mp4", "mov", "avi":
+        case .video, .hls_video:
             return "video"
-        case "audio", "mp3", "wav", "m4a":
+        case .audio:
             return "music.note"
-        case "document", "pdf", "doc", "docx":
+        case .pdf, .word, .excel, .ppt:
             return "doc.text"
-        default:
+        case .zip, .txt, .html:
+            return "paperclip"
+        case .unknown:
             return "paperclip"
         }
     }
@@ -603,7 +605,7 @@ struct ChatScreen: View {
                 // Create a temporary MimeiFileType for the selected photo
                 let tempAttachment = MimeiFileType(
                     mid: UUID().uuidString,
-                    type: "image",
+                    mediaType: .image,
                     size: Int64(data.count),
                     fileName: "photo.jpg",
                     url: nil

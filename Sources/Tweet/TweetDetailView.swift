@@ -130,7 +130,7 @@ struct DetailMediaCell: View {
     private var attachment: MimeiFileType {
         guard let attachments = parentTweet.attachments,
               attachmentIndex >= 0 && attachmentIndex < attachments.count else {
-            return MimeiFileType(mid: "", type: "unknown")
+            return MimeiFileType(mid: "", mediaType: .unknown)
         }
         return attachments[attachmentIndex]
     }
@@ -142,8 +142,8 @@ struct DetailMediaCell: View {
     var body: some View {
         Group {
             if let url = attachment.getUrl(baseUrl) {
-                switch attachment.type.lowercased() {
-                case "video", "hls_video":
+                switch attachment.type {
+                case .video, .hls_video:
                     // Show video with native controls using DetailVideoManager singleton
                     if shouldLoadVideo {
                         DetailVideoPlayerView(
@@ -162,7 +162,7 @@ struct DetailMediaCell: View {
                                     .scaleEffect(1.5)
                             )
                     }
-                case "image":
+                case .image:
                     // Images still go to full-screen when tapped
                     Group {
                         if let image = image {
@@ -213,12 +213,12 @@ struct DetailMediaCell: View {
         }
         .onAppear {
             isVisible = true
-            if attachment.type.lowercased() == "image" && image == nil {
+            if attachment.type == .image && image == nil {
                 loadImage()
             }
             
             // Handle mute state for videos in detail view - delay 1s before unmuting
-            if (attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video") {
+            if (attachment.type == .video || attachment.type == .hls_video) {
                 setupDetailViewMuteState()
             }
         }
@@ -702,10 +702,9 @@ struct TweetDetailView: View {
     }
     
     private func aspectRatio(for attachment: MimeiFileType, at index: Int) -> CGFloat {
-        let type = attachment.type.lowercased()
-        if type == "video" || type == "hls_video" {
+        if attachment.type == .video || attachment.type == .hls_video {
             return CGFloat(attachment.aspectRatio ?? (4.0/3.0))
-        } else if type == "image" {
+        } else if attachment.type == .image {
             if let ratio = imageAspectRatios[index] {
                 return ratio
             } else {

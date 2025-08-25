@@ -73,7 +73,7 @@ struct Avatar: View {
         // Create a MimeiFileType with the filename as mid so existing cache logic works
         let avatarAttachment = MimeiFileType(
             mid: cacheKey,
-            type: "image"
+            mediaType: .image
         )
         
         let baseUrl = user.baseUrl ?? HproseInstance.baseUrl

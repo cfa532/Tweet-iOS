@@ -70,7 +70,7 @@ struct AvatarFullScreenView: View {
         // Create a MimeiFileType for the avatar using the URL's lastPathComponent as mid
         let avatarAttachment = MimeiFileType(
             mid: url.lastPathComponent,
-            type: "image"
+            mediaType: .image
         )
         
         // Show compressed image as placeholder first

@@ -72,13 +72,13 @@ struct ChatMessageView: View {
                     HStack(spacing: 4) {
                         if attachments.count == 1, let attachment = attachments.first {
                             // Single attachment
-                            if attachment.type.lowercased().contains("image") {
+                            if attachment.type == .image {
                                 ChatImageViewWithPlaceholder(
                                     attachment: attachment, 
                                     isFromCurrentUser: isFromCurrentUser,
                                     senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser
                                 )
-                            } else if attachment.type.lowercased().contains("video") {
+                            } else if attachment.type == .video || attachment.type == .hls_video {
                                 ChatVideoPlayer(
                                     attachment: attachment, 
                                     isFromCurrentUser: isFromCurrentUser,
@@ -153,7 +153,7 @@ struct AttachmentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Attachment preview
-            if attachment.type.lowercased().contains("image") {
+            if attachment.type == .image {
                 // Image preview
                 if let url = attachment.url, let imageUrl = URL(string: url) {
                     AsyncImage(url: imageUrl) { image in
@@ -214,17 +214,19 @@ struct AttachmentView: View {
         .clipShape(isLastFromSender ? AnyShape(ChatBubbleShape(isFromCurrentUser: isFromCurrentUser)) : AnyShape(RoundedRectangle(cornerRadius: 12)))
     }
     
-    private func getAttachmentIcon(for type: String) -> String {
-        switch type.lowercased() {
-        case "image", "jpg", "jpeg", "png", "gif", "webp":
+    private func getAttachmentIcon(for type: MediaType) -> String {
+        switch type {
+        case .image:
             return "photo"
-        case "video", "mp4", "mov", "avi":
+        case .video, .hls_video:
             return "video"
-        case "audio", "mp3", "wav", "m4a":
+        case .audio:
             return "music.note"
-        case "document", "pdf", "doc", "docx":
+        case .pdf, .word, .excel, .ppt:
             return "doc.text"
-        default:
+        case .zip, .txt, .html:
+            return "paperclip"
+        case .unknown:
             return "paperclip"
         }
     }
@@ -530,17 +532,19 @@ struct ChatAttachmentLoader: View {
         }
     }
     
-    private func getAttachmentIcon(for type: String) -> String {
-        switch type.lowercased() {
-        case "image", "jpg", "jpeg", "png", "gif", "webp":
+    private func getAttachmentIcon(for type: MediaType) -> String {
+        switch type {
+        case .image:
             return "photo"
-        case "video", "mp4", "mov", "avi":
+        case .video, .hls_video:
             return "video"
-        case "audio", "mp3", "wav", "m4a":
+        case .audio:
             return "music.note"
-        case "document", "pdf", "doc", "docx":
+        case .pdf, .word, .excel, .ppt:
             return "doc.text"
-        default:
+        case .zip, .txt, .html:
+            return "paperclip"
+        case .unknown:
             return "paperclip"
         }
     }

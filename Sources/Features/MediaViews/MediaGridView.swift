@@ -39,14 +39,14 @@ struct MediaGridView: View {
         
         // Check if this is the first video and we should start playing
         let isFirstVideo = index == findFirstVideoIndex()
-        let shouldStart = isFirstVideo && (attachments[index].type.lowercased() == "video" || attachments[index].type.lowercased() == "hls_video")
+        let shouldStart = isFirstVideo && (attachments[index].type == .video || attachments[index].type == .hls_video)
         
         return shouldStart
     }
     
     private func findFirstVideoIndex() -> Int {
         return attachments.enumerated().first { _, attachment in
-            attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video"
+            attachment.type == .video || attachment.type == .hls_video
         }?.offset ?? -1
     }
     
@@ -55,7 +55,7 @@ struct MediaGridView: View {
         let attachment = attachments[index]
         
         // Check if this is a video
-        let isVideo = attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video"
+        let isVideo = attachment.type == .video || attachment.type == .hls_video
         guard isVideo else { return false }
         
         // Use VideoManager to determine if this video should play
@@ -459,7 +459,7 @@ struct MediaGridView: View {
                 
                 // Setup sequential playback for videos
                 let videoMids = attachments.enumerated().compactMap { index, attachment in
-                    if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+                    if attachment.type == .video || attachment.type == .hls_video {
                         return attachment.mid
                     }
                     return nil
@@ -488,7 +488,7 @@ struct MediaGridView: View {
                 }
                 
                 // Start video loading timer if this grid contains videos
-                let hasVideos = attachments.contains(where: { $0.type.lowercased() == "video" || $0.type.lowercased() == "hls_video" })
+                let hasVideos = attachments.contains(where: { $0.type == .video || $0.type == .hls_video })
                 
                 if hasVideos {
                     print("DEBUG: [MediaGridView] Grid contains videos - starting loading process")
@@ -608,7 +608,7 @@ extension MediaGridView {
     /// Start background preloading for all videos in the grid
     private func startBackgroundPreloading() {
         let videoAttachments = attachments.enumerated().compactMap { index, attachment in
-            if attachment.type.lowercased() == "video" || attachment.type.lowercased() == "hls_video" {
+            if attachment.type == .video || attachment.type == .hls_video {
                 return (index, attachment)
             }
             return nil

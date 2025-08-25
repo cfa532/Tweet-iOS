@@ -3,7 +3,7 @@ import Foundation
 struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
     var id: String { mid }  // Computed property that returns mid
     var mid: MimeiId
-    var type: String    // Image
+    var type: MediaType    // Image
     let size: Int64?
     var fileName: String?
     let timestamp: Date
@@ -20,9 +20,20 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
         case url
     }
     
-    init(mid: MimeiId, type: String, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(), aspectRatio: Float? = nil, url: String? = nil) {
+    init(mid: MimeiId, mediaType: MediaType, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(), aspectRatio: Float? = nil, url: String? = nil) {
         self.mid = mid
-        self.type = type
+        self.type = mediaType
+        self.size = size
+        self.fileName = fileName
+        self.timestamp = timestamp
+        self.aspectRatio = aspectRatio
+        self.url = url
+    }
+    
+    // Convenience initializer that accepts String for backward compatibility during transition
+    init(mid: String, type: String, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(), aspectRatio: Float? = nil, url: String? = nil) {
+        self.mid = mid
+        self.type = MediaType.fromString(type)
         self.size = size
         self.fileName = fileName
         self.timestamp = timestamp
@@ -33,7 +44,16 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mid = try container.decode(String.self, forKey: .mid)
-        type = try container.decode(String.self, forKey: .type)
+        
+        // Handle both String and MediaType decoding for backward compatibility
+        if let mediaType = try? container.decode(MediaType.self, forKey: .type) {
+            type = mediaType
+        } else if let typeString = try? container.decode(String.self, forKey: .type) {
+            type = MediaType.fromString(typeString)
+        } else {
+            type = .unknown
+        }
+        
         size = try container.decodeIfPresent(Int64.self, forKey: .size)
         fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
         aspectRatio = try container.decodeIfPresent(Float.self, forKey: .aspectRatio)

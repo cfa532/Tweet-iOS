@@ -2094,7 +2094,7 @@ final class HproseInstance: ObservableObject {
                         print("DEBUG: Video conversion successful, CID: \(cid)")
                         return MimeiFileType(
                             mid: cid,
-                            type: "hls_video",
+                            mediaType: .hls_video,
                             size: Int64(data.count),
                             fileName: fileName,
                             timestamp: Date(),

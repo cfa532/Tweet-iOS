@@ -60,7 +60,7 @@ struct MediaCell: View, Equatable {
     private var attachment: MimeiFileType {
         guard let attachments = parentTweet.attachments,
               attachmentIndex >= 0 && attachmentIndex < attachments.count else {
-            return MimeiFileType(mid: "", type: "unknown")
+            return MimeiFileType(mid: "", mediaType: .unknown)
         }
         return attachments[attachmentIndex]
     }
@@ -70,15 +70,14 @@ struct MediaCell: View, Equatable {
     }
     
     private var isVideoAttachment: Bool {
-        let type = attachment.type.lowercased()
-        return type == "video" || type == "hls_video"
+        return attachment.type == .video || attachment.type == .hls_video
     }
     
     var body: some View {
         Group {
             if let url = attachment.getUrl(baseUrl) {
-                switch attachment.type.lowercased() {
-                case "video", "hls_video":
+                switch attachment.type {
+                case .video, .hls_video:
                     
                     if shouldLoadVideo {
                         ZStack {
@@ -89,7 +88,7 @@ struct MediaCell: View, Equatable {
                                 autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
                                 videoManager: videoManager, // Pass VideoManager for reactive playback
                                 onVideoFinished: onVideoFinished,
-                                contentType: attachment.type,
+                                contentType: attachment.type.stringValue,
                                 cellAspectRatio: CGFloat(aspectRatio),
                                 videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                                 showNativeControls: false, // Disable native controls to allow fullscreen tap
@@ -214,13 +213,13 @@ struct MediaCell: View, Equatable {
                         }
                     }
                     // #endif
-                case "audio":
+                case .audio:
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
                         .onTapGesture {
                             handleTap()
                         }
-                case "image":
+                case .image:
                     if let image = image {
                         Image(uiImage: image)
                             .resizable()
@@ -400,14 +399,14 @@ struct MediaCell: View, Equatable {
     
     private func handleTap() {
         // Use internal full screen logic
-        switch attachment.type.lowercased() {
-        case "video", "hls_video":
+        switch attachment.type {
+        case .video, .hls_video:
             // Open full screen for videos
             showFullScreen = true
-        case "audio":
+        case .audio:
             // Toggle audio playback - handled by SimpleAudioPlayer
             break
-        case "image":
+        case .image:
             // Open full-screen for images
             showFullScreen = true
         default:

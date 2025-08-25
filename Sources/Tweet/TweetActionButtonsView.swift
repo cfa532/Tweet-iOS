@@ -378,7 +378,7 @@ struct TweetActionButtonsView: View {
             shareText += truncatedContent
         } else if let attachments = tweet.attachments, !attachments.isEmpty {
             // Create string from attachment types
-            let attachmentTypes = attachments.compactMap { $0.type }.joined(separator: ", ")
+            let attachmentTypes = attachments.compactMap { $0.type.rawValue }.joined(separator: ", ")
             shareText += attachmentTypes.isEmpty ? NSLocalizedString("[attachments]", comment: "Indicator for tweets with attachments but no text content") : attachmentTypes
         }
         
