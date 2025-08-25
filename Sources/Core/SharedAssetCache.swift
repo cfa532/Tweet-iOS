@@ -30,8 +30,7 @@ class SharedAssetCache: ObservableObject {
     private var preloadTasks: [String: Task<Void, Never>] = [:]
     
     // MARK: - Configuration
-    private let maxCacheSize = 20 // Maximum number of cached assets
-    private let maxPlayerCacheSize = 10 // Maximum number of cached players
+    private let maxCacheSize = 50 // Maximum number of cached assets and players
     private let cacheExpirationInterval: TimeInterval = 300 // 5 minutes
     
     // MARK: - Background Cleanup
@@ -302,10 +301,10 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func managePlayerCacheSize() {
-        if playerCache.count > maxPlayerCacheSize {
+        if playerCache.count > maxCacheSize {
             // Remove least recently used players
             let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
-            let keysToRemove = sortedKeys.prefix(playerCache.count - maxPlayerCacheSize)
+            let keysToRemove = sortedKeys.prefix(playerCache.count - maxCacheSize)
             
             for key in keysToRemove {
                 if let player = playerCache[key] {
