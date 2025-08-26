@@ -107,14 +107,14 @@ struct TweetActionButtonsView: View {
                     handleGuestAction()
                 } else {
                     Task {
-                        // Optimistic UI update
+                        // Store current state before any changes
                         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
-                        var newFavorites = tweet.favorites ?? [false, false, false]
-                        newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
-                        
-                        // Store original values for rollback
                         let originalFavoriteCount = tweet.favoriteCount ?? 0
                         let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
+                        
+                        // Optimistic UI update - only after debounce check passes
+                        var newFavorites = tweet.favorites ?? [false, false, false]
+                        newFavorites[UserActions.FAVORITE.rawValue] = !wasFavorite
                         
                         await MainActor.run {
                             tweet.favorites = newFavorites
@@ -195,14 +195,14 @@ struct TweetActionButtonsView: View {
                     handleGuestAction()
                 } else {
                     Task {
-                        // Optimistic UI update
+                        // Store current state before any changes
                         let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
-                        var newFavorites = tweet.favorites ?? [false, false, false]
-                        newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
-                        
-                        // Store original values for rollback
                         let originalBookmarkCount = tweet.bookmarkCount ?? 0
                         let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
+                        
+                        // Optimistic UI update - only after debounce check passes
+                        var newFavorites = tweet.favorites ?? [false, false, false]
+                        newFavorites[UserActions.BOOKMARK.rawValue] = !wasBookmarked
                         
                         await MainActor.run {
                             self.tweet.favorites = newFavorites

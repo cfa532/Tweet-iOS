@@ -12,6 +12,7 @@ struct DebounceButton<Label: View>: View {
     
     @State private var isEnabled: Bool = true
     @State private var lastTapTime: Date = Date.distantPast
+    @State private var isProcessing: Bool = false
     
     /// Initialize the button with custom parameters
     /// - Parameters:
@@ -41,9 +42,10 @@ struct DebounceButton<Label: View>: View {
         Button(action: handleTap) {
             label()
         }
-        .disabled(!isEnabled)
-        .opacity(isEnabled ? 1.0 : (enableAnimation ? 0.6 : 1.0))
+        .disabled(!isEnabled || isProcessing)
+        .opacity((isEnabled && !isProcessing) ? 1.0 : (enableAnimation ? 0.6 : 1.0))
         .animation(enableAnimation ? .easeInOut(duration: 0.1) : nil, value: isEnabled)
+        .animation(enableAnimation ? .easeInOut(duration: 0.1) : nil, value: isProcessing)
     }
     
     private func handleTap() {
@@ -55,6 +57,11 @@ struct DebounceButton<Label: View>: View {
             return
         }
         
+        // Check if we're already processing
+        guard !isProcessing else {
+            return
+        }
+        
         // Provide haptic feedback if enabled
         if enableVibration {
             let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
@@ -62,9 +69,10 @@ struct DebounceButton<Label: View>: View {
             impactFeedback.impactOccurred()
         }
         
-        // Update last tap time and disable button temporarily
+        // Update last tap time and disable button immediately
         lastTapTime = currentTime
         isEnabled = false
+        isProcessing = true
         
         // Perform the action
         action()
@@ -72,6 +80,7 @@ struct DebounceButton<Label: View>: View {
         // Re-enable the button after cooldown
         DispatchQueue.main.asyncAfter(deadline: .now() + cooldownDuration) {
             isEnabled = true
+            isProcessing = false
         }
     }
 }
