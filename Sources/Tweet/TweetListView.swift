@@ -490,6 +490,7 @@ struct TweetListContentView<RowView: View>: View {
                 if hasMoreTweets {
                     ProgressView()
                         .frame(height: 40)
+                        .padding(.top, -40) // Move spinner up by 40 dp
                 }
             }
         }
