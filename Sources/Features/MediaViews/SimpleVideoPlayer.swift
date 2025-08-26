@@ -53,6 +53,7 @@ struct SimpleVideoPlayer: View {
     var isMuted: Bool = true // Mute state controlled by caller
     var onVideoTap: (() -> Void)? = nil // Callback when video is tapped
     var disableAutoRestart: Bool = false // Disable auto-restart when video finishes
+    var forceRefreshTrigger: Int = 0 // External trigger to force refresh
     
     // MARK: Mode
     enum Mode {
@@ -89,7 +90,7 @@ struct SimpleVideoPlayer: View {
         }
         return autoPlay
     }
-
+    
     var body: some View {
         GeometryReader { geometry in
             let screenWidth = geometry.size.width
@@ -108,20 +109,20 @@ struct SimpleVideoPlayer: View {
                         let pad = needsVerticalPadding && overflow > 0 ? overflow / 2 : 0
                         ZStack {
                             videoPlayerView()
-                            .offset(y: -pad)    // align the video vertically in the middle
-                            .aspectRatio(videoAR, contentMode: .fill)
+                                .offset(y: -pad)    // align the video vertically in the middle
+                                .aspectRatio(videoAR, contentMode: .fill)
                         }
                     } else {
                         // Fallback when no cellAspectRatio is available
                         videoPlayerView()
-                        .aspectRatio(videoAR, contentMode: .fit)
+                            .aspectRatio(videoAR, contentMode: .fit)
                     }
                     
                 case .mediaBrowser:
                     // MediaBrowser mode: fullscreen browser with native controls only
                     videoPlayerView()
-                    .aspectRatio(videoAR, contentMode: .fit)
-                    .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                        .aspectRatio(videoAR, contentMode: .fit)
+                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                     
                 case .fullscreen:
                     // Fullscreen mode: handle different video orientations
@@ -129,8 +130,8 @@ struct SimpleVideoPlayer: View {
                         // Portrait video: fit on full screen
                         ZStack {
                             videoPlayerView()
-                            .aspectRatio(videoAR, contentMode: .fit)
-                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                                .aspectRatio(videoAR, contentMode: .fit)
+                                .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                         }
                         .onAppear {
                             UIApplication.shared.isIdleTimerDisabled = true
@@ -142,11 +143,11 @@ struct SimpleVideoPlayer: View {
                         // Landscape video: rotate -90 degrees to fit on portrait device
                         ZStack {
                             videoPlayerView()
-                            .aspectRatio(videoAR, contentMode: .fit)
-                            .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2)
-                            .rotationEffect(.degrees(-90))
-                            .scaleEffect(screenHeight / screenWidth)
-                            .background(Color.gray)
+                                .aspectRatio(videoAR, contentMode: .fit)
+                                .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2)
+                                .rotationEffect(.degrees(-90))
+                                .scaleEffect(screenHeight / screenWidth)
+                                .background(Color.gray)
                         }
                         .onAppear {
                             UIApplication.shared.isIdleTimerDisabled = true
@@ -158,8 +159,8 @@ struct SimpleVideoPlayer: View {
                         // Square video: fit on full screen
                         ZStack {
                             videoPlayerView()
-                            .aspectRatio(1.0, contentMode: .fit)
-                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                                .aspectRatio(1.0, contentMode: .fit)
+                                .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                         }
                         .onAppear {
                             UIApplication.shared.isIdleTimerDisabled = true
@@ -172,8 +173,8 @@ struct SimpleVideoPlayer: View {
             } else {
                 // Fallback when no aspect ratio is available
                 videoPlayerView()
-                .aspectRatio(16.0/9.0, contentMode: .fit)
-                .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                    .aspectRatio(16.0/9.0, contentMode: .fit)
+                    .frame(maxWidth: screenWidth, maxHeight: screenHeight)
             }
         }
         .onAppear {
@@ -201,6 +202,13 @@ struct SimpleVideoPlayer: View {
         .onChange(of: isMuted) { _, newMuteState in
             player?.isMuted = newMuteState
         }
+        .onReceive(MuteState.shared.$isMuted) { globalMuteState in
+            // For MediaCell mode, always sync with global mute state
+            if mode == .mediaCell {
+                player?.isMuted = globalMuteState
+                print("DEBUG: [VIDEO GLOBAL MUTE] Synced with global mute state: \(globalMuteState)")
+            }
+        }
         .onChange(of: currentAutoPlay) { _, shouldAutoPlay in
             // Handle autoPlay state changes (reactive to VideoManager)
             checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
@@ -214,6 +222,14 @@ struct SimpleVideoPlayer: View {
                 // If video failed to load and becomes visible again, retry
                 if loadFailed && retryCount < 3 {
                     retryLoad()
+                } else if loadFailed {
+                    // If we've exhausted retries but the video is visible again,
+                    // reset the retry count to allow future retries when network improves
+                    print("DEBUG: [VIDEO RECOVERY] Resetting retry count for \(mid) to allow future retries")
+                    retryCount = 0
+                    loadFailed = false
+                    isLoading = true
+                    setupPlayer()
                 } else {
                     // Restore cached video state if available
                     restoreCachedVideoState()
@@ -242,11 +258,26 @@ struct SimpleVideoPlayer: View {
                 checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             }
         }
-
+        .onChange(of: forceRefreshTrigger) { _, _ in
+            // External trigger to force refresh (e.g., from MediaCell long press)
+            if loadFailed {
+                print("DEBUG: [VIDEO FORCE REFRESH] External refresh triggered for \(mid)")
+                handleManualReset()
+            }
+        }
+        
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             // App going to background - pause all videos
             print("DEBUG: [VIDEO BACKGROUND] App entering background for \(mid)")
             player?.pause()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // App became active - reset retry count for failed videos to allow recovery
+            if loadFailed {
+                print("DEBUG: [VIDEO APP ACTIVE] App became active, resetting retry count for failed video: \(mid)")
+                retryCount = 0
+                // Don't automatically retry here, let network monitoring handle it
+            }
         }
         .onTapGesture {
             if let onVideoTap = onVideoTap {
@@ -255,6 +286,8 @@ struct SimpleVideoPlayer: View {
         }
         .onLongPressGesture(minimumDuration: 0.5) {
             isLongPressing = true
+            // Handle manual video reset on long press
+            handleManualReset()
         } onPressingChanged: { pressing in
             if !pressing {
                 isLongPressing = false
@@ -287,13 +320,27 @@ struct SimpleVideoPlayer: View {
                 
                 // Error state
                 if loadFailed {
-                    VStack {
+                    VStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.title)
                             .foregroundColor(.white)
                         Text("Failed to load video")
                             .foregroundColor(.white)
                             .font(.caption)
+                        Button(action: {
+                            handleManualReset()
+                        }) {
+                            HStack {
+                                Image(systemName: "arrow.clockwise")
+                                Text("Retry")
+                            }
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.blue.opacity(0.8))
+                            .cornerRadius(4)
+                        }
                     }
                     .padding()
                     .background(Color.black.opacity(0.7))
@@ -340,6 +387,7 @@ struct SimpleVideoPlayer: View {
                 }
             } catch {
                 await MainActor.run {
+                    print("DEBUG: [VIDEO SETUP] Failed to setup player for \(mid): \(error)")
                     handleLoadFailure()
                 }
             }
@@ -352,9 +400,16 @@ struct SimpleVideoPlayer: View {
         // Restore the cached player
         self.player = cachedState.player
         
-        // Apply the original mute state that was saved when the video was cached
-        // This ensures that MediaCell videos restore to the correct global mute state
-        cachedState.player.isMuted = cachedState.originalMuteState
+        // For MediaCell mode, always use the current global mute state instead of the cached one
+        // This ensures videos respect the current global mute setting when returning from full screen
+        if mode == .mediaCell {
+            cachedState.player.isMuted = isMuted
+            print("DEBUG: [VIDEO CACHE] Applied current global mute state (\(isMuted)) for MediaCell mode")
+        } else {
+            // For other modes, use the cached mute state
+            cachedState.player.isMuted = cachedState.originalMuteState
+            print("DEBUG: [VIDEO CACHE] Applied cached mute state (\(cachedState.originalMuteState)) for non-MediaCell mode")
+        }
         
         // Seek to the cached position
         cachedState.player.seek(to: cachedState.time) { finished in
@@ -440,6 +495,7 @@ struct SimpleVideoPlayer: View {
         loadFailed = true
         isLoading = false
         player = nil
+        print("DEBUG: [VIDEO ERROR] Load failed for \(mid), retry count: \(retryCount)")
     }
     
     private func restoreCachedVideoState() {
@@ -449,8 +505,6 @@ struct SimpleVideoPlayer: View {
             restoreFromCache(cachedState)
         }
     }
-    
-
     
     private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
         // Check if all conditions are met for autoplay
@@ -469,8 +523,6 @@ struct SimpleVideoPlayer: View {
             }
         }
     }
-    
-
     
     private func retryLoad() {
         guard retryCount < 3 else {
@@ -498,6 +550,53 @@ struct SimpleVideoPlayer: View {
         isLoading = true
         hasFinishedPlaying = false
         
+        setupPlayer()
+    }
+    
+    private func handleManualReset() {
+        print("DEBUG: [VIDEO MANUAL RESET] Manual reset triggered for \(mid)")
+        
+        // Clear all caches immediately
+        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        VideoStateCache.shared.clearCache(for: mid)
+        
+        // Clear asset cache to force fresh network request
+        Task {
+            await MainActor.run {
+                SharedAssetCache.shared.clearAssetCache(for: url)
+                print("DEBUG: [VIDEO MANUAL RESET] Cleared all caches for \(mid)")
+            }
+        }
+        
+        // Reset all state and retry
+        retryCount = 0
+        loadFailed = false
+        isLoading = true
+        hasFinishedPlaying = false
+        
+        setupPlayer()
+    }
+    
+    private func handleNetworkRecovery() {
+        print("DEBUG: [VIDEO NETWORK RECOVERY] Network recovered, attempting to reload video: \(mid)")
+        
+        // Reset retry count to allow fresh attempts
+        retryCount = 0
+        loadFailed = false
+        isLoading = true
+        
+        // Clear caches to force fresh network request
+        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        VideoStateCache.shared.clearCache(for: mid)
+        
+        Task {
+            await MainActor.run {
+                SharedAssetCache.shared.clearAssetCache(for: url)
+                print("DEBUG: [VIDEO NETWORK RECOVERY] Cleared all caches for \(mid)")
+            }
+        }
+        
+        // Attempt to reload the video
         setupPlayer()
     }
 }

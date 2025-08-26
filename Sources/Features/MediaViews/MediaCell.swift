@@ -38,6 +38,7 @@ struct MediaCell: View, Equatable {
     @State private var onVideoFinished: (() -> Void)?
     @State private var preloadTask: Task<Void, Never>?
     @State private var isPreloading = false
+    @State private var localForceRefreshTrigger: Int = 0
     let showMuteButton: Bool
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
@@ -397,7 +398,7 @@ struct MediaCell: View, Equatable {
                     showFullScreen = true
                 },
                 disableAutoRestart: true,
-                mode: .mediaCell
+                forceRefreshTrigger: localForceRefreshTrigger, mode: .mediaCell
             )
             
             // Invisible overlay to prevent tap propagation to parent views and add long press
@@ -453,6 +454,7 @@ struct MediaCell: View, Equatable {
         
         // THEN: Force a complete reload
         shouldLoadVideo = false
+        localForceRefreshTrigger += 1 // Increment local trigger to notify SimpleVideoPlayer
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             shouldLoadVideo = true
         }
