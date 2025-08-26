@@ -163,13 +163,7 @@ extension TweetCacheManager {
             if let tweetData = try? encoder.encode(tweet) {
                 cdTweet.tweetData = tweetData
             }
-            
-            if isExistingTweet {
-                print("[TweetCacheManager] Updated existing tweet \(tweet.mid) in cache with current memory state")
-            } else {
-                print("[TweetCacheManager] Cached new tweet \(tweet.mid) for user \(userId)")
-            }
-            
+                        
             // Update common fields
             cdTweet.tid = tweet.mid
             cdTweet.uid = userId
