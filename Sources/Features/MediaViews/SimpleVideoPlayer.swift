@@ -12,16 +12,16 @@ import AVFoundation
 // MARK: - Global Video State Cache
 class VideoStateCache {
     static let shared = VideoStateCache()
-    private var cache: [String: (player: AVPlayer, time: CMTime, wasPlaying: Bool)] = [:]
+    private var cache: [String: (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)] = [:]
     
     private init() {}
     
-    func cacheVideoState(for mid: String, player: AVPlayer, time: CMTime, wasPlaying: Bool) {
-        print("DEBUG: [VIDEO CACHE] Caching video state for \(mid)")
-        cache[mid] = (player: player, time: time, wasPlaying: wasPlaying)
+    func cacheVideoState(for mid: String, player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool) {
+        print("DEBUG: [VIDEO CACHE] Caching video state for \(mid) with original mute state: \(originalMuteState)")
+        cache[mid] = (player: player, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState)
     }
     
-    func getCachedState(for mid: String) -> (player: AVPlayer, time: CMTime, wasPlaying: Bool)? {
+    func getCachedState(for mid: String) -> (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)? {
         return cache[mid]
     }
     
@@ -184,11 +184,15 @@ struct SimpleVideoPlayer: View {
         .onDisappear {
             // Cache the current video state before pausing
             if let player = player {
+                // For MediaCell mode, save the current global mute state
+                // For detail/fullscreen modes, we need to track the original global mute state
+                let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
                 VideoStateCache.shared.cacheVideoState(
                     for: mid,
                     player: player,
                     time: player.currentTime(),
-                    wasPlaying: player.rate > 0
+                    wasPlaying: player.rate > 0,
+                    originalMuteState: originalMuteState
                 )
             }
             // Always pause when view disappears
@@ -219,11 +223,15 @@ struct SimpleVideoPlayer: View {
                 // When becoming invisible, cache state but don't pause here
                 // (pause is handled in onDisappear to avoid conflicts)
                 if let player = player {
+                    // For MediaCell mode, save the current global mute state
+                    // For detail/fullscreen modes, we need to track the original global mute state
+                    let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
                     VideoStateCache.shared.cacheVideoState(
                         for: mid,
                         player: player,
                         time: player.currentTime(),
-                        wasPlaying: player.rate > 0
+                        wasPlaying: player.rate > 0,
+                        originalMuteState: originalMuteState
                     )
                 }
             }
@@ -338,11 +346,15 @@ struct SimpleVideoPlayer: View {
         }
     }
     
-    private func restoreFromCache(_ cachedState: (player: AVPlayer, time: CMTime, wasPlaying: Bool)) {
-        print("DEBUG: [VIDEO CACHE] Restoring from cache for \(mid)")
+    private func restoreFromCache(_ cachedState: (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)) {
+        print("DEBUG: [VIDEO CACHE] Restoring from cache for \(mid) with original mute state: \(cachedState.originalMuteState)")
         
         // Restore the cached player
         self.player = cachedState.player
+        
+        // Apply the original mute state that was saved when the video was cached
+        // This ensures that MediaCell videos restore to the correct global mute state
+        cachedState.player.isMuted = cachedState.originalMuteState
         
         // Seek to the cached position
         cachedState.player.seek(to: cachedState.time) { finished in
