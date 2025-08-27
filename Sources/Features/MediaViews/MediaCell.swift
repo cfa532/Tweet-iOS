@@ -211,10 +211,8 @@ struct MediaCell: View, Equatable {
             // Set visibility to true immediately when cell appears
             isVisible = true
             
-            // Start background preloading for videos
-            if isVideoAttachment {
-                startBackgroundPreloading()
-            }
+            // Grid-level debouncing handles video preloading
+            // Individual cells just track visibility for playback
         }
         .onDisappear {
             // Set visibility to false when cell disappears
@@ -241,10 +239,8 @@ struct MediaCell: View, Equatable {
             if isVideoAttachment {
                 shouldLoadVideo = true
                 
-                // Resume background preloading if needed
-                if !shouldLoadVideo {
-                    startBackgroundPreloading()
-                }
+                // Grid-level debouncing handles video preloading
+                // Individual cells just track visibility for playback
             }
         }
         
@@ -268,53 +264,12 @@ struct MediaCell: View, Equatable {
     // MARK: - Video Preloading Methods
     
     /// Start background preloading of video assets
+    /// DISABLED: Grid-level debouncing now handles all video preloading
     private func startBackgroundPreloading() {
-        guard isVideoAttachment,
-              let url = attachment.getUrl(baseUrl),
-              !shouldLoadVideo,
-              preloadTask == nil else {
-            return
-        }
-        
-        isPreloading = true
-        
-        preloadTask = Task {
-            do {
-                // Use lower priority for background preloading
-                try await Task.sleep(nanoseconds: 100_000_000) // 0.1 second delay
-                
-                // Check if we should still preload (cell might have disappeared)
-                guard !Task.isCancelled else {
-                    return
-                }
-                
-                // Preload asset first (lighter operation)
-                await MainActor.run {
-                    SharedAssetCache.shared.preloadAsset(for: url)
-                }
-                
-                // Wait a bit more before preloading the full player
-                try await Task.sleep(nanoseconds: 200_000_000) // 0.2 second delay
-                
-                guard !Task.isCancelled else {
-                    return
-                }
-                
-                // Preload the full player (heavier operation)
-                await MainActor.run {
-                    SharedAssetCache.shared.preloadVideo(for: url)
-                }
-                
-                await MainActor.run {
-                    isPreloading = false
-                }
-                
-            } catch {
-                await MainActor.run {
-                    isPreloading = false
-                }
-            }
-        }
+        // This method is disabled because grid-level debouncing now handles all video preloading
+        // Individual cells no longer need to preload videos independently
+        print("DEBUG: [MediaCell] startBackgroundPreloading() called but disabled - grid-level debouncing handles preloading")
+        return
     }
     
     /// Cancel ongoing preload task
@@ -398,7 +353,9 @@ struct MediaCell: View, Equatable {
                     showFullScreen = true
                 },
                 disableAutoRestart: true,
-                forceRefreshTrigger: localForceRefreshTrigger, mode: .mediaCell
+                forceRefreshTrigger: localForceRefreshTrigger,
+                shouldLoadVideo: shouldLoadVideo,
+                mode: .mediaCell
             )
             
             // Invisible overlay to prevent tap propagation to parent views and add long press

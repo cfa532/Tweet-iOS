@@ -54,6 +54,7 @@ struct SimpleVideoPlayer: View {
     var onVideoTap: (() -> Void)? = nil // Callback when video is tapped
     var disableAutoRestart: Bool = false // Disable auto-restart when video finishes
     var forceRefreshTrigger: Int = 0 // External trigger to force refresh
+    var shouldLoadVideo: Bool = true // Whether grid-level loading is enabled
     
     // MARK: Mode
     enum Mode {
@@ -178,7 +179,7 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onAppear {
-            if player == nil {
+            if player == nil && shouldLoadVideo {
                 setupPlayer()
             }
         }
@@ -263,6 +264,13 @@ struct SimpleVideoPlayer: View {
             if loadFailed {
                 print("DEBUG: [VIDEO FORCE REFRESH] External refresh triggered for \(mid)")
                 handleManualReset()
+            }
+        }
+        .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in
+            // Grid-level debounce completed - set up player if needed
+            if newShouldLoadVideo && player == nil {
+                print("DEBUG: [VIDEO SETUP] Grid-level loading enabled, setting up player for \(mid)")
+                setupPlayer()
             }
         }
         

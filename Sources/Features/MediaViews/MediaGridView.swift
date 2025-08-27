@@ -14,6 +14,7 @@ struct MediaGridView: View {
     let maxImages: Int = 4
     @State private var shouldLoadVideo = true
     @State private var videoLoadTimer: Timer?
+    @State private var debounceTimer: Timer?
     @State private var isVisible = false
     @State private var forceRefreshTrigger = 0
     @StateObject private var videoManager = VideoManager()
@@ -493,8 +494,8 @@ struct MediaGridView: View {
                 if hasVideos {
                     print("DEBUG: [MediaGridView] Grid contains videos - starting loading process")
                     
-                    // Start background preloading for all videos in the grid
-                    startBackgroundPreloading()
+                    // Start debounced background preloading for all videos in the grid
+                    startDebouncedBackgroundPreloading()
                     
                     // Balanced delay - enough to let UI settle without feeling slow
                     #if targetEnvironment(simulator)
@@ -523,14 +524,18 @@ struct MediaGridView: View {
                 videoLoadTimer = nil
                 shouldLoadVideo = false
                 videoManager.stopSequentialPlayback()
+                
+                // Cancel debounce timer
+                cancelDebounceTimer()
             }
             // Removed duplicate .onAppear block that was causing infinite loop
             .onChange(of: isVisible) { _, newVisibility in
                 // Handle visibility changes
                 if !newVisibility {
-                    // Grid became invisible - stop video playback
-                    print("DEBUG: [MediaGridView] Grid became invisible - stopping playback")
+                    // Grid became invisible - stop video playback and cancel debounce
+                    print("DEBUG: [MediaGridView] Grid became invisible - stopping playback and cancelling debounce")
                     videoManager.stopSequentialPlayback()
+                    cancelDebounceTimer()
                 }
             }
         }
@@ -605,8 +610,8 @@ struct ZoomableView<Content: View>: View {
 // MARK: - Background Preloading
 
 extension MediaGridView {
-    /// Start background preloading for all videos in the grid
-    private func startBackgroundPreloading() {
+    /// Start debounced background preloading for all videos in the grid
+    private func startDebouncedBackgroundPreloading() {
         let videoAttachments = attachments.enumerated().compactMap { index, attachment in
             if attachment.type == .video || attachment.type == .hls_video {
                 return (index, attachment)
@@ -616,7 +621,29 @@ extension MediaGridView {
         
         guard !videoAttachments.isEmpty else { return }
         
-        print("DEBUG: [MediaGridView] Starting background preloading for \(videoAttachments.count) videos")
+        // Cancel any existing debounce timer
+        cancelDebounceTimer()
+        
+        print("DEBUG: [MediaGridView] Starting 0.5s debounce timer for \(videoAttachments.count) videos")
+        
+        // Start 0.5s debounce timer
+        debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
+            // Check if grid is still visible after 0.5s
+            if self.isVisible {
+                print("DEBUG: [MediaGridView] Debounce timer fired - grid still visible, starting sequential preloading")
+                self.startActualPreloading(videoAttachments: videoAttachments)
+            } else {
+                print("DEBUG: [MediaGridView] Debounce timer fired - grid no longer visible, cancelling preloading")
+            }
+            
+            // Clean up timer
+            self.debounceTimer = nil
+        }
+    }
+    
+    /// Start the actual preloading after debounce period
+    private func startActualPreloading(videoAttachments: [(Int, MimeiFileType)]) {
+        print("DEBUG: [MediaGridView] Starting sequential preloading for \(videoAttachments.count) videos")
         
         // Get URLs for all videos
         let baseUrl = parentTweet.author?.baseUrl ?? HproseInstance.baseUrl
@@ -624,18 +651,26 @@ extension MediaGridView {
             attachment.getUrl(baseUrl)
         }
         
-        // Start preloading with priority based on position
+        // Start preloading with priority based on position for sequential playback
         // First video gets high priority, others get normal priority
         if let firstURL = videoURLs.first {
-            // High priority for first video
+            // High priority for first video (will be played first in sequence)
             SharedAssetCache.shared.preloadVideo(for: firstURL)
+            print("DEBUG: [MediaGridView] Started HIGH PRIORITY preload for first video: \(firstURL.lastPathComponent)")
             
-            // Normal priority for remaining videos
+            // Normal priority for remaining videos (will be played in sequence)
             let remainingURLs = Array(videoURLs.dropFirst())
             if !remainingURLs.isEmpty {
                 SharedAssetCache.shared.preloadVideos(remainingURLs, priority: .normal)
+                print("DEBUG: [MediaGridView] Started NORMAL PRIORITY preload for \(remainingURLs.count) remaining videos")
             }
         }
+    }
+    
+    /// Cancel debounce timer
+    private func cancelDebounceTimer() {
+        debounceTimer?.invalidate()
+        debounceTimer = nil
     }
 }
 
