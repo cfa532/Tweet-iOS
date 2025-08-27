@@ -146,14 +146,11 @@ extension TweetCacheManager {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
             let cdTweet: CDTweet
-            let isExistingTweet: Bool
             
             if let existingTweet = try? context.fetch(request).first {
                 cdTweet = existingTweet
-                isExistingTweet = true
             } else {
                 cdTweet = CDTweet(context: context)
-                isExistingTweet = false
             }
             
             // Always save the current in-memory tweet state to cache
