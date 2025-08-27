@@ -231,6 +231,10 @@ struct SimpleVideoPlayer: View {
                     loadFailed = false
                     isLoading = true
                     setupPlayer()
+                } else if player == nil && shouldLoadVideo {
+                    // If no player but loading is enabled, set up the player
+                    print("DEBUG: [VIDEO VISIBILITY] Video became visible with no player, setting up: \(mid)")
+                    setupPlayer()
                 } else {
                     // Restore cached video state if available
                     restoreCachedVideoState()
@@ -280,11 +284,24 @@ struct SimpleVideoPlayer: View {
             player?.pause()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // App became active - reset retry count for failed videos to allow recovery
-            if loadFailed {
-                print("DEBUG: [VIDEO APP ACTIVE] App became active, resetting retry count for failed video: \(mid)")
+            // App became active - reset error state for videos that might have been interrupted
+            print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
+            
+            // If video is in error state but we have a player, it might have been interrupted during loading
+            if loadFailed && player != nil {
+                print("DEBUG: [VIDEO APP ACTIVE] Resetting error state for interrupted video: \(mid)")
+                loadFailed = false
+                isLoading = false
                 retryCount = 0
-                // Don't automatically retry here, let network monitoring handle it
+            } else if loadFailed {
+                // If no player but in error state, reset retry count to allow recovery
+                print("DEBUG: [VIDEO APP ACTIVE] Resetting retry count for failed video: \(mid)")
+                retryCount = 0
+            }
+            
+            // If video is visible and should play, check playback conditions
+            if isVisible && currentAutoPlay {
+                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             }
         }
         .onTapGesture {
@@ -378,6 +395,13 @@ struct SimpleVideoPlayer: View {
     // MARK: - Player Setup
     private func setupPlayer() {
         print("DEBUG: [VIDEO SETUP] Setting up player for \(mid)")
+        
+        // Reset error state when starting setup
+        if loadFailed {
+            print("DEBUG: [VIDEO SETUP] Resetting error state for \(mid)")
+            loadFailed = false
+            retryCount = 0
+        }
         
         // Check if we have a cached player first
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
