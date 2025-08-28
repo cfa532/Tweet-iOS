@@ -70,7 +70,7 @@ struct SimpleVideoPlayer: View {
     @State private var hasFinishedPlaying = false
     @State private var loadFailed = false
     @State private var retryCount = 0
-    @State private var instanceId = UUID().uuidString.prefix(8)
+    private var instanceId: String { mid }
     @State private var isLongPressing = false
     
     // MARK: Computed Properties
@@ -446,10 +446,12 @@ struct SimpleVideoPlayer: View {
         // Seek to the cached position
         cachedState.player.seek(to: cachedState.time) { finished in
             if finished {
-                // If it was playing before, resume playback
-                if cachedState.wasPlaying && self.isVisible && self.currentAutoPlay {
+                // If it was playing before, resume playback ONLY if VideoManager says it should play
+                if cachedState.wasPlaying && self.isVisible && self.currentAutoPlay && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
                     cachedState.player.play()
-                    print("DEBUG: [VIDEO CACHE] Resumed playback from cache for \(self.mid)")
+                    print("DEBUG: [VIDEO CACHE] Resumed playback from cache for \(self.mid) - VideoManager approved")
+                } else if cachedState.wasPlaying {
+                    print("DEBUG: [VIDEO CACHE] Skipped playback restoration for \(self.mid) - VideoManager did not approve")
                 }
                 print("DEBUG: [VIDEO CACHE] Successfully restored from cache for \(self.mid)")
             }
