@@ -487,8 +487,6 @@ struct ProfileView: View {
     @State private var isInertiaScrolling: Bool = false
     
     private func handleScroll(offset: CGFloat) {
-        print("[ProfileView] handleScroll called with offset: \(offset)")
-        
         // Cancel any existing timer
         scrollEndTimer?.invalidate()
         
@@ -507,9 +505,7 @@ struct ProfileView: View {
                 isInertiaScrolling = true
             }
         }
-        
-        print("[ProfileView] Scroll delta: \(scrollDelta), consecutiveSmallMovements: \(consecutiveSmallMovements), isInertiaScrolling: \(isInertiaScrolling)")
-        
+                
         // Only change navigation state if we're not in inertia scrolling
         if !isInertiaScrolling {
             // Determine scroll direction
