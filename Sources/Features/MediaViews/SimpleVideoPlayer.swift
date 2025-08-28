@@ -338,20 +338,23 @@ struct SimpleVideoPlayer: View {
         if let player = player {
             ZStack {
                 // Main video player
-                VideoPlayer(player: player)
-                    .disabled(showNativeControls)
-                    .onTapGesture {
-                        if let onVideoTap = onVideoTap {
-                            onVideoTap()
+                if mode == .fullscreen || mode == .mediaBrowser {
+                    // Use AVPlayerViewController for fullscreen modes to get native controls
+                    AVPlayerViewControllerRepresentable(player: player)
+                        .onTapGesture {
+                            if let onVideoTap = onVideoTap {
+                                onVideoTap()
+                            }
                         }
-                        
-                        // For fullscreen mode, show native controls for 2 seconds
-                        if mode == .fullscreen || mode == .mediaBrowser {
-                            // Note: showNativeControls is a parameter, so we can't modify it directly
-                            // The native controls will be shown by the VideoPlayer component
-                            print("DEBUG: [VIDEO CONTROLS] Tap detected in fullscreen mode for \(mid)")
+                } else {
+                    // Use SwiftUI VideoPlayer for normal modes
+                    VideoPlayer(player: player)
+                        .onTapGesture {
+                            if let onVideoTap = onVideoTap {
+                                onVideoTap()
+                            }
                         }
-                    }
+                }
                 
                 // Loading indicator
                 if isLoading {
@@ -750,4 +753,21 @@ struct VideoLayerRefreshView: UIViewRepresentable {
         // Clean up observers when view is dismantled
         NotificationCenter.default.removeObserver(uiView)
     }
-} 
+}
+
+// MARK: - AVPlayerViewController Wrapper for Full Screen
+struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
+    let player: AVPlayer?
+    
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.showsPlaybackControls = true
+        controller.videoGravity = .resizeAspect
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        uiViewController.player = player
+    }
+}
