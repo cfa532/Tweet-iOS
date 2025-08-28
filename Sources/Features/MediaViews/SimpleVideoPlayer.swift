@@ -552,6 +552,9 @@ struct SimpleVideoPlayer: View {
     private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
         // Check if all conditions are met for autoplay
         if autoPlay && isVisible && player != nil && !isLoading {
+            // Activate audio session for video playback
+            AudioSessionManager.shared.activateForVideoPlayback()
+            
             if hasFinishedPlaying {
                 if !disableAutoRestart {
                     // Reset to beginning and play

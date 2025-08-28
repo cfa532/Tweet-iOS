@@ -120,6 +120,8 @@ struct SimpleAudioPlayer: View {
         }
         
         if autoPlay {
+            // Activate audio session for audio playback
+            AudioSessionManager.shared.activateForVideoPlayback()
             player?.play()
             isPlaying = true
         }
@@ -129,6 +131,8 @@ struct SimpleAudioPlayer: View {
         if isPlaying {
             player?.pause()
         } else {
+            // Activate audio session for audio playback
+            AudioSessionManager.shared.activateForVideoPlayback()
             player?.play()
         }
         isPlaying.toggle()

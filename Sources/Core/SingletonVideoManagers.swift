@@ -16,22 +16,16 @@ class DetailVideoManager: ObservableObject {
     static let shared = DetailVideoManager()
     private init() {
         setupAppLifecycleNotifications()
-        configureAudioSession()
+        setupAudioInterruptionNotifications()
     }
     
     @Published var currentPlayer: AVPlayer?
     @Published var currentVideoMid: String?
     @Published var isPlaying = false
     
-    /// Configure audio session to prevent lock screen media controls
-    private func configureAudioSession() {
-        do {
-            let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            try audioSession.setActive(true)
-        } catch {
-            print("DEBUG: [DETAIL VIDEO MANAGER] Failed to configure audio session: \(error)")
-        }
+    /// Setup audio interruption notifications to handle incoming calls
+    private func setupAudioInterruptionNotifications() {
+        AudioSessionManager.shared.setupInterruptionNotifications()
     }
     
     /// Set current video for detail view
@@ -46,6 +40,9 @@ class DetailVideoManager: ObservableObject {
         }
         
         currentVideoMid = mid
+        
+        // Activate audio session for video playback
+        AudioSessionManager.shared.activateForVideoPlayback()
         
         Task {
             do {
@@ -105,6 +102,10 @@ class DetailVideoManager: ObservableObject {
         currentPlayer = nil
         currentVideoMid = nil
         isPlaying = false
+        
+        // Deactivate audio session when video is cleared
+        AudioSessionManager.shared.deactivateForVideoPlayback()
+        
         print("DEBUG: [DETAIL VIDEO MANAGER] Cleared current video")
     }
     

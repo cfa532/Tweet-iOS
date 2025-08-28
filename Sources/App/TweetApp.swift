@@ -23,6 +23,9 @@ class AppState: ObservableObject {
             // Refresh theme state from preferences after HproseInstance is ready
             ThemeManager.shared.refreshFromPreferences()
             
+            // Initialize audio session manager for call-friendly audio handling
+            _ = AudioSessionManager.shared
+            
             // Cleanup caches after a delay
             Task.detached(priority: .background) {
                 // Wait 30 seconds after app initialization

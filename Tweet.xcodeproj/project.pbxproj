@@ -54,6 +54,7 @@
 		468CF22C2E3A619A00D49038 /* ChatSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22B2E3A619A00D49038 /* ChatSessionManager.swift */; };
 		468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22D2E3A69F700D49038 /* StartChatView.swift */; };
 		468F19EF2E5FEA850085BFE5 /* VideoLoadingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468F19EE2E5FEA850085BFE5 /* VideoLoadingManager.swift */; };
+		468F19F12E6074A30085BFE5 /* AudioSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */; };
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
 		469A99502DEBFBC100954049 /* Tweet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994F2DEBFBC100954049 /* Tweet.swift */; };
@@ -160,6 +161,7 @@
 		468CF22B2E3A619A00D49038 /* ChatSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionManager.swift; sourceTree = "<group>"; };
 		468CF22D2E3A69F700D49038 /* StartChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartChatView.swift; sourceTree = "<group>"; };
 		468F19EE2E5FEA850085BFE5 /* VideoLoadingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoLoadingManager.swift; sourceTree = "<group>"; };
+		468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionManager.swift; sourceTree = "<group>"; };
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
 		469A994F2DEBFBC100954049 /* Tweet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tweet.swift; sourceTree = "<group>"; };
@@ -300,6 +302,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */,
 				468F19EE2E5FEA850085BFE5 /* VideoLoadingManager.swift */,
 				46B03D9A2E4D7336000E08DF /* NotificationManager.swift */,
 				46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */,
@@ -611,9 +614,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -664,6 +671,7 @@
 				461438232E403EAB002D1B22 /* ChatMessageView.swift in Sources */,
 				461438252E4042E1002D1B22 /* ZoomableImageView.swift in Sources */,
 				468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */,
+				468F19F12E6074A30085BFE5 /* AudioSessionManager.swift in Sources */,
 				46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */,
 				4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */,
 				4614381D2E3F69AD002D1B22 /* CoreDataManager.swift in Sources */,
