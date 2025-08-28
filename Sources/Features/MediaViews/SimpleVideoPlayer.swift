@@ -135,12 +135,6 @@ struct SimpleVideoPlayer: View {
                                 .aspectRatio(videoAR, contentMode: .fit)
                                 .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                         }
-                        .onAppear {
-                            UIApplication.shared.isIdleTimerDisabled = true
-                        }
-                        .onDisappear {
-                            UIApplication.shared.isIdleTimerDisabled = false
-                        }
                     } else if isVideoLandscape {
                         // Landscape video: rotate -90 degrees to fit on portrait device
                         ZStack {
@@ -151,24 +145,12 @@ struct SimpleVideoPlayer: View {
                                 .scaleEffect(screenHeight / screenWidth)
                                 .background(Color.gray)
                         }
-                        .onAppear {
-                            UIApplication.shared.isIdleTimerDisabled = true
-                        }
-                        .onDisappear {
-                            UIApplication.shared.isIdleTimerDisabled = false
-                        }
                     } else {
                         // Square video: fit on full screen
                         ZStack {
                             videoPlayerView()
                                 .aspectRatio(1.0, contentMode: .fit)
                                 .frame(maxWidth: screenWidth, maxHeight: screenHeight)
-                        }
-                        .onAppear {
-                            UIApplication.shared.isIdleTimerDisabled = true
-                        }
-                        .onDisappear {
-                            UIApplication.shared.isIdleTimerDisabled = false
                         }
                     }
                 }
@@ -180,12 +162,22 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onAppear {
+            // Handle idle timer for fullscreen modes
+            if mode == .fullscreen || mode == .mediaBrowser {
+                UIApplication.shared.isIdleTimerDisabled = true
+            }
+            
             // Only set up player if both conditions are met
             if player == nil && shouldLoadVideo && isVisible {
                 setupPlayer()
             }
         }
         .onDisappear {
+            // Handle idle timer for fullscreen modes
+            if mode == .fullscreen || mode == .mediaBrowser {
+                UIApplication.shared.isIdleTimerDisabled = false
+            }
+            
             // Cache the current video state before pausing
             if let player = player {
                 // For MediaCell mode, save the current global mute state

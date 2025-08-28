@@ -208,10 +208,14 @@ struct MediaCell: View, Equatable {
                 EmptyView()
             }
         }
-        .onAppear(perform: loadImage)
         .onAppear {
             // Set visibility to true immediately when cell appears
             isVisible = true
+            
+            // Load image if not already loaded
+            if image == nil {
+                loadImage()
+            }
             
             // Grid-level debouncing handles video preloading
             // Individual cells just track visibility for playback
@@ -224,9 +228,8 @@ struct MediaCell: View, Equatable {
             cancelPreloadTask()
         }
         .onChange(of: isVisible) { _, newValue in
-            if newValue && image == nil {
-                loadImage()
-            }
+            // Handle visibility changes - image loading is now handled in onAppear
+            // This prevents conflicts with the onAppear block
         }
         .onChange(of: forceRefreshTrigger) { _, _ in
             // Force refresh triggered by MediaGridView - update video state
@@ -370,12 +373,7 @@ struct MediaCell: View, Equatable {
                     handleVideoReload()
                 }
         }
-        .onAppear {
-            // SimpleVideoPlayer appeared
-        }
-        .onChange(of: isVisible) { _, newIsVisible in
-            // isVisible changed
-        }
+        // Note: SimpleVideoPlayer handles its own lifecycle internally
         .overlay(
             // Video controls overlay
             Group {
