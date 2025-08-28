@@ -28,6 +28,7 @@ class SharedAssetCache: ObservableObject {
     private var cacheTimestamps: [String: Date] = [:]
     private var loadingTasks: [String: Task<AVAsset, Error>] = [:]
     private var preloadTasks: [String: Task<Void, Never>] = [:]
+    private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of URLs
     
     // MARK: - Configuration
     private let maxCacheSize = 50 // Maximum number of cached assets and players
@@ -60,9 +61,58 @@ class SharedAssetCache: ObservableObject {
     
     // MARK: - Asset Management
     
-    /// Get cached asset or create new one
-    @MainActor func getAsset(for url: URL) async throws -> AVAsset {
+    /// Cancel loading tasks for a specific URL
+    @MainActor func cancelLoading(for url: URL) {
         let cacheKey = url.absoluteString
+        
+        // Cancel loading task if exists
+        if let loadingTask = loadingTasks[cacheKey] {
+            loadingTask.cancel()
+            loadingTasks.removeValue(forKey: cacheKey)
+            print("DEBUG: [SharedAssetCache] Cancelled loading task for \(cacheKey)")
+        }
+        
+        // Cancel preload task if exists
+        if let preloadTask = preloadTasks[cacheKey] {
+            preloadTask.cancel()
+            preloadTasks.removeValue(forKey: cacheKey)
+            print("DEBUG: [SharedAssetCache] Cancelled preload task for \(cacheKey)")
+        }
+    }
+    
+    /// Get URLs associated with a tweet
+    private func getUrlsForTweet(_ tweetId: String) -> [URL] {
+        guard let urlStrings = tweetUrlMapping[tweetId] else { return [] }
+        return urlStrings.compactMap { URL(string: $0) }
+    }
+    
+    /// Track URL for a tweet
+    private func trackUrl(_ url: URL, for tweetId: String) {
+        let urlString = url.absoluteString
+        if tweetUrlMapping[tweetId] == nil {
+            tweetUrlMapping[tweetId] = Set<String>()
+        }
+        tweetUrlMapping[tweetId]?.insert(urlString)
+    }
+    
+    /// Cancel all loading tasks for a tweet
+    @MainActor func cancelLoadingForTweet(_ tweetId: String) {
+        // Find all URLs associated with this tweet and cancel their loading
+        let tweetUrls = getUrlsForTweet(tweetId)
+        for url in tweetUrls {
+            cancelLoading(for: url)
+        }
+        print("DEBUG: [SharedAssetCache] Cancelled all loading tasks for tweet \(tweetId)")
+    }
+    
+    /// Get cached asset or create new one
+    @MainActor func getAsset(for url: URL, tweetId: String? = nil) async throws -> AVAsset {
+        let cacheKey = url.absoluteString
+        
+        // Track URL for tweet if provided
+        if let tweetId = tweetId {
+            trackUrl(url, for: tweetId)
+        }
         
         // Check if we have a cached asset
         if let cachedAsset = assetCache[cacheKey] {
@@ -150,14 +200,14 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Get cached player or create new one with asset
-    @MainActor func getOrCreatePlayer(for url: URL) async throws -> AVPlayer {
+    @MainActor func getOrCreatePlayer(for url: URL, tweetId: String? = nil) async throws -> AVPlayer {
         // Try to get cached player first
         if let cachedPlayer = getCachedPlayer(for: url) {
             return cachedPlayer
         }
         
         // Create new player with asset
-        let asset = try await getAsset(for: url)
+        let asset = try await getAsset(for: url, tweetId: tweetId)
         let playerItem = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: playerItem)
         
@@ -217,7 +267,7 @@ class SharedAssetCache: ObservableObject {
     // MARK: - Enhanced Preloading Methods
     
     /// Preload video for immediate display (high priority)
-    func preloadVideo(for url: URL) {
+    func preloadVideo(for url: URL, tweetId: String? = nil) {
         let cacheKey = url.absoluteString
         
         // Cancel existing preload task if any
@@ -225,7 +275,7 @@ class SharedAssetCache: ObservableObject {
         
         let task = Task {
             do {
-                _ = try await getOrCreatePlayer(for: url)
+                _ = try await getOrCreatePlayer(for: url, tweetId: tweetId)
             } catch {
                 // Handle error silently
             }
@@ -235,7 +285,7 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Preload asset only (for background loading - lower priority)
-    func preloadAsset(for url: URL) {
+    func preloadAsset(for url: URL, tweetId: String? = nil) {
         let cacheKey = url.absoluteString
         
         // Cancel existing preload task if any
@@ -243,7 +293,7 @@ class SharedAssetCache: ObservableObject {
         
         let task = Task {
             do {
-                _ = try await getAsset(for: url)
+                _ = try await getAsset(for: url, tweetId: tweetId)
             } catch {
                 // Handle error silently
             }

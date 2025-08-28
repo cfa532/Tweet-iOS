@@ -38,13 +38,14 @@ struct MediaCell: View, Equatable {
     @State private var onVideoFinished: (() -> Void)?
     @State private var preloadTask: Task<Void, Never>?
     @State private var isPreloading = false
+    @State private var cancelVideoTrigger = 0
     @State private var localForceRefreshTrigger: Int = 0
     let showMuteButton: Bool
     let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0, cancelVideoTrigger: Int = 0) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -54,6 +55,7 @@ struct MediaCell: View, Equatable {
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
         self.forceRefreshTrigger = forceRefreshTrigger
+        self._cancelVideoTrigger = State(initialValue: cancelVideoTrigger)
     }
     
     private let imageCache = ImageCacheManager.shared

@@ -34,6 +34,7 @@ struct TweetListView<RowView: View>: View {
     @State private var toastType: ToastView.ToastType = .info
     @State private var initialLoadComplete = false
     @State private var deletedTweetIds = Set<String>()
+    @StateObject private var videoLoadingManager = VideoLoadingManager.shared
 
     // MARK: - Initialization
     init(
@@ -175,6 +176,10 @@ struct TweetListView<RowView: View>: View {
             await MainActor.run {
                 tweets.mergeTweets(validCachedTweets)
                 print("[TweetListView] Loaded \(validCachedTweets.count) tweets from cache")
+                
+                // Update VideoLoadingManager with new tweet list
+                let tweetIds = tweets.map { $0.mid }
+                videoLoadingManager.updateTweetList(tweetIds)
             }
             
             // Step 2: Always load from server to get the most up-to-date data
@@ -229,11 +234,18 @@ struct TweetListView<RowView: View>: View {
                     currentPage = 0
                     hasMoreTweets = freshTweets.count >= pageSize
                     print("[TweetListView] Refreshed with \(tweets.count) fresh tweets from server for user: \(hproseInstance.appUser.mid)")
+                    
+                    // Update VideoLoadingManager with new tweet list
+                    let tweetIds = tweets.map { $0.mid }
+                    videoLoadingManager.updateTweetList(tweetIds)
                 } else {
                     // Only clear if server returned no valid tweets
                     tweets = []
                     hasMoreTweets = false
                     print("[TweetListView] Server returned no valid tweets, cleared list for user: \(hproseInstance.appUser.mid)")
+                    
+                    // Update VideoLoadingManager with empty tweet list
+                    videoLoadingManager.updateTweetList([])
                 }
                 
                 isLoading = false
@@ -416,6 +428,7 @@ struct TweetListContentView<RowView: View>: View {
     let isLoading: Bool
     let initialLoadComplete: Bool
     let loadMoreTweets: () -> Void
+    @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     
     var body: some View {
         LazyVStack(spacing: 0) {
@@ -462,6 +475,11 @@ struct TweetListContentView<RowView: View>: View {
                         rowView(tweet)
                             // Add stable identity to prevent unnecessary re-composition
                             .id("tweet_\(tweet.mid)_\(index)")
+                            .onAppear {
+                                // Update VideoLoadingManager when tweet becomes visible
+                                videoLoadingManager.updateVisibleTweetIndex(index)
+                                print("DEBUG: [TweetListContentView] Tweet \(tweet.mid) at index \(index) became visible")
+                            }
                     }
                 }
                 

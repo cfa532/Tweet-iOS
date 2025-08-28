@@ -16,7 +16,9 @@ struct MediaGridView: View {
     @State private var videoLoadTimer: Timer?
     @State private var isVisible = false
     @State private var forceRefreshTrigger = 0
+    @State private var cancelVideoTrigger = 0
     @StateObject private var videoManager = VideoManager()
+    @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     
     init(parentTweet: Tweet, attachments: [MimeiFileType]) {
         self.parentTweet = parentTweet
@@ -85,7 +87,8 @@ struct MediaGridView: View {
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
                         videoManager: videoManager,
-                        forceRefreshTrigger: forceRefreshTrigger
+                        forceRefreshTrigger: forceRefreshTrigger,
+                        cancelVideoTrigger: cancelVideoTrigger
                     )
                     .frame(width: gridWidth, height: gridHeight)
                     .clipped()
@@ -491,10 +494,16 @@ struct MediaGridView: View {
                 let hasVideos = attachments.contains(where: { $0.type == .video || $0.type == .hls_video })
                 
                 if hasVideos {
-                    print("DEBUG: [MediaGridView] Grid contains videos - starting loading process (TIMER DISABLED)")
+                    print("DEBUG: [MediaGridView] Grid contains videos - checking VideoLoadingManager")
                     
-                    // TIMER DISABLED - immediate loading for testing
-                    shouldLoadVideo = true
+                    // Check if this tweet should load videos based on VideoLoadingManager
+                    if videoLoadingManager.shouldLoadVideos(for: parentTweet.mid) {
+                        shouldLoadVideo = true
+                        print("DEBUG: [MediaGridView] VideoLoadingManager approved loading for tweet \(parentTweet.mid)")
+                    } else {
+                        shouldLoadVideo = false
+                        print("DEBUG: [MediaGridView] VideoLoadingManager denied loading for tweet \(parentTweet.mid)")
+                    }
                     
                     // Force refresh all cells to update their play states
                     forceRefreshTrigger += 1
@@ -519,6 +528,26 @@ struct MediaGridView: View {
                     print("DEBUG: [MediaGridView] Grid became invisible - stopping playback")
                     videoManager.stopSequentialPlayback()
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
+                if let tweetId = notification.userInfo?["tweetId"] as? String,
+                   tweetId == parentTweet.mid {
+                    print("DEBUG: [MediaGridView] Received cancel video loading notification for tweet \(tweetId)")
+                    shouldLoadVideo = false
+                    videoManager.stopSequentialPlayback()
+                    
+                    // Trigger video cancellation
+                    cancelVideoTrigger += 1
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
+                print("DEBUG: [MediaGridView] Received stopAllVideos notification for tweet \(parentTweet.mid)")
+                shouldLoadVideo = false
+                videoManager.stopSequentialPlayback()
+                
+                // Trigger video cancellation
+                cancelVideoTrigger += 1
+                print("DEBUG: [MediaGridView] Stop all videos trigger incremented to: \(cancelVideoTrigger)")
             }
         }
     }

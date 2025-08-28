@@ -65,4 +65,8 @@ extension Notification.Name {
     // MARK: - App Lifecycle
     /// Posted when the app becomes active (returns from background)
     static let appDidBecomeActive = Notification.Name("AppDidBecomeActive")
+    
+    // MARK: - Video Related
+    /// Posted to stop all videos in the tweet list when entering full screen
+    static let stopAllVideos = Notification.Name("StopAllVideos")
 }

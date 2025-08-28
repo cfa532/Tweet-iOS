@@ -42,113 +42,176 @@ struct MediaBrowserView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black
-                .ignoresSafeArea(.all, edges: .all)
-            
-            TabView(selection: $currentIndex) {
-                ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
-                    Group {
-                        if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                            // Create video player for all video attachments, but only play the current one
-                            videoView(for: attachment, url: url, index: index)
-                        } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                            audioView(for: attachment, url: url, index: index)
-                        } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                            imageView(for: attachment, url: url, index: index)
+        MediaBrowserContentView(
+            attachments: attachments,
+            currentIndex: $currentIndex,
+            previousIndex: $previousIndex,
+            showControls: $showControls,
+            dragOffset: $dragOffset,
+            isDragging: $isDragging,
+            isVisible: $isVisible,
+            baseUrl: baseUrl,
+            dismiss: { dismiss() },
+            startControlsTimer: startControlsTimer,
+            resetControlsTimer: resetControlsTimer
+        )
+    }
+    
+    // MARK: - MediaBrowserContentView
+    private struct MediaBrowserContentView: View {
+        let attachments: [MimeiFileType]
+        @Binding var currentIndex: Int
+        @Binding var previousIndex: Int
+        @Binding var showControls: Bool
+        @Binding var dragOffset: CGSize
+        @Binding var isDragging: Bool
+        @Binding var isVisible: Bool
+        let baseUrl: URL
+        let dismiss: () -> Void
+        let startControlsTimer: () -> Void
+        let resetControlsTimer: () -> Void
+        
+        var body: some View {
+            ZStack {
+                Color.black
+                    .ignoresSafeArea(.all, edges: .all)
+                
+                TabView(selection: $currentIndex) {
+                    ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
+                        Group {
+                            if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                videoView(for: attachment, url: url, index: index)
+                            } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                audioView(for: attachment, url: url, index: index)
+                            } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                imageView(for: attachment, url: url, index: index)
+                            }
                         }
+                        .tag(index)
                     }
-                    .tag(index)
                 }
-            }
-            .tabViewStyle(.page)
-            .indexViewStyle(.page(backgroundDisplayMode: .always))
-            .onChange(of: currentIndex) { _, newIndex in
-                print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
-                previousIndex = newIndex
-            }
-            
-            // Close button overlay
-            if showControls {
-                VStack {
-                    HStack {
-                        Button(action: { dismiss() }) {
-                            Image(systemName: "xmark")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .padding()
-                                .background(Color.black.opacity(0.5))
-                                .clipShape(Circle())
+                .tabViewStyle(.page)
+                .indexViewStyle(.page(backgroundDisplayMode: .always))
+                .onChange(of: currentIndex) { _, newIndex in
+                    print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
+                    previousIndex = newIndex
+                }
+                
+                // Close button overlay
+                if showControls {
+                    VStack {
+                        HStack {
+                            Button(action: { dismiss() }) {
+                                Image(systemName: "xmark")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .padding()
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                            }
+                            Spacer()
                         }
                         Spacer()
                     }
-                    Spacer()
+                    .transition(.opacity)
                 }
-                .transition(.opacity)
             }
-        }
-        .statusBar(hidden: true)
-        .offset(y: dragOffset.height)
-        .scaleEffect(1.0 - abs(dragOffset.height) / 1000.0)
-        .opacity(1.0 - abs(dragOffset.height) / 500.0)
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    if value.translation.height > 0 { // Only allow downward drag
-                        dragOffset = value.translation
-                        isDragging = true
-                        showControls = true
-                        // Don't reset timer during drag - let it stay visible
-                    }
-                }
-                .onEnded { value in
-                    if value.translation.height > 100 || value.velocity.height > 500 {
-                        // Dismiss if dragged down far enough or with enough velocity
-                        dismiss()
-                    } else {
-                        // Reset position with animation
-                        withAnimation(.spring()) {
-                            dragOffset = .zero
+            .statusBar(hidden: true)
+            .offset(y: dragOffset.height)
+            .scaleEffect(1.0 - abs(dragOffset.height) / 1000.0)
+            .opacity(1.0 - abs(dragOffset.height) / 500.0)
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        if value.translation.height > 0 {
+                            dragOffset = value.translation
+                            isDragging = true
+                            showControls = true
                         }
-                        isDragging = false
-                        // Reset timer after drag ends
-                        resetControlsTimer()
                     }
+                    .onEnded { value in
+                        if value.translation.height > 100 || value.velocity.height > 500 {
+                            dismiss()
+                        } else {
+                            withAnimation(.spring()) {
+                                dragOffset = .zero
+                            }
+                            isDragging = false
+                            resetControlsTimer()
+                        }
+                    }
+            )
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showControls = true
                 }
-        )
-        .onTapGesture {
-            // Show close button for ALL content types on tap
-            withAnimation(.easeInOut(duration: 0.2)) {
-                showControls = true
+                resetControlsTimer()
             }
-            resetControlsTimer()
-        }
-        .onAppear {
-            isVisible = true
-            UIApplication.shared.isIdleTimerDisabled = true
-            startControlsTimer()
-            
-
-            
-            // Initialize previous index
-            previousIndex = currentIndex
-            
-            // Start playing the initial video if it's a video
-            if let initialAttachment = attachments[safe: currentIndex],
-               isVideoAttachment(initialAttachment) {
-                print("DEBUG: [MediaBrowserView] Starting initial video with mid: \(initialAttachment.mid)")
+            .onAppear {
+                isVisible = true
+                UIApplication.shared.isIdleTimerDisabled = true
+                startControlsTimer()
                 
-                // Video playback is handled by SimpleVideoPlayer in videoView
-                print("DEBUG: [MediaBrowserView] Video playback handled by SimpleVideoPlayer")
+                // Stop all videos in the tweet list when entering full screen
+                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
+                print("DEBUG: [MediaBrowserView] Posted stopAllVideos notification")
+                
+                previousIndex = currentIndex
+            }
+            .onDisappear {
+                isVisible = false
+                UIApplication.shared.isIdleTimerDisabled = false
             }
         }
-        .onDisappear {
-            isVisible = false
-            UIApplication.shared.isIdleTimerDisabled = false
-            controlsTimer?.invalidate()
-            
-            // Stop video playback when exiting full screen
-            print("DEBUG: [MediaBrowserView] Exiting full-screen - stopping video playback")
+        
+        // Helper functions
+        private func isVideoAttachment(_ attachment: MimeiFileType) -> Bool {
+            attachment.type == .video || attachment.type == .hls_video
+        }
+        
+        private func isAudioAttachment(_ attachment: MimeiFileType) -> Bool {
+            attachment.type == .audio
+        }
+        
+        private func isImageAttachment(_ attachment: MimeiFileType) -> Bool {
+            attachment.type == .image
+        }
+        
+        private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
+            SimpleVideoPlayer(
+                url: url,
+                mid: attachment.mid,
+                isVisible: true,
+                autoPlay: index == currentIndex,
+                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
+                isMuted: false,
+                onVideoTap: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showControls = true
+                    }
+                    resetControlsTimer()
+                },
+                disableAutoRestart: false,
+                mode: .mediaBrowser
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+        }
+        
+        private func audioView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
+            SimpleAudioPlayer(
+                url: url,
+                autoPlay: currentIndex == index
+            )
+            .environmentObject(MuteState.shared)
+        }
+        
+        private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
+            ZoomableImageView(
+                imageURL: url,
+                placeholderImage: nil,
+                contentMode: .fit
+            )
         }
     }
     

@@ -72,6 +72,7 @@ struct SimpleVideoPlayer: View {
     @State private var retryCount = 0
     private var instanceId: String { mid }
     @State private var isLongPressing = false
+    @State private var nativeControlsTimer: Timer?
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -179,7 +180,8 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onAppear {
-            if player == nil && shouldLoadVideo {
+            // Only set up player if both conditions are met
+            if player == nil && shouldLoadVideo && isVisible {
                 setupPlayer()
             }
         }
@@ -218,21 +220,16 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onChange(of: isVisible) { _, visible in
-            // Handle visibility changes
+            // Handle visibility changes - simplified logic to avoid conflicts
             if visible {
-                // If video failed to load and becomes visible again, retry
-                if loadFailed && retryCount < 3 {
-                    retryLoad()
-                } else if loadFailed {
-                    // If we've exhausted retries but the video is visible again,
-                    // reset the retry count to allow future retries when network improves
-                    print("DEBUG: [VIDEO RECOVERY] Resetting retry count for \(mid) to allow future retries")
-                    retryCount = 0
-                    loadFailed = false
-                    isLoading = true
-                    setupPlayer()
-                } else if player == nil && shouldLoadVideo {
-                    // If no player but loading is enabled, set up the player
+                // Only proceed if loading is enabled
+                guard shouldLoadVideo else {
+                    print("DEBUG: [VIDEO VISIBILITY] Video became visible but loading is disabled for \(mid)")
+                    return
+                }
+                
+                // If no player and loading is enabled, set up the player
+                if player == nil {
                     print("DEBUG: [VIDEO VISIBILITY] Video became visible with no player, setting up: \(mid)")
                     setupPlayer()
                 } else {
@@ -271,11 +268,8 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in
-            // Grid-level debounce completed - set up player if needed
-            if newShouldLoadVideo && player == nil {
-                print("DEBUG: [VIDEO SETUP] Grid-level loading enabled, setting up player for \(mid)")
-                setupPlayer()
-            }
+            // Grid-level loading state changed - consolidate all loading decisions here
+            handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo)
         }
         
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -284,24 +278,42 @@ struct SimpleVideoPlayer: View {
             player?.pause()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // App became active - reset error state for videos that might have been interrupted
+            // App became active - comprehensive recovery for videos
             print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
             
-            // If video is in error state but we have a player, it might have been interrupted during loading
-            if loadFailed && player != nil {
-                print("DEBUG: [VIDEO APP ACTIVE] Resetting error state for interrupted video: \(mid)")
-                loadFailed = false
-                isLoading = false
-                retryCount = 0
-            } else if loadFailed {
-                // If no player but in error state, reset retry count to allow recovery
-                print("DEBUG: [VIDEO APP ACTIVE] Resetting retry count for failed video: \(mid)")
-                retryCount = 0
+            // Check if player is still valid
+            if let player = player {
+                // Check if player item is still valid
+                if player.currentItem?.status == .failed {
+                    print("DEBUG: [VIDEO APP ACTIVE] Player item failed for \(mid), attempting recovery")
+                    handleBackgroundRecovery()
+                } else if player.currentItem?.status == .readyToPlay {
+                    print("DEBUG: [VIDEO APP ACTIVE] Player is ready for \(mid)")
+                    // If video is visible and should play, resume playback
+                    if isVisible && currentAutoPlay && shouldLoadVideo {
+                        checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+                    }
+                } else {
+                    print("DEBUG: [VIDEO APP ACTIVE] Player item status: \(player.currentItem?.status.rawValue ?? -1) for \(mid)")
+                    // Player item might be loading, wait for it to become ready
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        if isVisible && currentAutoPlay && shouldLoadVideo {
+                            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+                        }
+                    }
+                }
+            } else {
+                // No player - check if we should recreate it
+                if isVisible && shouldLoadVideo {
+                    print("DEBUG: [VIDEO APP ACTIVE] No player for \(mid), recreating")
+                    setupPlayer()
+                }
             }
             
-            // If video is visible and should play, check playback conditions
-            if isVisible && currentAutoPlay {
-                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+            // Reset error state for videos that might have been interrupted
+            if loadFailed {
+                print("DEBUG: [VIDEO APP ACTIVE] Resetting error state for \(mid)")
+                retryCount = 0
             }
         }
         .onTapGesture {
@@ -331,6 +343,13 @@ struct SimpleVideoPlayer: View {
                     .onTapGesture {
                         if let onVideoTap = onVideoTap {
                             onVideoTap()
+                        }
+                        
+                        // For fullscreen mode, show native controls for 2 seconds
+                        if mode == .fullscreen || mode == .mediaBrowser {
+                            // Note: showNativeControls is a parameter, so we can't modify it directly
+                            // The native controls will be shown by the VideoPlayer component
+                            print("DEBUG: [VIDEO CONTROLS] Tap detected in fullscreen mode for \(mid)")
                         }
                     }
                 
@@ -396,6 +415,12 @@ struct SimpleVideoPlayer: View {
     private func setupPlayer() {
         print("DEBUG: [VIDEO SETUP] Setting up player for \(mid)")
         
+        // Early return if loading is disabled
+        guard shouldLoadVideo else {
+            print("DEBUG: [VIDEO SETUP] Loading disabled for \(mid), skipping setup")
+            return
+        }
+        
         // Reset error state when starting setup
         if loadFailed {
             print("DEBUG: [VIDEO SETUP] Resetting error state for \(mid)")
@@ -413,7 +438,7 @@ struct SimpleVideoPlayer: View {
         // Otherwise, create a new player
         Task {
             do {
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url)
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid)
                 await MainActor.run {
                     configurePlayer(newPlayer)
                 }
@@ -428,6 +453,12 @@ struct SimpleVideoPlayer: View {
     
     private func restoreFromCache(_ cachedState: (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)) {
         print("DEBUG: [VIDEO CACHE] Restoring from cache for \(mid) with original mute state: \(cachedState.originalMuteState)")
+        
+        // Early return if loading is disabled
+        guard shouldLoadVideo else {
+            print("DEBUG: [VIDEO CACHE] Loading disabled for \(mid), skipping cache restoration")
+            return
+        }
         
         // Restore the cached player
         self.player = cachedState.player
@@ -584,7 +615,10 @@ struct SimpleVideoPlayer: View {
         isLoading = true
         hasFinishedPlaying = false
         
-        setupPlayer()
+        // Only setup player if loading is enabled
+        if shouldLoadVideo {
+            setupPlayer()
+        }
     }
     
     private func handleManualReset() {
@@ -608,7 +642,10 @@ struct SimpleVideoPlayer: View {
         isLoading = true
         hasFinishedPlaying = false
         
-        setupPlayer()
+        // Only setup player if loading is enabled
+        if shouldLoadVideo {
+            setupPlayer()
+        }
     }
     
     private func handleNetworkRecovery() {
@@ -631,7 +668,53 @@ struct SimpleVideoPlayer: View {
         }
         
         // Attempt to reload the video
-        setupPlayer()
+        if shouldLoadVideo {
+            setupPlayer()
+        }
+    }
+    
+    private func handleLoadingStateChange(newShouldLoadVideo: Bool) {
+        print("DEBUG: [VIDEO LOADING STATE] Loading state changed to \(newShouldLoadVideo) for \(mid)")
+        
+        if newShouldLoadVideo {
+            // Loading enabled - set up player if conditions are met
+            if player == nil && isVisible {
+                print("DEBUG: [VIDEO SETUP] Loading enabled, setting up player for \(mid)")
+                setupPlayer()
+            }
+        } else {
+            // Loading disabled - cancel any ongoing setup and pause player
+            print("DEBUG: [VIDEO SETUP] Loading disabled, cancelling setup for \(mid)")
+            player?.pause()
+        }
+    }
+    
+    private func handleBackgroundRecovery() {
+        print("DEBUG: [VIDEO BACKGROUND RECOVERY] Attempting background recovery for \(mid)")
+        
+        // Reset retry count to allow fresh attempts
+        retryCount = 0
+        loadFailed = false
+        isLoading = true
+        
+        // Clear the current player since it's invalid
+        player = nil
+        
+        // Clear caches to force fresh network request
+        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        VideoStateCache.shared.clearCache(for: mid)
+        
+        Task {
+            await MainActor.run {
+                SharedAssetCache.shared.clearAssetCache(for: url)
+                print("DEBUG: [VIDEO BACKGROUND RECOVERY] Cleared all caches for \(mid)")
+            }
+        }
+        
+        // Attempt to reload the video
+        if shouldLoadVideo {
+            setupPlayer()
+        }
     }
 }
 
