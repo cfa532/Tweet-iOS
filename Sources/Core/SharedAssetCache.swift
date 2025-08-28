@@ -105,6 +105,16 @@ class SharedAssetCache: ObservableObject {
         print("DEBUG: [SharedAssetCache] Cancelled all loading tasks for tweet \(tweetId)")
     }
     
+    /// Trigger video preloading for a tweet
+    @MainActor func triggerVideoPreloadingForTweet(_ tweetId: String) {
+        // Find all URLs associated with this tweet and trigger preloading
+        let tweetUrls = getUrlsForTweet(tweetId)
+        for url in tweetUrls {
+            preloadVideo(for: url, tweetId: tweetId)
+        }
+        print("DEBUG: [SharedAssetCache] Triggered video preloading for tweet \(tweetId) with \(tweetUrls.count) URLs")
+    }
+    
     /// Get cached asset or create new one
     @MainActor func getAsset(for url: URL, tweetId: String? = nil) async throws -> AVAsset {
         let cacheKey = url.absoluteString

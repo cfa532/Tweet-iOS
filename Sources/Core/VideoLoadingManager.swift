@@ -18,6 +18,7 @@ class VideoLoadingManager: ObservableObject {
     @Published private(set) var visibleTweetIds: Set<String> = []
     @Published private(set) var currentVisibleTweetIndex: Int = 0
     private var allTweetIds: [String] = []
+    private var tweetsWithVideos: Set<String> = [] // Track which tweets contain videos
     
     // MARK: - Configuration
     private let preloadCount = 3 // Number of tweets to preload ahead
@@ -28,7 +29,13 @@ class VideoLoadingManager: ObservableObject {
     /// Update the list of all tweet IDs (called when tweet list changes)
     func updateTweetList(_ tweetIds: [String]) {
         allTweetIds = tweetIds
-        print("DEBUG: [VideoLoadingManager] Updated tweet list with \(tweetIds.count) tweets")
+        print("DEBUG: [VideoLoadingManager] Updated tweet list with \(tweetIds.count) tweets: \(tweetIds)")
+    }
+    
+    /// Register a tweet as containing videos
+    func registerTweetWithVideos(_ tweetId: String) {
+        tweetsWithVideos.insert(tweetId)
+        print("DEBUG: [VideoLoadingManager] Registered tweet \(tweetId) as containing videos")
     }
     
     /// Update the currently visible tweet index
@@ -60,6 +67,9 @@ class VideoLoadingManager: ObservableObject {
     func shouldPreloadVideos(for tweetId: String) -> Bool {
         guard let index = allTweetIds.firstIndex(of: tweetId) else { return false }
         
+        // Only preload if the tweet actually contains videos
+        guard tweetsWithVideos.contains(tweetId) else { return false }
+        
         // Preload if tweet is within the next 3 tweets
         let distance = index - currentVisibleTweetIndex
         return distance > 0 && distance <= preloadCount
@@ -68,6 +78,9 @@ class VideoLoadingManager: ObservableObject {
     /// Check if a tweet should cancel video loading
     func shouldCancelVideoLoading(for tweetId: String) -> Bool {
         guard let index = allTweetIds.firstIndex(of: tweetId) else { return false }
+        
+        // Only cancel if the tweet actually contains videos
+        guard tweetsWithVideos.contains(tweetId) else { return false }
         
         // Cancel if tweet is behind the current visible tweet (with small buffer)
         let distance = currentVisibleTweetIndex - index
@@ -97,11 +110,13 @@ class VideoLoadingManager: ObservableObject {
     }
     
     private func manageVideoLoading() {
+        print("DEBUG: [VideoLoadingManager] Managing video loading for visible tweet index: \(currentVisibleTweetIndex)")
+        
         // Cancel loading for tweets that are too far behind
         for (index, tweetId) in allTweetIds.enumerated() {
             if shouldCancelVideoLoading(for: tweetId) {
                 cancelVideoLoading(for: tweetId)
-                print("DEBUG: [VideoLoadingManager] Cancelled video loading for tweet \(tweetId) at index \(index)")
+                print("DEBUG: [VideoLoadingManager] Cancelled video loading for tweet \(tweetId) at index \(index) (distance: \(currentVisibleTweetIndex - index))")
             }
         }
         
@@ -112,7 +127,7 @@ class VideoLoadingManager: ObservableObject {
                 let tweetId = allTweetIds[index]
                 if shouldPreloadVideos(for: tweetId) {
                     triggerVideoPreloading(for: tweetId)
-                    print("DEBUG: [VideoLoadingManager] Triggered video preloading for tweet \(tweetId) at index \(index)")
+                    print("DEBUG: [VideoLoadingManager] Triggered video preloading for tweet \(tweetId) at index \(index) (distance: \(i))")
                 }
             }
         }
@@ -133,8 +148,10 @@ class VideoLoadingManager: ObservableObject {
     }
     
     private func triggerVideoPreloading(for tweetId: String) {
-        // Trigger video preloading for this tweet
-        // This will be implemented by calling SharedAssetCache methods
+        // Trigger video preloading for this tweet using SharedAssetCache
+        Task { @MainActor in
+            SharedAssetCache.shared.triggerVideoPreloadingForTweet(tweetId)
+        }
         
         // Post notification for MediaGridView to handle
         NotificationCenter.default.post(

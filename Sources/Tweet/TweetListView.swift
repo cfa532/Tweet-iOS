@@ -311,6 +311,10 @@ struct TweetListView<RowView: View>: View {
                 await MainActor.run {
                     print("[TweetListView] Got \(tweetsFromCache.count) tweets from cache for page \(page)")
                     tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
+                    
+                    // Update VideoLoadingManager with new tweet list
+                    let tweetIds = tweets.map { $0.mid }
+                    videoLoadingManager.updateTweetList(tweetIds)
                 }
                 
                 // Step 2: Load from server to update with fresh data (non-blocking, no retry)
@@ -349,6 +353,10 @@ struct TweetListView<RowView: View>: View {
                         tweets.mergeTweets(validServerTweets)
                         print("[TweetListView] Merged server data for page \(page)")
                     }
+                    
+                    // Update VideoLoadingManager with new tweet list
+                    let tweetIds = tweets.map { $0.mid }
+                    videoLoadingManager.updateTweetList(tweetIds)
                     
                     currentPage = page
                     print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")

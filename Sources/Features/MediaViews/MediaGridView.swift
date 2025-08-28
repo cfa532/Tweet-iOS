@@ -496,6 +496,9 @@ struct MediaGridView: View {
                 if hasVideos {
                     print("DEBUG: [MediaGridView] Grid contains videos - checking VideoLoadingManager")
                     
+                    // Register this tweet as containing videos
+                    videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
+                    
                     // Check if this tweet should load videos based on VideoLoadingManager
                     if videoLoadingManager.shouldLoadVideos(for: parentTweet.mid) {
                         shouldLoadVideo = true
@@ -537,6 +540,14 @@ struct MediaGridView: View {
                     
                     // Trigger video cancellation
                     cancelVideoTrigger += 1
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
+                if let tweetId = notification.userInfo?["tweetId"] as? String,
+                   tweetId == parentTweet.mid {
+                    print("DEBUG: [MediaGridView] Received video preloading notification for tweet \(tweetId)")
+                    // Enable video loading for preloading
+                    shouldLoadVideo = true
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
