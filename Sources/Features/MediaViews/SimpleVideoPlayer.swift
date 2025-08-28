@@ -276,36 +276,13 @@ struct SimpleVideoPlayer: View {
             player?.pause()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // App became active - comprehensive recovery for videos
+            // App became active - simple resume for videos
             print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
             
-            // Check if player is still valid
-            if let player = player {
-                // Check if player item is still valid
-                if player.currentItem?.status == .failed {
-                    print("DEBUG: [VIDEO APP ACTIVE] Player item failed for \(mid), attempting recovery")
-                    handleBackgroundRecovery()
-                } else if player.currentItem?.status == .readyToPlay {
-                    print("DEBUG: [VIDEO APP ACTIVE] Player is ready for \(mid)")
-                    // If video is visible and should play, resume playback
-                    if isVisible && currentAutoPlay && shouldLoadVideo {
-                        checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
-                    }
-                } else {
-                    print("DEBUG: [VIDEO APP ACTIVE] Player item status: \(player.currentItem?.status.rawValue ?? -1) for \(mid)")
-                    // Player item might be loading, wait for it to become ready
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        if isVisible && currentAutoPlay && shouldLoadVideo {
-                            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
-                        }
-                    }
-                }
-            } else {
-                // No player - check if we should recreate it
-                if isVisible && shouldLoadVideo {
-                    print("DEBUG: [VIDEO APP ACTIVE] No player for \(mid), recreating")
-                    setupPlayer()
-                }
+            // Simple approach: if video is visible and should play, just resume playback
+            if isVisible && currentAutoPlay && shouldLoadVideo {
+                print("DEBUG: [VIDEO APP ACTIVE] Resuming playback for \(mid)")
+                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             }
             
             // Reset error state for videos that might have been interrupted
