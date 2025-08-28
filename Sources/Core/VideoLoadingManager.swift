@@ -47,6 +47,8 @@ class VideoLoadingManager: ObservableObject {
         
         print("DEBUG: [VideoLoadingManager] Visible tweet changed from index \(previousIndex) to \(index)")
         
+        // Note: Video cancellation is handled in manageVideoLoading() below
+        
         // Update visible tweet IDs
         updateVisibleTweetIds()
         
@@ -58,7 +60,7 @@ class VideoLoadingManager: ObservableObject {
     func shouldLoadVideos(for tweetId: String) -> Bool {
         guard let index = allTweetIds.firstIndex(of: tweetId) else { return false }
         
-        // Only load videos for current visible tweet and next few tweets
+        // Only load videos for current visible tweet and next few tweets (NOT past tweets)
         let distance = index - currentVisibleTweetIndex
         return distance >= 0 && distance <= preloadCount
     }

@@ -136,8 +136,7 @@ struct MediaCell: View, Equatable {
                                         }
                                     }
                                     
-                                    // THEN: Force load the video
-                                    shouldLoadVideo = true
+                                    // Note: shouldLoadVideo is controlled by VideoLoadingManager, not overridden here
                                 }
                         }
                     }
@@ -238,12 +237,18 @@ struct MediaCell: View, Equatable {
                 // based on the videoManager.shouldPlayVideo() call
             }
         }
+        .onChange(of: cancelVideoTrigger) { _, _ in
+            // Video cancellation triggered by MediaGridView
+            if isVideoAttachment {
+                print("DEBUG: [MediaCell] Received cancelVideoTrigger for \(attachment.mid)")
+                // The SimpleVideoPlayer will handle the actual cancellation
+            }
+        }
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Restore video state when app becomes active
             if isVideoAttachment {
-                shouldLoadVideo = true
-                
+                // Note: shouldLoadVideo is controlled by VideoLoadingManager, not overridden here
                 // Grid-level debouncing handles video preloading
                 // Individual cells just track visibility for playback
             }
@@ -359,6 +364,7 @@ struct MediaCell: View, Equatable {
                 },
                 disableAutoRestart: true,
                 forceRefreshTrigger: localForceRefreshTrigger,
+                cancelVideoTrigger: cancelVideoTrigger,
                 shouldLoadVideo: shouldLoadVideo,
                 mode: .mediaCell
             )

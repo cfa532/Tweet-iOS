@@ -54,6 +54,7 @@ struct SimpleVideoPlayer: View {
     var onVideoTap: (() -> Void)? = nil // Callback when video is tapped
     var disableAutoRestart: Bool = false // Disable auto-restart when video finishes
     var forceRefreshTrigger: Int = 0 // External trigger to force refresh
+    var cancelVideoTrigger: Int = 0 // External trigger to cancel video loading/playback
     var shouldLoadVideo: Bool = true // Whether grid-level loading is enabled
     
     // MARK: Mode
@@ -258,6 +259,11 @@ struct SimpleVideoPlayer: View {
                 print("DEBUG: [VIDEO FORCE REFRESH] External refresh triggered for \(mid)")
                 handleManualReset()
             }
+        }
+        .onChange(of: cancelVideoTrigger) { _, _ in
+            // External trigger to cancel video loading/playback
+            print("DEBUG: [VIDEO CANCELLATION] External cancellation triggered for \(mid)")
+            cancelVideoLoading()
         }
         .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in
             // Grid-level loading state changed - consolidate all loading decisions here
@@ -682,6 +688,28 @@ struct SimpleVideoPlayer: View {
             print("DEBUG: [VIDEO SETUP] Loading disabled, cancelling setup for \(mid)")
             player?.pause()
         }
+    }
+    
+    private func cancelVideoLoading() {
+        print("DEBUG: [VIDEO CANCELLATION] Cancelling video loading for \(mid)")
+        
+        // Pause the player immediately
+        player?.pause()
+        
+        // Cancel any ongoing loading tasks in SharedAssetCache
+        SharedAssetCache.shared.cancelLoadingForTweet(mid)
+        
+        // Clear loading state
+        isLoading = false
+        loadFailed = false
+        
+        // Reset retry count
+        retryCount = 0
+        
+        // Clear cached state
+        VideoStateCache.shared.clearCache(for: mid)
+        
+        print("DEBUG: [VIDEO CANCELLATION] Video cancellation completed for \(mid)")
     }
     
     private func handleBackgroundRecovery() {
