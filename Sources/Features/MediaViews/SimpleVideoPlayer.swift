@@ -276,10 +276,16 @@ struct SimpleVideoPlayer: View {
             player?.pause()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // App became active - simple resume for videos
+            // App became active - restore video state without marking as invalid
             print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
             
-            // Simple approach: if video is visible and should play, just resume playback
+            // Always try to restore cached state first when app becomes active
+            if player == nil && shouldLoadVideo {
+                print("DEBUG: [VIDEO APP ACTIVE] No player found, attempting to restore cached state for \(mid)")
+                restoreCachedVideoState()
+            }
+            
+            // If video is visible and should play, resume playback
             if isVisible && currentAutoPlay && shouldLoadVideo {
                 print("DEBUG: [VIDEO APP ACTIVE] Resuming playback for \(mid)")
                 checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
@@ -289,6 +295,7 @@ struct SimpleVideoPlayer: View {
             if loadFailed {
                 print("DEBUG: [VIDEO APP ACTIVE] Resetting error state for \(mid)")
                 retryCount = 0
+                loadFailed = false
             }
         }
         .onTapGesture {
@@ -406,10 +413,18 @@ struct SimpleVideoPlayer: View {
             retryCount = 0
         }
         
-        // Check if we have a cached player first
+        // Check if we have a cached player first - prioritize for fullscreen modes
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
-            print("DEBUG: [VIDEO CACHE] Found cached player for \(mid)")
+            print("DEBUG: [VIDEO CACHE] Found cached player for \(mid) in \(mode) mode")
             restoreFromCache(cachedState)
+            return
+        }
+        
+        // For fullscreen modes, if no cached state and no player, try to restore from cache again
+        // This handles cases where the cache was cleared but we still need the video
+        if (mode == .fullscreen || mode == .mediaBrowser) && player == nil && !isLoading {
+            print("DEBUG: [VIDEO CACHE] Fullscreen mode with no player, attempting to restore cached state for \(mid)")
+            restoreCachedVideoState()
             return
         }
         
@@ -471,8 +486,8 @@ struct SimpleVideoPlayer: View {
             }
         }
         
-        // Clear the cache since we've used it
-        VideoStateCache.shared.clearCache(for: mid)
+        // Don't clear cache immediately - let it persist for fullscreen transitions
+        // Cache will be cleared by the system cleanup or when explicitly needed
         
         // Update state
         self.isLoading = false
@@ -542,8 +557,15 @@ struct SimpleVideoPlayer: View {
     private func handleLoadFailure() {
         loadFailed = true
         isLoading = false
-        player = nil
+        // Don't clear player immediately - let it persist for potential recovery
+        // player = nil
         print("DEBUG: [VIDEO ERROR] Load failed for \(mid), retry count: \(retryCount)")
+        
+        // For fullscreen modes, try to restore from cache even on failure
+        if mode == .fullscreen || mode == .mediaBrowser {
+            print("DEBUG: [VIDEO ERROR] Fullscreen mode, attempting to restore from cache for \(mid)")
+            restoreCachedVideoState()
+        }
     }
     
     private func restoreCachedVideoState() {
