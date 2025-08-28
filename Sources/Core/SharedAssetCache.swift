@@ -142,6 +142,9 @@ class SharedAssetCache: ObservableObject {
             }
         }
         
+        // Notify VideoLoadingManager that a load is starting
+        VideoLoadingManager.shared.videoLoadStarted()
+        
         // Create new loading task
         let task = Task<AVAsset, Error> {
             let resolvedURL = await resolveHLSURL(url)
@@ -152,6 +155,9 @@ class SharedAssetCache: ObservableObject {
                 self.assetCache[cacheKey] = asset
                 self.cacheTimestamps[cacheKey] = Date()
                 self.loadingTasks.removeValue(forKey: cacheKey)
+                
+                // Notify VideoLoadingManager that the load completed
+                VideoLoadingManager.shared.videoLoadCompleted()
             }
             
             return asset
@@ -165,6 +171,8 @@ class SharedAssetCache: ObservableObject {
             return asset
         } catch {
             loadingTasks.removeValue(forKey: cacheKey)
+            // Notify VideoLoadingManager that the load failed
+            VideoLoadingManager.shared.videoLoadCompleted()
             throw error
         }
     }
@@ -272,6 +280,36 @@ class SharedAssetCache: ObservableObject {
         loadingTasks.removeAll()
         preloadTasks.values.forEach { $0.cancel() }
         preloadTasks.removeAll()
+    }
+    
+    /// Clear all caches (emergency cleanup)
+    @MainActor func clearAllCaches() {
+        print("DEBUG: [SharedAssetCache] Clearing all caches")
+        
+        // Pause and remove all cached players
+        for (_, player) in playerCache {
+            player.pause()
+        }
+        playerCache.removeAll()
+        
+        // Clear asset cache
+        assetCache.removeAll()
+        
+        // Clear loading tasks
+        loadingTasks.values.forEach { $0.cancel() }
+        loadingTasks.removeAll()
+        
+        // Clear preload tasks
+        preloadTasks.values.forEach { $0.cancel() }
+        preloadTasks.removeAll()
+        
+        // Clear timestamps
+        cacheTimestamps.removeAll()
+        
+        // Clear URL tracking
+        tweetUrlMapping.removeAll()
+        
+        print("DEBUG: [SharedAssetCache] All caches cleared")
     }
     
     // MARK: - Enhanced Preloading Methods

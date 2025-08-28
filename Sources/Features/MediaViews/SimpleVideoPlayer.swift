@@ -413,9 +413,14 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // Otherwise, create a new player
+        // Otherwise, create a new player with performance considerations
         Task {
             do {
+                // Add a small delay to prevent overwhelming the system when multiple videos load simultaneously
+                if retryCount == 0 {
+                    try await Task.sleep(nanoseconds: UInt64(retryCount * 50_000_000)) // 0.05s delay per retry
+                }
+                
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid)
                 await MainActor.run {
                     configurePlayer(newPlayer)

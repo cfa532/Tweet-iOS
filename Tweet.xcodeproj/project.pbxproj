@@ -55,6 +55,7 @@
 		468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF22D2E3A69F700D49038 /* StartChatView.swift */; };
 		468F19EF2E5FEA850085BFE5 /* VideoLoadingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468F19EE2E5FEA850085BFE5 /* VideoLoadingManager.swift */; };
 		468F19F12E6074A30085BFE5 /* AudioSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */; };
+		468F19F32E6078020085BFE5 /* PerformanceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468F19F22E6078020085BFE5 /* PerformanceMonitor.swift */; };
 		469A994B2DEB163F00954049 /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A99492DEB163F00954049 /* ToastView.swift */; };
 		469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994C2DEB31EF00954049 /* NotificationNames.swift */; };
 		469A99502DEBFBC100954049 /* Tweet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469A994F2DEBFBC100954049 /* Tweet.swift */; };
@@ -162,6 +163,7 @@
 		468CF22D2E3A69F700D49038 /* StartChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartChatView.swift; sourceTree = "<group>"; };
 		468F19EE2E5FEA850085BFE5 /* VideoLoadingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoLoadingManager.swift; sourceTree = "<group>"; };
 		468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionManager.swift; sourceTree = "<group>"; };
+		468F19F22E6078020085BFE5 /* PerformanceMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceMonitor.swift; sourceTree = "<group>"; };
 		469A99492DEB163F00954049 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		469A994C2DEB31EF00954049 /* NotificationNames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationNames.swift; sourceTree = "<group>"; };
 		469A994F2DEBFBC100954049 /* Tweet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tweet.swift; sourceTree = "<group>"; };
@@ -302,6 +304,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				468F19F22E6078020085BFE5 /* PerformanceMonitor.swift */,
 				468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */,
 				468F19EE2E5FEA850085BFE5 /* VideoLoadingManager.swift */,
 				46B03D9A2E4D7336000E08DF /* NotificationManager.swift */,
@@ -648,6 +651,7 @@
 				46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */,
 				46F3BFCE2DFB3F1100059F18 /* SimpleAudioPlayer.swift in Sources */,
 				469A99622DEF318C00954049 /* TweetModel.xcdatamodeld in Sources */,
+				468F19F32E6078020085BFE5 /* PerformanceMonitor.swift in Sources */,
 				46E5B3422DDAB74400AEF31F /* TweetActionButtonsView.swift in Sources */,
 				46E8A7D52DE9F15100A30FBA /* CommentsViewModel.swift in Sources */,
 				467494212DF885940082FAC6 /* UserRowView.swift in Sources */,
