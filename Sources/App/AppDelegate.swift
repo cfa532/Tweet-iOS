@@ -7,6 +7,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        // Lock app to portrait orientation by default
+        AppDelegate.lockOrientation(.portrait)
+        
         // Register background tasks before application finishes launching
         registerBackgroundTasks()
         
