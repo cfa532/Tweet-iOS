@@ -268,54 +268,7 @@ struct MediaBrowserView: View {
         }
     }
     
-    // MARK: - Helper Methods
-    private func isVideoAttachment(_ attachment: MimeiFileType) -> Bool {
-        return attachment.type == .video || attachment.type == .hls_video
-    }
-    
-    private func isAudioAttachment(_ attachment: MimeiFileType) -> Bool {
-        return attachment.type == .audio
-    }
-    
-    private func isImageAttachment(_ attachment: MimeiFileType) -> Bool {
-        return attachment.type == .image
-    }
-    
-    @ViewBuilder
-    private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
-        SimpleVideoPlayer(
-            url: url,
-            mid: attachment.mid,
-            isVisible: isVisible && index == currentIndex, // Consider both parent visibility and current index
-            autoPlay: isVisible && index == currentIndex, // Only auto-play if parent is visible and this is current
-            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-            isMuted: isMuted, // Use local mute state
-            onVideoTap: {
-                // Native controls will be shown by VideoPlayer automatically
-                // Also show our close button overlay
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showControls = true
-                }
-                resetControlsTimer() // Reset close button timer
-            },
-            disableAutoRestart: false, // Enable auto-replay in fullscreen
-            mode: .mediaBrowser
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .onChange(of: isMuted) { _, _ in
-            // Local mute state changes will be handled by SimpleVideoPlayer's onChange
-        }
-    }
-    
-    @ViewBuilder
-    private func audioView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
-        SimpleAudioPlayer(
-            url: url,
-            autoPlay: isVisible && currentIndex == index
-        )
-        .environmentObject(MuteState.shared)
-    }
+
     
 
     

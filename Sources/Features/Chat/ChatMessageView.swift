@@ -473,7 +473,7 @@ struct ChatVideoPlayer: View {
                         showNativeControls: false,
                         isMuted: MuteState.shared.isMuted,
                         onVideoTap: {
-                            showFullScreen = true
+                            // This is handled by the overlay below
                         },
                         disableAutoRestart: true
                     )
@@ -493,10 +493,26 @@ struct ChatVideoPlayer: View {
                             )
                             .transition(.opacity)
                             .animation(.easeInOut(duration: 0.2), value: showPlayButton)
+                            .allowsHitTesting(false) // Allow taps to pass through to the overlay
                     }
-                }
-                .onTapGesture {
-                    showFullScreen = true
+                    
+                    // Clear overlay to capture taps for full-screen (like MediaCell)
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            showFullScreen = true
+                        }
+                    
+                    // Mute button overlay (bottom right corner)
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            MuteButton()
+                                .padding(.trailing, 8)
+                                .padding(.bottom, 8)
+                        }
+                    }
                 }
                 .onAppear {
                     // Auto-hide play button after 2 seconds
@@ -692,4 +708,6 @@ struct ChatMultipleAttachmentsLoader: View {
         }
     }
 }
+
+
 
