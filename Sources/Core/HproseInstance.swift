@@ -1895,7 +1895,7 @@ final class HproseInstance: ObservableObject {
                 chunkCount += 1
                 
                 let nsData = chunkData as NSData
-                let response = try await uploadChunkWithRetry(
+                let response = try await uploadChunk(
                     uploadClient: uploadClient!,
                     request: request,
                     data: nsData,
@@ -2012,61 +2012,41 @@ final class HproseInstance: ObservableObject {
             fileName: String?,
             aspectRatio: Float?
         ) async throws -> MimeiFileType? {
-            var lastError: Error?
-            
             // Create a custom URLSession with longer timeout for large uploads
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = 600  // 5 minutes
             config.timeoutIntervalForResource = 600 // 10 minutes
             let session = URLSession(configuration: config)
             
-            for attempt in 1...3 {
-                do {
-                    print("DEBUG: Video upload attempt \(attempt)/3")
-                    let (responseData, response) = try await session.data(for: request)
-                    
-                    if let httpResponse = response as? HTTPURLResponse {
-                        print("DEBUG: HTTP status code: \(httpResponse.statusCode)")
-                        
-                        if httpResponse.statusCode == 200 {
-                            return try parseVideoConversionResponse(
-                                responseData: responseData,
-                                data: data,
-                                fileName: fileName,
-                                aspectRatio: aspectRatio
-                            )
-                        } else if httpResponse.statusCode == 400 {
-                            // Bad request - don't retry, parse error message
-                            let errorMessage = String(data: responseData, encoding: .utf8) ?? "Bad request"
-                            throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Bad request: \(errorMessage)"])
-                        } else if httpResponse.statusCode == 413 {
-                            // Payload too large - don't retry
-                            throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Video file too large for processing"])
-                        } else if httpResponse.statusCode >= 500 {
-                            // Server error - retry
-                            throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server error (HTTP \(httpResponse.statusCode))"])
-                        } else {
-                            throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode) error"])
-                        }
-                    } else {
-                        throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid HTTP response"])
-                    }
-                } catch {
-                    lastError = error
-                    print("DEBUG: Video upload attempt \(attempt) failed: \(error)")
-                    
-                    if attempt < 3 {
-                        // Wait before retrying (exponential backoff)
-                        let delay = TimeInterval(attempt * 2) // 2, 4 seconds
-                        print("DEBUG: Waiting \(delay) seconds before retry...")
-                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    }
-                }
-            }
+            print("DEBUG: Video upload attempt")
+            let (responseData, response) = try await session.data(for: request)
             
-            // All retries failed
-            print("DEBUG: All video upload attempts failed")
-            throw lastError ?? NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload video after 3 attempts"])
+            if let httpResponse = response as? HTTPURLResponse {
+                print("DEBUG: HTTP status code: \(httpResponse.statusCode)")
+                
+                if httpResponse.statusCode == 200 {
+                    return try parseVideoConversionResponse(
+                        responseData: responseData,
+                        data: data,
+                        fileName: fileName,
+                        aspectRatio: aspectRatio
+                    )
+                } else if httpResponse.statusCode == 400 {
+                    // Bad request - don't retry, parse error message
+                    let errorMessage = String(data: responseData, encoding: .utf8) ?? "Bad request"
+                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Bad request: \(errorMessage)"])
+                } else if httpResponse.statusCode == 413 {
+                    // Payload too large - don't retry
+                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Video file too large for processing"])
+                } else if httpResponse.statusCode >= 500 {
+                    // Server error - throw error
+                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server error (HTTP \(httpResponse.statusCode))"])
+                } else {
+                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode) error"])
+                }
+            } else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid HTTP response"])
+            }
         }
         
         /// Parse video conversion response
@@ -2117,20 +2097,15 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        /// Upload chunk with retry for regular files
-        private func uploadChunkWithRetry(
+        /// Upload chunk for regular files (no retry)
+        private func uploadChunk(
             uploadClient: HproseClient,
             request: [String: Any],
             data: NSData,
-            chunkNumber: Int,
-            maxRetries: Int = 3
+            chunkNumber: Int
         ) async throws -> Any {
-            for _ in 1...maxRetries {
-                let response = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]]) as Any
-                return response
-            }
-            
-            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk after \(maxRetries) attempts"])
+            let response = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]]) as Any
+            return response
         }
     }
     
@@ -2273,8 +2248,8 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    private let maxRetryAttempts = 3
-    private let retryDelaySeconds: TimeInterval = 5.0
+    // Retry mechanism removed to prevent duplicate uploads
+    // Keeping persistence for unfinished uploads only
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
         return try await withRetry {
@@ -2367,8 +2342,8 @@ final class HproseInstance: ObservableObject {
         await savePendingUpload(pendingUpload)
         
         do {
-            // Upload attachments first
-            let uploadedAttachments = try await uploadAttachmentsWithRetry(itemData: itemData, retryCount: retryCount)
+            // Upload attachments first (no retry)
+            let uploadedAttachments = try await uploadAttachments(itemData: itemData)
             
             // Update tweet with uploaded attachments
             tweet.attachments = uploadedAttachments
@@ -2391,30 +2366,23 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
             }
         } catch {
-            print("Error uploading tweet (attempt \(retryCount + 1)/\(maxRetryAttempts)): \(error)")
+            print("Error uploading tweet: \(error)")
             
-            if retryCount < maxRetryAttempts - 1 {
-                // Retry after delay
-                print("Retrying upload in \(retryDelaySeconds) seconds...")
-                try? await Task.sleep(nanoseconds: UInt64(retryDelaySeconds * 1_000_000_000))
-                await uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData, retryCount: retryCount + 1)
-            } else {
-                // Max retries reached - notify failure but keep pending upload for manual retry
-                await MainActor.run {
-                    NotificationCenter.default.post(
-                        name: .backgroundUploadFailed,
-                        object: nil,
-                        userInfo: ["error": error]
-                    )
-                }
+            // No retry - just notify failure but keep pending upload for manual retry
+            await MainActor.run {
+                NotificationCenter.default.post(
+                    name: .backgroundUploadFailed,
+                    object: nil,
+                    userInfo: ["error": error]
+                )
             }
         }
     }
     
     private func uploadChatMessageWithPersistenceAndRetry(message: inout ChatMessage, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0) async {
         do {
-            // Upload attachments first
-            let uploadedAttachments = try await uploadAttachmentsWithRetry(itemData: itemData, retryCount: retryCount)
+            // Upload attachments first (no retry)
+            let uploadedAttachments = try await uploadAttachments(itemData: itemData)
             
             // Update message with uploaded attachments
             message.attachments = uploadedAttachments
@@ -2429,22 +2397,15 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: resultMessage.errorMsg ?? "Failed to send chat message"])
             }
         } catch {
-            print("Error uploading chat message (attempt \(retryCount + 1)/\(maxRetryAttempts)): \(error)")
+            print("Error uploading chat message: \(error)")
             
-            if retryCount < maxRetryAttempts - 1 {
-                // Retry after delay
-                print("Retrying chat message upload in \(retryDelaySeconds) seconds...")
-                try? await Task.sleep(nanoseconds: UInt64(retryDelaySeconds * 1_000_000_000))
-                await uploadChatMessageWithPersistenceAndRetry(message: &message, itemData: itemData, retryCount: retryCount + 1)
-            } else {
-                // Max retries reached - the message will show with a failure icon
-                // No need to post notification since the UI already handles failed messages
-                print("Chat message upload failed after \(maxRetryAttempts) attempts")
-            }
+            // No retry - the message will show with a failure icon
+            // No need to post notification since the UI already handles failed messages
+            print("Chat message upload failed")
         }
     }
     
-    private func uploadAttachmentsWithRetry(itemData: [PendingTweetUpload.ItemData], retryCount: Int) async throws -> [MimeiFileType] {
+    private func uploadAttachments(itemData: [PendingTweetUpload.ItemData]) async throws -> [MimeiFileType] {
         var uploadedAttachments: [MimeiFileType] = []
         let itemPairs = itemData.chunked(into: 2)
         
