@@ -87,10 +87,10 @@ struct ChatScreen: View {
                                 proxy.scrollTo(lastMessage.id, anchor: .bottom)
                             }
                         }
-                                }
-        }
-        .navigationBarHidden(true)
-        .onAppear {
+                    }
+                }
+                .navigationBarHidden(true)
+                .onAppear {
                     // Scroll to bottom when view appears
                     if let lastMessage = messages.last {
                         withAnimation(.easeInOut(duration: 0.3)) {
@@ -220,9 +220,9 @@ struct ChatScreen: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .animation(.easeInOut(duration: 0.3), value: showToast)
+                .animation(.easeInOut(duration: 0.3), value: showToast)
         )
-
+        
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
             if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
                 keyboardHeight = keyboardFrame.height
@@ -295,7 +295,7 @@ struct ChatScreen: View {
             content: trimmedContent,
             attachments: nil
         )
-                
+        
         // Clear input immediately
         messageText = ""
         
@@ -390,7 +390,7 @@ struct ChatScreen: View {
         selectedPhotos = []
         
         // Show toast message for background upload
-                        showToastMessage(NSLocalizedString("Sending message in background...", comment: "Chat status"), type: .info)
+        showToastMessage(NSLocalizedString("Sending message in background...", comment: "Chat status"), type: .info)
         
         // Process message in background
         Task.detached(priority: .background) {
@@ -665,19 +665,19 @@ struct ChatScreen: View {
     
     private func detectMediaType(for typeIdentifier: String) -> MediaType {
         if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") || 
-           typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
-           typeIdentifier.contains("heic") || typeIdentifier.contains("heif") ||
-           typeIdentifier.contains("tiff") || typeIdentifier.contains("bmp") ||
-           typeIdentifier.contains("webp") || typeIdentifier.hasPrefix("public.image") {
+            typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
+            typeIdentifier.contains("heic") || typeIdentifier.contains("heif") ||
+            typeIdentifier.contains("tiff") || typeIdentifier.contains("bmp") ||
+            typeIdentifier.contains("webp") || typeIdentifier.hasPrefix("public.image") {
             return .image
         } else if typeIdentifier.contains("mp4") || typeIdentifier.contains("mov") || 
-                  typeIdentifier.contains("m4v") || typeIdentifier.contains("mkv") ||
-                  typeIdentifier.contains("avi") || typeIdentifier.contains("wmv") ||
-                  typeIdentifier.hasPrefix("public.movie") || typeIdentifier.hasPrefix("public.video") {
+                    typeIdentifier.contains("m4v") || typeIdentifier.contains("mkv") ||
+                    typeIdentifier.contains("avi") || typeIdentifier.contains("wmv") ||
+                    typeIdentifier.hasPrefix("public.movie") || typeIdentifier.hasPrefix("public.video") {
             return .video
         } else if typeIdentifier.contains("m4a") || typeIdentifier.contains("mp3") || 
-                  typeIdentifier.contains("wav") || typeIdentifier.contains("aac") ||
-                  typeIdentifier.hasPrefix("public.audio") {
+                    typeIdentifier.contains("wav") || typeIdentifier.contains("aac") ||
+                    typeIdentifier.hasPrefix("public.audio") {
             return .audio
         } else {
             return .image // Default to image for unknown types
@@ -836,7 +836,7 @@ struct ChatHeaderView: View {
             
             if let user = user {
                 HStack(spacing: 8) {
-                    Avatar(user: user, size: 32)
+                    Avatar(user: user, size: 36)
                     Text(user.name ?? "@\(user.username ?? "")")
                         .font(.headline)
                 }

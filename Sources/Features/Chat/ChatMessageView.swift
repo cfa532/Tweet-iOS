@@ -24,11 +24,11 @@ struct ChatMessageView: View {
             if !isFromCurrentUser {
                 // Avatar for received messages (LEFT) - use receipt's avatar
                 if let receiptUser = receiptUser {
-                    Avatar(user: receiptUser, size: 32)
+                    Avatar(user: receiptUser, size: 36)
                 } else {
                     Circle()
                         .fill(Color.gray.opacity(0.3))
-                        .frame(width: 32, height: 32)
+                        .frame(width: 36, height: 36)
                         .overlay(
                             Image(systemName: "person")
                                 .foregroundColor(.gray)
@@ -123,7 +123,7 @@ struct ChatMessageView: View {
             
             if isFromCurrentUser {
                 // Avatar for sent messages (RIGHT)
-                Avatar(user: HproseInstance.shared.appUser, size: 32)
+                Avatar(user: HproseInstance.shared.appUser, size: 36)
             }
         }
         .task {
@@ -290,14 +290,16 @@ struct ChatImageThumbnail: View {
     @ViewBuilder
     private func chatImageThumbnail() -> some View {
         let maxWidth = UIScreen.main.bounds.width * 0.7
+        let maxHeight = maxWidth * 1.1 // Standard height for chat images
         
         // Use the same approach as MediaCell
         if let image = image {
             // Show loaded image
             Image(uiImage: image)
                 .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: maxWidth)
+                .aspectRatio(contentMode: .fill)
+                .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .onTapGesture {
                     showFullScreen = true
@@ -307,8 +309,9 @@ struct ChatImageThumbnail: View {
             if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
                 Image(uiImage: cachedImage)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: maxWidth)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                    .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(
                         ProgressView()
@@ -327,8 +330,7 @@ struct ChatImageThumbnail: View {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle())
                     .scaleEffect(1.2)
-                    .frame(maxWidth: maxWidth)
-                    .frame(height: 200)
+                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
                     .background(Color(.systemGray6).opacity(0.5))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .onTapGesture {
@@ -340,8 +342,9 @@ struct ChatImageThumbnail: View {
             if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
                 Image(uiImage: cachedImage)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: maxWidth)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
+                    .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .onTapGesture {
                         showFullScreen = true
@@ -349,8 +352,7 @@ struct ChatImageThumbnail: View {
             } else {
                 // Show fallback placeholder
                 Color(.systemGray6)
-                    .frame(maxWidth: maxWidth)
-                    .frame(height: 200)
+                    .frame(maxWidth: maxWidth, maxHeight: maxHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(
                         VStack(spacing: 8) {
