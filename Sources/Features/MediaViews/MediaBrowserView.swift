@@ -51,9 +51,13 @@ struct MediaBrowserView: View {
             isDragging: $isDragging,
             isVisible: $isVisible,
             baseUrl: baseUrl,
+            imageStates: $imageStates,
             dismiss: { dismiss() },
             startControlsTimer: startControlsTimer,
-            resetControlsTimer: resetControlsTimer
+            resetControlsTimer: resetControlsTimer,
+            loadImageIfNeededClosure: { attachment, index in
+                loadImageIfNeeded(for: attachment, at: index)
+            }
         )
     }
     
@@ -67,9 +71,11 @@ struct MediaBrowserView: View {
         @Binding var isDragging: Bool
         @Binding var isVisible: Bool
         let baseUrl: URL
+        @Binding var imageStates: [Int: ImageState]
         let dismiss: () -> Void
         let startControlsTimer: () -> Void
         let resetControlsTimer: () -> Void
+        let loadImageIfNeededClosure: (MimeiFileType, Int) -> Void
         
         var body: some View {
             ZStack {
@@ -177,6 +183,18 @@ struct MediaBrowserView: View {
             attachment.type == .image
         }
         
+        private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
+            ImageViewWithPlaceholder(
+                attachment: attachment,
+                baseUrl: baseUrl,
+                url: url,
+                imageState: imageStates[index] ?? .loading
+            )
+            .onAppear {
+                loadImageIfNeededClosure(attachment, index)
+            }
+        }
+        
         private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
             SimpleVideoPlayer(
                 url: url,
@@ -206,13 +224,7 @@ struct MediaBrowserView: View {
             .environmentObject(MuteState.shared)
         }
         
-        private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
-            ZoomableImageView(
-                imageURL: url,
-                placeholderImage: nil,
-                contentMode: .fit
-            )
-        }
+
     }
     
 
@@ -305,18 +317,7 @@ struct MediaBrowserView: View {
         .environmentObject(MuteState.shared)
     }
     
-    @ViewBuilder
-    private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
-        ImageViewWithPlaceholder(
-            attachment: attachment,
-            baseUrl: baseUrl,
-            url: url,
-            imageState: imageStates[index] ?? .loading
-        )
-        .onAppear {
-            loadImageIfNeeded(for: attachment, at: index)
-        }
-    }
+
     
     private func getCachedPlaceholder(for attachment: MimeiFileType) -> UIImage? {
         return ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl)
