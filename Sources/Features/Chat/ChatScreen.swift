@@ -238,6 +238,7 @@ struct ChatScreen: View {
                 showToastMessage(NSLocalizedString("Failed to send message", comment: "Chat error"), type: .error)
             }
         }
+
         .task {
             print("[ChatScreen] Starting to load chat for receiptId: \(receiptId)")
             
@@ -370,14 +371,6 @@ struct ChatScreen: View {
     }
     
     private func sendMessageWithAttachments() {
-        // Guard against creating ChatMessage without content or attachments
-        let trimmedContent = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedContent.isEmpty || (selectedAttachment != nil && attachmentData != nil) else {
-            print("[ChatScreen] Cannot send message without content or attachment")
-            showToastMessage(NSLocalizedString("Message must have content or attachment", comment: "Chat validation error"), type: .error)
-            return
-        }
-        
         // Store current values for background processing
         let currentMessageText = messageText
         let currentAttachment = selectedAttachment
@@ -390,27 +383,29 @@ struct ChatScreen: View {
         selectedPhotos = []
         
         // Show toast message for background upload
-        showToastMessage(NSLocalizedString("Sending message in background...", comment: "Chat status"), type: .info)
+        showToastMessage(NSLocalizedString("Uploading attachment...", comment: "Chat status"), type: .info)
         
-        // Process message in background
+        // Process attachment upload in background, then send message directly
         Task.detached(priority: .background) {
-            var uploadedAttachments: [MimeiFileType]? = nil
-            
             do {
-                // Upload attachment if present
+                // Use the same tweet upload routine for attachments
+                var uploadedAttachments: [MimeiFileType]? = nil
+                
                 if let attachment = currentAttachment, let photoData = currentAttachmentData {
-                    print("[ChatScreen] Uploading attachment to IPFS in background...")
+                    print("[ChatScreen] Uploading attachment using tweet upload routine...")
+                    
+                    // Upload attachment directly using the same method as tweet uploads
                     if let uploadedAttachment = try await HproseInstance.shared.uploadToIPFS(
                         data: photoData,
                         typeIdentifier: attachment.type == .image ? "public.image" : "public.movie",
-                        fileName: attachment.fileName
+                        fileName: attachment.fileName ?? "attachment"
                     ) {
                         uploadedAttachments = [uploadedAttachment]
-                        print("[ChatScreen] Attachment uploaded successfully: \(uploadedAttachment.fileName ?? "Unknown")")
+                        print("[ChatScreen] Attachment uploaded successfully using tweet routine")
                     }
                 }
                 
-                // Create final message with uploaded attachment
+                // Create final message with uploaded attachments
                 let finalMessage = ChatMessage(
                     authorId: HproseInstance.shared.appUser.mid,
                     receiptId: receiptId,
@@ -419,15 +414,9 @@ struct ChatScreen: View {
                     attachments: uploadedAttachments
                 )
                 
-                // Send message to backend
-                print("[ChatScreen] Sending message to backend...")
+                // Send message directly (not in background)
+                print("[ChatScreen] Sending message directly...")
                 let resultMessage = try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: finalMessage)
-                
-                if resultMessage.success == true {
-                    print("[ChatScreen] Message sent to backend successfully")
-                } else {
-                    print("[ChatScreen] Message failed to send: \(resultMessage.errorMsg ?? "Unknown error")")
-                }
                 
                 // Update the chat session with the result message
                 await chatSessionManager.updateOrCreateChatSession(
@@ -442,45 +431,33 @@ struct ChatScreen: View {
                     chatRepository.addMessagesToCoreData([resultMessage])
                     
                     if resultMessage.success == true {
-                        print("[ChatScreen] Message sent successfully in background")
+                        print("[ChatScreen] Message sent successfully")
                     } else {
-                        print("[ChatScreen] Message failed to send in background: \(resultMessage.errorMsg ?? "Unknown error")")
+                        print("[ChatScreen] Message failed to send: \(resultMessage.errorMsg ?? "Unknown error")")
                     }
                 }
                 
             } catch {
-                print("[ChatScreen] Error sending message in background: \(error)")
+                print("[ChatScreen] Error uploading attachment or sending message: \(error)")
                 
-                // Capture the error message and attachments before entering MainActor
-                let errorMessage = error.localizedDescription
-                let capturedAttachments = uploadedAttachments
-                
-                // Handle network exceptions the same as backend failures
+                // Handle network exceptions
                 await MainActor.run {
                     // Create a failed message with error details
-                    // Guard against creating ChatMessage without content or attachments
-                    let trimmedContent = currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmedContent.isEmpty || (capturedAttachments != nil && !capturedAttachments!.isEmpty) else {
-                        print("[ChatScreen] Cannot create failed message without content or attachments")
-                        showToastMessage(NSLocalizedString("Failed to create error message", comment: "Chat error"), type: .error)
-                        return
-                    }
-                    
                     let failedMessage = ChatMessage(
                         authorId: HproseInstance.shared.appUser.mid,
                         receiptId: receiptId,
                         chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
-                        content: trimmedContent.isEmpty ? nil : trimmedContent,
-                        attachments: capturedAttachments,
+                        content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
+                        attachments: nil,
                         success: false,
-                        errorMsg: errorMessage
+                        errorMsg: error.localizedDescription
                     )
                     
                     // Add failed message to UI and save to Core Data
                     messages.append(failedMessage)
                     chatRepository.addMessagesToCoreData([failedMessage])
                     
-                    print("[ChatScreen] Message failed to send in background (network error): \(errorMessage)")
+                    print("[ChatScreen] Message failed to send: \(error.localizedDescription)")
                 }
             }
         }
@@ -633,21 +610,73 @@ struct ChatScreen: View {
         
         do {
             if let data = try await item.loadTransferable(type: Data.self) {
-                // Get the type identifier and determine media type and file extension
+                // Get the type identifier from the PhotosPickerItem
                 let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                let mediaType = detectMediaType(for: typeIdentifier)
-                let fileExtension = getFileExtension(for: typeIdentifier)
+                print("[ChatScreen] Type identifier: \(typeIdentifier)")
                 
-                // Create a unique filename with timestamp
-                let timestamp = Int(Date().timeIntervalSince1970)
-                let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
+                // Detect media type and set appropriate file extension
+                let mediaType: MediaType
+                let fileExtension: String
+                
+                // Determine media type and extension from type identifier
+                if typeIdentifier.contains("movie") || typeIdentifier.contains("video") || typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || typeIdentifier.contains("webm") {
+                    mediaType = .video
+                    if typeIdentifier.contains("mp4") || typeIdentifier.contains("mpeg-4") {
+                        fileExtension = "mp4"
+                    } else if typeIdentifier.contains("mov") || typeIdentifier.contains("quicktime") {
+                        fileExtension = "mov"
+                    } else if typeIdentifier.contains("avi") {
+                        fileExtension = "avi"
+                    } else if typeIdentifier.contains("wmv") {
+                        fileExtension = "wmv"
+                    } else if typeIdentifier.contains("flv") {
+                        fileExtension = "flv"
+                    } else if typeIdentifier.contains("webm") {
+                        fileExtension = "webm"
+                    } else {
+                        fileExtension = "mp4" // Default for videos
+                    }
+                    print("[ChatScreen] Detected video with extension: \(fileExtension)")
+                } else {
+                    mediaType = .image
+                    if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
+                        fileExtension = "jpg"
+                    } else if typeIdentifier.contains("png") {
+                        fileExtension = "png"
+                    } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+                        fileExtension = "heic"
+                    } else if typeIdentifier.contains("gif") {
+                        fileExtension = "gif"
+                    } else if typeIdentifier.contains("webp") {
+                        fileExtension = "webp"
+                    } else {
+                        fileExtension = "jpg" // Default for images
+                    }
+                    print("[ChatScreen] Detected image with extension: \(fileExtension)")
+                }
+                
+                // Use item identifier for uniqueness, fallback to timestamp
+                let uniqueId = item.itemIdentifier ?? String(Int(Date().timeIntervalSince1970))
+                // Sanitize the uniqueId to make it safe for filenames
+                let sanitizedId = uniqueId.replacingOccurrences(of: "/", with: "_")
+                    .replacingOccurrences(of: ":", with: "_")
+                    .replacingOccurrences(of: "\\", with: "_")
+                    .replacingOccurrences(of: "*", with: "_")
+                    .replacingOccurrences(of: "?", with: "_")
+                    .replacingOccurrences(of: "\"", with: "_")
+                    .replacingOccurrences(of: "<", with: "_")
+                    .replacingOccurrences(of: ">", with: "_")
+                    .replacingOccurrences(of: "|", with: "_")
+                
+                let fileName = "\(mediaType == .image ? "photo" : "video")_\(sanitizedId).\(fileExtension)"
+                print("[ChatScreen] Generated filename: \(fileName)")
                 
                 // Create a temporary MimeiFileType for the selected media
                 let tempAttachment = MimeiFileType(
                     mid: UUID().uuidString,
                     mediaType: mediaType,
                     size: Int64(data.count),
-                    fileName: filename,
+                    fileName: fileName,
                     url: nil
                 )
                 
@@ -663,60 +692,7 @@ struct ChatScreen: View {
         }
     }
     
-    private func detectMediaType(for typeIdentifier: String) -> MediaType {
-        if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") || 
-            typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
-            typeIdentifier.contains("heic") || typeIdentifier.contains("heif") ||
-            typeIdentifier.contains("tiff") || typeIdentifier.contains("bmp") ||
-            typeIdentifier.contains("webp") || typeIdentifier.hasPrefix("public.image") {
-            return .image
-        } else if typeIdentifier.contains("mp4") || typeIdentifier.contains("mov") || 
-                    typeIdentifier.contains("m4v") || typeIdentifier.contains("mkv") ||
-                    typeIdentifier.contains("avi") || typeIdentifier.contains("wmv") ||
-                    typeIdentifier.hasPrefix("public.movie") || typeIdentifier.hasPrefix("public.video") {
-            return .video
-        } else if typeIdentifier.contains("m4a") || typeIdentifier.contains("mp3") || 
-                    typeIdentifier.contains("wav") || typeIdentifier.contains("aac") ||
-                    typeIdentifier.hasPrefix("public.audio") {
-            return .audio
-        } else {
-            return .image // Default to image for unknown types
-        }
-    }
     
-    private func getFileExtension(for typeIdentifier: String) -> String {
-        if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
-            return "jpg"
-        } else if typeIdentifier.contains("png") {
-            return "png"
-        } else if typeIdentifier.contains("gif") {
-            return "gif"
-        } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
-            return "heic"
-        } else if typeIdentifier.contains("mp4") {
-            return "mp4"
-        } else if typeIdentifier.contains("mov") {
-            return "mov"
-        } else if typeIdentifier.contains("m4v") {
-            return "m4v"
-        } else if typeIdentifier.contains("mkv") {
-            return "mkv"
-        } else if typeIdentifier.contains("avi") {
-            return "avi"
-        } else if typeIdentifier.contains("wmv") {
-            return "wmv"
-        } else if typeIdentifier.contains("m4a") {
-            return "m4a"
-        } else if typeIdentifier.contains("mp3") {
-            return "mp3"
-        } else if typeIdentifier.contains("wav") {
-            return "wav"
-        } else if typeIdentifier.contains("aac") {
-            return "aac"
-        } else {
-            return "file"
-        }
-    }
     
     private func refreshMessagesFromBackend() async {
         do {

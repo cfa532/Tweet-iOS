@@ -1643,7 +1643,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Detect media type from type identifier, filename, and file header
-        private func detectMediaType(from typeIdentifier: String, fileName: String?, data: Data) async -> MediaType {
+        func detectMediaType(from typeIdentifier: String, fileName: String?, data: Data) async -> MediaType {
             // Check type identifier first
             if typeIdentifier.hasPrefix("public.image") {
                 return .image
@@ -2354,6 +2354,13 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
+        Task.detached(priority: .background) {
+            var mutableMessage = message
+            await self.uploadChatMessageWithPersistenceAndRetry(message: &mutableMessage, itemData: itemData)
+        }
+    }
+    
     private func uploadTweetWithPersistenceAndRetry(tweet: Tweet, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0) async {
         // Save pending upload to disk for persistence
         let pendingUpload = PendingTweetUpload(tweet: tweet, itemData: itemData, retryCount: retryCount)
@@ -2400,6 +2407,39 @@ final class HproseInstance: ObservableObject {
                         userInfo: ["error": error]
                     )
                 }
+            }
+        }
+    }
+    
+    private func uploadChatMessageWithPersistenceAndRetry(message: inout ChatMessage, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0) async {
+        do {
+            // Upload attachments first
+            let uploadedAttachments = try await uploadAttachmentsWithRetry(itemData: itemData, retryCount: retryCount)
+            
+            // Update message with uploaded attachments
+            message.attachments = uploadedAttachments
+            
+            // Send the message
+            let resultMessage = try await self.sendMessage(receiptId: message.receiptId, message: message)
+            
+            if resultMessage.success == true {
+                // Success - message will appear in chat automatically
+                print("Chat message sent successfully: \(resultMessage.id)")
+            } else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: resultMessage.errorMsg ?? "Failed to send chat message"])
+            }
+        } catch {
+            print("Error uploading chat message (attempt \(retryCount + 1)/\(maxRetryAttempts)): \(error)")
+            
+            if retryCount < maxRetryAttempts - 1 {
+                // Retry after delay
+                print("Retrying chat message upload in \(retryDelaySeconds) seconds...")
+                try? await Task.sleep(nanoseconds: UInt64(retryDelaySeconds * 1_000_000_000))
+                await uploadChatMessageWithPersistenceAndRetry(message: &message, itemData: itemData, retryCount: retryCount + 1)
+            } else {
+                // Max retries reached - the message will show with a failure icon
+                // No need to post notification since the UI already handles failed messages
+                print("Chat message upload failed after \(maxRetryAttempts) attempts")
             }
         }
     }

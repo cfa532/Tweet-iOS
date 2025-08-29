@@ -55,8 +55,6 @@ extension Notification.Name {
     // MARK: - Chat Related
     /// Posted when a new chat message is received
     static let newChatMessageReceived = Notification.Name("NewChatMessageReceived")
-    /// Posted when a chat message is sent
-    static let chatMessageSent = Notification.Name("ChatMessageSent")
     /// Posted when chat message sending fails
     static let chatMessageSendFailed = Notification.Name("ChatMessageSendFailed")
     /// Posted when a chat notification is tapped to open chat screen

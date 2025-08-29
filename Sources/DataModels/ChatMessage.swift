@@ -7,7 +7,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     let chatSessionId: String
     let content: String?
     let timestamp: TimeInterval
-    let attachments: [MimeiFileType]?
+    var attachments: [MimeiFileType]?
     let success: Bool?
     let errorMsg: String?
     
