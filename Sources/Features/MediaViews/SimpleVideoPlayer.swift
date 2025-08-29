@@ -159,6 +159,15 @@ struct SimpleVideoPlayer: View {
                 UIApplication.shared.isIdleTimerDisabled = true
             }
             
+            // Validate existing player state if present
+            if let player = player, let playerItem = player.currentItem {
+                if playerItem.status == .failed {
+                    print("DEBUG: [VIDEO APPEAR] Player item is in failed state for \(mid), triggering recovery")
+                    handleLoadFailure()
+                    return
+                }
+            }
+            
             // Only set up player if both conditions are met
             if player == nil && shouldLoadVideo && isVisible {
                 setupPlayer()
@@ -210,6 +219,15 @@ struct SimpleVideoPlayer: View {
                 guard shouldLoadVideo else {
                     print("DEBUG: [VIDEO VISIBILITY] Video became visible but loading is disabled for \(mid)")
                     return
+                }
+                
+                // Validate existing player state if present
+                if let player = player, let playerItem = player.currentItem {
+                    if playerItem.status == .failed {
+                        print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state for \(mid), triggering recovery")
+                        handleLoadFailure()
+                        return
+                    }
                 }
                 
                 // If no player and loading is enabled, set up the player
@@ -450,6 +468,33 @@ struct SimpleVideoPlayer: View {
             return
         }
         
+        // Validate cached player before using it
+        guard let playerItem = cachedState.player.currentItem else {
+            print("DEBUG: [VIDEO CACHE] Cached player has no currentItem, clearing cache and creating new player for \(mid)")
+            VideoStateCache.shared.clearCache(for: mid)
+            SharedAssetCache.shared.removeInvalidPlayer(for: url)
+            setupPlayer()
+            return
+        }
+        
+        // Check if player item is in a valid state
+        if playerItem.status == .failed {
+            print("DEBUG: [VIDEO CACHE] Cached player item is in failed state, clearing cache and creating new player for \(mid)")
+            VideoStateCache.shared.clearCache(for: mid)
+            SharedAssetCache.shared.removeInvalidPlayer(for: url)
+            setupPlayer()
+            return
+        }
+        
+        // Check if player item is ready to play
+        if playerItem.status != .readyToPlay {
+            print("DEBUG: [VIDEO CACHE] Cached player item not ready (status: \(playerItem.status.rawValue)), clearing cache and creating new player for \(mid)")
+            VideoStateCache.shared.clearCache(for: mid)
+            SharedAssetCache.shared.removeInvalidPlayer(for: url)
+            setupPlayer()
+            return
+        }
+        
         // Restore the cached player
         self.player = cachedState.player
         
@@ -544,19 +589,35 @@ struct SimpleVideoPlayer: View {
         ) { notification in
             self.handleLoadFailure()
         }
+        
+        // Note: KVO observers are not available in SwiftUI structs
+        // Player status monitoring is handled through notification observers and periodic checks
     }
     
     private func handleLoadFailure() {
         loadFailed = true
         isLoading = false
-        // Don't clear player immediately - let it persist for potential recovery
-        // player = nil
         print("DEBUG: [VIDEO ERROR] Load failed for \(mid), retry count: \(retryCount)")
+        
+        // Clear the current player since it's in an invalid state
+        player = nil
+        
+        // Clear all caches to force a fresh load
+        VideoStateCache.shared.clearCache(for: mid)
+        SharedAssetCache.shared.removeInvalidPlayer(for: url)
         
         // For fullscreen modes, try to restore from cache even on failure
         if mode == .mediaBrowser {
             print("DEBUG: [VIDEO ERROR] Fullscreen mode, attempting to restore from cache for \(mid)")
             restoreCachedVideoState()
+        } else {
+            // For MediaCell mode, attempt retry if we haven't exceeded max retries
+            if retryCount < 3 {
+                print("DEBUG: [VIDEO ERROR] MediaCell mode, attempting retry for \(mid)")
+                retryLoad()
+            } else {
+                print("DEBUG: [VIDEO ERROR] Max retries exceeded for \(mid), video will remain in failed state")
+            }
         }
     }
     
@@ -569,6 +630,15 @@ struct SimpleVideoPlayer: View {
     }
     
     private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
+        // Validate player state before attempting playback
+        if let player = player, let playerItem = player.currentItem {
+            if playerItem.status == .failed {
+                print("DEBUG: [VIDEO VALIDATION] Player item is in failed state for \(mid), triggering recovery")
+                handleLoadFailure()
+                return
+            }
+        }
+        
         // Check if all conditions are met for autoplay
         if autoPlay && isVisible && player != nil && !isLoading {
             // Activate audio session for video playback

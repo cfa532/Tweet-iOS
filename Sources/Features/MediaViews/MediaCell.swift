@@ -406,6 +406,9 @@ struct MediaCell: View, Equatable {
             // Clear player cache
             SharedAssetCache.shared.removeInvalidPlayer(for: url)
             
+            // Clear video state cache
+            VideoStateCache.shared.clearCache(for: attachment.mid)
+            
             // Clear asset cache
             Task {
                 await MainActor.run {

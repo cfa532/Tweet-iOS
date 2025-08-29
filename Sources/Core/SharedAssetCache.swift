@@ -203,6 +203,19 @@ class SharedAssetCache: ObservableObject {
     func getCachedPlayer(for url: URL) -> AVPlayer? {
         let cacheKey = url.absoluteString
         if let player = playerCache[cacheKey] {
+            // Validate player before returning it
+            guard let playerItem = player.currentItem else {
+                print("DEBUG: [SHARED ASSET CACHE] Cached player has no currentItem, removing invalid player for: \(url)")
+                removeInvalidPlayer(for: url)
+                return nil
+            }
+            
+            if playerItem.status == .failed {
+                print("DEBUG: [SHARED ASSET CACHE] Cached player item is in failed state, removing invalid player for: \(url)")
+                removeInvalidPlayer(for: url)
+                return nil
+            }
+            
             cacheTimestamps[cacheKey] = Date() // Update access time
             return player
         }
