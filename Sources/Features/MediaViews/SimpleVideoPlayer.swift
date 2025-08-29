@@ -420,11 +420,12 @@ struct SimpleVideoPlayer: View {
         }
         
         // Otherwise, create a new player with performance considerations
-        Task {
+        Task.detached(priority: .userInitiated) {
             do {
                 // Add a small delay to prevent overwhelming the system when multiple videos load simultaneously
-                if retryCount == 0 {
-                    try await Task.sleep(nanoseconds: UInt64(retryCount * 50_000_000)) // 0.05s delay per retry
+                let currentRetryCount = retryCount
+                if currentRetryCount == 0 {
+                    try await Task.sleep(nanoseconds: UInt64(currentRetryCount * 50_000_000)) // 0.05s delay per retry
                 }
                 
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid)
@@ -600,8 +601,8 @@ struct SimpleVideoPlayer: View {
         SharedAssetCache.shared.removeInvalidPlayer(for: url)
         VideoStateCache.shared.clearCache(for: mid)
         
-        // Clear asset cache to force fresh network request
-        Task {
+        // Clear asset cache to force fresh network request - do this asynchronously
+        Task.detached {
             await MainActor.run {
                 SharedAssetCache.shared.clearAssetCache(for: url)
                 print("DEBUG: [VIDEO RETRY] Cleared all caches for \(mid)")
@@ -627,8 +628,8 @@ struct SimpleVideoPlayer: View {
         SharedAssetCache.shared.removeInvalidPlayer(for: url)
         VideoStateCache.shared.clearCache(for: mid)
         
-        // Clear asset cache to force fresh network request
-        Task {
+        // Clear asset cache to force fresh network request - do this asynchronously
+        Task.detached {
             await MainActor.run {
                 SharedAssetCache.shared.clearAssetCache(for: url)
                 print("DEBUG: [VIDEO MANUAL RESET] Cleared all caches for \(mid)")
@@ -659,7 +660,8 @@ struct SimpleVideoPlayer: View {
         SharedAssetCache.shared.removeInvalidPlayer(for: url)
         VideoStateCache.shared.clearCache(for: mid)
         
-        Task {
+        // Clear asset cache asynchronously
+        Task.detached {
             await MainActor.run {
                 SharedAssetCache.shared.clearAssetCache(for: url)
                 print("DEBUG: [VIDEO NETWORK RECOVERY] Cleared all caches for \(mid)")

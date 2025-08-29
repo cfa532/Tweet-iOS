@@ -181,16 +181,22 @@ class SharedAssetCache: ObservableObject {
     func cachePlayer(_ player: AVPlayer, for url: URL) {
         let cacheKey = url.absoluteString
         
-        // Remove old player if exists
+        // Remove old player if exists - do this asynchronously to avoid blocking
         if let oldPlayer = playerCache[cacheKey] {
-            oldPlayer.pause()
+            Task.detached {
+                oldPlayer.pause()
+            }
         }
         
         playerCache[cacheKey] = player
         cacheTimestamps[cacheKey] = Date()
         
-        // Manage cache size
-        managePlayerCacheSize()
+        // Manage cache size asynchronously
+        Task.detached {
+            await MainActor.run {
+                self.managePlayerCacheSize()
+            }
+        }
     }
     
     /// Get cached player if available
@@ -244,26 +250,27 @@ class SharedAssetCache: ObservableObject {
             return url
         }
         
-        // Try to find HLS playlist
+        // Try to find HLS playlist with shorter timeout
         let masterURL = url.appendingPathComponent("master.m3u8")
         let playlistURL = url.appendingPathComponent("playlist.m3u8")
         
-        if await urlExists(masterURL) {
+        // Use shorter timeout to prevent blocking
+        if await urlExists(masterURL, timeout: 3.0) {
             return masterURL
         }
         
-        if await urlExists(playlistURL) {
+        if await urlExists(playlistURL, timeout: 3.0) {
             return playlistURL
         }
         return url
     }
     
-    /// Check if URL exists
-    private func urlExists(_ url: URL) async -> Bool {
+    /// Check if URL exists with configurable timeout
+    private func urlExists(_ url: URL, timeout: TimeInterval = 3.0) async -> Bool {
         do {
             var request = URLRequest(url: url)
             request.httpMethod = "HEAD"
-            request.timeoutInterval = 15.0
+            request.timeoutInterval = timeout
             let (_, response) = try await URLSession.shared.data(for: request)
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch {
@@ -387,28 +394,43 @@ class SharedAssetCache: ObservableObject {
     
     private func manageCacheSize() {
         if assetCache.count > maxCacheSize {
-            // Remove least recently used assets
-            let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
-            let keysToRemove = sortedKeys.prefix(assetCache.count - maxCacheSize)
-            
-            for key in keysToRemove {
-                assetCache.removeValue(forKey: key)
-                cacheTimestamps.removeValue(forKey: key)
+            // Remove least recently used assets - do sorting on background thread
+            Task.detached {
+                let sortedKeys = await MainActor.run {
+                    self.cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+                }
+                let keysToRemove = sortedKeys.prefix(await MainActor.run { self.assetCache.count - self.maxCacheSize })
+                
+                await MainActor.run {
+                    for key in keysToRemove {
+                        self.assetCache.removeValue(forKey: key)
+                        self.cacheTimestamps.removeValue(forKey: key)
+                    }
+                }
             }
         }
     }
     
     private func managePlayerCacheSize() {
         if playerCache.count > maxCacheSize {
-            // Remove least recently used players
-            let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
-            let keysToRemove = sortedKeys.prefix(playerCache.count - maxCacheSize)
-            
-            for key in keysToRemove {
-                if let player = playerCache[key] {
-                    player.pause()
-                    playerCache.removeValue(forKey: key)
-                    cacheTimestamps.removeValue(forKey: key)
+            // Remove least recently used players - do sorting on background thread
+            Task.detached {
+                let sortedKeys = await MainActor.run {
+                    self.cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+                }
+                let keysToRemove = sortedKeys.prefix(await MainActor.run { self.playerCache.count - self.maxCacheSize })
+                
+                await MainActor.run {
+                    for key in keysToRemove {
+                        if let player = self.playerCache[key] {
+                            // Pause player asynchronously
+                            Task.detached {
+                                player.pause()
+                            }
+                            self.playerCache.removeValue(forKey: key)
+                            self.cacheTimestamps.removeValue(forKey: key)
+                        }
+                    }
                 }
             }
         }
