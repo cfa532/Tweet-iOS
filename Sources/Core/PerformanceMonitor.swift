@@ -22,9 +22,9 @@ class PerformanceMonitor: ObservableObject {
     @Published private(set) var lastFreezeDetection = Date()
     
     // MARK: - Configuration
-    private let maxConcurrentVideoLoads = 3
-    private let freezeThreshold: TimeInterval = 0.1 // 100ms threshold for freeze detection
-    private let loadCooldownPeriod: TimeInterval = 2.0 // 2 seconds cooldown after freeze
+    private let maxConcurrentVideoLoads = 3 // Back to 3 concurrent loads
+    private let freezeThreshold: TimeInterval = 0.2 // Increased from 0.1 to 200ms for less aggressive detection
+    private let loadCooldownPeriod: TimeInterval = 1.0 // Reduced from 2.0 to 1 second for faster recovery
     
     // MARK: - Monitoring
     private var lastMainThreadCheck = Date()
@@ -82,7 +82,7 @@ class PerformanceMonitor: ObservableObject {
             print("DEBUG: [PerformanceMonitor] Freeze count: \(freezeCount), entering cooldown period")
             
             // Trigger emergency cleanup if needed
-            if freezeCount > 3 {
+            if freezeCount > 5 { // Increased from 3 to 5 to be less aggressive
                 emergencyCleanup()
             }
         }
@@ -106,14 +106,14 @@ class PerformanceMonitor: ObservableObject {
     
     private func setupMonitoring() {
         // Monitor main thread performance
-        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in // Increased from 0.05 to 0.1 for less frequent monitoring
             Task { @MainActor in
                 self.checkForFreeze()
             }
         }
         
         // Reset freeze count periodically
-        Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { _ in
+        Timer.scheduledTimer(withTimeInterval: 20.0, repeats: true) { _ in // Reduced from 30.0 to 20.0 for faster recovery
             Task { @MainActor in
                 if self.freezeCount > 0 {
                     self.freezeCount = max(0, self.freezeCount - 1)

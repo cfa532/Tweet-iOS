@@ -24,12 +24,12 @@ class VideoLoadingManager: ObservableObject {
     
     // MARK: - Performance Management
     private var activeLoadingCount: Int = 0
-    private let maxConcurrentLoads: Int = 2 // Limit concurrent video loads to prevent UI freezes
+    private let maxConcurrentLoads: Int = 3 // Set to 3 to match PerformanceMonitor
     private var loadingQueue: [String] = [] // Queue for pending video loads
     private var isProcessingQueue = false
     
     // MARK: - Configuration
-    private let preloadCount = 2 // Reduced from 3 to 2 to prevent excessive loading
+    private let preloadCount = 3 // Increased from 2 to 3 to allow more preloading
     private let bufferDistance = 1 // Keep 1 tweet behind as buffer
     
     // MARK: - Performance Monitoring
@@ -160,7 +160,7 @@ class VideoLoadingManager: ObservableObject {
     
     private func isLoadingTooFrequently() -> Bool {
         let timeSinceLastLoad = Date().timeIntervalSince(lastLoadTime)
-        return timeSinceLastLoad < 0.5 && loadCountInLastMinute > 10 // Throttle if loading too frequently
+        return timeSinceLastLoad < 0.3 && loadCountInLastMinute > 20 // Increased frequency limit from 15 to 20
     }
     
     private func updateVisibleTweetIds() {
