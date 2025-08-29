@@ -2704,11 +2704,12 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Find IP addresses of given nodeId
-    func getHostIP(_ nodeId: String) async -> String? {
+    func getHostIP(_ nodeId: String, v4Only: String = "false") async -> String? {
         let params = [
             "aid": appId,
             "ver": "last",
-            "nodeid": nodeId
+            "nodeid": nodeId,
+            "v4only": "false"
         ]
         if let response = client.invoke("runMApp", withArgs: ["get_node_ip", params]) {
             return response as? String
