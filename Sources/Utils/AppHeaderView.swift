@@ -25,10 +25,11 @@ struct AppHeaderView: View {
             Spacer()
             
             // Middle: App Logo
-            Image("AppIcon") // Make sure to add this to your asset catalog
+            Image("tweet_icon")
                 .resizable()
                 .scaledToFit()
-                .frame(height: 32)
+                .frame(width: 40, height: 40)
+                .clipShape(Circle())
             
             Spacer()
             
