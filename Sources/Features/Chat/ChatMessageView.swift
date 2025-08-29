@@ -73,7 +73,7 @@ struct ChatMessageView: View {
                         if attachments.count == 1, let attachment = attachments.first {
                             // Single attachment
                             if attachment.type == .image {
-                                ChatImageViewWithPlaceholder(
+                                ChatImageThumbnail(
                                     attachment: attachment, 
                                     isFromCurrentUser: isFromCurrentUser,
                                     senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser
@@ -239,16 +239,16 @@ struct AttachmentView: View {
     }
 }
 
-// MARK: - Chat Image View With Placeholder
+// MARK: - Chat Image Thumbnail
 
-struct ChatImageViewWithPlaceholder: View {
+struct ChatImageThumbnail: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
     let senderUser: User?
     
     @State private var showFullScreen = false
-    @State private var isImageLoaded = false
-    @State private var hasLoadError = false
+    @State private var image: UIImage?
+    @State private var isLoading = false
     
     private var baseUrl: URL {
         if isFromCurrentUser {
@@ -262,99 +262,178 @@ struct ChatImageViewWithPlaceholder: View {
     
     var body: some View {
         Group {
-            if let url = attachment.getUrl(baseUrl) {
-                chatImageView(url: url)
+            if attachment.getUrl(baseUrl) != nil {
+                chatImageThumbnail()
             } else {
                 chatImageFallback
             }
         }
-        .sheet(isPresented: $showFullScreen) {
-            if let url = attachment.getUrl(baseUrl) {
-                FullScreenImageView(
-                    imageURL: url,
-                    placeholderImage: getCachedPlaceholder(),
-                    isPresented: $showFullScreen
+        .onAppear {
+            // Load image if not already loaded
+            if image == nil {
+                loadImage()
+            }
+        }
+        .fullScreenCover(isPresented: $showFullScreen) {
+            // Use MediaBrowserView for full-screen viewing (same as MediaCell)
+            if attachment.getUrl(baseUrl) != nil {
+                // Create a mock Tweet for MediaBrowserView
+                let mockTweet = createMockTweet(for: attachment)
+                MediaBrowserView(
+                    tweet: mockTweet,
+                    initialIndex: 0
                 )
             }
         }
     }
     
     @ViewBuilder
-    private func chatImageView(url: URL) -> some View {
-        let aspectRatio = CGFloat(max(attachment.aspectRatio ?? 1.0, 0.8))
+    private func chatImageThumbnail() -> some View {
         let maxWidth = UIScreen.main.bounds.width * 0.7
         
-        WebImage(url: url, options: [.progressiveLoad])
-            .onSuccess { image, data, cacheType in
-                // Image loaded successfully
-                Task { @MainActor in
-                    isImageLoaded = true
-                    hasLoadError = false
+        // Use the same approach as MediaCell
+        if let image = image {
+            // Show loaded image
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: maxWidth)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .onTapGesture {
+                    showFullScreen = true
                 }
+        } else if isLoading {
+            // Show loading state with cached placeholder
+            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                Image(uiImage: cachedImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: maxWidth)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.8)
+                            .background(Color.gray.opacity(0.3))
+                            .clipShape(Circle())
+                            .padding(4),
+                        alignment: .topTrailing
+                    )
+                    .onTapGesture {
+                        showFullScreen = true
+                    }
+            } else {
+                // Show loading placeholder
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
+                    .scaleEffect(1.2)
+                    .frame(maxWidth: maxWidth)
+                    .frame(height: 200)
+                    .background(Color(.systemGray6).opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .onTapGesture {
+                        showFullScreen = true
+                    }
             }
-            .onFailure { error in
-                // Handle error state
-                Task { @MainActor in
-                    hasLoadError = true
-                    isImageLoaded = false
-                }
-            }
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-            .frame(maxWidth: maxWidth)
-            .aspectRatio(aspectRatio, contentMode: .fit)
-            .overlay(
-                Group {
-                    if !isImageLoaded && !hasLoadError {
-                        if let placeholderImage = getCachedPlaceholder() {
-                            Image(uiImage: placeholderImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
+        } else {
+            // Show cached placeholder if available, otherwise fallback
+            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                Image(uiImage: cachedImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: maxWidth)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .onTapGesture {
+                        showFullScreen = true
+                    }
+            } else {
+                // Show fallback placeholder
+                Color(.systemGray6)
+                    .frame(maxWidth: maxWidth)
+                    .frame(height: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        VStack(spacing: 8) {
+                            Image(systemName: "photo")
+                                .font(.system(size: 24))
                                 .foregroundColor(.gray)
-                        } else {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                        }
-                    } else if hasLoadError {
-                        // Show error state
-                        VStack {
-                            Image(systemName: "exclamationmark.triangle")
-                                .foregroundColor(.orange)
-                                .font(.system(size: 20))
-                            Text(NSLocalizedString("Failed to load image", comment: "Image loading error"))
-                                .font(.caption2)
+                            Text(NSLocalizedString("Image", comment: "Image placeholder text"))
+                                .font(.caption)
                                 .foregroundColor(.secondary)
                         }
-                        .padding(8)
-                        .background(Color(.systemGray6).opacity(0.8))
-                        .cornerRadius(6)
+                    )
+                    .onTapGesture {
+                        showFullScreen = true
                     }
-                }
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .onTapGesture {
-                showFullScreen = true
             }
-            .onAppear {
-                // Reset state when view appears
-                isImageLoaded = false
-                hasLoadError = false
-            }
+        }
     }
     
     @ViewBuilder
     private var chatImageFallback: some View {
+        let aspectRatio = CGFloat(max(attachment.aspectRatio ?? 1.0, 0.8))
+        let maxWidth = UIScreen.main.bounds.width * 0.7
+        
         RoundedRectangle(cornerRadius: 8)
             .fill(Color(.systemGray6))
-            .frame(width: 100, height: 100)
+            .frame(maxWidth: maxWidth)
+            .aspectRatio(aspectRatio, contentMode: .fit)
             .overlay(
-                Image(systemName: "photo")
-                    .foregroundColor(.gray)
+                VStack(spacing: 8) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 24))
+                        .foregroundColor(.gray)
+                    Text(NSLocalizedString("Image", comment: "Image placeholder text"))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             )
     }
     
-    private func getCachedPlaceholder() -> UIImage? {
-        return ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl)
+
+    
+    private func loadImage() {
+        guard let url = attachment.getUrl(baseUrl) else { return }
+        
+        // First, try to get cached image immediately
+        if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            self.image = cachedImage
+            return
+        }
+        
+        // If no cached image, start loading
+        isLoading = true
+        Task {
+            if let loadedImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: baseUrl) {
+                await MainActor.run {
+                    self.image = loadedImage
+                    self.isLoading = false
+                }
+            } else {
+                await MainActor.run {
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+    
+    private func createMockTweet(for attachment: MimeiFileType) -> Tweet {
+        // Create a minimal Tweet object for MediaBrowserView
+        let mockAuthor = User(
+            mid: isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? ""),
+            baseUrl: baseUrl,
+            name: isFromCurrentUser ? HproseInstance.shared.appUser.name : (senderUser?.name ?? ""),
+            avatar: isFromCurrentUser ? HproseInstance.shared.appUser.avatar : (senderUser?.avatar ?? "")
+        )
+        
+        return Tweet(
+            mid: MimeiId("chat_message_\(attachment.mid)"),
+            authorId: MimeiId(isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? "")),
+            content: "",
+            timestamp: Date(),
+            author: mockAuthor,
+            attachments: [attachment]
+        )
     }
 }
 

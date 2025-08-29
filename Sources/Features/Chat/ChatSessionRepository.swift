@@ -54,8 +54,8 @@ class ChatSessionRepository: ObservableObject {
         var sessions: [ChatSession] = []
         
         for sessionEntity in sessionEntities {
-            if let lastMessageEntity = await chatMessageDao.getMessageById(sessionEntity.lastMessageId) {
-                let chatMessage = lastMessageEntity.toChatMessage()
+            if let lastMessageEntity = await chatMessageDao.getMessageById(sessionEntity.lastMessageId),
+               let chatMessage = lastMessageEntity.toChatMessage() {
                 let chatSession = sessionEntity.toChatSession(chatMessage)
                 sessions.append(chatSession)
             }
@@ -169,13 +169,20 @@ class ChatSessionRepository: ObservableObject {
 // MARK: - Extensions
 
 extension ChatMessageEntity {
-    func toChatMessage() -> ChatMessage {
+    func toChatMessage() -> ChatMessage? {
+        // Guard against creating ChatMessage without content or attachments
+        let trimmedContent = content.isEmpty ? nil : content
+        guard trimmedContent != nil else {
+            print("[ChatSessionRepository] Cannot create ChatMessage without content or attachments")
+            return nil
+        }
+        
         return ChatMessage(
             id: id,
             authorId: authorId,
             receiptId: receiptId,
             chatSessionId: ChatMessage.generateSessionId(userId: authorId, receiptId: receiptId),
-            content: content.isEmpty ? nil : content,
+            content: trimmedContent,
             timestamp: timestamp,
             attachments: nil // ChatMessageEntity doesn't store attachments, so it's nil
         )

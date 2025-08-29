@@ -21,10 +21,6 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     }
     
     init(id: String = UUID().uuidString, authorId: MimeiId, receiptId: MimeiId, chatSessionId: String, content: String? = nil, timestamp: TimeInterval = Date().timeIntervalSince1970, attachments: [MimeiFileType]? = nil, success: Bool? = nil, errorMsg: String? = nil) {
-        // Validate that either content or attachments (or both) are present
-        guard content != nil || (attachments != nil && !attachments!.isEmpty) else {
-            fatalError("ChatMessage must have either content or attachments (or both)")
-        }
         self.id = id
         self.authorId = authorId
         self.receiptId = receiptId

@@ -78,6 +78,12 @@ class ChatRepository: ObservableObject {
             // Handle network exceptions the same as backend failures
             await MainActor.run {
                 // Create a failed message with error details
+                // Guard against creating ChatMessage without content or attachments
+                guard message.content != nil || (message.attachments != nil && !message.attachments!.isEmpty) else {
+                    print("[ChatRepository] Cannot create failed message without content or attachments")
+                    return
+                }
+                
                 let failedMessage = ChatMessage(
                     id: message.id,
                     authorId: message.authorId,

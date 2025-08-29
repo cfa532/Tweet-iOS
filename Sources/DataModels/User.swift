@@ -420,7 +420,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             return writableUrl
         }
         if let hostId = self.hostIds?.first, !hostId.isEmpty {
-            if let hostIP = await HproseInstance.shared.getHostIP(hostId) {
+            if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: "true") {
                 let url = URL(string: "http://\(hostIP)")
                 self.writableUrl = url
                 return url

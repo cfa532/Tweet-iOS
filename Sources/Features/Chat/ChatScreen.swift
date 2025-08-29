@@ -279,12 +279,20 @@ struct ChatScreen: View {
     }
     
     private func sendTextMessageDirectly() {
+        // Guard against creating ChatMessage without content or attachments
+        let trimmedContent = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedContent.isEmpty else {
+            print("[ChatScreen] Cannot send empty message")
+            showToastMessage(NSLocalizedString("Message cannot be empty", comment: "Chat validation error"), type: .error)
+            return
+        }
+        
         // Create message for immediate sending
         let message = ChatMessage(
             authorId: HproseInstance.shared.appUser.mid,
             receiptId: receiptId,
             chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
-            content: messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : messageText.trimmingCharacters(in: .whitespacesAndNewlines),
+            content: trimmedContent,
             attachments: nil
         )
                 
@@ -328,6 +336,13 @@ struct ChatScreen: View {
                 // Handle network exceptions the same as backend failures
                 await MainActor.run {
                     // Create a failed message with error details
+                    // Guard against creating ChatMessage without content or attachments
+                    guard message.content != nil || (message.attachments != nil && !message.attachments!.isEmpty) else {
+                        print("[ChatScreen] Cannot create failed message without content or attachments")
+                        showToastMessage(NSLocalizedString("Failed to create error message", comment: "Chat error"), type: .error)
+                        return
+                    }
+                    
                     let failedMessage = ChatMessage(
                         id: message.id,
                         authorId: message.authorId,
@@ -355,6 +370,14 @@ struct ChatScreen: View {
     }
     
     private func sendMessageWithAttachments() {
+        // Guard against creating ChatMessage without content or attachments
+        let trimmedContent = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedContent.isEmpty || (selectedAttachment != nil && attachmentData != nil) else {
+            print("[ChatScreen] Cannot send message without content or attachment")
+            showToastMessage(NSLocalizedString("Message must have content or attachment", comment: "Chat validation error"), type: .error)
+            return
+        }
+        
         // Store current values for background processing
         let currentMessageText = messageText
         let currentAttachment = selectedAttachment
@@ -435,11 +458,19 @@ struct ChatScreen: View {
                 // Handle network exceptions the same as backend failures
                 await MainActor.run {
                     // Create a failed message with error details
+                    // Guard against creating ChatMessage without content or attachments
+                    let trimmedContent = currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmedContent.isEmpty || (capturedAttachments != nil && !capturedAttachments!.isEmpty) else {
+                        print("[ChatScreen] Cannot create failed message without content or attachments")
+                        showToastMessage(NSLocalizedString("Failed to create error message", comment: "Chat error"), type: .error)
+                        return
+                    }
+                    
                     let failedMessage = ChatMessage(
                         authorId: HproseInstance.shared.appUser.mid,
                         receiptId: receiptId,
                         chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
-                        content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
+                        content: trimmedContent.isEmpty ? nil : trimmedContent,
                         attachments: capturedAttachments,
                         success: false,
                         errorMsg: errorMessage
@@ -602,12 +633,21 @@ struct ChatScreen: View {
         
         do {
             if let data = try await item.loadTransferable(type: Data.self) {
-                // Create a temporary MimeiFileType for the selected photo
+                // Get the type identifier and determine media type and file extension
+                let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+                let mediaType = detectMediaType(for: typeIdentifier)
+                let fileExtension = getFileExtension(for: typeIdentifier)
+                
+                // Create a unique filename with timestamp
+                let timestamp = Int(Date().timeIntervalSince1970)
+                let filename = "\(timestamp)_\(UUID().uuidString).\(fileExtension)"
+                
+                // Create a temporary MimeiFileType for the selected media
                 let tempAttachment = MimeiFileType(
                     mid: UUID().uuidString,
-                    mediaType: .image,
+                    mediaType: mediaType,
                     size: Int64(data.count),
-                    fileName: "photo.jpg",
+                    fileName: filename,
                     url: nil
                 )
                 
@@ -619,7 +659,62 @@ struct ChatScreen: View {
                 }
             }
         } catch {
-            print("[ChatScreen] Error loading photo: \(error)")
+            print("[ChatScreen] Error loading media: \(error)")
+        }
+    }
+    
+    private func detectMediaType(for typeIdentifier: String) -> MediaType {
+        if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") || 
+           typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
+           typeIdentifier.contains("heic") || typeIdentifier.contains("heif") ||
+           typeIdentifier.contains("tiff") || typeIdentifier.contains("bmp") ||
+           typeIdentifier.contains("webp") || typeIdentifier.hasPrefix("public.image") {
+            return .image
+        } else if typeIdentifier.contains("mp4") || typeIdentifier.contains("mov") || 
+                  typeIdentifier.contains("m4v") || typeIdentifier.contains("mkv") ||
+                  typeIdentifier.contains("avi") || typeIdentifier.contains("wmv") ||
+                  typeIdentifier.hasPrefix("public.movie") || typeIdentifier.hasPrefix("public.video") {
+            return .video
+        } else if typeIdentifier.contains("m4a") || typeIdentifier.contains("mp3") || 
+                  typeIdentifier.contains("wav") || typeIdentifier.contains("aac") ||
+                  typeIdentifier.hasPrefix("public.audio") {
+            return .audio
+        } else {
+            return .image // Default to image for unknown types
+        }
+    }
+    
+    private func getFileExtension(for typeIdentifier: String) -> String {
+        if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
+            return "jpg"
+        } else if typeIdentifier.contains("png") {
+            return "png"
+        } else if typeIdentifier.contains("gif") {
+            return "gif"
+        } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+            return "heic"
+        } else if typeIdentifier.contains("mp4") {
+            return "mp4"
+        } else if typeIdentifier.contains("mov") {
+            return "mov"
+        } else if typeIdentifier.contains("m4v") {
+            return "m4v"
+        } else if typeIdentifier.contains("mkv") {
+            return "mkv"
+        } else if typeIdentifier.contains("avi") {
+            return "avi"
+        } else if typeIdentifier.contains("wmv") {
+            return "wmv"
+        } else if typeIdentifier.contains("m4a") {
+            return "m4a"
+        } else if typeIdentifier.contains("mp3") {
+            return "mp3"
+        } else if typeIdentifier.contains("wav") {
+            return "wav"
+        } else if typeIdentifier.contains("aac") {
+            return "aac"
+        } else {
+            return "file"
         }
     }
     

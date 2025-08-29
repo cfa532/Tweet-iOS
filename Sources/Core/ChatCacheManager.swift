@@ -266,6 +266,12 @@ extension ChatCacheManager {
             attachments = try? JSONDecoder().decode([MimeiFileType].self, from: attachmentData)
         }
         
+        // Guard against creating ChatMessage without content or attachments
+        guard cdMessage.content != nil || (attachments != nil && !attachments!.isEmpty) else {
+            print("[ChatCacheManager] Cannot create ChatMessage without content or attachments")
+            return nil
+        }
+        
         return ChatMessage(
             id: id,
             authorId: authorId,
