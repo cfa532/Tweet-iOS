@@ -56,7 +56,9 @@ struct Avatar: View {
                     }
                 }
             } else {
-                Image("ic_splash")
+                Image("manyone")
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
                     .frame(width: size, height: size)
                     .clipShape(Circle())
             }

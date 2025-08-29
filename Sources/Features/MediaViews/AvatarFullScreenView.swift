@@ -29,7 +29,7 @@ struct AvatarFullScreenView: View {
                         loadAvatarImageIfNeeded(url: url)
                     }
                 } else {
-                    Image("ic_splash")
+                    Image("manyone")
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                 }

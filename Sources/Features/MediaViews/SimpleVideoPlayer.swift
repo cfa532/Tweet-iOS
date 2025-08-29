@@ -423,7 +423,7 @@ struct SimpleVideoPlayer: View {
         Task.detached(priority: .userInitiated) {
             do {
                 // Add a small delay to prevent overwhelming the system when multiple videos load simultaneously
-                let currentRetryCount = retryCount
+                let currentRetryCount = await retryCount
                 if currentRetryCount == 0 {
                     try await Task.sleep(nanoseconds: UInt64(currentRetryCount * 50_000_000)) // 0.05s delay per retry
                 }
