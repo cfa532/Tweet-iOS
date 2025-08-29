@@ -61,7 +61,6 @@ struct SimpleVideoPlayer: View {
     enum Mode {
         case mediaCell // Normal cell in feed/grid
         case mediaBrowser // In MediaBrowserView (fullscreen browser)
-        case fullscreen // Direct fullscreen mode
     }
     var mode: Mode = .mediaCell
     
@@ -123,21 +122,13 @@ struct SimpleVideoPlayer: View {
                     
                 case .mediaBrowser:
                     // MediaBrowser mode: fullscreen browser with native controls only
-                    videoPlayerView()
-                        .aspectRatio(videoAR, contentMode: .fit)
-                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
-                    
-                case .fullscreen:
-                    // Fullscreen mode: handle different video orientations
                     if isVideoPortrait {
                         // Portrait video: fit on full screen
-                        ZStack {
-                            videoPlayerView()
-                                .aspectRatio(videoAR, contentMode: .fit)
-                                .frame(maxWidth: screenWidth, maxHeight: screenHeight)
-                        }
+                        videoPlayerView()
+                            .aspectRatio(videoAR, contentMode: .fit)
+                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                     } else if isVideoLandscape {
-                        // Landscape video: rotate -90 degrees to fit on portrait device
+                        // Landscape video: rotate 90 degrees clockwise to fit on portrait device
                         ZStack {
                             videoPlayerView()
                                 .aspectRatio(videoAR, contentMode: .fit)
@@ -148,12 +139,12 @@ struct SimpleVideoPlayer: View {
                         }
                     } else {
                         // Square video: fit on full screen
-                        ZStack {
-                            videoPlayerView()
-                                .aspectRatio(1.0, contentMode: .fit)
-                                .frame(maxWidth: screenWidth, maxHeight: screenHeight)
-                        }
+                        videoPlayerView()
+                            .aspectRatio(videoAR, contentMode: .fit)
+                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                     }
+                    
+
                 }
             } else {
                 // Fallback when no aspect ratio is available
@@ -164,7 +155,7 @@ struct SimpleVideoPlayer: View {
         }
         .onAppear {
             // Handle idle timer for fullscreen modes
-            if mode == .fullscreen || mode == .mediaBrowser {
+            if mode == .mediaBrowser {
                 UIApplication.shared.isIdleTimerDisabled = true
             }
             
@@ -175,7 +166,7 @@ struct SimpleVideoPlayer: View {
         }
         .onDisappear {
             // Handle idle timer for fullscreen modes
-            if mode == .fullscreen || mode == .mediaBrowser {
+            if mode == .mediaBrowser {
                 UIApplication.shared.isIdleTimerDisabled = false
             }
             
@@ -320,7 +311,7 @@ struct SimpleVideoPlayer: View {
         if let player = player {
             ZStack {
                 // Main video player
-                if mode == .fullscreen || mode == .mediaBrowser {
+                if mode == .mediaBrowser {
                     // Use AVPlayerViewController for fullscreen modes to get native controls
                     AVPlayerViewControllerRepresentable(player: player)
                         .onTapGesture {
@@ -422,7 +413,7 @@ struct SimpleVideoPlayer: View {
         
         // For fullscreen modes, if no cached state and no player, try to restore from cache again
         // This handles cases where the cache was cleared but we still need the video
-        if (mode == .fullscreen || mode == .mediaBrowser) && player == nil && !isLoading {
+        if mode == .mediaBrowser && player == nil && !isLoading {
             print("DEBUG: [VIDEO CACHE] Fullscreen mode with no player, attempting to restore cached state for \(mid)")
             restoreCachedVideoState()
             return
@@ -562,7 +553,7 @@ struct SimpleVideoPlayer: View {
         print("DEBUG: [VIDEO ERROR] Load failed for \(mid), retry count: \(retryCount)")
         
         // For fullscreen modes, try to restore from cache even on failure
-        if mode == .fullscreen || mode == .mediaBrowser {
+        if mode == .mediaBrowser {
             print("DEBUG: [VIDEO ERROR] Fullscreen mode, attempting to restore from cache for \(mid)")
             restoreCachedVideoState()
         }
