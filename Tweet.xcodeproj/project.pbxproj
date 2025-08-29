@@ -25,7 +25,6 @@
 		4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4614381A2E3F5E97002D1B22 /* BlackList.swift */; };
 		4614381D2E3F69AD002D1B22 /* CoreDataManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4614381C2E3F69AD002D1B22 /* CoreDataManager.swift */; };
 		461438232E403EAB002D1B22 /* ChatMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438222E403E98002D1B22 /* ChatMessageView.swift */; };
-
 		461438272E44DCCC002D1B22 /* VideoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438262E44DCCB002D1B22 /* VideoManager.swift */; };
 		4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4629FB182DFFEA3100588941 /* MetricKitManager.swift */; };
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
@@ -132,7 +131,6 @@
 		4614381A2E3F5E97002D1B22 /* BlackList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackList.swift; sourceTree = "<group>"; };
 		4614381C2E3F69AD002D1B22 /* CoreDataManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataManager.swift; sourceTree = "<group>"; };
 		461438222E403E98002D1B22 /* ChatMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessageView.swift; sourceTree = "<group>"; };
-
 		461438262E44DCCB002D1B22 /* VideoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoManager.swift; sourceTree = "<group>"; };
 		4629FB182DFFEA3100588941 /* MetricKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitManager.swift; sourceTree = "<group>"; };
 		4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiFileType.swift; sourceTree = "<group>"; };
@@ -672,7 +670,6 @@
 				4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */,
 				4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
 				461438232E403EAB002D1B22 /* ChatMessageView.swift in Sources */,
-
 				468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */,
 				468F19F12E6074A30085BFE5 /* AudioSessionManager.swift in Sources */,
 				46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */,
@@ -890,7 +887,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -949,7 +946,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
