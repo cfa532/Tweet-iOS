@@ -73,7 +73,8 @@ struct DetailVideoPlayerView: View {
             }
         }
         .onChange(of: isMuted) { _, newMuteState in
-            detailVideoManager.currentPlayer?.isMuted = newMuteState
+            // Detail view videos should always be unmuted
+            detailVideoManager.currentPlayer?.isMuted = false
         }
         .onChange(of: detailVideoManager.currentPlayer) { _, player in
             if player != nil {

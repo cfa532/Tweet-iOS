@@ -196,13 +196,24 @@ struct SimpleVideoPlayer: View {
             player?.pause()
         }
         .onChange(of: isMuted) { _, newMuteState in
-            player?.isMuted = newMuteState
+            // For full screen modes, always keep unmuted regardless of the isMuted parameter
+            if mode == .mediaBrowser {
+                player?.isMuted = false
+                print("DEBUG: [VIDEO MUTE CHANGE] Forced unmuted for full screen mode")
+            } else {
+                player?.isMuted = newMuteState
+            }
         }
         .onReceive(MuteState.shared.$isMuted) { globalMuteState in
             // For MediaCell mode, always sync with global mute state
             if mode == .mediaCell {
                 player?.isMuted = globalMuteState
                 print("DEBUG: [VIDEO GLOBAL MUTE] Synced with global mute state: \(globalMuteState)")
+            }
+            // For full screen modes, ignore global mute state and always keep unmuted
+            else if mode == .mediaBrowser {
+                player?.isMuted = false
+                print("DEBUG: [VIDEO GLOBAL MUTE] Ignored global mute state for full screen mode")
             }
         }
         .onChange(of: currentAutoPlay) { _, shouldAutoPlay in
@@ -504,9 +515,10 @@ struct SimpleVideoPlayer: View {
             cachedState.player.isMuted = isMuted
             print("DEBUG: [VIDEO CACHE] Applied current global mute state (\(isMuted)) for MediaCell mode")
         } else {
-            // For other modes, use the cached mute state
-            cachedState.player.isMuted = cachedState.originalMuteState
-            print("DEBUG: [VIDEO CACHE] Applied cached mute state (\(cachedState.originalMuteState)) for non-MediaCell mode")
+            // For full screen modes (mediaBrowser), always unmute regardless of cached state
+            // This ensures full screen videos are never muted
+            cachedState.player.isMuted = false
+            print("DEBUG: [VIDEO CACHE] Forced unmuted for full screen mode")
         }
         
         // Seek to the cached position
@@ -535,7 +547,13 @@ struct SimpleVideoPlayer: View {
     
     private func configurePlayer(_ player: AVPlayer) {
         // Configure player
-        player.isMuted = isMuted
+        // For full screen modes, always unmute regardless of the isMuted parameter
+        if mode == .mediaBrowser {
+            player.isMuted = false
+            print("DEBUG: [VIDEO CONFIGURE] Forced unmuted for full screen mode")
+        } else {
+            player.isMuted = isMuted
+        }
         
         // Reset player position to beginning (in case it was cached at the end)
         player.seek(to: .zero)
