@@ -22,7 +22,7 @@ class PerformanceMonitor: ObservableObject {
     @Published private(set) var lastFreezeDetection = Date()
     
     // MARK: - Configuration
-    private let maxConcurrentVideoLoads = 3 // Back to 3 concurrent loads
+    private let maxConcurrentVideoLoads = 5 // Increased from 3 to 5 for better performance
     private let freezeThreshold: TimeInterval = 0.2 // Increased from 0.1 to 200ms for less aggressive detection
     private let loadCooldownPeriod: TimeInterval = 1.0 // Reduced from 2.0 to 1 second for faster recovery
     
