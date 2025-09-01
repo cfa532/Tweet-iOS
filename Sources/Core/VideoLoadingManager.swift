@@ -13,7 +13,7 @@ class VideoLoadingManager: ObservableObject {
     static let shared = VideoLoadingManager()
     
     private init() {
-        setupPerformanceMonitoring()
+        setupBasicMonitoring()
     }
     
     // MARK: - State
@@ -83,11 +83,7 @@ class VideoLoadingManager: ObservableObject {
             return false
         }
         
-        // Check performance monitor
-        if !PerformanceMonitor.shared.canLoadMoreVideos() {
-            print("DEBUG: [VideoLoadingManager] Throttling video load for \(tweetId) - performance monitor blocked")
-            return false
-        }
+
         
         // Only load videos for current visible tweet and next few tweets (NOT past tweets)
         let distance = index - currentVisibleTweetIndex
@@ -129,18 +125,12 @@ class VideoLoadingManager: ObservableObject {
         loadCountInLastMinute += 1
         lastLoadTime = Date()
         print("DEBUG: [VideoLoadingManager] Video load started. Active loads: \(activeLoadingCount)")
-        
-        // Notify performance monitor
-        PerformanceMonitor.shared.videoLoadStarted()
     }
     
     /// Notify that a video load has completed
     func videoLoadCompleted() {
         activeLoadingCount = max(0, activeLoadingCount - 1)
         print("DEBUG: [VideoLoadingManager] Video load completed. Active loads: \(activeLoadingCount)")
-        
-        // Notify performance monitor
-        PerformanceMonitor.shared.videoLoadCompleted()
         
         // Process queue if there are pending loads
         if !loadingQueue.isEmpty && !isProcessingQueue {
@@ -150,7 +140,7 @@ class VideoLoadingManager: ObservableObject {
     
     // MARK: - Private Methods
     
-    private func setupPerformanceMonitoring() {
+    private func setupBasicMonitoring() {
         // Reset load count every minute
         Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
             Task { @MainActor in

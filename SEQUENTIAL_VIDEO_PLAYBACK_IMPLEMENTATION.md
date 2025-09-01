@@ -14,7 +14,7 @@ The Tweet-iOS app now supports **sequential video playback** in media grids and 
 ### 2. Increased Concurrent Loading Limit ✅
 - **Maximum concurrent video loading: 5** (increased from 3)
 - **Performance optimized** - Balances loading speed with system resources
-- **Coordinated across managers** - Both `VideoLoadingManager` and `PerformanceMonitor` updated
+- **Simplified architecture** - Only `VideoLoadingManager` manages concurrent loading
 
 ## Technical Implementation
 
@@ -97,11 +97,6 @@ if let onVideoFinished = onVideoFinished {
 private let maxConcurrentLoads: Int = 5 // Increased from 3 to 5 for better performance
 ```
 
-#### PerformanceMonitor (`Sources/Core/PerformanceMonitor.swift`)
-```swift
-private let maxConcurrentVideoLoads = 5 // Increased from 3 to 5 for better performance
-```
-
 ## How It Works
 
 ### 1. Grid Initialization
@@ -148,7 +143,7 @@ The system provides comprehensive logging:
 DEBUG: [MediaGridView] Setup sequential playback for 3 videos
 DEBUG: [VideoManager] Video finished, moved to next video: 1
 DEBUG: [VideoLoadingManager] Video load started. Active loads: 2
-DEBUG: [PerformanceMonitor] Video load completed. Active loads: 1
+DEBUG: [VideoLoadingManager] Video load completed. Active loads: 1
 ```
 
 ## Usage Examples
@@ -163,7 +158,7 @@ DEBUG: [PerformanceMonitor] Video load completed. Active loads: 1
 - Automatic progression
 - Seamless user experience
 
-### Performance Monitoring
+### Video Loading Management
 - System tracks active loads
 - Prevents overload
 - Automatic throttling when needed
@@ -180,20 +175,19 @@ DEBUG: [PerformanceMonitor] Video load completed. Active loads: 1
 - **Coordinated state management**
 - **Efficient resource usage**
 - **Scalable architecture**
-- **Performance monitoring**
+- **Simplified loading management**
 
 ## Configuration
 
 ### Current Settings
 - **Max concurrent loads**: 5 videos
 - **Sequential playback**: Enabled for 2+ videos
-- **Performance monitoring**: Active
+- **Video loading management**: Active
 - **Memory management**: Optimized
 
 ### Customization
 To adjust the concurrent loading limit, modify:
 1. `VideoLoadingManager.maxConcurrentLoads`
-2. `PerformanceMonitor.maxConcurrentVideoLoads`
 
 ## Testing
 
@@ -216,4 +210,4 @@ Potential improvements:
 
 **Status**: ✅ **FULLY IMPLEMENTED AND TESTED**
 
-The sequential video playback system is now active and ready for use. Multiple videos in media grids will automatically play sequentially, and the system can handle up to 5 concurrent video loads for optimal performance.
+The sequential video playback system is now active and ready for use. Multiple videos in media grids will automatically play sequentially, and the system can handle up to 5 concurrent video loads for optimal performance. The PerformanceMonitor has been completely removed, simplifying the architecture while maintaining all functionality.
