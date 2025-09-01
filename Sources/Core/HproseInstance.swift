@@ -698,7 +698,7 @@ final class HproseInstance: ObservableObject {
         
         // Reset appUser to guest user
         let guestUser = User.getInstance(mid: Constants.GUEST_ID)
-        guestUser.baseUrl = HproseInstance.baseUrl
+        guestUser.baseUrl = appUser.baseUrl
         guestUser.followingList = Gadget.getAlphaIds()
         self.appUser = guestUser
     }

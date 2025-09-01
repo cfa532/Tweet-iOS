@@ -141,8 +141,6 @@ struct HomeView: View {
     @State private var isInertiaScrolling: Bool = false
     
     private func handleScroll(offset: CGFloat) {
-        print("[HomeView] handleScroll called with offset: \(offset)")
-        
         // Cancel any existing timer
         scrollEndTimer?.invalidate()
         
@@ -161,8 +159,6 @@ struct HomeView: View {
                 isInertiaScrolling = true
             }
         }
-        
-        print("[HomeView] Scroll delta: \(scrollDelta), consecutiveSmallMovements: \(consecutiveSmallMovements), isInertiaScrolling: \(isInertiaScrolling)")
         
         // Only change navigation state if we're not in inertia scrolling
         if !isInertiaScrolling {

@@ -128,11 +128,8 @@ class PerformanceMonitor: ObservableObject {
         // Cancel all pending video loads
         NotificationCenter.default.post(name: .stopAllVideos, object: nil)
         
-        // Clear video caches
-        Task { @MainActor in
-            SharedAssetCache.shared.clearAllCaches()
-            VideoStateCache.shared.clearAllCache()
-        }
+        // Note: Video caches are preserved to maintain user experience
+        // Only cancel operations, don't clear cached data
         
         // Reset performance state
         activeVideoLoads = 0
@@ -140,6 +137,6 @@ class PerformanceMonitor: ObservableObject {
         isInCooldown = false
         freezeCount = 0
         
-        print("DEBUG: [PerformanceMonitor] Emergency cleanup completed")
+        print("DEBUG: [PerformanceMonitor] Emergency cleanup completed (video caches preserved)")
     }
 }
