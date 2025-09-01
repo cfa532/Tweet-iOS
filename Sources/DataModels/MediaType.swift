@@ -25,7 +25,39 @@ extension MediaType {
     
     // Convert string to MediaType with fallback to unknown
     static func fromString(_ string: String) -> MediaType {
-        return MediaType(rawValue: string) ?? .unknown
+        // First try exact match
+        if let mediaType = MediaType(rawValue: string) {
+            return mediaType
+        }
+        
+        // Try case-insensitive match for common variations
+        let lowercased = string.lowercased()
+        switch lowercased {
+        case "hls_video":
+            return .hls_video
+        case "image":
+            return .image
+        case "video":
+            return .video
+        case "audio":
+            return .audio
+        case "pdf":
+            return .pdf
+        case "word":
+            return .word
+        case "excel":
+            return .excel
+        case "ppt":
+            return .ppt
+        case "zip":
+            return .zip
+        case "txt":
+            return .txt
+        case "html":
+            return .html
+        default:
+            return .unknown
+        }
     }
     
     // Convert MediaType to string

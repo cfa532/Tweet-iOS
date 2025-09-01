@@ -236,6 +236,31 @@ extension TweetCacheManager {
         }
     }
     
+    /// Release a percentage of tweet cache to free memory
+    func releasePartialCache(percentage: Int) {
+        let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range
+        print("DEBUG: [TweetCacheManager] Releasing \(percentageToRemove)% of tweet cache")
+        
+        context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            
+            // Sort by cache time (oldest first) for LRU strategy
+            request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: true)]
+            
+            if let allTweets = try? context.fetch(request) {
+                let countToRemove = max(1, (allTweets.count * percentageToRemove) / 100)
+                let tweetsToRemove = Array(allTweets.prefix(countToRemove))
+                
+                for tweet in tweetsToRemove {
+                    context.delete(tweet)
+                }
+                
+                try? context.save()
+                print("DEBUG: [TweetCacheManager] Released \(tweetsToRemove.count) tweets from cache")
+            }
+        }
+    }
+    
     func clearCacheForUser(userId: String) {
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()

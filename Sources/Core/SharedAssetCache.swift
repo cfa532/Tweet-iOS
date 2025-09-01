@@ -332,6 +332,38 @@ class SharedAssetCache: ObservableObject {
         print("DEBUG: [SharedAssetCache] All caches cleared")
     }
     
+    /// Release a percentage of cache to free memory (preserves current playing videos)
+    @MainActor func releasePartialCache(percentage: Int) {
+        let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range
+        print("DEBUG: [SharedAssetCache] Releasing \(percentageToRemove)% of cache")
+        
+        // Calculate how many items to remove
+        let assetCountToRemove = max(1, (assetCache.count * percentageToRemove) / 100)
+        let playerCountToRemove = max(1, (playerCache.count * percentageToRemove) / 100)
+        
+        // Remove oldest assets first (LRU strategy)
+        let sortedAssetKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+        let assetsToRemove = sortedAssetKeys.prefix(assetCountToRemove)
+        
+        for key in assetsToRemove {
+            assetCache.removeValue(forKey: key)
+            cacheTimestamps.removeValue(forKey: key)
+        }
+        
+        // Remove oldest players first (LRU strategy)
+        let sortedPlayerKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+        let playersToRemove = sortedPlayerKeys.prefix(playerCountToRemove)
+        
+        for key in playersToRemove {
+            if let player = playerCache[key] {
+                player.pause()
+                playerCache.removeValue(forKey: key)
+            }
+        }
+        
+        print("DEBUG: [SharedAssetCache] Released \(assetsToRemove.count) assets and \(playersToRemove.count) players")
+    }
+    
     // MARK: - Enhanced Preloading Methods
     
     /// Preload video for immediate display (high priority)
