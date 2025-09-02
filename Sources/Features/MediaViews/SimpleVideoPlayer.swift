@@ -583,22 +583,7 @@ struct SimpleVideoPlayer: View {
             object: playerItem,
             queue: .main
         ) { _ in
-            if !disableAutoRestart {
-                // Auto-restart for fullscreen/detail contexts
-                player.seek(to: .zero) { finished in
-                    if finished {
-                        player.play()
-                    }
-                }
-            } else {
-                // Mark as finished for MediaCell
-                self.hasFinishedPlaying = true
-            }
-            
-            // Call external callback
-            if let onVideoFinished = onVideoFinished {
-                onVideoFinished()
-            }
+            self.handleVideoFinished()
         }
         
         // Error observer
@@ -639,6 +624,17 @@ struct SimpleVideoPlayer: View {
                 print("DEBUG: [VIDEO ERROR] Max retries exceeded for \(mid), video will remain in failed state")
             }
         }
+    }
+    
+    private func handleVideoFinished() {
+        if !disableAutoRestart {
+            player?.seek(to: .zero)
+            player?.play()
+        } else {
+            hasFinishedPlaying = true
+        }
+        
+        onVideoFinished?()
     }
     
     private func restoreCachedVideoState() {
