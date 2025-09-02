@@ -9,7 +9,13 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
-// MARK: - Global Video State Cache
+// MARK: - Video Player Mode
+enum Mode {
+    case mediaCell // Normal cell in feed/grid
+    case mediaBrowser // In MediaBrowserView (fullscreen browser)
+}
+
+// MARK: - Video Player State Manager
 class VideoStateCache {
     static let shared = VideoStateCache()
     private var cache: [String: (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)] = [:]
@@ -58,10 +64,6 @@ struct SimpleVideoPlayer: View {
     var shouldLoadVideo: Bool = true // Whether grid-level loading is enabled
     
     // MARK: Mode
-    enum Mode {
-        case mediaCell // Normal cell in feed/grid
-        case mediaBrowser // In MediaBrowserView (fullscreen browser)
-    }
     var mode: Mode = .mediaCell
     
     // MARK: State
@@ -118,7 +120,7 @@ struct SimpleVideoPlayer: View {
                         // Fallback when no cellAspectRatio is available
                         videoPlayerView()
                             .aspectRatio(videoAR, contentMode: .fit)
-                    }
+                        }
                     
                 case .mediaBrowser:
                     // MediaBrowser mode: fullscreen browser with native controls only
@@ -144,7 +146,7 @@ struct SimpleVideoPlayer: View {
                             .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                     }
                     
-
+                    
                 }
             } else {
                 // Fallback when no aspect ratio is available
@@ -658,7 +660,7 @@ struct SimpleVideoPlayer: View {
         }
         
         // Check if all conditions are met for autoplay
-        if autoPlay && isVisible && player != nil && !isLoading {
+        if autoPlay && isVisible && player != nil && !isLoading && shouldLoadVideo {
             // Activate audio session for video playback
             AudioSessionManager.shared.activateForVideoPlayback()
             
