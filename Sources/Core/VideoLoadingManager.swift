@@ -14,6 +14,7 @@ class VideoLoadingManager: ObservableObject {
     
     private init() {
         setupBasicMonitoring()
+        startBackgroundCancellationTimer()
     }
     
     // MARK: - State
@@ -29,9 +30,15 @@ class VideoLoadingManager: ObservableObject {
     private var isProcessingQueue = false
     private var isUnderMemoryPressure = false
     
+    // MARK: - Background Cancellation
+    private var backgroundCancellationTimer: Timer?
+    private var tweetsToCancel: Set<String> = [] // Tweets queued for background cancellation
+    private var isProcessingCancellations = false
+    
     // MARK: - Configuration
     private let preloadCount = 3 // Increased from 2 to 3 to allow more preloading
     private let bufferDistance = 1 // Keep 1 tweet behind as buffer
+    private let cancellationBatchSize = 10 // Process cancellations in batches
     
     // MARK: - Performance Monitoring
     private var lastLoadTime: Date = Date()
@@ -63,6 +70,9 @@ class VideoLoadingManager: ObservableObject {
         // Update visible tweet IDs
         updateVisibleTweetIds()
         
+        // Queue tweets for background cancellation instead of immediate cancellation
+        queueTweetsForCancellation()
+        
         // Manage video loading with performance considerations
         manageVideoLoadingWithPerformance()
     }
@@ -82,8 +92,6 @@ class VideoLoadingManager: ObservableObject {
             print("DEBUG: [VideoLoadingManager] Throttling video load for \(tweetId) - loading too frequently")
             return false
         }
-        
-
         
         // Only load videos for current visible tweet and next few tweets (NOT past tweets)
         let distance = index - currentVisibleTweetIndex
@@ -156,6 +164,69 @@ class VideoLoadingManager: ObservableObject {
         }
     }
     
+    /// Start background cancellation timer to process cancellations without blocking main actor
+    private func startBackgroundCancellationTimer() {
+        backgroundCancellationTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            Task { @MainActor in
+                self.processBackgroundCancellations()
+            }
+        }
+    }
+    
+    /// Queue tweets for background cancellation instead of immediate cancellation
+    private func queueTweetsForCancellation() {
+        for (index, tweetId) in allTweetIds.enumerated() {
+            if shouldCancelVideoLoading(for: tweetId) {
+                tweetsToCancel.insert(tweetId)
+                print("DEBUG: [VideoLoadingManager] Queued tweet \(tweetId) at index \(index) for background cancellation")
+            }
+        }
+    }
+    
+    /// Process cancellations in background without blocking main actor
+    private func processBackgroundCancellations() {
+        guard !isProcessingCancellations && !tweetsToCancel.isEmpty else { return }
+        
+        isProcessingCancellations = true
+        
+        // Process cancellations in batches to avoid blocking
+        let batchSize = min(cancellationBatchSize, tweetsToCancel.count)
+        let batch = Array(tweetsToCancel.prefix(batchSize))
+        
+        // Remove processed tweets from the set
+        for tweetId in batch {
+            tweetsToCancel.remove(tweetId)
+        }
+        
+        // Process cancellations in background
+        Task.detached(priority: .background) {
+            await self.processCancellationBatch(batch)
+        }
+        
+        isProcessingCancellations = false
+    }
+    
+    /// Process a batch of cancellations in background
+    private func processCancellationBatch(_ tweetIds: [String]) async {
+        for tweetId in tweetIds {
+            // Cancel loading tasks in SharedAssetCache
+            SharedAssetCache.shared.cancelLoadingForTweet(tweetId)
+            
+            // Post notification for MediaGridView to handle (on main actor)
+            await MainActor.run {
+                NotificationCenter.default.post(
+                    name: .cancelVideoLoading,
+                    object: nil,
+                    userInfo: ["tweetId": tweetId]
+                )
+                print("DEBUG: [VideoLoadingManager] Background cancellation completed for tweet \(tweetId)")
+            }
+            
+            // Small delay to prevent overwhelming the system
+            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+        }
+    }
+    
     private func isLoadingTooFrequently() -> Bool {
         let timeSinceLastLoad = Date().timeIntervalSince(lastLoadTime)
         if isUnderMemoryPressure { return true }
@@ -185,13 +256,7 @@ class VideoLoadingManager: ObservableObject {
     private func manageVideoLoadingWithPerformance() {
         print("DEBUG: [VideoLoadingManager] Managing video loading for visible tweet index: \(currentVisibleTweetIndex)")
         
-        // Cancel loading for tweets that are too far behind
-        for (index, tweetId) in allTweetIds.enumerated() {
-            if shouldCancelVideoLoading(for: tweetId) {
-                cancelVideoLoading(for: tweetId)
-                print("DEBUG: [VideoLoadingManager] Cancelled video loading for tweet \(tweetId) at index \(index)")
-            }
-        }
+        // Note: Cancellations are now handled by background timer, not here
         
         // Trigger preloading for upcoming tweets with performance limits
         for i in 1...preloadCount {
@@ -278,7 +343,7 @@ class VideoLoadingManager: ObservableObject {
         print("DEBUG: [VideoLoadingManager] Releasing 30% of memory caches...")
         
         // Release 30% of video caches (preserve current playing videos)
-        await SharedAssetCache.shared.releasePartialCache(percentage: 30)
+        SharedAssetCache.shared.releasePartialCache(percentage: 30)
         
         // Release 30% of tweet caches
         TweetCacheManager.shared.releasePartialCache(percentage: 30)
@@ -286,21 +351,11 @@ class VideoLoadingManager: ObservableObject {
         print("DEBUG: [VideoLoadingManager] Memory cache release completed")
     }
     
+    /// Legacy method - now handled by background cancellation
     private func cancelVideoLoading(for tweetId: String) {
-        // Remove from queue if present
-        loadingQueue.removeAll { $0 == tweetId }
-        
-        // Cancel any ongoing video loading tasks for this tweet
-        Task { @MainActor in
-            SharedAssetCache.shared.cancelLoadingForTweet(tweetId)
-        }
-        
-        // Post notification for MediaGridView to handle
-        NotificationCenter.default.post(
-            name: .cancelVideoLoading,
-            object: nil,
-            userInfo: ["tweetId": tweetId]
-        )
+        // This method is kept for backward compatibility but is no longer used
+        // Cancellations are now handled by the background timer
+        print("DEBUG: [VideoLoadingManager] Legacy cancelVideoLoading called for \(tweetId) - using background cancellation instead")
     }
     
     private func triggerVideoPreloading(for tweetId: String) {
@@ -315,6 +370,12 @@ class VideoLoadingManager: ObservableObject {
             object: nil,
             userInfo: ["tweetId": tweetId]
         )
+    }
+    
+    deinit {
+        // Clean up timers
+        backgroundCancellationTimer?.invalidate()
+        backgroundCancellationTimer = nil
     }
 }
 
