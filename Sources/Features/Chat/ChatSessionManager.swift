@@ -26,15 +26,15 @@ class ChatSessionManager: ObservableObject {
     /// Load chat sessions from Core Data
     private func loadChatSessionsFromCoreData() {
         // Check if user ID is available and not guest
-        guard hproseInstance.appUser.mid != Constants.GUEST_ID else {
+        guard HproseInstance.globalCurrentUserId != Constants.GUEST_ID else {
             print("[ChatSessionManager] Cannot load sessions - user is still guest")
             return
         }
         
-        print("[ChatSessionManager] Loading sessions for user ID: \(hproseInstance.appUser.mid)")
-        let sessions = chatCacheManager.fetchChatSessions(for: hproseInstance.appUser.mid)
+        print("[ChatSessionManager] Loading sessions for user ID: \(HproseInstance.globalCurrentUserId)")
+        let sessions = chatCacheManager.fetchChatSessions(for: HproseInstance.globalCurrentUserId)
         chatSessions = sessions
-        print("[ChatSessionManager] Loaded \(sessions.count) chat sessions from Core Data for user: \(hproseInstance.appUser.mid)")
+        print("[ChatSessionManager] Loaded \(sessions.count) chat sessions from Core Data for user: \(HproseInstance.globalCurrentUserId)")
         
         // Debug: Print session details
         for session in sessions {
@@ -83,7 +83,7 @@ class ChatSessionManager: ObservableObject {
                 
                 // Group messages by conversation partner
                 let messagesByPartner = Dictionary(grouping: newMessages) { message in
-                    message.authorId == hproseInstance.appUser.mid ? message.receiptId : message.authorId
+                    message.authorId == HproseInstance.globalCurrentUserId ? message.receiptId : message.authorId
                 }
                 
                 // Update or create chat sessions (only add new ones, don't overwrite existing)
@@ -116,9 +116,9 @@ class ChatSessionManager: ObservableObject {
                         } else {
                             // No existing session - create new session with the actual message
                             // The message is stored as a copy in the session, not saved to Core Data yet
-                            print("[ChatSessionManager] Creating new session with user ID: \(hproseInstance.appUser.mid), partner ID: \(partnerId)")
+                            print("[ChatSessionManager] Creating new session with user ID: \(HproseInstance.globalCurrentUserId), partner ID: \(partnerId)")
                             let newSession = ChatSession.createSession(
-                                userId: hproseInstance.appUser.mid,
+                                userId: HproseInstance.globalCurrentUserId,
                                 receiptId: partnerId,
                                 lastMessage: lastMessage,
                                 hasNews: true
@@ -165,7 +165,7 @@ class ChatSessionManager: ObservableObject {
         await MainActor.run {
             // Determine the other party's ID (the person we're chatting with)
             let otherPartyId: MimeiId
-            if message.authorId == hproseInstance.appUser.mid {
+            if message.authorId == HproseInstance.globalCurrentUserId {
                 // Message sent by current user, other party is the recipient
                 otherPartyId = message.receiptId
             } else {
@@ -189,7 +189,7 @@ class ChatSessionManager: ObservableObject {
                 // Don't rely on timestamps as they are not trustworthy across devices
                 let updatedSession = ChatSession(
                     id: existingSession.id,
-                    userId: hproseInstance.appUser.mid,
+                    userId: HproseInstance.globalCurrentUserId,
                     receiptId: otherPartyId,
                     lastMessage: message,
                     timestamp: message.timestamp,
@@ -200,7 +200,7 @@ class ChatSessionManager: ObservableObject {
             } else {
                 // Create new session
                 let newSession = ChatSession.createSession(
-                    userId: hproseInstance.appUser.mid,
+                    userId: HproseInstance.globalCurrentUserId,
                     receiptId: otherPartyId,
                     lastMessage: message,
                     hasNews: hasNews
@@ -246,7 +246,7 @@ class ChatSessionManager: ObservableObject {
     /// Remove a chat session and all associated messages
     func removeChatSession(receiptId: MimeiId) {
         // Remove the chat session from Core Data (this will cascade delete messages)
-        chatCacheManager.deleteChatSessionByReceiptId(userId: hproseInstance.appUser.mid, receiptId: receiptId)
+        chatCacheManager.deleteChatSessionByReceiptId(userId: HproseInstance.globalCurrentUserId, receiptId: receiptId)
         
         // Remove from local array
         chatSessions.removeAll { $0.receiptId == receiptId }

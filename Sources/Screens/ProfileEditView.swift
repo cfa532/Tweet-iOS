@@ -39,8 +39,85 @@ struct ProfileEditView: View {
     @State private var showExitConfirmation = false
     @State private var hasUnsavedChanges = false
     @State private var initialValues: [String: String] = [:]
-    @EnvironmentObject private var hproseInstance: HproseInstance
-
+    @State private var hproseInstance = HproseInstanceState.shared
+    
+    private var avatarSection: some View {
+        VStack {
+            ZStack(alignment: .bottomTrailing) {
+                Avatar(user: hproseInstance.appUser, size: 80)
+                    .onTapGesture { showImagePicker = true }
+                    .overlay(
+                        Group {
+                            if isUploadingAvatar {
+                                ZStack {
+                                    Color.black.opacity(0.6)
+                                        .clipShape(Circle())
+                                    
+                                    VStack(spacing: 8) {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                            .scaleEffect(1.2)
+                                        
+                                        Text(NSLocalizedString("Uploading...", comment: "Upload progress message"))
+                                            .font(.caption)
+                                            .foregroundColor(.white)
+                                    }
+                                }
+                                .frame(width: 80, height: 80)
+                            }
+                        }
+                    )
+                Image(systemName: "camera.fill")
+                    .foregroundColor(.white)
+                    .background(Circle().fill(Color.blue).frame(width: 28, height: 28))
+                    .offset(x: -8, y: -8)
+            }
+            if let avatarUploadError = avatarUploadError {
+                Text(avatarUploadError)
+                    .foregroundColor(.red)
+                    .font(.caption)
+            }
+        }
+        }
+    
+    private func handlePhotoSelection(_ item: PhotosPickerItem?) {
+        guard let item = item else { return }
+        
+        Task {
+            isUploadingAvatar = true
+            avatarUploadError = nil
+            onAvatarUploadStateChange?(true) // Notify parent about upload start
+            do {
+                if let data = try await item.loadTransferable(type: Data.self) {
+                    let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+                    let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
+                    let uploaded = try await hproseInstance.uploadToIPFS(fileData: data, fileName: fileName, mimeType: typeIdentifier)
+                    if !uploaded.mid.isEmpty {
+                        try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
+                        await MainActor.run {
+                            hproseInstance.appUser.avatar = uploaded.mid
+                        }
+                        // Notify success
+                        onAvatarUploadSuccess?()
+                    } else {
+                        let errorMessage = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
+                        avatarUploadError = errorMessage
+                        onAvatarUploadFailure?(errorMessage)
+                    }
+                } else {
+                    let errorMessage = NSLocalizedString("Failed to load image data.", comment: "Image data loading error")
+                    avatarUploadError = errorMessage
+                    onAvatarUploadFailure?(errorMessage)
+                }
+            } catch {
+                avatarUploadError = error.localizedDescription
+                onAvatarUploadFailure?(error.localizedDescription)
+            }
+            isUploadingAvatar = false
+            onAvatarUploadStateChange?(false) // Notify parent about upload end
+        }
+    }
+    
     enum Field: Hashable {
         case password, confirmPassword, alias, profile, hostId, cloudDrivePort
     }
@@ -58,81 +135,12 @@ struct ProfileEditView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
-                    // Avatar section
-                    VStack {
-                        ZStack(alignment: .bottomTrailing) {
-                            Avatar(user: hproseInstance.appUser, size: 80)
-                                .onTapGesture { showImagePicker = true }
-                                .overlay(
-                                    Group {
-                                        if isUploadingAvatar {
-                                            ZStack {
-                                                Color.black.opacity(0.6)
-                                                    .clipShape(Circle())
-                                                
-                                                VStack(spacing: 8) {
-                                                    ProgressView()
-                                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                                        .scaleEffect(1.2)
-                                                    
-                                                    Text(NSLocalizedString("Uploading...", comment: "Upload progress message"))
-                                                        .font(.caption)
-                                                        .foregroundColor(.white)
-                                                }
-                                            }
-                                            .frame(width: 80, height: 80)
-                                        }
-                                    }
-                                )
-                            Image(systemName: "camera.fill")
-                                .foregroundColor(.white)
-                                .background(Circle().fill(Color.blue).frame(width: 28, height: 28))
-                                .offset(x: -8, y: -8)
+                    avatarSection
+                        .padding(.bottom, 8)
+                        .photosPicker(isPresented: $showImagePicker, selection: $selectedPhoto, matching: .images)
+                        .onChange(of: selectedPhoto) { _, newItem in
+                            handlePhotoSelection(newItem)
                         }
-                        if let avatarUploadError = avatarUploadError {
-                            Text(avatarUploadError)
-                                .foregroundColor(.red)
-                                .font(.caption)
-                        }
-                    }
-                    .padding(.bottom, 8)
-                    .photosPicker(isPresented: $showImagePicker, selection: $selectedPhoto, matching: .images)
-                    .onChange(of: selectedPhoto) { _, newItem in
-                        if let item = newItem {
-                            Task {
-                                isUploadingAvatar = true
-                                avatarUploadError = nil
-                                onAvatarUploadStateChange?(true) // Notify parent about upload start
-                                do {
-                                    if let data = try await item.loadTransferable(type: Data.self) {
-                                        let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                                        let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
-                                        if let uploaded = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName, referenceId: hproseInstance.appUser.mid), !uploaded.mid.isEmpty {
-                                            try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
-                                            await MainActor.run {
-                                                hproseInstance.appUser.avatar = uploaded.mid
-                                            }
-                                            // Notify success
-                                            onAvatarUploadSuccess?()
-                                        } else {
-                                            let errorMessage = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
-                                            avatarUploadError = errorMessage
-                                            onAvatarUploadFailure?(errorMessage)
-                                        }
-                                    } else {
-                                        let errorMessage = NSLocalizedString("Failed to load image data.", comment: "Image data loading error")
-                                        avatarUploadError = errorMessage
-                                        onAvatarUploadFailure?(errorMessage)
-                                    }
-                                } catch {
-                                    avatarUploadError = error.localizedDescription
-                                    onAvatarUploadFailure?(error.localizedDescription)
-                                }
-                                isUploadingAvatar = false
-                                onAvatarUploadStateChange?(false) // Notify parent about upload end
-                            }
-                        }
-                    }
 
                     // Username display (read-only)
                     VStack(alignment: .leading, spacing: 4) {

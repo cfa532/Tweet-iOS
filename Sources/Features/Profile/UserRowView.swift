@@ -16,7 +16,7 @@ struct UserRowView: View {
     @State private var showFullProfile: Bool = false
     @State private var isLoading: Bool = true
     @State private var loadingTask: Task<Void, Never>?
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     
     private func formatRegistrationDate(_ date: Date) -> String {
         let formatter = DateFormatter()

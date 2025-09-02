@@ -15,7 +15,7 @@ struct CommentComposeView: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
     @FocusState private var isEditorFocused: Bool
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     
     // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
     private var identifiableItems: [IdentifiablePhotosPickerItem] {
@@ -215,10 +215,11 @@ struct CommentComposeView: View {
         
         // Note: isSubmitting state is now managed by DebounceButton
         
+        let appUserId = await hproseInstance.instance.appUser.mid
         // Create comment object with a temporary UUID
         let comment = Tweet(
             mid: UUID().uuidString,         // temporary ID that will be replaced by server
-            authorId: hproseInstance.appUser.mid,
+            authorId: appUserId,
             content: trimmedContent,
             timestamp: Date(),
             originalTweetId: isQuoting ? tweet.mid : nil,
@@ -243,7 +244,7 @@ struct CommentComposeView: View {
         }
         
         print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")
-        hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
+        await hproseInstance.instance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
         
         // Reset form and dismiss
         await MainActor.run {

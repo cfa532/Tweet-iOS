@@ -64,7 +64,7 @@ class ProfileTweetsViewModel: ObservableObject {
             }
             
             // Cache tweets only if it's the appUser's profile
-            if shouldCache && user.mid == hproseInstance.appUser.mid {
+            if shouldCache && user.mid == HproseInstance.globalCurrentUserId {
                 for tweet in filteredTweets.compactMap({ $0 }) {
                     TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
                 }
@@ -79,7 +79,7 @@ class ProfileTweetsViewModel: ObservableObject {
     
     func handleNewTweet(_ tweet: Tweet) {
         // Only show private tweets if the current user is the author
-        if !(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid {
+        if !(tweet.isPrivate ?? false) || tweet.authorId == HproseInstance.globalCurrentUserId {
             // Don't add the tweet if it's pinned
             if !pinnedTweetIds.contains(tweet.mid) {
                 print("DEBUG: [ProfileTweetsViewModel] Adding new tweet to list: \(tweet.mid)")
@@ -154,9 +154,9 @@ struct ProfileTweetsSection<Header: View>: View {
             tweetFetcher: { page, size, isFromCache, shouldCache in
                 if isFromCache {
                     // Fetch from cache for profile tweets (only if it's the appUser's profile)
-                    if user.mid == hproseInstance.appUser.mid {
+                    if user.mid == HproseInstance.globalCurrentUserId {
                         let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-                            for: user.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
+                            for: user.mid, page: page, pageSize: size, currentUserId: HproseInstance.globalCurrentUserId)
                         return cachedTweets
                     } else {
                         // Don't cache other users' tweets
@@ -203,7 +203,7 @@ struct ProfileTweetsSection<Header: View>: View {
                                     tweet: pinnedTweet,
                                     isPinned: true,
                                     isInProfile: true,
-                                    showDeleteButton: user.mid == hproseInstance.appUser.mid,
+                                    showDeleteButton: user.mid == HproseInstance.globalCurrentUserId,
                                     onAvatarTap: { user in
                                         onUserSelect(user)
                                     },
@@ -238,7 +238,7 @@ struct ProfileTweetsSection<Header: View>: View {
                     tweet: tweet,
                     isPinned: pinnedTweets.contains { $0.mid == tweet.mid },
                     isInProfile: true,
-                    showDeleteButton: user.mid == hproseInstance.appUser.mid,
+                                            showDeleteButton: user.mid == HproseInstance.globalCurrentUserId,
                     onAvatarTap: { user in
                         onUserSelect(user)
                     },

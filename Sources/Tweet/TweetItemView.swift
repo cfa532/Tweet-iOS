@@ -17,7 +17,7 @@ struct TweetItemView: View, Equatable {
     @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
     @State private var originalTweet: Tweet?
     @State private var isVisible = false
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     var onRemove: ((String) -> Void)? = nil
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
@@ -266,7 +266,7 @@ struct EmbeddedTweetView: View, Equatable {
     var onTap: ((Tweet) -> Void)? = nil
     var backgroundColor: Color = Color(.systemBackground)
     @State private var isVisible = false
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
 
     var body: some View {
         Group {

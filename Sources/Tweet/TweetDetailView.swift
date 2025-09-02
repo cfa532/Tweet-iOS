@@ -285,7 +285,7 @@ struct TweetDetailView: View {
     @State private var isTopNavigationVisible = true
     @State private var previousScrollOffset: CGFloat = 0
     
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @Environment(\.dismiss) private var dismiss
     
     init(tweet: Tweet) {

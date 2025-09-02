@@ -8,12 +8,33 @@ import AVFoundation
 }
 
 // MARK: - HproseInstance
-final class HproseInstance: ObservableObject {
+actor HproseInstance {
     // MARK: - Properties
     static let shared = HproseInstance()
     static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
     // Removed _HproseClient as we now use client directly
     private var _domainToShare: String = AppConfig.baseUrl
+    
+    // Global access to current user ID - stable during app lifespan
+    static var currentUserId: String {
+        get async {
+            HproseInstance.globalCurrentUserId
+        }
+    }
+    
+    // Non-async global accessor for the current user ID
+    static var globalCurrentUserId: String = Constants.GUEST_ID
+    
+    // Global access to current user - stable during app lifespan
+    static var globalAppUser: User = User.getInstance(mid: Constants.GUEST_ID)
+    
+    // Callback for when appUser changes
+    private var onAppUserChanged: (() -> Void)?
+    
+    // Method to set the callback from outside the actor
+    func setAppUserChangedCallback(_ callback: @escaping () -> Void) {
+        onAppUserChanged = callback
+    }
     
     /// The domain to use for sharing links
     var domainToShare: String {
@@ -21,40 +42,30 @@ final class HproseInstance: ObservableObject {
         set { _domainToShare = newValue }
     }
     
-    @Published private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
+    private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
     var appUser: User {
         get { _appUser }
         set {
-            // Get the singleton instance for the new user
-            let instance = User.getInstance(mid: newValue.mid)
-            Task { @MainActor in
-                // Update the singleton instance with new values
-                instance.baseUrl = newValue.baseUrl
-                instance.writableUrl = newValue.writableUrl
-                instance.name = newValue.name
-                instance.username = newValue.username
-                instance.avatar = newValue.avatar
-                instance.email = newValue.email
-                instance.profile = newValue.profile
-                instance.cloudDrivePort = newValue.cloudDrivePort
-                
-                instance.tweetCount = newValue.tweetCount
-                instance.followingCount = newValue.followingCount
-                instance.followersCount = newValue.followersCount
-                instance.bookmarksCount = newValue.bookmarksCount
-                instance.favoritesCount = newValue.favoritesCount
-                instance.commentsCount = newValue.commentsCount
-                
-                instance.hostIds = newValue.hostIds
-                // Update the reference to point to the singleton instance
-                self._appUser = instance
-                // Notify observers that appUser has changed
-                self.objectWillChange.send()
-            }
+            _appUser = newValue
+            // Keep global user ID and appUser in sync
+            HproseInstance.globalCurrentUserId = newValue.mid
+            HproseInstance.globalAppUser = newValue
+            onAppUserChanged?()
         }
     }
     
-    private var appId: String = Constants.GUEST_ID      // placeholder mimei id
+    private var _appId: String = Constants.GUEST_ID      // placeholder mimei id
+    var appId: String {
+        get { _appId }
+        set {
+            _appId = newValue
+            HproseInstance.globalAppId = newValue
+        }
+    }
+    
+    // Global access to app ID - stable during app lifespan
+    static var globalAppId: String = Constants.GUEST_ID
+    
     var preferenceHelper: PreferenceHelper?
     
     // MARK: - BlackList Management
@@ -69,10 +80,23 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - Helper Methods
     
+    /// Get current user state for UI consumption
+    var currentUserState: (isGuest: Bool, user: User) {
+        return (isGuest: _appUser.isGuest, user: _appUser)
+    }
+    
+    /// Notify main actor when appUser changes (for UI updates)
+    private func notifyAppUserChanged() async {
+        await MainActor.run {
+            // This will be called by the UI layer to get updates
+            // The actual UI update logic will be handled by the calling code
+        }
+    }
+    
     /// Print detailed app user content for debugging
     private func printAppUserContent(_ context: String) {
         print("=== APP USER CONTENT [\(context)] ===")
-        print("MID: \(appUser.mid)")
+        print("MID: \(HproseInstance.globalCurrentUserId)")
         print("Username: \(appUser.username ?? "nil")")
         print("Name: \(appUser.name ?? "nil")")
         print("Profile: \(appUser.profile ?? "nil")")
@@ -103,7 +127,12 @@ final class HproseInstance: ObservableObject {
     }
     
     // MARK: - Initialization
-    private init() {}
+    private init() {
+        // Initialize global user ID, appUser, and appId
+        HproseInstance.globalCurrentUserId = _appUser.mid
+        HproseInstance.globalAppUser = _appUser
+        HproseInstance.globalAppId = _appId
+    }
     
     // MARK: - Public Methods
     func initialize() async throws {
@@ -134,23 +163,21 @@ final class HproseInstance: ObservableObject {
     
     /// Initialize app user with default values
     private func initializeAppUser() async {
-        await MainActor.run {
-            // Get user ID from preferences or use guest ID
-            let userId = preferenceHelper?.getUserId() ?? Constants.GUEST_ID
-            _appUser = User.getInstance(mid: userId)
-            
-            // Set base URL from preferences or use default
-            let baseUrlString = preferenceHelper?.getAppUrls().first ?? AppConfig.baseUrl
-            _appUser.baseUrl = URL(string: baseUrlString)!
-            
-            // Set following list
-            _appUser.followingList = Gadget.getAlphaIds()
-            
-            // Update domain to share
-            _domainToShare = baseUrlString
-            
-            print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(baseUrlString)")
-        }
+        // Get user ID from preferences or use guest ID
+        let userId = preferenceHelper?.getUserId() ?? Constants.GUEST_ID
+        _appUser = User.getInstance(mid: userId)
+        
+        // Set base URL from preferences or use default
+        let baseUrlString = preferenceHelper?.getAppUrls().first ?? AppConfig.baseUrl
+        _appUser.baseUrl = URL(string: baseUrlString)!
+        
+        // Set following list
+        _appUser.followingList = Gadget.getAlphaIds()
+        
+        // Update domain to share
+        _domainToShare = baseUrlString
+        
+        print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(baseUrlString)")
     }
     
     /// Schedule background tasks
@@ -182,14 +209,14 @@ final class HproseInstance: ObservableObject {
                     HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     
-                    if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
+                    if !appUser.isGuest, let providerIp = try await getProviderIP(HproseInstance.globalCurrentUserId) {
                         print("provider ip:  \(providerIp)")
                         // Try to fetch user with retry logic
                         var user: User? = nil
                         
                         // First attempt
                         do {
-                            user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
+                            user = try await fetchUser(HproseInstance.globalCurrentUserId, baseUrl: "http://\(providerIp)")
                         } catch {
                             print("DEBUG: [initAppEntry] First fetchUser attempt failed: \(error)")
                             
@@ -197,7 +224,7 @@ final class HproseInstance: ObservableObject {
                             do {
                                 try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
                                 print("DEBUG: [initAppEntry] Retrying fetchUser...")
-                                user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
+                                user = try await fetchUser(HproseInstance.globalCurrentUserId, baseUrl: "http://\(providerIp)")
                                 print("DEBUG: [initAppEntry] fetchUser retry successful")
                             } catch {
                                 print("DEBUG: [initAppEntry] fetchUser retry also failed: \(error)")
@@ -210,18 +237,18 @@ final class HproseInstance: ObservableObject {
                             client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                             let followings = (try? await getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
                             let blackList = (try? await getListByType(user: user, entry: .BLACK_LIST)) ?? []
+                            // Update the appUser to the fetched user with all properties
                             await MainActor.run {
-                                // Update the appUser to the fetched user with all properties
                                 user.baseUrl = HproseInstance.baseUrl
                                 user.followingList = followings
                                 user.userBlackList = blackList
-                                self.appUser = user
-                                // Update domain to share with the new base URL
-                                self._domainToShare = HproseInstance.baseUrl.absoluteString
-                                
-                                // Print detailed app user content after successful login
-                                self.printAppUserContent("After successful login")
                             }
+                            self.appUser = user
+                            // Update domain to share with the new base URL
+                            self._domainToShare = HproseInstance.baseUrl.absoluteString
+                            
+                            // Print detailed app user content after successful login
+                            self.printAppUserContent("After successful login")
                             return
                         } else {
                             print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
@@ -229,10 +256,10 @@ final class HproseInstance: ObservableObject {
                             await MainActor.run {
                                 user.baseUrl = HproseInstance.baseUrl
                                 user.followingList = Gadget.getAlphaIds()
-                                _appUser = user
-                                // Update domain to share with the new base URL
-                                self._domainToShare = HproseInstance.baseUrl.absoluteString
                             }
+                            _appUser = user
+                            // Update domain to share with the new base URL
+                            _domainToShare = HproseInstance.baseUrl.absoluteString
                             return
                         }
                     } else {
@@ -240,10 +267,10 @@ final class HproseInstance: ObservableObject {
                         await MainActor.run {
                             user.baseUrl = HproseInstance.baseUrl
                             user.followingList = Gadget.getAlphaIds()
-                            _appUser = user
-                            // Update domain to share with the new base URL
-                            self._domainToShare = HproseInstance.baseUrl.absoluteString
                         }
+                        _appUser = user
+                        // Update domain to share with the new base URL
+                        _domainToShare = HproseInstance.baseUrl.absoluteString
                         return
                     }
                 }
@@ -265,7 +292,7 @@ final class HproseInstance: ObservableObject {
             "aid": appId,
             "ver": "last",
             "tweetid": parentTweet.mid,
-            "appuserid": appUser.mid,
+            "appuserid": HproseInstance.globalCurrentUserId,
             "pn": pageNumber,
             "ps": pageSize,
         ] as [String : Any]
@@ -281,9 +308,7 @@ final class HproseInstance: ObservableObject {
         for item in response {
             if let dict = item {
                 do {
-                    let comment = try await MainActor.run {
-                        return try Tweet.from(dict: dict)
-                    }
+                    let comment = try Tweet.from(dict: dict)
                     comment.author = try? await fetchUser(comment.authorId)
                     commentsWithAuthors.append(comment)
                 } catch {
@@ -321,7 +346,7 @@ final class HproseInstance: ObservableObject {
             "pn": pageNumber,
             "ps": pageSize,
             "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
-            "appuserid": appUser.mid,
+            "appuserid": HproseInstance.globalCurrentUserId,
         ]
         
         if entry == "update_following_tweets" {
@@ -354,7 +379,7 @@ final class HproseInstance: ObservableObject {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
                     originalTweet.author = try? await fetchUser(originalTweet.authorId)
-                    TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: appUser.mid)
+                    TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: HproseInstance.globalCurrentUserId)
                     print("[fetchTweetFeed] Cached original tweet: \(originalTweet.mid)")
                 } catch {
                     print("[fetchTweetFeed] Error caching original tweet: \(error)")
@@ -377,7 +402,7 @@ final class HproseInstance: ObservableObject {
                     }
                     
                     // Save tweet back to cache
-                    TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
+                    TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: HproseInstance.globalCurrentUserId)
                     tweets.append(tweet)
                 } catch {
                     print("[fetchTweetFeed] Error processing tweet: \(error)")
@@ -417,7 +442,7 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "pn": pageNumber,
             "ps": pageSize,
-            "appuserid": appUser.mid,
+            "appuserid": HproseInstance.globalCurrentUserId,
         ] as [String : Any]
         
         guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
@@ -441,13 +466,13 @@ final class HproseInstance: ObservableObject {
         print("[fetchUserTweet] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
         
         // Cache original tweets first (only if the user is appUser)
-        if user.mid == appUser.mid {
+        if user.mid == HproseInstance.globalCurrentUserId {
             for originalTweetDict in originalTweetsData {
                 if let dict = originalTweetDict {
                     do {
                         let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
                         originalTweet.author = try? await fetchUser(originalTweet.authorId)
-                        TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: appUser.mid)
+                        TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: HproseInstance.globalCurrentUserId)
                         print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid)")
                     } catch {
                         print("[fetchUserTweet] Error caching original tweet: \(error)")
@@ -464,14 +489,14 @@ final class HproseInstance: ObservableObject {
                     tweet.author = user
                     
                     // Only show private tweets if the current user is the author
-                    if tweet.isPrivate == true && tweet.authorId != appUser.mid {
+                    if tweet.isPrivate == true && tweet.authorId != HproseInstance.globalCurrentUserId {
                         tweets.append(nil)
                         continue
                     }
                     
                     // Cache tweets only if the user is appUser
-                    if user.mid == appUser.mid {
-                        TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
+                    if user.mid == HproseInstance.globalCurrentUserId {
+                        TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: HproseInstance.globalCurrentUserId)
                     }
                     tweets.append(tweet)
                 } catch {
@@ -511,7 +536,7 @@ final class HproseInstance: ObservableObject {
             "aid": appId,
             "ver": "last",
             "tweetid": tweetId,
-            "appuserid": appUser.mid
+            "appuserid": HproseInstance.globalCurrentUserId
         ]
         if let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] {
             do {
@@ -519,7 +544,7 @@ final class HproseInstance: ObservableObject {
                 tweet.author = try? await fetchUser(authorId)
                 
                 // Update cached data for main feed
-                TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
+                TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: HproseInstance.globalCurrentUserId)
                 
                 return tweet
             } catch {
@@ -555,7 +580,7 @@ final class HproseInstance: ObservableObject {
     /// Do not really need to return the user, for user instance with the same mid has been updated or created.
     func fetchUser(
         _ userId: String,
-        baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
+        baseUrl: String = ""
     ) async throws -> User? {
         // Step 1: Check user cache in Core Data.
         let user = User.getInstance(mid: userId)
@@ -565,20 +590,22 @@ final class HproseInstance: ObservableObject {
         }
         
         // Step 2: Fetch from server. No instance available in memory or cache.
-        if baseUrl.isEmpty {
+        let effectiveBaseUrl = baseUrl.isEmpty ? appUser.baseUrl?.absoluteString ?? "" : baseUrl
+        
+        if effectiveBaseUrl.isEmpty {
             guard let providerIP = try await getProviderIP(userId) else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provide not found"])
             }
             await MainActor.run {
                 user.baseUrl = URL(string: "http://\(providerIP)")!
             }
-            try await updateUserFromServer(user)
+            try? await updateUserFromServer(user)
             return user
         } else {
             await MainActor.run {
-                user.baseUrl = URL(string: baseUrl)!
+                user.baseUrl = URL(string: effectiveBaseUrl)!
             }
-            try await updateUserFromServer(user)
+            try? await updateUserFromServer(user)
             return user
         }
     }
@@ -667,12 +694,10 @@ final class HproseInstance: ObservableObject {
                 }
                 return ["reason": "Unknown error occurred", "status": "failure"]
             } else if status == "success" {
-                await MainActor.run {
-                    // Update the appUser reference to point to the new user instance
-                    preferenceHelper?.setUserId(loginUser.mid)
-                    // Update appUser to the logged-in user
-                    self.appUser = loginUser
-                }
+                // Update the appUser reference to point to the new user instance
+                preferenceHelper?.setUserId(loginUser.mid)
+                // Update appUser to the logged-in user
+                self.appUser = loginUser
                 
                 // Populate fans and following lists for the logged-in user
                 Task {
@@ -685,22 +710,23 @@ final class HproseInstance: ObservableObject {
         return ["reason": "Invalid response status", "status": "failure"]
     }
     
-    func logout() {
+    func logout() async {
+        // Clear user preferences
         preferenceHelper?.setUserId(nil as String?)
-        
-        // Clear all caches
-        TweetCacheManager.shared.clearAllCache()
-        ImageCacheManager.shared.clearAllCache()
-        ChatCacheManager.shared.clearAllCache()
-        Task { @MainActor in
-            SharedAssetCache.shared.clearCache()
-        }
         
         // Reset appUser to guest user
         let guestUser = User.getInstance(mid: Constants.GUEST_ID)
         guestUser.baseUrl = appUser.baseUrl
         guestUser.followingList = Gadget.getAlphaIds()
         self.appUser = guestUser
+        
+        // Notify that user has changed
+        onAppUserChanged?()
+    }
+    
+    /// Get logout data for UI cleanup
+    func getLogoutData() -> (userId: String?, baseUrl: URL?) {
+        return (userId: preferenceHelper?.getUserId(), baseUrl: appUser.baseUrl)
     }
     
     /*
@@ -777,7 +803,7 @@ final class HproseInstance: ObservableObject {
                 return false
             }
             let blackList = (try? await getListByType(user: targetUser, entry: .BLACK_LIST)) ?? []
-            return blackList.contains(appUser.mid)
+            return blackList.contains(HproseInstance.globalCurrentUserId)
         } catch {
             print("DEBUG: [HproseInstance] Error checking blacklist for user \(targetUserId): \(error)")
             return false
@@ -858,7 +884,7 @@ final class HproseInstance: ObservableObject {
             "type": type.rawValue,
             "pn": pageNumber,
             "ps": pageSize,
-            "appuserid": appUser.mid
+            "appuserid": HproseInstance.globalCurrentUserId
         ] as [String : Any]
         print("DEBUG: [HproseInstance] getUserTweetsByType params: \(params)")
         
@@ -932,7 +958,7 @@ final class HproseInstance: ObservableObject {
         guard let targetUser = try await fetchUser(followingId) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Target user not found"])
         }
-        if targetUser.isUserBlacklisted(appUser.mid) {
+        if targetUser.isUserBlacklisted(HproseInstance.globalCurrentUserId) {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot follow this user because you are blocked"])
         }
         
@@ -942,7 +968,7 @@ final class HproseInstance: ObservableObject {
                 "aid": appId,
                 "ver": "last",
                 "followingid": followingId,
-                "userid": appUser.mid,
+                "userid": HproseInstance.globalCurrentUserId,
             ]
             guard let client = appUser.hproseClient else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
@@ -963,7 +989,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "appuserid": appUser.mid,
+                "appuserid": HproseInstance.globalCurrentUserId,
                 "tweetid": tweet.mid,
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
@@ -993,7 +1019,7 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = response["tweet"] as? [String: Any] {
                 updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 // Cache the updated tweet for main feed
-                TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet!, appUserId: appUser.mid)
+                TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet!, appUserId: HproseInstance.globalCurrentUserId)
             }
             
             return (updatedTweet, updatedUser)
@@ -1006,7 +1032,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
-                "userid": appUser.mid,
+                "userid": HproseInstance.globalCurrentUserId,
                 "tweetid": tweet.mid,
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
@@ -1036,7 +1062,7 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = response["tweet"] as? [String: Any] {
                 updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 // Cache the updated tweet for main feed
-                TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet!, appUserId: appUser.mid)
+                TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet!, appUserId: HproseInstance.globalCurrentUserId)
             }
             
             return (updatedTweet, updatedUser)
@@ -1045,18 +1071,16 @@ final class HproseInstance: ObservableObject {
 
     func retweet(_ tweet: Tweet) async throws -> Tweet? {
         if let retweet = try await uploadTweet(
-            await MainActor.run {
-                Tweet(
-                    mid: Constants.GUEST_ID,
-                    authorId: appUser.mid,
-                    originalTweetId: tweet.mid,
-                    originalAuthorId: tweet.authorId
-                )
-            }
+            Tweet(
+                mid: Constants.GUEST_ID,
+                authorId: HproseInstance.globalCurrentUserId,
+                originalTweetId: tweet.mid,
+                originalAuthorId: tweet.authorId
+            )
         ) {
             return retweet
         }
-        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "retweet: Upload failed"])
+        throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "retweet: Upload failed"])
     }
     
     /**
@@ -1075,7 +1099,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
-            "appuserid": appUser.mid,
+            "appuserid": HproseInstance.globalCurrentUserId,
             "retweetid": retweetId,
             "tweetid": tweet.mid,
             "authorid": tweet.authorId,
@@ -1086,7 +1110,7 @@ final class HproseInstance: ObservableObject {
         if let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] {
             try await MainActor.run { try tweet.update(from: tweetDict) }
             // Cache the updated tweet for main feed
-            TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
+            TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: HproseInstance.globalCurrentUserId)
         } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "updateRetweetCount: No response"])
         }
@@ -1100,7 +1124,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
-            "userid": appUser.mid,
+            "userid": HproseInstance.globalCurrentUserId,
             "tweetid": tweetId
         ]
         guard let client = appUser.hproseClient else {
@@ -1131,7 +1155,7 @@ final class HproseInstance: ObservableObject {
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
         // Check if app user is blacklisted by the tweet author
         if let tweetAuthor = tweet.author {
-            if tweetAuthor.isUserBlacklisted(appUser.mid) {
+            if tweetAuthor.isUserBlacklisted(HproseInstance.globalCurrentUserId) {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot comment on this tweet because you are blocked by the author"])
             }
         }
@@ -1153,7 +1177,7 @@ final class HproseInstance: ObservableObject {
             "hostid": tweet.author?.hostIds?.first as Any,
             "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
             "tweetid": tweet.mid,
-            "appuserid": appUser.mid
+            "appuserid": HproseInstance.globalCurrentUserId
         ]
         let entry = "add_comment"
         guard let response = uploadClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
@@ -1175,13 +1199,11 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment: Success response missing comment count"])
             }
             
-            await MainActor.run {
-                comment.mid = commentId
-                comment.author = appUser
-                tweet.commentCount = count
-            }
+            comment.mid = commentId
+            comment.author = appUser
+            tweet.commentCount = count
             // Cache the updated tweet for main feed
-            TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
+            TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: HproseInstance.globalCurrentUserId)
             
             // Check if retweetid is present and create a new tweet
             if let retweetId = response["retweetid"] as? String, !retweetId.isEmpty {
@@ -1190,7 +1212,7 @@ final class HproseInstance: ObservableObject {
                 // Create a new tweet with the comment's content and original tweet ID
                 let newTweet = Tweet(
                     mid: retweetId,
-                    authorId: appUser.mid,
+                    authorId: HproseInstance.globalCurrentUserId,
                     content: comment.content,
                     timestamp: comment.timestamp,
                     originalTweetId: tweet.mid,
@@ -1252,7 +1274,7 @@ final class HproseInstance: ObservableObject {
             "tweetid": parentTweet.mid,
             "hostid": parentTweet.author?.hostIds?.first as Any,
             "commentid": commentId,
-            "appuserid": appUser.mid
+            "appuserid": HproseInstance.globalCurrentUserId
         ]
         guard let client = appUser.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
@@ -2353,9 +2375,9 @@ final class HproseInstance: ObservableObject {
                 // Success - remove pending upload and notify
                 await removePendingUpload()
                 
-                // Update user's tweet count and post notification
+                                // Update user's tweet count and post notification
+                self.appUser.tweetCount = (self.appUser.tweetCount ?? 0) + 1
                 await MainActor.run {
-                    self.appUser.tweetCount = (self.appUser.tweetCount ?? 0) + 1
                     NotificationCenter.default.post(
                         name: .newTweetCreated,
                         object: nil,
@@ -2558,7 +2580,7 @@ final class HproseInstance: ObservableObject {
             "aid": appId,
             "ver": "last",
             "tweetid": tweetId,
-            "appuserid": appUser.mid,
+            "appuserid": HproseInstance.globalCurrentUserId,
         ]
         guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "togglePinnedTweet: No response"])
@@ -2576,7 +2598,7 @@ final class HproseInstance: ObservableObject {
             "aid": appId,
             "ver": "last",
             "userid": user.mid,
-            "appuserid": appUser.mid
+            "appuserid": HproseInstance.globalCurrentUserId
         ]
         guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "getPinnedTweets: No response"])
@@ -2608,7 +2630,7 @@ final class HproseInstance: ObservableObject {
         if let hostId = hostId, !hostId.isEmpty {
             hosts = [hostId]
         }
-        let newUser = User(mid: appUser.mid, name: alias, username: username, password: password,
+        let newUser = User(mid: HproseInstance.globalCurrentUserId, name: alias, username: username, password: password,
                            profile: profile, cloudDrivePort: cloudDrivePort, hostIds: hosts)
         let entry = "register"
         let params = [
@@ -2640,9 +2662,11 @@ final class HproseInstance: ObservableObject {
     ) async throws -> Bool {
         print("DEBUG: updateUserCore called with - alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort?.description ?? "nil")")
         
-        let updatedUser = User(mid: appUser.mid, name: alias, password: password, profile: profile, cloudDrivePort: cloudDrivePort)
+        let updatedUser = User(mid: HproseInstance.globalCurrentUserId, name: alias, password: password, profile: profile, cloudDrivePort: cloudDrivePort)
         if let hostId = hostId, !hostId.isEmpty {
-            updatedUser.hostIds = [hostId]
+            await MainActor.run {
+                updatedUser.hostIds = [hostId]
+            }
         }
 
         let entry = "set_author_core_data"
@@ -2664,8 +2688,8 @@ final class HproseInstance: ObservableObject {
                 print("DEBUG: updateUserCore - server returned success")
                 
                 // Clear user cache to ensure fresh data is loaded
-                TweetCacheManager.shared.deleteUser(mid: appUser.mid)
-                print("DEBUG: updateUserCore - cleared user cache for: \(appUser.mid)")
+                TweetCacheManager.shared.deleteUser(mid: HproseInstance.globalCurrentUserId)
+                print("DEBUG: updateUserCore - cleared user cache for: \(HproseInstance.globalCurrentUserId)")
                 
                 return true
             } else {
@@ -2692,7 +2716,7 @@ final class HproseInstance: ObservableObject {
         _ = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
     }
 
-    private func getProviderIP(_ mid: String) async throws -> String? {
+    func getProviderIP(_ mid: String) async throws -> String? {
         let params = [
             "aid": appId,
             "ver": "last",
@@ -2705,7 +2729,7 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Find IP addresses of given nodeId
-    func getHostIP(_ nodeId: String, v4Only: String = "false") async -> String? {
+    func getHostIP(_ nodeId: String, v4Only: String = "false") async throws-> String? {
         let params = [
             "aid": appId,
             "ver": "last",
@@ -2726,7 +2750,7 @@ final class HproseInstance: ObservableObject {
         guard let recipient = try await fetchUser(receiptId) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Recipient user not found"])
         }
-        if recipient.isUserBlacklisted(appUser.mid) {
+        if recipient.isUserBlacklisted(HproseInstance.globalCurrentUserId) {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot send a message to this user because you are blocked"])
         }
 
@@ -2734,7 +2758,7 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
-            "userid": appUser.mid,
+            "userid": HproseInstance.globalCurrentUserId,
             "receiptid": receiptId,
             "msg": message.toJSONString()
         ]
@@ -2770,7 +2794,7 @@ final class HproseInstance: ObservableObject {
                 let receiptParams: [String: Any] = [
                     "aid": appId,
                     "ver": "last",
-                    "senderid": appUser.mid,
+                    "senderid": HproseInstance.globalCurrentUserId,
                     "receiptid": receiptId,
                     "msg": message.toJSONString()
                 ]
@@ -2853,7 +2877,7 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
-            "userid": appUser.mid,
+            "userid": HproseInstance.globalCurrentUserId,
             "senderid": senderId
         ]
         
@@ -2877,7 +2901,7 @@ final class HproseInstance: ObservableObject {
                 
                 // Only return messages that are incoming (sent by others to current user)
                 // Filter out messages sent by the current user
-                if message.authorId != appUser.mid {
+                if message.authorId != HproseInstance.globalCurrentUserId {
                     // Update timestamp to current system time for incoming messages
                     let updatedMessage = ChatMessage(
                         id: message.id,
@@ -2912,7 +2936,7 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
-            "userid": appUser.mid
+            "userid": HproseInstance.globalCurrentUserId
         ]
         
         let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] ?? []
@@ -2924,7 +2948,7 @@ final class HproseInstance: ObservableObject {
                 
                 // Only return messages that are incoming (sent by others to current user)
                 // Filter out messages sent by the current user
-                if message.authorId != appUser.mid {
+                if message.authorId != HproseInstance.globalCurrentUserId {
                     // Update timestamp to current system time for incoming messages
                     let updatedMessage = ChatMessage(
                         id: message.id,
@@ -2976,9 +3000,7 @@ final class HproseInstance: ObservableObject {
         print("[checkAndUpdateDomain] Received domain: \(domain)")
         
         // Update domain to share and save to preferences
-        await MainActor.run {
-            _domainToShare = "http://" + domain
-        }
+        _domainToShare = "http://" + domain
     }
     /// Localizes backend error messages
     private func localizeBackendError(_ errorMessage: String) -> String {
@@ -3014,7 +3036,7 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
-            "userid": appUser.mid,
+            "userid": HproseInstance.globalCurrentUserId,
             "blocked": userId
         ]
         
@@ -3032,7 +3054,7 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
-            "userid": appUser.mid
+            "userid": HproseInstance.globalCurrentUserId
         ]
         return client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] ?? [:]
     }
@@ -3052,6 +3074,120 @@ final class HproseInstance: ObservableObject {
         await notifySystemAdmin(tweetId: tweetId, category: category, comments: comments)
     }
     
+    // MARK: - Tweet Interaction Methods
+    
+    /// Likes a tweet
+    func likeTweet(_ tweet: Tweet) async throws {
+        let entry = "like_tweet"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": HproseInstance.globalCurrentUserId,
+            "tweetid": tweet.mid,
+            "authorid": tweet.authorId
+        ]
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+        }
+        client.invoke("runMApp", withArgs: [entry, params])
+    }
+    
+    /// Unlikes a tweet
+    func unlikeTweet(_ tweet: Tweet) async throws {
+        let entry = "unlike_tweet"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": HproseInstance.globalCurrentUserId,
+            "tweetid": tweet.mid,
+            "authorid": tweet.authorId
+        ]
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+        }
+        client.invoke("runMApp", withArgs: [entry, params])
+    }
+    
+    /// Bookmarks a tweet
+    func bookmarkTweet(_ tweet: Tweet) async throws {
+        let entry = "bookmark_tweet"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": HproseInstance.globalCurrentUserId,
+            "tweetid": tweet.mid,
+            "authorid": tweet.authorId
+        ]
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+        }
+        client.invoke("runMApp", withArgs: [entry, params])
+    }
+    
+    /// Unbookmarks a tweet
+    func unbookmarkTweet(_ tweet: Tweet) async throws {
+        let entry = "unbookmark_tweet"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": HproseInstance.globalCurrentUserId,
+            "tweetid": tweet.mid,
+            "authorid": tweet.authorId
+        ]
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+        }
+        client.invoke("runMApp", withArgs: [entry, params])
+    }
+    
+    /// Unretweets a tweet
+    func unretweet(_ tweet: Tweet) async throws {
+        let entry = "unretweet"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": HproseInstance.globalCurrentUserId,
+            "tweetid": tweet.mid,
+            "authorid": tweet.authorId
+        ]
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+        }
+        client.invoke("runMApp", withArgs: [entry, params])
+    }
+    
+    /// Toggles favorite status of a tweet
+    func toggleFavorite(_ tweet: Tweet) async throws {
+        let entry = "toggle_favorite"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": HproseInstance.globalCurrentUserId,
+            "tweetid": tweet.mid,
+            "authorid": tweet.authorId
+        ]
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+        }
+        client.invoke("runMApp", withArgs: [entry, params])
+    }
+    
+    /// Toggles pinned status of a tweet
+    func togglePinnedTweet(_ tweet: Tweet) async throws {
+        let entry = "toggle_pinned_tweet"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": HproseInstance.globalCurrentUserId,
+            "tweetid": tweet.mid,
+            "authorid": tweet.authorId
+        ]
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+        }
+        client.invoke("runMApp", withArgs: [entry, params])
+    }
+    
     /// Send notification to system admin about reported and deleted content
     private func notifySystemAdmin(tweetId: String, category: String, comments: String) async {
         let adminUserId = AppConfig.alphaId // System admin user ID
@@ -3062,7 +3198,7 @@ final class HproseInstance: ObservableObject {
         
         Tweet ID: \(tweetId) - DELETED
         Category: \(category)
-        Reporter: \(appUser.mid)
+        Reporter: \(HproseInstance.globalCurrentUserId)
         Comments: \(comments.isEmpty ? "None" : comments)
         Time: \(Date().formatted())
         
@@ -3071,9 +3207,9 @@ final class HproseInstance: ObservableObject {
         """
         
         // Create chat message
-        let sessionId = ChatMessage.generateSessionId(userId: appUser.mid, receiptId: adminUserId)
+        let sessionId = ChatMessage.generateSessionId(userId: HproseInstance.globalCurrentUserId, receiptId: adminUserId)
         let notificationMessage = ChatMessage(
-            authorId: appUser.mid,
+            authorId: HproseInstance.globalCurrentUserId,
             receiptId: adminUserId,
             chatSessionId: sessionId,
             content: notificationContent
@@ -3095,6 +3231,271 @@ final class HproseInstance: ObservableObject {
     }
 }
 
+// MARK: - Modern Swift 6 State Management
+@MainActor
+@Observable
+class HproseInstanceState {
+    var appUser: User
+    var domainToShare: String
+    
+    private let hproseInstance: HproseInstance
+    
+    init(hproseInstance: HproseInstance) {
+        self.hproseInstance = hproseInstance
+        // Initialize with default values
+        self.appUser = User.getInstance(mid: Constants.GUEST_ID)
+        self.domainToShare = AppConfig.baseUrl
+        
+        // Set up callback to update published properties
+        Task {
+            await hproseInstance.setAppUserChangedCallback { [weak self] in
+                Task { @MainActor in
+                    self?.appUser = await hproseInstance.appUser
+                    self?.domainToShare = await hproseInstance.domainToShare
+                }
+            }
+            
+            // Initial sync
+            self.appUser = await hproseInstance.appUser
+            self.domainToShare = await hproseInstance.domainToShare
+        }
+    }
+    
+    // Convenience accessor for the actor
+    var instance: HproseInstance {
+        hproseInstance
+    }
+    
+    // Method to set the callback from outside
+    func setAppUserChangedCallback(_ callback: @escaping () -> Void) async {
+        await hproseInstance.setAppUserChangedCallback(callback)
+    }
+    
+    // Convenience properties - synchronous access to current state
+    var isGuest: Bool {
+        appUser.mid == Constants.GUEST_ID
+    }
+    
+    var favoritesCount: Int? {
+        get { appUser.favoritesCount }
+        set { appUser.favoritesCount = newValue }
+    }
+    
+    // Forward all method calls to the actor
+    func initialize() async throws {
+        try await hproseInstance.initialize()
+    }
+    
+    func initAppEntry() async throws {
+        try await hproseInstance.initAppEntry()
+    }
+    
+    func fetchUser(_ userId: String, baseUrl: String = "") async throws -> User? {
+        try await hproseInstance.fetchUser(userId, baseUrl: baseUrl)
+    }
+    
+    func getUserId(_ username: String) async throws -> String? {
+        try await hproseInstance.getUserId(username)
+    }
+    
+    func toggleFollowing(followingId: String) async throws -> Bool? {
+        try await hproseInstance.toggleFollowing(followingId: followingId)
+    }
+    
+    func getPinnedTweets(user: User) async throws -> [[String: Any]] {
+        try await hproseInstance.getPinnedTweets(user: user)
+    }
+    
+    func getUserTweetsByType(user: User, type: UserContentType, pageNumber: UInt = 0, pageSize: UInt = 20) async throws -> [Tweet?] {
+        try await hproseInstance.getUserTweetsByType(user: user, type: type, pageNumber: pageNumber, pageSize: pageSize)
+    }
+    
+    func registerUser(username: String, password: String, alias: String, profile: String, hostId: String?, cloudDrivePort: Int?) async throws -> Bool {
+        try await hproseInstance.registerUser(username: username, password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort)
+    }
+    
+    func getTweet(tweetId: String, authorId: String, nodeUrl: String? = nil) async throws -> Tweet? {
+        try await hproseInstance.getTweet(tweetId: tweetId, authorId: authorId, nodeUrl: nodeUrl)
+    }
+    
+    func refreshTweet(tweetId: String, authorId: String) async throws -> Tweet? {
+        try await hproseInstance.refreshTweet(tweetId: tweetId, authorId: authorId)
+    }
+    
+    func scheduleTweetUpload(tweet: Tweet, itemData: [HproseInstance.PendingTweetUpload.ItemData]) async {
+        await hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
+    }
+    
+    func scheduleCommentUpload(comment: Tweet, to parentTweet: Tweet, itemData: [HproseInstance.PendingTweetUpload.ItemData]) async {
+        await hproseInstance.scheduleCommentUpload(comment: comment, to: parentTweet, itemData: itemData)
+    }
+    
+    func sendMessage(receiptId: String, message: ChatMessage) async throws -> ChatMessage {
+        try await hproseInstance.sendMessage(receiptId: receiptId, message: message)
+    }
+    
+    func fetchMessages(senderId: String) async throws -> [ChatMessage] {
+        try await hproseInstance.fetchMessages(senderId: senderId)
+    }
+    
+    func uploadToIPFS(fileData: Data, fileName: String, mimeType: String) async throws -> MimeiFileType {
+        guard let result = try await hproseInstance.uploadToIPFS(
+            data: fileData,
+            typeIdentifier: mimeType,
+            fileName: fileName
+        ) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload failed - no result returned"])
+        }
+        return result
+    }
+    
+    func setUserAvatar(user: User, avatar: String) async throws {
+        try await hproseInstance.setUserAvatar(user: user, avatar: avatar)
+    }
+    
+    func updateUserCore(password: String, alias: String?, profile: String?, hostId: String?, cloudDrivePort: Int?) async throws -> Bool {
+        try await hproseInstance.updateUserCore(password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort)
+    }
+    
+    func getProviderIP(_ userId: String) async throws -> String? {
+        try await hproseInstance.getProviderIP(userId)
+    }
+    
+    func getHostIP(_ hostId: String, v4Only: String) async throws -> String? {
+        try await hproseInstance.getHostIP(hostId, v4Only: v4Only)
+    }
+    
+    func getListByType(user: User, entry: UserContentType) async throws -> [String] {
+        try await hproseInstance.getListByType(user: user, entry: entry)
+    }
+    
+    func fetchTweetFeed(user: User, pageNumber: UInt = 0, pageSize: UInt = 20, entry: String = "get_tweet_feed") async throws -> [Tweet?] {
+        try await hproseInstance.fetchTweetFeed(user: user, pageNumber: pageNumber, pageSize: pageSize, entry: entry)
+    }
+    
+    func fetchUserTweets(user: User, pageNumber: UInt = 0, pageSize: UInt = 20) async throws -> [Tweet?] {
+        try await hproseInstance.fetchUserTweets(user: user, pageNumber: pageNumber, pageSize: pageSize)
+    }
+    
+    func fetchComments(_ parentTweet: Tweet, pageNumber: UInt = 0, pageSize: UInt = 20) async throws -> [Tweet?] {
+        try await hproseInstance.fetchComments(parentTweet, pageNumber: pageNumber, pageSize: pageSize)
+    }
+    
+    func likeTweet(_ tweet: Tweet) async throws {
+        try await hproseInstance.likeTweet(tweet)
+    }
+    
+    func unlikeTweet(_ tweet: Tweet) async throws {
+        try await hproseInstance.unlikeTweet(tweet)
+    }
+    
+    func bookmarkTweet(_ tweet: Tweet) async throws {
+        try await hproseInstance.bookmarkTweet(tweet)
+    }
+    
+    func unbookmarkTweet(_ tweet: Tweet) async throws {
+        try await hproseInstance.unbookmarkTweet(tweet)
+    }
+    
+    func retweet(_ tweet: Tweet) async throws -> Tweet? {
+        try await hproseInstance.retweet(tweet)
+    }
+    
+    func unretweet(_ tweet: Tweet) async throws {
+        try await hproseInstance.unretweet(tweet)
+    }
+    
+    func updateRetweetCount(tweet: Tweet, retweetId: String, direction: Bool = true) async throws {
+        try await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: retweetId, direction: direction)
+    }
+    
+    func toggleFavorite(_ tweet: Tweet) async throws -> (Tweet?, User?) {
+        try await hproseInstance.toggleFavorite(tweet)
+    }
+    
+    func toggleBookmark(_ tweet: Tweet) async throws -> (Tweet?, User?) {
+        try await hproseInstance.toggleBookmark(tweet)
+    }
+    
+    func deleteComment(parentTweet: Tweet, commentId: String) async throws -> [String: Any]? {
+        try await hproseInstance.deleteComment(parentTweet: parentTweet, commentId: commentId)
+    }
+    
+    func togglePinnedTweet(_ tweet: Tweet) async throws {
+        try await hproseInstance.togglePinnedTweet(tweet)
+    }
+    
+    func deleteTweet(_ tweetId: String) async throws -> String? {
+        try await hproseInstance.deleteTweet(tweetId)
+    }
+    
+    func reportTweet(tweetId: String, category: String, comments: String) async throws {
+        try await hproseInstance.reportTweet(tweetId: tweetId, category: category, comments: comments)
+    }
+    
+    func blockUser(userId: String) async throws {
+        try await hproseInstance.blockUser(userId: userId)
+    }
+    
+    func deleteAccount() async throws -> [String: Any] {
+        try await hproseInstance.deleteAccount()
+    }
+    
+    func login(_ loginUser: User) async throws -> [String: Any] {
+        try await hproseInstance.login(loginUser)
+    }
+    
+    func logout() async {
+        // First, perform the actor logout
+        await hproseInstance.logout()
+        
+        // Then handle UI cleanup on the main actor
+        await MainActor.run {
+            // Clear all caches
+            TweetCacheManager.shared.clearAllCache()
+            ImageCacheManager.shared.clearAllCache()
+            ChatCacheManager.shared.clearAllCache()
+            SharedAssetCache.shared.clearCache()
+        }
+    }
+    
+
+}
+
+// Global state instance for Swift 6
+extension HproseInstanceState {
+    static let shared = HproseInstanceState(hproseInstance: HproseInstance.shared)
+}
+
+// MARK: - Legacy ObservableObject Wrapper (for backward compatibility during migration)
+@MainActor
+class HproseInstanceObservable: ObservableObject {
+    @Published var appUser: User
+    @Published var domainToShare: String
+    
+    private let state: HproseInstanceState
+    
+    init(hproseInstance: HproseInstance) {
+        self.state = HproseInstanceState(hproseInstance: hproseInstance)
+        self.appUser = state.appUser
+        self.domainToShare = state.domainToShare
+        
+        // Sync with the new state using the callback
+        Task {
+            await state.setAppUserChangedCallback { [weak self, weak state] in
+                Task { @MainActor in
+                    guard let self = self, let state = state else { return }
+                    self.appUser = state.appUser
+                    self.domainToShare = state.domainToShare
+                }
+            }
+        }
+    }
+    
+    var instance: HproseInstance {
+        state.instance
+    }
+}
 
 // MARK: - Array Extension
 extension Array {

@@ -4,7 +4,7 @@ import SwiftUI
 struct AppHeaderView: View {
     @State private var isLoginSheetPresented = false
     @State private var isSettingsSheetPresented = false
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     
     var body: some View {
         HStack {

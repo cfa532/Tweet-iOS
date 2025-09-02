@@ -14,7 +14,7 @@ struct CommentDetailViewWithParent: View {
     @ObservedObject var comment: Tweet
     @State private var parentTweet: Tweet?
     @State private var isLoading = true
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -83,7 +83,7 @@ struct CommentDetailView: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @Environment(\.dismiss) private var dismiss
     
     init(comment: Tweet, parentTweet: Tweet) {

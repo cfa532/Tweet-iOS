@@ -3,7 +3,7 @@ import SwiftUI
 @available(iOS 16.0, *)
 struct StartChatView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @State private var users: [User] = []
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil

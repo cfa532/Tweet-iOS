@@ -29,7 +29,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     // Update the singleton instance in the cache
                     User.userInstances[mid]?.tweetCount = newValue
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    let appUserId = await HproseInstance.shared.appUser.mid
+                    if mid == appUserId {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -44,7 +45,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     // Update the singleton instance in the cache
                     User.userInstances[mid]?.followingCount = newValue
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    let appUserId = await HproseInstance.shared.appUser.mid
+                    if mid == appUserId {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -59,7 +61,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     // Update the singleton instance in the cache
                     User.userInstances[mid]?.followersCount = newValue
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    let appUserId = await HproseInstance.shared.appUser.mid
+                    if mid == appUserId {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -74,7 +77,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     // Update the singleton instance in the cache
                     User.userInstances[mid]?.bookmarksCount = newValue
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    let appUserId = await HproseInstance.shared.appUser.mid
+                    if mid == appUserId {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -89,7 +93,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     // Update the singleton instance in the cache
                     User.userInstances[mid]?.favoritesCount = newValue
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    let appUserId = await HproseInstance.shared.appUser.mid
+                    if mid == appUserId {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -109,20 +114,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             if let cached = _hproseClient {
                 return cached
             } else {
-                if baseUrl == HproseInstance.shared.appUser.baseUrl {
-                    // Create a new client since the shared one is private
-                    let client = HproseHttpClient()
-                    client.timeout = 30000
-                    client.uri = "\(baseUrl)/webapi/"
-                    _hproseClient = client
-                    return client
-                } else {
-                    let client = HproseHttpClient()
-                    client.timeout = 30000
-                    client.uri = "\(baseUrl)/webapi/"
-                    _hproseClient = client
-                    return client
-                }
+                // Create a new client since the shared one is private
+                let client = HproseHttpClient()
+                client.timeout = 30000
+                client.uri = "\(baseUrl)/webapi/"
+                _hproseClient = client
+                return client
             }
         }
     }
@@ -137,22 +134,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             if let cached = _uploadClient {
                 return cached
             } else {
-                if writableUrl == HproseInstance.shared.appUser.baseUrl {
-                    // Use the main hprose client if available, otherwise create a new one
-                    // Create a new client for upload
-                    let client = HproseHttpClient()
-                    client.timeout = 180000
-                    client.uri = "\(writableUrl)/webapi/"
-                    _uploadClient = client
-                    return client
-                } else {
-                    print("DEBUG: uploadClient - creating client for different baseUrl")
-                    let client = HproseHttpClient()
-                    client.timeout = 180000
-                    client.uri = "\(writableUrl)/webapi/"
-                    _uploadClient = client
-                    return client
-                }
+                // Create a new client for upload
+                let client = HproseHttpClient()
+                client.timeout = 180000
+                client.uri = "\(writableUrl)/webapi/"
+                _uploadClient = client
+                return client
             }
         }
     }
@@ -420,7 +407,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             return writableUrl
         }
         if let hostId = self.hostIds?.first, !hostId.isEmpty {
-            if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: "true") {
+            if let hostIP = try await HproseInstance.shared.getHostIP(hostId, v4Only: "true") {
                 let url = URL(string: "http://\(hostIP)")
                 self.writableUrl = url
                 return url

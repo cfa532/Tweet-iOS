@@ -20,7 +20,7 @@ struct TweetListView<RowView: View>: View {
     let shouldCacheServerTweets: Bool
     private let pageSize: UInt = 10
 
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @Binding var tweets: [Tweet]
     @State private var isLoading: Bool = false
     @State private var isLoadingMore: Bool = false

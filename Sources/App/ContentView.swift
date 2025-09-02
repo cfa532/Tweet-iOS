@@ -3,7 +3,7 @@ import SwiftUI
 // Main ContentView
 @available(iOS 17.0, *)
 struct ContentView: View {
-    @StateObject private var hproseInstance = HproseInstance.shared
+    @State private var hproseInstance = HproseInstanceState(hproseInstance: HproseInstance.shared)
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var selectedTab = 0
@@ -148,7 +148,6 @@ struct ContentView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
         )
-        .environmentObject(hproseInstance)
         .environmentObject(themeManager)
     }
 }

@@ -17,10 +17,10 @@ struct TweetActionButtonsView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
 
     private func handleGuestAction() {
-        if hproseInstance.appUser.isGuest {
+        if hproseInstance.isGuest {
             showLoginSheet = true
         }
     }
@@ -51,7 +51,7 @@ struct TweetActionButtonsView: View {
                 enableAnimation: true,
                 enableVibration: false
             ) {
-                if hproseInstance.appUser.isGuest {
+                if hproseInstance.isGuest {
                     handleGuestAction()
                 } else {
                     onCommentTap?() ?? { showCommentCompose = true }()
@@ -74,7 +74,7 @@ struct TweetActionButtonsView: View {
                 enableAnimation: true,
                 enableVibration: false
             ) {
-                if hproseInstance.appUser.isGuest {
+                if hproseInstance.isGuest {
                     handleGuestAction()
                 } else {
                     Task {
@@ -103,14 +103,14 @@ struct TweetActionButtonsView: View {
                 enableAnimation: true,
                 enableVibration: false
             ) {
-                if hproseInstance.appUser.isGuest {
+                if hproseInstance.isGuest {
                     handleGuestAction()
                 } else {
                     Task {
                         // Store current state before any changes
                         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
                         let originalFavoriteCount = tweet.favoriteCount ?? 0
-                        let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
+                        let originalAppUserFavoriteCount = hproseInstance.favoritesCount ?? 0
                         
                         // Optimistic UI update - only after debounce check passes
                         var newFavorites = tweet.favorites ?? [false, false, false]
@@ -120,7 +120,7 @@ struct TweetActionButtonsView: View {
                             tweet.favorites = newFavorites
                             tweet.favoriteCount = (tweet.favoriteCount ?? 0) + (wasFavorite ? -1 : 1)
                             // Update appUser favorite count immediately
-                            hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount + (wasFavorite ? -1 : 1)
+                            hproseInstance.favoritesCount = originalAppUserFavoriteCount + (wasFavorite ? -1 : 1)
                         }
                         
                         do {
@@ -129,7 +129,7 @@ struct TweetActionButtonsView: View {
                             // Update appUser with server response if available
                             if let updatedUser = updatedUser {
                                 await MainActor.run {
-                                    hproseInstance.appUser.favoritesCount = updatedUser.favoritesCount
+                                    hproseInstance.favoritesCount = updatedUser.favoritesCount
                                     hproseInstance.appUser.favoriteTweets = updatedUser.favoriteTweets
                                 }
                             }
@@ -156,7 +156,7 @@ struct TweetActionButtonsView: View {
                             await MainActor.run {
                                 self.tweet.favorites = tweet.favorites
                                 self.tweet.favoriteCount = originalFavoriteCount
-                                hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
+                                hproseInstance.favoritesCount = originalAppUserFavoriteCount
                             }
                             
                             // Show error toast
@@ -191,7 +191,7 @@ struct TweetActionButtonsView: View {
                 enableAnimation: true,
                 enableVibration: false
             ) {
-                if hproseInstance.appUser.isGuest {
+                if hproseInstance.isGuest {
                     handleGuestAction()
                 } else {
                     Task {
@@ -293,7 +293,7 @@ struct TweetActionButtonsView: View {
             if let commentsVM = commentsVM {
                 CommentComposeView(tweet: tweet, commentsVM: commentsVM)
             } else {
-                CommentComposeView(tweet: tweet, commentsVM: CommentsViewModel(hproseInstance: hproseInstance, parentTweet: tweet))
+                CommentComposeView(tweet: tweet, commentsVM: CommentsViewModel(hproseInstance: hproseInstance.instance, parentTweet: tweet))
             }
         }
         .onChange(of: showCommentCompose) { _, isPresented in

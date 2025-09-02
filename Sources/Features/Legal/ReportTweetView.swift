@@ -3,8 +3,7 @@ import SwiftUI
 struct ReportTweetView: View {
     @ObservedObject var tweet: Tweet
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var appUser = HproseInstance.shared.appUser
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info

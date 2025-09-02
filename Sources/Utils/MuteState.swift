@@ -14,7 +14,7 @@ class MuteState: ObservableObject {
             Task { @MainActor in
                 // Save to preferences whenever the mute state changes
                 if oldValue != isMuted {
-                    HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
+                    await HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
                     print("DEBUG: [MUTE STATE] Mute state changed to: \(isMuted)")
                 }
             }
@@ -41,20 +41,26 @@ class MuteState: ObservableObject {
     @objc private func userDefaultsDidChange() {
         // Check for changes to the speakerMuted key
         // If the key was removed (reset to default), default to unmuted
-        let newMuteState = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
-        if self.isMuted != newMuteState {
-            DispatchQueue.main.async {
-                self.isMuted = newMuteState
-                print("DEBUG: [MUTE STATE] Synced from UserDefaults change: \(newMuteState)")
+        Task {
+            let newMuteState = await HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
+            if self.isMuted != newMuteState {
+                await MainActor.run {
+                    self.isMuted = newMuteState
+                    print("DEBUG: [MUTE STATE] Synced from UserDefaults change: \(newMuteState)")
+                }
             }
         }
     }
     
     func refreshFromPreferences() {
         // Read the current preference and update the published property
-        let savedMuteState = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
-        if self.isMuted != savedMuteState {
-            self.isMuted = savedMuteState
+        Task {
+            let savedMuteState = await HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
+            if self.isMuted != savedMuteState {
+                await MainActor.run {
+                    self.isMuted = savedMuteState
+                }
+            }
         }
     }
     

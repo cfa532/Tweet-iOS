@@ -19,7 +19,7 @@ struct UserListView: View {
     @State private var refreshTask: Task<Void, Never>?
     @State private var loadMoreTask: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @Binding var navigationPath: NavigationPath
     
     // MARK: - Initialization

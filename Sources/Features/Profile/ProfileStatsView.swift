@@ -7,7 +7,7 @@ struct ProfileStatsView: View {
     let onFollowingTap: () -> Void
     let onBookmarksTap: () -> Void
     let onFavoritesTap: () -> Void
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     
     var body: some View {
         HStack {

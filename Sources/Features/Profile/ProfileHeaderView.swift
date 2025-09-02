@@ -8,7 +8,7 @@ struct ProfileHeaderView: View {
     let onEditTap: () -> Void
     let onFollowToggle: () -> Void
     let onAvatarTap: () -> Void
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     
     private func formatRegistrationDate(_ date: Date) -> String {
         let formatter = DateFormatter()

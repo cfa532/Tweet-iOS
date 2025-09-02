@@ -26,7 +26,8 @@ class FollowingsTweetViewModel: ObservableObject {
     func fetchTweets(page: UInt, pageSize: UInt, shouldCache: Bool = true) async -> [Tweet?] {
         // fetch tweets from server
         // Load tweets of alphaId if appUser is a guest user
-        if hproseInstance.appUser.isGuest {
+        let userState = await hproseInstance.currentUserState
+        if userState.isGuest {
             do {
                 print("[HproseInstance] Loading tweets for guest user from alphaId")
                 if let adminUser = try await hproseInstance.fetchUser(AppConfig.alphaId) {
@@ -48,7 +49,7 @@ class FollowingsTweetViewModel: ObservableObject {
             /// The backend may return an array containing nils. If the returned array size is less than pageSize, it means there are no more tweets on the backend.
             /// This function accumulates only non-nil tweets and stops fetching when the backend returns fewer than pageSize items.
             let serverTweets = try await hproseInstance.fetchTweetFeed(
-                user: hproseInstance.appUser,
+                user: userState.user,
                 pageNumber: page,
                 pageSize: pageSize
             )
@@ -66,12 +67,12 @@ class FollowingsTweetViewModel: ObservableObject {
             if page == 0 {
                 // only check for new tweets from followings on initial load.
                 Task {
-                    let newTweets = try await hproseInstance.fetchTweetFeed(
-                        user: hproseInstance.appUser,
-                        pageNumber: page,
-                        pageSize: pageSize,
-                        entry: "update_following_tweets"    // check for new tweets have not been synced.
-                    )
+                                    let newTweets = try await hproseInstance.fetchTweetFeed(
+                    user: userState.user,
+                    pageNumber: page,
+                    pageSize: pageSize,
+                    entry: "update_following_tweets"    // check for new tweets have not been synced.
+                )
                     await MainActor.run {
                         tweets.mergeTweets(newTweets.compactMap{ $0 })
                     }

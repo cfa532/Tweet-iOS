@@ -32,7 +32,7 @@ struct RegistrationView: View {
     @State private var hasUnsavedChanges = false
     @State private var hasAcceptedTerms = false
     @State private var showTermsOfService = false
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
 
     enum Field: Hashable {
         case username, password, confirmPassword, alias, profile, hostId, cloudDrivePort

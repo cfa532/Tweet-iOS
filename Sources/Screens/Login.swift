@@ -10,7 +10,7 @@ import SwiftUI
 @available(iOS 16.0, *)
 struct LoginView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @State private var username = ""
     @State private var password = ""
     @State private var showRegistration = false
@@ -24,6 +24,69 @@ struct LoginView: View {
         case password
     }
     
+    private var usernameField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(LocalizedStringKey("Username"))
+                .font(.headline)
+                .foregroundColor(.themeText)
+            
+            TextField(LocalizedStringKey("Enter your username"), text: $username)
+                .textFieldStyle(PlainTextFieldStyle())
+                .autocapitalization(.none)
+                .disabled(isLoading)
+                .focused($focusedField, equals: .username)
+                .submitLabel(.next)
+                .onSubmit {
+                    focusedField = .password
+                }
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(.systemGray6))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(focusedField == .username ? Color.themeAccent : Color.clear, lineWidth: 2)
+                )
+                .onTapGesture {
+                    focusedField = .username
+                }
+        }
+    }
+    
+    private var passwordField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(LocalizedStringKey("Password"))
+                .font(.headline)
+                .foregroundColor(.themeText)
+            
+            SecureField(LocalizedStringKey("Enter your password"), text: $password)
+                .textFieldStyle(PlainTextFieldStyle())
+                .autocapitalization(.none)
+                .disabled(isLoading)
+                .focused($focusedField, equals: .password)
+                .submitLabel(.done)
+                .onSubmit {
+                    focusedField = nil
+                    Task {
+                        await login()
+                    }
+                }
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(.systemGray6))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(focusedField == .password ? Color.themeAccent : Color.clear, lineWidth: 2)
+                )
+                .onTapGesture {
+                    focusedField = .password
+                }
+        }
+    }
+    
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
@@ -32,65 +95,8 @@ struct LoginView: View {
                     .fontWeight(.bold)
                     .foregroundColor(.themeText)
                 
-                Group {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(LocalizedStringKey("Username"))
-                            .font(.headline)
-                            .foregroundColor(.themeText)
-                        
-                        TextField(LocalizedStringKey("Enter your username"), text: $username)
-                            .textFieldStyle(PlainTextFieldStyle())
-                            .autocapitalization(.none)
-                            .disabled(isLoading)
-                            .focused($focusedField, equals: .username)
-                            .submitLabel(.next)
-                            .onSubmit {
-                                focusedField = .password
-                            }
-                            .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(Color(.systemGray6))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .stroke(focusedField == .username ? Color.themeAccent : Color.clear, lineWidth: 2)
-                                    )
-                            )
-                            .onTapGesture {
-                                focusedField = .username
-                            }
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(LocalizedStringKey("Password"))
-                            .font(.headline)
-                            .foregroundColor(.themeText)
-                        
-                        SecureField(LocalizedStringKey("Enter your password"), text: $password)
-                            .textFieldStyle(PlainTextFieldStyle())
-                            .disabled(isLoading)
-                            .focused($focusedField, equals: .password)
-                            .submitLabel(.done)
-                            .onSubmit {
-                                focusedField = nil
-                                Task {
-                                    await login()
-                                }
-                            }
-                            .padding()
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(Color(.systemGray6))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12)
-                                            .stroke(focusedField == .password ? Color.themeAccent : Color.clear, lineWidth: 2)
-                                    )
-                            )
-                            .onTapGesture {
-                                focusedField = .password
-                            }
-                    }
-                }
+                usernameField
+                passwordField
                 
                 if let errorMessage = errorMessage {
                     Text(errorMessage)
@@ -156,7 +162,7 @@ struct LoginView: View {
             }
             .alert(LocalizedStringKey("Login Successful. Wait for a few minutes before login."), isPresented: $showSuccess) {
                 Button(LocalizedStringKey("OK")) {
-//                    dismiss()
+                    //                    dismiss()
                 }
             } message: {
                 Text(LocalizedStringKey("Welcome back!"))
@@ -202,4 +208,3 @@ struct LoginView: View {
         isLoading = false
     }
 }
-

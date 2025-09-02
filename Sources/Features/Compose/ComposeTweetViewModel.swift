@@ -83,9 +83,10 @@ class ComposeTweetViewModel: ObservableObject {
         let isPrivateValue = false
         #endif
         
+        let appUserId = await hproseInstance.appUser.mid
         let tweet = Tweet(
             mid: Constants.GUEST_ID,        // placeholder Mimei Id
-            authorId: hproseInstance.appUser.mid,
+            authorId: appUserId,
             content: trimmedContent,
             timestamp: Date(),
             attachments: nil,
@@ -112,7 +113,7 @@ class ComposeTweetViewModel: ObservableObject {
         }
         
         print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
-        hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
+        await hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
     }
     
     func clearForm() {

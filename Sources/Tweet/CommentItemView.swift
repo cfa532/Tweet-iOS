@@ -21,7 +21,7 @@ struct CommentItemView: View {
     @State private var isVisible = false
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
 
     var body: some View {
         Group {

@@ -61,8 +61,7 @@ struct TweetMenu: View {
     let isPinned: Bool
     let showDeleteButton: Bool
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var appUser = HproseInstance.shared.appUser
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @State private var isCurrentlyPinned: Bool
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -95,7 +94,7 @@ struct TweetMenu: View {
                 }
                 
                 // Report tweet option (only show for tweets not authored by current user)
-                if tweet.authorId != appUser.mid {
+                if tweet.authorId != HproseInstance.globalCurrentUserId {
                     Button(action: {
                         showReportSheet = true
                     }) {
@@ -103,20 +102,19 @@ struct TweetMenu: View {
                     }
                 }
                 
-                if tweet.authorId == appUser.mid {
+                if tweet.authorId == HproseInstance.globalCurrentUserId {
                     Button(action: {
                         Task {
-                            if let isPinned = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
-                                isCurrentlyPinned = isPinned
-                                NotificationCenter.default.post(
-                                    name: .tweetPinStatusChanged,
-                                    object: nil,
-                                    userInfo: [
-                                        "tweetId": tweet.mid,
-                                        "isPinned": isPinned
-                                    ]
-                                )
-                            }
+                            try? await hproseInstance.togglePinnedTweet(tweet)
+                            isCurrentlyPinned.toggle()
+                            NotificationCenter.default.post(
+                                name: .tweetPinStatusChanged,
+                                object: nil,
+                                userInfo: [
+                                    "tweetId": tweet.mid,
+                                    "isPinned": isCurrentlyPinned
+                                ]
+                            )
                         }
                     }) {
                         if isCurrentlyPinned {

@@ -24,7 +24,7 @@ struct CommentListView<RowView: View>: View {
     let notifications: [CommentListNotification]
     private let pageSize: UInt = 20
 
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @Binding var comments: [Tweet]
     @State private var isLoading: Bool = false
     @State private var isLoadingMore: Bool = false

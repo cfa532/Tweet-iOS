@@ -30,7 +30,7 @@ struct ReplyEditorView: View {
     var onExpandedClose: (() -> Void)? = nil
     var initialExpanded: Bool = false
     
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -356,7 +356,7 @@ struct ReplyEditorView: View {
             // Create comment tweet
             let comment = Tweet(
                 mid: UUID().uuidString, // Temporary ID, will be replaced by server
-                authorId: hproseInstance.appUser.mid,
+                authorId: HproseInstance.globalCurrentUserId,
                 content: trimmedContent,
                 timestamp: Date(),
                 originalTweetId: isQuoting ? parentTweet.mid : nil,
@@ -371,7 +371,7 @@ struct ReplyEditorView: View {
                 )
                 
                 // Schedule comment upload in background (same as CommentComposeView)
-                hproseInstance.scheduleCommentUpload(comment: comment, to: parentTweet, itemData: itemData)
+                await hproseInstance.scheduleCommentUpload(comment: comment, to: parentTweet, itemData: itemData)
                 
                 // Show success toast immediately and reset form
                 await MainActor.run {
@@ -393,5 +393,5 @@ struct ReplyEditorView: View {
 
 #Preview {
     ReplyEditorView(parentTweet: Tweet(mid: "test", authorId: "test"), isQuoting: false)
-        .environmentObject(HproseInstance.shared)
+        .environmentObject(HproseInstanceObservable(hproseInstance: HproseInstance.shared))
 }

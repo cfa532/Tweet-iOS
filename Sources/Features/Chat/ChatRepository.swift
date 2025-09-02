@@ -145,12 +145,12 @@ class ChatRepository: ObservableObject {
     
     /// Get messages for a specific conversation
     func getMessages(for receiptId: String) -> [ChatMessage] {
-        return chatCacheManager.fetchMessages(for: receiptId, userId: hproseInstance.appUser.mid)
+        return chatCacheManager.fetchMessages(for: receiptId, userId: HproseInstance.globalCurrentUserId)
     }
     
     /// Clear messages for a specific conversation
     func clearMessages(for receiptId: String) {
-        chatCacheManager.deleteMessagesForConversation(authorId: hproseInstance.appUser.mid, receiptId: receiptId)
+        chatCacheManager.deleteMessagesForConversation(authorId: HproseInstance.globalCurrentUserId, receiptId: receiptId)
         // Update local array
         chatMessages.removeAll { $0.authorId == receiptId || $0.receiptId == receiptId }
     }
@@ -188,7 +188,7 @@ class ChatRepository: ObservableObject {
     
     /// Get the last N messages for a specific conversation from Core Data
     func getLastMessages(for receiptId: String, limit: Int = 50) -> [ChatMessage] {
-        let allMessages = chatCacheManager.fetchMessages(for: receiptId, userId: hproseInstance.appUser.mid)
+        let allMessages = chatCacheManager.fetchMessages(for: receiptId, userId: HproseInstance.globalCurrentUserId)
         return Array(allMessages.suffix(limit))
     }
     

@@ -8,7 +8,7 @@ struct ComposeTweetView: View {
     @FocusState private var isEditorFocused: Bool
     @State private var shouldFocus = false
     @State private var showMediaPicker = false
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     
     // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
     private var identifiableItems: [IdentifiablePhotosPickerItem] {

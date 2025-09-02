@@ -59,7 +59,7 @@ struct ChatScreen: View {
                             
                             ChatMessageView(
                                 message: message, 
-                                isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid,
+                                isFromCurrentUser: message.authorId == HproseInstance.globalCurrentUserId,
                                 isLastMessage: index == messages.count - 1,
                                 isLastFromSender: isLastMessageFromSender(index: index, messages: messages),
                                 showTimestamp: isLastMessageFromSender(index: index, messages: messages) // Show timestamp for last message from each party
@@ -290,9 +290,9 @@ struct ChatScreen: View {
         
         // Create message for immediate sending
         let message = ChatMessage(
-            authorId: HproseInstance.shared.appUser.mid,
+                            authorId: HproseInstance.globalCurrentUserId,
             receiptId: receiptId,
-            chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+                            chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.globalCurrentUserId, receiptId: receiptId),
             content: trimmedContent,
             attachments: nil
         )
@@ -387,6 +387,9 @@ struct ChatScreen: View {
         
         // Process attachment upload in background, then send message directly
         Task.detached(priority: .background) {
+            // Get app user ID once at the beginning
+            let appUserId = HproseInstance.globalCurrentUserId
+            
             do {
                 // Use the same tweet upload routine for attachments
                 var uploadedAttachments: [MimeiFileType]? = nil
@@ -407,9 +410,9 @@ struct ChatScreen: View {
                 
                 // Create final message with uploaded attachments
                 let finalMessage = ChatMessage(
-                    authorId: HproseInstance.shared.appUser.mid,
+                    authorId: appUserId,
                     receiptId: receiptId,
-                    chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+                    chatSessionId: ChatMessage.generateSessionId(userId: appUserId, receiptId: receiptId),
                     content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
                     attachments: uploadedAttachments
                 )
@@ -444,9 +447,9 @@ struct ChatScreen: View {
                 await MainActor.run {
                     // Create a failed message with error details
                     let failedMessage = ChatMessage(
-                        authorId: HproseInstance.shared.appUser.mid,
+                        authorId: appUserId,
                         receiptId: receiptId,
-                        chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+                        chatSessionId: ChatMessage.generateSessionId(userId: appUserId, receiptId: receiptId),
                         content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
                         attachments: nil,
                         success: false,

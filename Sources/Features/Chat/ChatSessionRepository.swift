@@ -49,7 +49,7 @@ class ChatSessionRepository: ObservableObject {
     
     /// Get all chat sessions for the current user
     func getAllSessions() async -> [ChatSession] {
-        let sessionEntities = await chatSessionDao.getAllSessions(for: hproseInstance.appUser.mid)
+        let sessionEntities = await chatSessionDao.getAllSessions(for: HproseInstance.globalCurrentUserId)
         
         var sessions: [ChatSession] = []
         
@@ -144,8 +144,8 @@ class ChatSessionRepository: ObservableObject {
             if existingSession == nil {
                 // A new session is created
                 let newSession = ChatSession.createSession(
-                    userId: hproseInstance.appUser.mid,
-                    receiptId: key.first == hproseInstance.appUser.mid ? key.second : key.first,
+                    userId: HproseInstance.globalCurrentUserId,
+                    receiptId: key.first == HproseInstance.globalCurrentUserId ? key.second : key.first,
                     lastMessage: message,
                     hasNews: true
                 )

@@ -12,15 +12,14 @@ struct CommentMenu: View {
     @ObservedObject var comment: Tweet
     @ObservedObject var parentTweet: Tweet
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var appUser = HproseInstance.shared.appUser
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @State private var showAlert = false
     @State private var alertMessage = ""
     @State private var isDeleting = false
 
     var body: some View {
         Menu {
-            if comment.authorId == appUser.mid || parentTweet.authorId == appUser.mid {
+            if comment.authorId == HproseInstance.globalCurrentUserId || parentTweet.authorId == HproseInstance.globalCurrentUserId {
                 Button(role: .destructive) {
                     isDeleting = true
                     // Start deletion in background

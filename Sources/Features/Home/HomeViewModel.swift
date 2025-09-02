@@ -16,7 +16,7 @@ struct HomeView: View {
     @State private var previousScrollOffset: CGFloat = 0
     @State private var selectedUser: User? = nil
     
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     
     init(
         navigationPath: Binding<NavigationPath>,

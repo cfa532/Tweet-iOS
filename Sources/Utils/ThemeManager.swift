@@ -8,7 +8,7 @@ class ThemeManager: ObservableObject {
         didSet {
             Task { @MainActor in
                 if oldValue != isDarkMode {
-                    HproseInstance.shared.preferenceHelper?.setDarkMode(isDarkMode)
+                    await HproseInstance.shared.preferenceHelper?.setDarkMode(isDarkMode)
                     updateAppearance()
                 }
             }
@@ -17,14 +17,18 @@ class ThemeManager: ObservableObject {
     
     private init() {
         // Initialize from saved preference
-        isDarkMode = HproseInstance.shared.preferenceHelper?.getDarkMode() ?? false
+        Task {
+            isDarkMode = await HproseInstance.shared.preferenceHelper?.getDarkMode() ?? false
+        }
         updateAppearance()
     }
     
     func refreshFromPreferences() {
-        let savedDarkMode = HproseInstance.shared.preferenceHelper?.getDarkMode() ?? false
-        if self.isDarkMode != savedDarkMode {
-            self.isDarkMode = savedDarkMode
+        Task {
+            let savedDarkMode = await HproseInstance.shared.preferenceHelper?.getDarkMode() ?? false
+            if self.isDarkMode != savedDarkMode {
+                self.isDarkMode = savedDarkMode
+            }
         }
     }
     

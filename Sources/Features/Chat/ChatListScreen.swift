@@ -10,7 +10,7 @@ struct ChatListScreen: View {
     
     var body: some View {
         VStack {
-                let currentUserSessions = chatSessionManager.chatSessions.filter { $0.userId == HproseInstance.shared.appUser.mid }
+                let currentUserSessions = chatSessionManager.chatSessions.filter { $0.userId == HproseInstance.globalCurrentUserId }
                 if currentUserSessions.isEmpty {
                     VStack(spacing: 20) {
                         Image(systemName: "message")
@@ -47,7 +47,7 @@ struct ChatListScreen: View {
                 } else {
                     List {
                         ForEach(chatSessionManager.chatSessions
-                            .filter { $0.userId == HproseInstance.shared.appUser.mid }
+                            .filter { $0.userId == HproseInstance.globalCurrentUserId }
                             .sorted(by: { $0.timestamp > $1.timestamp })) { session in
                             ChatSessionRow(session: session)
                         }
@@ -154,7 +154,7 @@ struct ChatListScreen: View {
 struct ChatSessionRow: View {
     let session: ChatSession
     @State private var user: User?
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     
     var body: some View {

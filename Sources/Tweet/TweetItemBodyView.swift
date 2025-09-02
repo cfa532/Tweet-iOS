@@ -19,7 +19,7 @@ struct TweetItemBodyView: View {
     var isVisible: Bool = true
     @State private var isExpanded = false
     @State private var showLoginSheet = false
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
 
     private func handleGuestAction() {
         if hproseInstance.appUser.isGuest {

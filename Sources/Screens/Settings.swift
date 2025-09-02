@@ -10,7 +10,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var hproseInstance = HproseInstanceState.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @ObservedObject private var muteState = MuteState.shared
     @State private var isCleaningCache = false

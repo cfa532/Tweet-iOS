@@ -76,13 +76,13 @@ struct ChatMessageView: View {
                                 ChatImageThumbnail(
                                     attachment: attachment, 
                                     isFromCurrentUser: isFromCurrentUser,
-                                    senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser
+                                    senderUser: isFromCurrentUser ? HproseInstance.globalAppUser : receiptUser
                                 )
                             } else if attachment.type == .video || attachment.type == .hls_video {
                                 ChatVideoPlayer(
                                     attachment: attachment, 
                                     isFromCurrentUser: isFromCurrentUser,
-                                    senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser
+                                    senderUser: isFromCurrentUser ? HproseInstance.globalAppUser : receiptUser
                                 )
                             } else {
                                 // Other file types
@@ -123,7 +123,7 @@ struct ChatMessageView: View {
             
             if isFromCurrentUser {
                 // Avatar for sent messages (RIGHT)
-                Avatar(user: HproseInstance.shared.appUser, size: 36)
+                Avatar(user: HproseInstance.globalAppUser, size: 36)
             }
         }
         .task {
@@ -253,7 +253,7 @@ struct ChatImageThumbnail: View {
     private var baseUrl: URL {
         if isFromCurrentUser {
             // For messages sent by current user, use app user's baseUrl
-            return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
+            return HproseInstance.globalAppUser.baseUrl ?? HproseInstance.baseUrl
         } else {
             // For messages received from other users, use sender's baseUrl
             return senderUser?.baseUrl ?? HproseInstance.baseUrl
@@ -422,15 +422,15 @@ struct ChatImageThumbnail: View {
     private func createMockTweet(for attachment: MimeiFileType) -> Tweet {
         // Create a minimal Tweet object for MediaBrowserView
         let mockAuthor = User(
-            mid: isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? ""),
+                            mid: isFromCurrentUser ? HproseInstance.globalCurrentUserId : (senderUser?.mid ?? ""),
             baseUrl: baseUrl,
-            name: isFromCurrentUser ? HproseInstance.shared.appUser.name : (senderUser?.name ?? ""),
-            avatar: isFromCurrentUser ? HproseInstance.shared.appUser.avatar : (senderUser?.avatar ?? "")
+                            name: isFromCurrentUser ? HproseInstance.globalAppUser.name : (senderUser?.name ?? ""),
+                            avatar: isFromCurrentUser ? HproseInstance.globalAppUser.avatar : (senderUser?.avatar ?? "")
         )
         
         return Tweet(
             mid: MimeiId("chat_message_\(attachment.mid)"),
-            authorId: MimeiId(isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? "")),
+            authorId: MimeiId(isFromCurrentUser ? HproseInstance.globalCurrentUserId : (senderUser?.mid ?? "")),
             content: "",
             timestamp: Date(),
             author: mockAuthor,
@@ -452,7 +452,7 @@ struct ChatVideoPlayer: View {
     private var baseUrl: URL {
         if isFromCurrentUser {
             // For messages sent by current user, use app user's baseUrl
-            return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
+            return HproseInstance.globalAppUser.baseUrl ?? HproseInstance.baseUrl
         } else {
             // For messages received from other users, use sender's baseUrl
             return senderUser?.baseUrl ?? HproseInstance.baseUrl
@@ -526,7 +526,7 @@ struct ChatVideoPlayer: View {
                     // Create a temporary tweet-like structure for the video
                     let tempTweet = Tweet(
                         mid: "chat_video_\(attachment.mid)",
-                        authorId: isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? Constants.GUEST_ID),
+                        authorId: isFromCurrentUser ? HproseInstance.globalCurrentUserId : (senderUser?.mid ?? Constants.GUEST_ID),
                         content: "",
                         attachments: [attachment]
                     )
