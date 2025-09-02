@@ -20,7 +20,7 @@ A Twitter-like iOS application built with SwiftUI, featuring real-time social me
 - **SwiftUI Views**: Modern declarative UI framework
 - **Hprose RPC**: Backend communication layer
 - **Core Data**: Local data persistence and caching
-- **FFmpeg**: Video processing and playback
+- **Native iOS**: Video processing and playback using AVFoundation
 - **HLS Streaming**: Adaptive bitrate video delivery
 
 ### Key Design Patterns
@@ -158,7 +158,7 @@ These optimizations provide:
 - [Video Caching System](VIDEO_CACHING_SYSTEM.md)
 - [Network Resilience](NETWORK_RESILIENCE.md)
 - [HLS Video Processing](HLS_VIDEO_PROCESSING.md)
-- [FFmpeg Integration](FFMPEG_INTEGRATION.md)
+
 
 ## Development
 

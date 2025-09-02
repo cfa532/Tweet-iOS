@@ -74,8 +74,7 @@
 		46B03D992E4C56C2000E08DF /* HapticButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */; };
 		46B03D9B2E4D7336000E08DF /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D9A2E4D7336000E08DF /* NotificationManager.swift */; };
 		46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */; };
-		46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */; };
-		46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */; };
+
 		46B95F4C2E0EF77500D81590 /* ImageCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */; };
 		46B95F4E2E0F98CE00D81590 /* ThemeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */; };
 		46B95F502E1269F500D81590 /* IdentifiablePhotosPickerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */; };
@@ -180,9 +179,7 @@
 		46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticButtonStyle.swift; sourceTree = "<group>"; };
 		46B03D9A2E4D7336000E08DF /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSVideoProcessor.swift; sourceTree = "<group>"; };
-		46B1F59B2E07DA7D00B3CE6C /* FFmpegWrapper.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FFmpegWrapper.h; sourceTree = "<group>"; };
-		46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = FFmpegWrapper.c; sourceTree = "<group>"; };
-		46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FFmpegManager.swift; sourceTree = "<group>"; };
+
 		46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCacheManager.swift; sourceTree = "<group>"; };
 		46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeManager.swift; sourceTree = "<group>"; };
 		46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentifiablePhotosPickerItem.swift; sourceTree = "<group>"; };
@@ -309,9 +306,7 @@
 				4614381C2E3F69AD002D1B22 /* CoreDataManager.swift */,
 				4614381A2E3F5E97002D1B22 /* BlackList.swift */,
 				461438162E3E426A002D1B22 /* ChatCacheManager.swift */,
-				46B1F59E2E07FD9900B3CE6C /* FFmpegManager.swift */,
-				46B1F59B2E07DA7D00B3CE6C /* FFmpegWrapper.h */,
-				46B1F59C2E07DA7D00B3CE6C /* FFmpegWrapper.c */,
+
 				46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */,
 				469A995E2DEF300900954049 /* TweetCacheManager.swift */,
 				469A994C2DEB31EF00954049 /* NotificationNames.swift */,
@@ -668,7 +663,7 @@
 				461438232E403EAB002D1B22 /* ChatMessageView.swift in Sources */,
 				468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */,
 				468F19F12E6074A30085BFE5 /* AudioSessionManager.swift in Sources */,
-				46B1F59D2E07DA7D00B3CE6C /* FFmpegWrapper.c in Sources */,
+
 				4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */,
 				4614381D2E3F69AD002D1B22 /* CoreDataManager.swift in Sources */,
 				46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */,
@@ -721,7 +716,7 @@
 				46E5B33B2DDA315700AEF31F /* TweetItemView.swift in Sources */,
 				461438172E3E426A002D1B22 /* ChatCacheManager.swift in Sources */,
 				46E5B33C2DDA315700AEF31F /* FollowingsTweetView.swift in Sources */,
-				46B1F59F2E07FD9900B3CE6C /* FFmpegManager.swift in Sources */,
+
 				46E8A7D32DE9D0E700A30FBA /* CommentItemView.swift in Sources */,
 				46E5B3532DDD6A7A00AEF31F /* TweetDetailView.swift in Sources */,
 				46B03D852E486D3B000E08DF /* MuteState.swift in Sources */,
@@ -801,7 +796,7 @@
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Pods/hprose/src",
-					"$(SRCROOT)/FFmpeg-iOS/include/**",
+
 				);
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "";
@@ -863,7 +858,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/FFmpeg-iOS/include/**";
+				HEADER_SEARCH_PATHS = "";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "";
 				MTL_ENABLE_DEBUG_INFO = NO;
@@ -901,7 +896,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/FFmpeg-iOS/lib-$(PLATFORM_NAME)/**";
+				LIBRARY_SEARCH_PATHS = "";
 				MARKETING_VERSION = 1.0.2;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
@@ -913,17 +908,6 @@
 					"\"VideoToolbox\"",
 					"-framework",
 					"\"hprose\"",
-					"-lavformat",
-					"-lavcodec",
-					"-lavutil",
-					"-lswscale",
-					"-lswresample",
-					"-lz",
-					"-lm",
-					"-lpthread",
-					"-lbz2",
-					"-liconv",
-					"-Wl,-w",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.Tweet;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -960,7 +944,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/FFmpeg-iOS/lib-$(PLATFORM_NAME)/**";
+				LIBRARY_SEARCH_PATHS = "";
 				MARKETING_VERSION = 1.0.2;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
@@ -972,17 +956,6 @@
 					"\"VideoToolbox\"",
 					"-framework",
 					"\"hprose\"",
-					"-lavformat",
-					"-lavcodec",
-					"-lavutil",
-					"-lswscale",
-					"-lswresample",
-					"-lz",
-					"-lm",
-					"-lpthread",
-					"-lbz2",
-					"-liconv",
-					"-Wl,-w",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.Tweet;
 				PRODUCT_NAME = "$(TARGET_NAME)";

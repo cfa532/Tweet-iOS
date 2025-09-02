@@ -165,7 +165,7 @@
 "Loading HLS stream..." = "正在加载 HLS 流...";
 "Failed to load media data" = "媒体数据加载失败";
 "Failed to generate thumbnail" = "缩略图生成失败";
-"FFmpeg conversion failed with code: %d" = "FFmpeg 转换失败，错误代码：%d";
+"Video conversion failed with code: %d" = "视频转换失败，错误代码：%d";
 "Failed to create output directory: %@" = "创建输出目录失败：%@";
 "No video track found in the file" = "文件中未找到视频轨道";
 "Failed to get video info: %@" = "获取视频信息失败：%@";
