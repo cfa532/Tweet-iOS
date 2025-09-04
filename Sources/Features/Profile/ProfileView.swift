@@ -166,16 +166,6 @@ struct ProfileView: View {
         .onAppear {
             // Calculate isFollowing by checking if the user's mid is in the app user's followingList
             isFollowing = (hproseInstance.appUser.followingList)?.contains(user.mid) ?? false
-            
-            // Refresh user data from backend every time profile is opened
-            Task {
-                do {
-                    _ = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
-                    print("DEBUG: [ProfileView] Refreshed user data from backend for user: \(user.mid)")
-                } catch {
-                    print("DEBUG: [ProfileView] Failed to refresh user data: \(error)")
-                }
-            }
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -262,16 +252,6 @@ struct ProfileView: View {
                         // Save updated user to cache with fresh data
                         TweetCacheManager.shared.saveUser(hproseInstance.appUser)
                         print("DEBUG: Saved updated user to cache")
-                        
-                        // Force refresh user data from server to ensure consistency
-                        Task {
-                            do {
-                                _ = try await hproseInstance.fetchUser(hproseInstance.appUser.mid, baseUrl: "")
-                                print("DEBUG: Forced refresh of user data from server")
-                            } catch {
-                                print("DEBUG: Failed to refresh user data: \(error)")
-                            }
-                        }
                         
                         // Reset submission state
                         isSubmittingProfile = false

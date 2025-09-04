@@ -111,6 +111,8 @@ struct ProfileEditView: View {
                                             try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
                                             await MainActor.run {
                                                 hproseInstance.appUser.avatar = uploaded.mid
+                                                // Save updated user to cache to ensure fetchUser returns fresh data
+                                                TweetCacheManager.shared.saveUser(hproseInstance.appUser)
                                             }
                                             // Notify success
                                             onAvatarUploadSuccess?()
