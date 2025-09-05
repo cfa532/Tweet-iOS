@@ -235,14 +235,20 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     /// Update user instance with backend data. Keep current baseUrl
     static func from(dict: [String: Any]) throws -> User {
         do {
-            // Check for non-JSON-serializable values
+            // Convert NSArray objects to proper JSON arrays
+            var sanitizedDict = dict
             for (key, value) in dict {
-                if !JSONSerialization.isValidJSONObject([key: value]) {
+                if let nsArray = value as? NSArray {
+                    // Convert NSArray to Swift Array
+                    let swiftArray = nsArray.compactMap { $0 as? String }
+                    sanitizedDict[key] = swiftArray
+                    print("DEBUG: [User.from] Converted NSArray to Swift Array for key '\(key)': \(swiftArray)")
+                } else if !JSONSerialization.isValidJSONObject([key: value]) {
                     print("DEBUG: [User.from] Non-JSON-serializable value for key '\(key)': \(value) (type: \(type(of: value)))")
                 }
             }
             
-            let jsonData = try JSONSerialization.data(withJSONObject: dict, options: [])
+            let jsonData = try JSONSerialization.data(withJSONObject: sanitizedDict, options: [])
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .millisecondsSince1970
             let decodedUser = try decoder.decode(User.self, from: jsonData)
@@ -258,6 +264,21 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             }
         } catch {
             print("DEBUG: [User.from] Error decoding user dict: \(dict)")
+            print("DEBUG: [User.from] Error details: \(error)")
+            if let decodingError = error as? DecodingError {
+                switch decodingError {
+                case .keyNotFound(let key, let context):
+                    print("DEBUG: [User.from] Missing key '\(key)' at path: \(context.codingPath)")
+                case .typeMismatch(let type, let context):
+                    print("DEBUG: [User.from] Type mismatch for type '\(type)' at path: \(context.codingPath)")
+                case .valueNotFound(let type, let context):
+                    print("DEBUG: [User.from] Value not found for type '\(type)' at path: \(context.codingPath)")
+                case .dataCorrupted(let context):
+                    print("DEBUG: [User.from] Data corrupted at path: \(context.codingPath)")
+                @unknown default:
+                    print("DEBUG: [User.from] Unknown decoding error")
+                }
+            }
             throw NSError(domain: "User", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot decode dict to user: \(error.localizedDescription)"])
         }
     }
@@ -315,7 +336,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
         email = try container.decodeIfPresent(String.self, forKey: .email)
         profile = try container.decodeIfPresent(String.self, forKey: .profile)
-        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date.now
         lastLogin = try container.decodeIfPresent(Date.self, forKey: .lastLogin)
         cloudDrivePort = try container.decodeIfPresent(Int.self, forKey: .cloudDrivePort)
         

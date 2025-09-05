@@ -4,9 +4,10 @@ struct SearchScreen: View {
     @StateObject private var searchViewModel = SearchViewModel()
     @State private var searchText = ""
     @Environment(\.dismiss) private var dismiss
+    @State private var navigationPath = NavigationPath()
     
     var body: some View {
-        NavigationView {
+        NavigationStack(path: $navigationPath) {
             VStack(spacing: 0) {
                 // Search Bar
                 HStack {
@@ -29,9 +30,7 @@ struct SearchScreen: View {
                                 enableVibration: false
                             ) {
                                 searchText = ""
-                                Task {
-                                    await searchViewModel.clearResults()
-                                }
+                                // Don't clear results when clearing search text - keep them for better UX
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundColor(.gray)
@@ -80,7 +79,7 @@ struct SearchScreen: View {
                             .padding(.horizontal)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if searchText.isEmpty {
+                } else if searchText.isEmpty && searchViewModel.searchResults.isEmpty {
                     VStack {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 48))
@@ -103,6 +102,11 @@ struct SearchScreen: View {
             }
             .navigationTitle(LocalizedStringKey("Search"))
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: User.self) { user in
+                ProfileView(user: user, onLogout: {
+                    navigationPath.removeLast(navigationPath.count)
+                }, navigationPath: $navigationPath)
+            }
         }
     }
 }
