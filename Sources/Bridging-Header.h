@@ -5,6 +5,5 @@
 #ifndef BridgingHeader_h
 #define BridgingHeader_h
 // Hprose is imported via Swift module, no need for bridging header import
-#include "FFmpegWrapper.h"
 #include <mach/mach.h>
 #endif 

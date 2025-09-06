@@ -177,7 +177,6 @@
 "Loading HLS stream..." = "Loading HLS stream...";
 "Failed to load media data" = "Failed to load media data";
 "Failed to generate thumbnail" = "Failed to generate thumbnail";
-"FFmpeg conversion failed with code: %d" = "FFmpeg conversion failed with code: %d";
 "Failed to create output directory: %@" = "Failed to create output directory: %@";
 "No video track found in the file" = "No video track found in the file";
 "Failed to get video info: %@" = "Failed to get video info: %@";

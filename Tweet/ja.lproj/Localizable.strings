@@ -162,7 +162,6 @@
 "Loading HLS stream..." = "HLSストリームを読み込み中...";
 "Failed to load media data" = "メディアデータの読み込みに失敗";
 "Failed to generate thumbnail" = "サムネイルの生成に失敗";
-"FFmpeg conversion failed with code: %d" = "FFmpeg変換に失敗しました。エラーコード：%d";
 "Failed to create output directory: %@" = "出力ディレクトリの作成に失敗：%@";
 "No video track found in the file" = "ファイルにビデオトラックが見つかりません";
 "Failed to get video info: %@" = "ビデオ情報の取得に失敗：%@";
