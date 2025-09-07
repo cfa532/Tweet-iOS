@@ -1303,7 +1303,7 @@ final class HproseInstance: ObservableObject {
         referenceId: String? = nil,
         noResample: Bool = false,
         progressCallback: ((String, Int) -> Void)? = nil
-    ) async throws -> MimeiFileType? {
+    ) async throws -> (MimeiFileType?, String?) {
         _ = try await appUser.resolveWritableUrl()
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
         
@@ -1623,7 +1623,7 @@ final class HproseInstance: ObservableObject {
             appUser: User,
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> MimeiFileType? {
+        ) async throws -> (MimeiFileType?, String?) {
             
             // Determine media type
             let mediaType = await detectMediaType(from: typeIdentifier, fileName: fileName, data: data)
@@ -1642,7 +1642,7 @@ final class HproseInstance: ObservableObject {
                 )
             } else {
                 print("Processing non-video file with regular upload")
-                return try await uploadRegularFile(
+                let result = try await uploadRegularFile(
                     data: data,
                     typeIdentifier: typeIdentifier,
                     fileName: fileName,
@@ -1651,6 +1651,7 @@ final class HproseInstance: ObservableObject {
                     appUser: appUser,
                     appId: appId
                 )
+                return (result, nil) // No job ID for non-video files
             }
         }
         
@@ -1710,7 +1711,7 @@ final class HproseInstance: ObservableObject {
             noResample: Bool,
             appUser: User,
             progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> MimeiFileType? {
+        ) async throws -> (MimeiFileType?, String?) {
             print("Uploading original video to backend for conversion, data size: \(data.count) bytes")
             
             // Get the user's cloudDrivePort with fallback to default
@@ -2025,7 +2026,7 @@ final class HproseInstance: ObservableObject {
             fileName: String?,
             aspectRatio: Float?,
             progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> MimeiFileType? {
+        ) async throws -> (MimeiFileType?, String?) {
             // Create a custom URLSession with longer timeout for large uploads
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = 600  // 5 minutes
@@ -2046,7 +2047,7 @@ final class HproseInstance: ObservableObject {
                     progressCallback?("Video uploaded, starting conversion...", 20)
                     
                     // Poll for job completion
-                    return try await pollVideoConversionStatus(
+                    let result = try await pollVideoConversionStatus(
                         jobId: jobId,
                         baseURL: request.url?.deletingLastPathComponent(),
                         data: data,
@@ -2054,6 +2055,7 @@ final class HproseInstance: ObservableObject {
                         aspectRatio: aspectRatio,
                         progressCallback: progressCallback
                     )
+                    return (result, jobId)
                 } else if httpResponse.statusCode == 400 {
                     // Bad request - don't retry, parse error message
                     let errorMessage = String(data: responseData, encoding: .utf8) ?? "Bad request"
@@ -2105,7 +2107,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Poll video conversion status until completion
-        private func pollVideoConversionStatus(
+        func pollVideoConversionStatus(
             jobId: String,
             baseURL: URL?,
             data: Data,
@@ -2398,6 +2400,7 @@ final class HproseInstance: ObservableObject {
         let itemData: [ItemData]
         let timestamp: Date
         let retryCount: Int
+        let videoJobId: String? // Store job ID for video uploads
         
         struct ItemData: Codable {
             let identifier: String
@@ -2405,21 +2408,24 @@ final class HproseInstance: ObservableObject {
             let data: Data
             let fileName: String
             let noResample: Bool
+            let videoJobId: String? // Store job ID for individual video items
             
-            init(identifier: String, typeIdentifier: String, data: Data, fileName: String, noResample: Bool = false) {
+            init(identifier: String, typeIdentifier: String, data: Data, fileName: String, noResample: Bool = false, videoJobId: String? = nil) {
                 self.identifier = identifier
                 self.typeIdentifier = typeIdentifier
                 self.data = data
                 self.fileName = fileName
                 self.noResample = noResample
+                self.videoJobId = videoJobId
             }
         }
         
-        init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0) {
+        init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0, videoJobId: String? = nil) {
             self.tweet = tweet
             self.itemData = itemData
             self.timestamp = Date()
             self.retryCount = retryCount
+            self.videoJobId = videoJobId
         }
     }
     
@@ -2469,7 +2475,7 @@ final class HproseInstance: ObservableObject {
     private func uploadItemPair(_ pair: [PendingTweetUpload.ItemData]) async throws -> [MimeiFileType] {
         let uploadTasks = pair.map { itemData in
             Task {
-                return try await uploadToIPFS(
+                let (result, _) = try await uploadToIPFS(
                     data: itemData.data,
                     typeIdentifier: itemData.typeIdentifier,
                     fileName: itemData.fileName,
@@ -2478,6 +2484,7 @@ final class HproseInstance: ObservableObject {
                         print("DEBUG: Upload progress for \(itemData.fileName): \(message) (\(progress)%)")
                     }
                 )
+                return result
             }
         }
         
@@ -2514,14 +2521,14 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    private func uploadTweetWithPersistenceAndRetry(tweet: Tweet, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0) async {
+    private func uploadTweetWithPersistenceAndRetry(tweet: Tweet, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0, videoJobId: String? = nil) async {
         // Save pending upload to disk for persistence
-        let pendingUpload = PendingTweetUpload(tweet: tweet, itemData: itemData, retryCount: retryCount)
+        let pendingUpload = PendingTweetUpload(tweet: tweet, itemData: itemData, retryCount: retryCount, videoJobId: videoJobId)
         await savePendingUpload(pendingUpload)
         
         do {
             // Upload attachments first (no retry)
-            let uploadedAttachments = try await uploadAttachments(itemData: itemData)
+            let (uploadedAttachments, _) = try await uploadAttachments(itemData: itemData)
             
             // Update tweet with uploaded attachments
             tweet.attachments = uploadedAttachments
@@ -2560,7 +2567,7 @@ final class HproseInstance: ObservableObject {
     private func uploadChatMessageWithPersistenceAndRetry(message: inout ChatMessage, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0) async {
         do {
             // Upload attachments first (no retry)
-            let uploadedAttachments = try await uploadAttachments(itemData: itemData)
+            let (uploadedAttachments, _) = try await uploadAttachments(itemData: itemData)
             
             // Update message with uploaded attachments
             message.attachments = uploadedAttachments
@@ -2583,17 +2590,55 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    private func uploadAttachments(itemData: [PendingTweetUpload.ItemData]) async throws -> [MimeiFileType] {
+    private func uploadAttachments(itemData: [PendingTweetUpload.ItemData]) async throws -> ([MimeiFileType], String?) {
         var uploadedAttachments: [MimeiFileType] = []
-        let itemPairs = itemData.chunked(into: 2)
+        var videoJobId: String? = nil
         
-        for (pairIndex, pair) in itemPairs.enumerated() {
-            do {
-                let pairAttachments = try await self.uploadItemPair(pair)
-                uploadedAttachments.append(contentsOf: pairAttachments)
-            } catch {
-                print("Error uploading pair \(pairIndex + 1): \(error)")
-                throw error
+        // Check if we have any video items that need job ID tracking
+        let hasVideoItems = itemData.contains { item in
+            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+        }
+        
+        if hasVideoItems {
+            // Upload video items individually to track job IDs
+            for item in itemData {
+                do {
+                    let (result, jobId) = try await uploadToIPFS(
+                        data: item.data,
+                        typeIdentifier: item.typeIdentifier,
+                        fileName: item.fileName,
+                        noResample: item.noResample,
+                        progressCallback: { message, progress in
+                            print("DEBUG: Upload progress for \(item.fileName): \(message) (\(progress)%)")
+                        }
+                    )
+                    
+                    if let fileType = result {
+                        uploadedAttachments.append(fileType)
+                    }
+                    
+                    // Store the job ID for video items
+                    if let jobId = jobId {
+                        videoJobId = jobId
+                        print("DEBUG: Stored video job ID: \(jobId)")
+                    }
+                } catch {
+                    print("Error uploading item \(item.fileName): \(error)")
+                    throw error
+                }
+            }
+        } else {
+            // Use the existing pair upload for non-video items
+            let itemPairs = itemData.chunked(into: 2)
+            
+            for (pairIndex, pair) in itemPairs.enumerated() {
+                do {
+                    let pairAttachments = try await self.uploadItemPair(pair)
+                    uploadedAttachments.append(contentsOf: pairAttachments)
+                } catch {
+                    print("Error uploading pair \(pairIndex + 1): \(error)")
+                    throw error
+                }
             }
         }
         
@@ -2601,7 +2646,7 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
         }
         
-        return uploadedAttachments
+        return (uploadedAttachments, videoJobId)
     }
     
     private func savePendingUpload(_ pendingUpload: PendingTweetUpload) async {
@@ -2621,6 +2666,242 @@ final class HproseInstance: ObservableObject {
         print("Removed pending upload from disk")
     }
     
+    // MARK: - Video Job Status Checking
+    private func parseVideoStatusResponse(responseData: Data) throws -> VideoConversionStatus {
+        guard let responseString = String(data: responseData, encoding: .utf8) else {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response encoding"])
+        }
+        
+        guard let jsonData = responseString.data(using: .utf8) else {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert response to data"])
+        }
+        
+        do {
+            let json = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any]
+            
+            let status = json?["status"] as? String ?? "unknown"
+            let progress = json?["progress"] as? Int ?? 0
+            let message = json?["message"] as? String
+            let cid = json?["cid"] as? String
+            
+            return VideoConversionStatus(
+                status: status,
+                progress: progress,
+                message: message,
+                cid: cid
+            )
+        } catch {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse video status response: \(error.localizedDescription)"])
+        }
+    }
+    
+    private func checkVideoJobStatus(jobId: String, baseURL: URL?) async -> VideoConversionStatus? {
+        guard let baseURL = baseURL else { return nil }
+        
+        let statusURL = baseURL.appendingPathComponent("convert-video/status/\(jobId)")
+        print("DEBUG: Checking video job status at: \(statusURL)")
+        
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 30
+        let session = URLSession(configuration: config)
+        
+        do {
+            let (responseData, response) = try await session.data(from: statusURL)
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 200 {
+                    return try parseVideoStatusResponse(responseData: responseData)
+                } else if httpResponse.statusCode == 404 {
+                    print("DEBUG: Video job not found: \(jobId)")
+                    return nil
+                } else {
+                    print("DEBUG: Video job status check failed with HTTP \(httpResponse.statusCode)")
+                    return nil
+                }
+            }
+        } catch {
+            print("DEBUG: Video job status check error: \(error)")
+        }
+        
+        return nil
+    }
+    
+    /// Handle a completed video job by creating MimeiFileType and continuing tweet upload
+    private func handleCompletedVideoJob(pendingUpload: PendingTweetUpload, cid: String?) async {
+        guard let cid = cid, !cid.isEmpty else {
+            print("DEBUG: No CID available for completed video job")
+            // Fallback to re-upload
+            await uploadTweetWithPersistenceAndRetry(
+                tweet: pendingUpload.tweet,
+                itemData: pendingUpload.itemData,
+                retryCount: pendingUpload.retryCount,
+                videoJobId: pendingUpload.videoJobId
+            )
+            return
+        }
+        
+        // Find the video item and create MimeiFileType with the CID
+        var uploadedAttachments: [MimeiFileType] = []
+        var hasVideoItem = false
+        
+        for item in pendingUpload.itemData {
+            if item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie") {
+                hasVideoItem = true
+                
+                // Create MimeiFileType for the completed video
+                let videoFile = MimeiFileType(
+                    mid: cid,
+                    mediaType: .hls_video,
+                    size: Int64(item.data.count),
+                    fileName: item.fileName,
+                    timestamp: Date(),
+                    aspectRatio: nil, // We don't have aspect ratio from job status
+                    url: nil
+                )
+                uploadedAttachments.append(videoFile)
+            } else {
+                // For non-video items, we need to upload them normally
+                do {
+                    let (result, _) = try await uploadToIPFS(
+                        data: item.data,
+                        typeIdentifier: item.typeIdentifier,
+                        fileName: item.fileName,
+                        noResample: item.noResample,
+                        progressCallback: { message, progress in
+                            print("DEBUG: Upload progress for \(item.fileName): \(message) (\(progress)%)")
+                        }
+                    )
+                    if let fileType = result {
+                        uploadedAttachments.append(fileType)
+                    }
+                } catch {
+                    print("Error uploading non-video item \(item.fileName): \(error)")
+                    // Fallback to re-upload everything
+                    await uploadTweetWithPersistenceAndRetry(
+                        tweet: pendingUpload.tweet,
+                        itemData: pendingUpload.itemData,
+                        retryCount: pendingUpload.retryCount,
+                        videoJobId: pendingUpload.videoJobId
+                    )
+                    return
+                }
+            }
+        }
+        
+        if hasVideoItem && uploadedAttachments.count == pendingUpload.itemData.count {
+            // All attachments uploaded successfully, continue with tweet upload
+            pendingUpload.tweet.attachments = uploadedAttachments
+            
+            do {
+                if let uploadedTweet = try await self.uploadTweet(pendingUpload.tweet) {
+                    // Success - remove pending upload and notify
+                    await removePendingUpload()
+                    
+                    // Update user's tweet count and post notification
+                    await MainActor.run {
+                        self.appUser.tweetCount = (self.appUser.tweetCount ?? 0) + 1
+                        NotificationCenter.default.post(
+                            name: .newTweetCreated,
+                            object: nil,
+                            userInfo: ["tweet": uploadedTweet]
+                        )
+                    }
+                } else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
+                }
+            } catch {
+                print("Error uploading tweet: \(error)")
+                
+                // Notify failure but keep pending upload for manual retry
+                await MainActor.run {
+                    NotificationCenter.default.post(
+                        name: .backgroundUploadFailed,
+                        object: nil,
+                        userInfo: ["error": error]
+                    )
+                }
+            }
+        } else {
+            print("DEBUG: No video item found or attachment count mismatch")
+            // Fallback to re-upload
+            await uploadTweetWithPersistenceAndRetry(
+                tweet: pendingUpload.tweet,
+                itemData: pendingUpload.itemData,
+                retryCount: pendingUpload.retryCount,
+                videoJobId: pendingUpload.videoJobId
+            )
+        }
+    }
+    
+    /// Resume polling for a video job that's still in progress
+    private func resumeVideoJobPolling(pendingUpload: PendingTweetUpload, jobId: String) async {
+        print("DEBUG: Resuming video job polling for job ID: \(jobId)")
+        
+        // Get base URL for polling
+        let baseURL = appUser.writableUrl?.deletingLastPathComponent()
+        
+        // Find the video item to get its data
+        guard let videoItem = pendingUpload.itemData.first(where: { 
+            $0.typeIdentifier.contains("video") || $0.typeIdentifier.contains("movie") 
+        }) else {
+            print("DEBUG: No video item found for polling resume")
+            return
+        }
+        
+        // Resume polling with the stored job ID
+        do {
+            let videoProcessor = VideoProcessor()
+            let result = try await videoProcessor.pollVideoConversionStatus(
+                jobId: jobId,
+                baseURL: baseURL,
+                data: videoItem.data,
+                fileName: videoItem.fileName,
+                aspectRatio: nil as Float?, // We don't have aspect ratio stored
+                progressCallback: { message, progress in
+                    print("DEBUG: Resume polling progress: \(message) (\(progress)%)")
+                }
+            )
+            
+            if let completedVideo = result {
+                print("DEBUG: Video job completed during resume polling, CID: \(completedVideo.mid)")
+                
+                // Update the item data with the completed video
+                var updatedItemData = pendingUpload.itemData
+                for (index, item) in updatedItemData.enumerated() {
+                    if item.identifier == videoItem.identifier {
+                        updatedItemData[index] = PendingTweetUpload.ItemData(
+                            identifier: item.identifier,
+                            typeIdentifier: item.typeIdentifier,
+                            data: item.data,
+                            fileName: item.fileName,
+                            noResample: item.noResample,
+                            videoJobId: nil // Clear job ID since it's completed
+                        )
+                        break
+                    }
+                }
+                
+                // Continue with tweet upload
+                await uploadTweetWithPersistenceAndRetry(
+                    tweet: pendingUpload.tweet,
+                    itemData: updatedItemData,
+                    retryCount: pendingUpload.retryCount,
+                    videoJobId: nil // Clear job ID since it's completed
+                )
+            }
+        } catch {
+            print("DEBUG: Resume polling failed: \(error)")
+            // Fallback to re-upload
+            await uploadTweetWithPersistenceAndRetry(
+                tweet: pendingUpload.tweet,
+                itemData: pendingUpload.itemData,
+                retryCount: pendingUpload.retryCount,
+                videoJobId: pendingUpload.videoJobId
+            )
+        }
+    }
+    
     // MARK: - Recovery Methods
     func recoverPendingUploads() async {
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
@@ -2637,10 +2918,49 @@ final class HproseInstance: ObservableObject {
             let maxAge: TimeInterval = 24 * 60 * 60 // 24 hours
             if Date().timeIntervalSince(pendingUpload.timestamp) < maxAge {
                 print("Recovering pending upload from \(pendingUpload.timestamp)")
+                
+                // Check if we have video job IDs to check first
+                if let videoJobId = pendingUpload.videoJobId {
+                    print("DEBUG: Found video job ID: \(videoJobId), checking status...")
+                    
+                    // Get base URL for status checking
+                    let baseURL = appUser.writableUrl?.deletingLastPathComponent()
+                    
+                    if let status = await checkVideoJobStatus(jobId: videoJobId, baseURL: baseURL) {
+                        switch status.status {
+                        case "completed":
+                            print("DEBUG: Video job completed while app was backgrounded, CID: \(status.cid ?? "unknown")")
+                            // Job completed - we need to create MimeiFileType with the CID
+                            // and continue with tweet upload
+                            await handleCompletedVideoJob(pendingUpload: pendingUpload, cid: status.cid)
+                            return
+                            
+                        case "failed":
+                            print("DEBUG: Video job failed: \(status.message ?? "Unknown error")")
+                            // Job failed - fall through to re-upload
+                            
+                        case "uploading", "processing":
+                            print("DEBUG: Video job still in progress, resuming polling...")
+                            // Job still in progress - resume polling
+                            await resumeVideoJobPolling(pendingUpload: pendingUpload, jobId: videoJobId)
+                            return
+                            
+                        default:
+                            print("DEBUG: Unknown video job status: \(status.status)")
+                            // Unknown status - fall through to re-upload
+                        }
+                    } else {
+                        print("DEBUG: Could not check video job status, job may have expired")
+                        // Job not found or error - fall through to re-upload
+                    }
+                }
+                
+                // Fallback to normal recovery (re-upload)
                 await uploadTweetWithPersistenceAndRetry(
                     tweet: pendingUpload.tweet,
                     itemData: pendingUpload.itemData,
-                    retryCount: pendingUpload.retryCount
+                    retryCount: pendingUpload.retryCount,
+                    videoJobId: pendingUpload.videoJobId
                 )
             } else {
                 // Remove old pending upload

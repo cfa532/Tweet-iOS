@@ -107,7 +107,8 @@ struct ProfileEditView: View {
                                     if let data = try await item.loadTransferable(type: Data.self) {
                                         let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
                                         let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
-                                        if let uploaded = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName, referenceId: hproseInstance.appUser.mid), !uploaded.mid.isEmpty {
+                                        let (uploaded, _) = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName, referenceId: hproseInstance.appUser.mid)
+                                        if let uploaded = uploaded, !uploaded.mid.isEmpty {
                                             try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
                                             await MainActor.run {
                                                 hproseInstance.appUser.avatar = uploaded.mid

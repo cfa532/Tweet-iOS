@@ -395,11 +395,12 @@ struct ChatScreen: View {
                     print("[ChatScreen] Uploading attachment using tweet upload routine...")
                     
                     // Upload attachment directly using the same method as tweet uploads
-                    if let uploadedAttachment = try await HproseInstance.shared.uploadToIPFS(
+                    let (uploadedAttachment, _) = try await HproseInstance.shared.uploadToIPFS(
                         data: photoData,
                         typeIdentifier: attachment.type == .image ? "public.image" : "public.movie",
                         fileName: attachment.fileName ?? "attachment"
-                    ) {
+                    )
+                    if let uploadedAttachment = uploadedAttachment {
                         uploadedAttachments = [uploadedAttachment]
                         print("[ChatScreen] Attachment uploaded successfully using tweet routine")
                     }
