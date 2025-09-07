@@ -3,6 +3,14 @@ import hprose
 import PhotosUI
 import AVFoundation
 
+// MARK: - Video Conversion Status
+struct VideoConversionStatus {
+    let status: String
+    let progress: Int
+    let message: String?
+    let cid: String?
+}
+
 @objc protocol HproseService {
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
 }
@@ -1293,7 +1301,8 @@ final class HproseInstance: ObservableObject {
         typeIdentifier: String,
         fileName: String? = nil,
         referenceId: String? = nil,
-        noResample: Bool = false
+        noResample: Bool = false,
+        progressCallback: ((String, Int) -> Void)? = nil
     ) async throws -> MimeiFileType? {
         _ = try await appUser.resolveWritableUrl()
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
@@ -1310,7 +1319,8 @@ final class HproseInstance: ObservableObject {
             referenceId: referenceId,
             noResample: noResample,
             appUser: appUser,
-            appId: appId
+            appId: appId,
+            progressCallback: progressCallback
         )
     }
     
@@ -1611,7 +1621,8 @@ final class HproseInstance: ObservableObject {
             referenceId: String?,
             noResample: Bool,
             appUser: User,
-            appId: String
+            appId: String,
+            progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> MimeiFileType? {
             
             // Determine media type
@@ -1626,7 +1637,8 @@ final class HproseInstance: ObservableObject {
                     fileName: fileName,
                     referenceId: referenceId,
                     noResample: noResample,
-                    appUser: appUser
+                    appUser: appUser,
+                    progressCallback: progressCallback
                 )
             } else {
                 print("Processing non-video file with regular upload")
@@ -1696,7 +1708,8 @@ final class HproseInstance: ObservableObject {
             fileName: String?,
             referenceId: String?,
             noResample: Bool,
-            appUser: User
+            appUser: User,
+            progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> MimeiFileType? {
             print("Uploading original video to backend for conversion, data size: \(data.count) bytes")
             
@@ -1788,7 +1801,7 @@ final class HproseInstance: ObservableObject {
             let aspectRatio = await getVideoAspectRatioWithFallback(from: data)
             
             // Upload with retry mechanism
-            return try await uploadWithRetry(request: request, data: data, fileName: fileName, aspectRatio: aspectRatio)
+            return try await uploadWithRetry(request: request, data: data, fileName: fileName, aspectRatio: aspectRatio, progressCallback: progressCallback)
         }
         
         /// Determine video content type based on file extension
@@ -2005,12 +2018,13 @@ final class HproseInstance: ObservableObject {
             
         }
         
-        /// Upload with retry mechanism for video conversion
+        /// Upload with retry mechanism for video conversion using new async job-based API
         private func uploadWithRetry(
             request: URLRequest,
             data: Data,
             fileName: String?,
-            aspectRatio: Float?
+            aspectRatio: Float?,
+            progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> MimeiFileType? {
             // Create a custom URLSession with longer timeout for large uploads
             let config = URLSessionConfiguration.default
@@ -2019,17 +2033,26 @@ final class HproseInstance: ObservableObject {
             let session = URLSession(configuration: config)
             
             print("DEBUG: Video upload attempt")
+            progressCallback?("Uploading video...", 10)
             let (responseData, response) = try await session.data(for: request)
             
             if let httpResponse = response as? HTTPURLResponse {
                 print("DEBUG: HTTP status code: \(httpResponse.statusCode)")
                 
                 if httpResponse.statusCode == 200 {
-                    return try parseVideoConversionResponse(
-                        responseData: responseData,
+                    // Parse initial response to get job ID
+                    let jobId = try parseVideoUploadResponse(responseData: responseData)
+                    print("DEBUG: Video upload started, job ID: \(jobId)")
+                    progressCallback?("Video uploaded, starting conversion...", 20)
+                    
+                    // Poll for job completion
+                    return try await pollVideoConversionStatus(
+                        jobId: jobId,
+                        baseURL: request.url?.deletingLastPathComponent(),
                         data: data,
                         fileName: fileName,
-                        aspectRatio: aspectRatio
+                        aspectRatio: aspectRatio,
+                        progressCallback: progressCallback
                     )
                 } else if httpResponse.statusCode == 400 {
                     // Bad request - don't retry, parse error message
@@ -2049,7 +2072,159 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        /// Parse video conversion response
+        /// Parse video upload response to get job ID
+        private func parseVideoUploadResponse(responseData: Data) throws -> String {
+            guard let responseString = String(data: responseData, encoding: .utf8) else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response encoding"])
+            }
+            
+            print("DEBUG: Upload response: \(responseString)")
+            
+            do {
+                guard let jsonData = responseString.data(using: .utf8),
+                      let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON response"])
+                }
+                
+                if let success = json["success"] as? Bool, success {
+                    if let jobId = json["jobId"] as? String, !jobId.isEmpty {
+                        print("DEBUG: Video upload started, job ID: \(jobId)")
+                        return jobId
+                    } else {
+                        throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "No job ID in response"])
+                    }
+                } else {
+                    let message = json["message"] as? String ?? "Unknown error"
+                    print("DEBUG: Server reported error: \(message)")
+                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server error: \(message)"])
+                }
+            } catch {
+                print("DEBUG: Failed to parse upload response: \(error)")
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse upload response: \(error.localizedDescription)"])
+            }
+        }
+        
+        /// Poll video conversion status until completion
+        private func pollVideoConversionStatus(
+            jobId: String,
+            baseURL: URL?,
+            data: Data,
+            fileName: String?,
+            aspectRatio: Float?,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async throws -> MimeiFileType? {
+            guard let baseURL = baseURL else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid base URL for status polling"])
+            }
+            
+            let statusURL = baseURL.appendingPathComponent("convert-video/status/\(jobId)")
+            print("DEBUG: Polling status at: \(statusURL)")
+            
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 30  // 30 seconds for status checks
+            config.timeoutIntervalForResource = 30
+            let session = URLSession(configuration: config)
+            
+            var attempts = 0
+            let maxAttempts = 120 // 10 minutes with 5-second intervals
+            let pollInterval: TimeInterval = 5.0
+            
+            while attempts < maxAttempts {
+                attempts += 1
+                print("DEBUG: Status check attempt \(attempts)/\(maxAttempts)")
+                
+                do {
+                    let (responseData, response) = try await session.data(from: statusURL)
+                    
+                    if let httpResponse = response as? HTTPURLResponse {
+                        if httpResponse.statusCode == 200 {
+                            let statusResult = try parseVideoStatusResponse(responseData: responseData)
+                            
+                            switch statusResult.status {
+                            case "completed":
+                                print("DEBUG: Video conversion completed, CID: \(statusResult.cid ?? "unknown")")
+                                progressCallback?("Video conversion completed!", 100)
+                                return MimeiFileType(
+                                    mid: statusResult.cid ?? "",
+                                    mediaType: .hls_video,
+                                    size: Int64(data.count),
+                                    fileName: fileName,
+                                    timestamp: Date(),
+                                    aspectRatio: aspectRatio,
+                                    url: nil
+                                )
+                                
+                            case "failed":
+                                let errorMessage = statusResult.message ?? "Video conversion failed"
+                                print("DEBUG: Video conversion failed: \(errorMessage)")
+                                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video conversion failed: \(errorMessage)"])
+                                
+                            case "uploading", "processing":
+                                let message = statusResult.message ?? "Processing..."
+                                print("DEBUG: Video conversion in progress: \(message) (\(statusResult.progress)%)")
+                                progressCallback?(message, statusResult.progress)
+                                // Continue polling
+                                
+                            default:
+                                print("DEBUG: Unknown status: \(statusResult.status)")
+                                // Continue polling
+                            }
+                        } else if httpResponse.statusCode == 404 {
+                            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Job not found"])
+                        } else {
+                            print("DEBUG: Status check failed with HTTP \(httpResponse.statusCode)")
+                            // Continue polling on server errors
+                        }
+                    }
+                } catch {
+                    print("DEBUG: Status check error: \(error)")
+                    // Continue polling on network errors
+                }
+                
+                // Wait before next poll
+                try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+            }
+            
+            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video conversion timed out after \(maxAttempts * Int(pollInterval)) seconds"])
+        }
+        
+        /// Parse video status response
+        private func parseVideoStatusResponse(responseData: Data) throws -> VideoConversionStatus {
+            guard let responseString = String(data: responseData, encoding: .utf8) else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid status response encoding"])
+            }
+            
+            print("DEBUG: Status response: \(responseString)")
+            
+            do {
+                guard let jsonData = responseString.data(using: .utf8),
+                      let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON status response"])
+                }
+                
+                if let success = json["success"] as? Bool, success {
+                    let status = json["status"] as? String ?? "unknown"
+                    let progress = json["progress"] as? Int ?? 0
+                    let message = json["message"] as? String
+                    let cid = json["cid"] as? String
+                    
+                    return VideoConversionStatus(
+                        status: status,
+                        progress: progress,
+                        message: message,
+                        cid: cid
+                    )
+                } else {
+                    let message = json["message"] as? String ?? "Unknown error"
+                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Status check failed: \(message)"])
+                }
+            } catch {
+                print("DEBUG: Failed to parse status response: \(error)")
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse status response: \(error.localizedDescription)"])
+            }
+        }
+        
+        /// Parse video conversion response (legacy method for backward compatibility)
         private func parseVideoConversionResponse(
             responseData: Data,
             data: Data,
@@ -2298,7 +2473,10 @@ final class HproseInstance: ObservableObject {
                     data: itemData.data,
                     typeIdentifier: itemData.typeIdentifier,
                     fileName: itemData.fileName,
-                    noResample: itemData.noResample
+                    noResample: itemData.noResample,
+                    progressCallback: { message, progress in
+                        print("DEBUG: Upload progress for \(itemData.fileName): \(message) (\(progress)%)")
+                    }
                 )
             }
         }
