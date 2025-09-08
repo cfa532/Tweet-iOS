@@ -297,6 +297,42 @@ struct ImageViewWithPlaceholder: View {
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
     
+    // Calculate zoom parameters based on actual image dimensions and screen dimensions
+    private func getActualAspectRatio() -> CGFloat {
+        switch imageState {
+        case .loaded(let image):
+            return image.size.width / image.size.height
+        case .placeholder(let image):
+            return image.size.width / image.size.height
+        default:
+            return CGFloat(attachment.aspectRatio ?? 1.0)
+        }
+    }
+    
+    private func calculateDoubleTapScale(for geometry: GeometryProxy) -> CGFloat {
+        let screenWidth = geometry.size.width
+        let screenHeight = geometry.size.height
+        let actualAspectRatio = getActualAspectRatio()
+        
+        // For images with AR < 0.6: calculate scale to cover full width
+        // For other images: use 2.0 as double-tap zoom scale
+        if actualAspectRatio < 0.6 {
+            // Image is tall, so it's fitted to screen height
+            // Current width = screenHeight * actualAspectRatio
+            // We want width = screenWidth
+            // So scale = screenWidth / (screenHeight * actualAspectRatio)
+            return screenWidth / (screenHeight * actualAspectRatio)
+        } else {
+            // Image is wide or normal, use 2.0 zoom
+            return 2.0
+        }
+    }
+    
+    private func calculateMaxScale(for geometry: GeometryProxy) -> CGFloat {
+        // Allow up to 2x the double-tap scale for pinch zoom
+        return calculateDoubleTapScale(for: geometry) * 2.0
+    }
+    
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -337,7 +373,8 @@ struct ImageViewWithPlaceholder: View {
                         .onChanged { value in
                             let delta = value / lastScale
                             lastScale = value
-                            scale = min(max(scale * delta, 1.0), 4.0)
+                            let maxScale = calculateMaxScale(for: geometry)
+                            scale = min(max(scale * delta, 1.0), maxScale)
                         }
                         .onEnded { _ in
                             lastScale = 1.0
@@ -361,13 +398,26 @@ struct ImageViewWithPlaceholder: View {
                                 )
                                 lastOffset = value.translation
                                 
+                                let actualAspectRatio = getActualAspectRatio()
                                 let maxOffsetX = (geometry.size.width * (scale - 1.0)) / 2
                                 let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
                                 
-                                offset = CGSize(
-                                    width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
-                                    height: max(-maxOffsetY, min(maxOffsetY, offset.height + delta.height))
-                                )
+                                // For tall images (AR < 0.6), align to top and only allow upward scrolling
+                                if actualAspectRatio < 0.6 {
+                                    // Align to top: offset.y should be positive (image top aligned to screen top)
+                                    let topAlignedOffsetY = maxOffsetY
+                                    
+                                    offset = CGSize(
+                                        width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
+                                        height: max(0, min(topAlignedOffsetY, offset.height + delta.height))
+                                    )
+                                } else {
+                                    // Normal behavior for wide/normal images
+                                    offset = CGSize(
+                                        width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
+                                        height: max(-maxOffsetY, min(maxOffsetY, offset.height + delta.height))
+                                    )
+                                }
                             }
                         }
                         .onEnded { _ in
@@ -380,7 +430,16 @@ struct ImageViewWithPlaceholder: View {
                             scale = 1.0
                             offset = .zero
                         } else {
-                            scale = 2.0
+                            scale = calculateDoubleTapScale(for: geometry)
+                            
+                            // For tall images (AR < 0.6), align to top when zooming in
+                            let actualAspectRatio = getActualAspectRatio()
+                            if actualAspectRatio < 0.6 {
+                                let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
+                                offset = CGSize(width: 0, height: maxOffsetY)
+                            } else {
+                                offset = .zero
+                            }
                         }
                     }
                 }
