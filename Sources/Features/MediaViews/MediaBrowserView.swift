@@ -283,17 +283,6 @@ enum ImageState {
     case placeholder(UIImage)
     case loaded(UIImage)
     case error
-    
-    var imageAspectRatio: CGFloat? {
-        switch self {
-        case .placeholder(let image):
-            return image.size.width / image.size.height
-        case .loaded(let image):
-            return image.size.width / image.size.height
-        case .loading, .error:
-            return nil
-        }
-    }
 }
 
 // MARK: - Image View With Placeholder
@@ -313,93 +302,85 @@ struct ImageViewWithPlaceholder: View {
             ZStack {
                 Color.black
                 
-                ScrollView([.vertical, .horizontal], showsIndicators: false) {
-                    Group {
-                        switch imageState {
-                        case .loading:
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(1.5)
-                                .frame(minHeight: geometry.size.height)
-                            
-                        case .placeholder(let placeholderImage):
-                            Image(uiImage: placeholderImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: geometry.size.width)
-                                .clipped()
-                            
-                        case .loaded(let image):
-                            Image(uiImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: geometry.size.width)
-                                .clipped()
-                            
-                        case .error:
-                            VStack {
-                                Image(systemName: "photo")
-                                    .font(.system(size: 50))
-                                    .foregroundColor(.gray)
-                                Text(LocalizedStringKey("Failed to load image"))
-                                    .foregroundColor(.gray)
-                                    .font(.caption)
-                            }
-                            .frame(minHeight: geometry.size.height)
+                Group {
+                    switch imageState {
+                    case .loading:
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.5)
+                        
+                    case .placeholder(let placeholderImage):
+                        Image(uiImage: placeholderImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                        
+                    case .loaded(let image):
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                        
+                    case .error:
+                        VStack {
+                            Image(systemName: "photo")
+                                .font(.system(size: 50))
+                                .foregroundColor(.gray)
+                            Text(LocalizedStringKey("Failed to load image"))
+                                .foregroundColor(.gray)
+                                .font(.caption)
                         }
                     }
-                    .scaleEffect(scale)
-                    .offset(offset)
-                    .simultaneousGesture(
-                        MagnificationGesture()
-                            .onChanged { value in
-                                let delta = value / lastScale
-                                lastScale = value
-                                scale = min(max(scale * delta, 1.0), 4.0)
-                            }
-                            .onEnded { _ in
-                                lastScale = 1.0
-                                // Snap back to bounds if needed
-                                if scale < 1.0 {
-                                    withAnimation(.easeOut(duration: 0.3)) {
-                                        scale = 1.0
-                                        offset = .zero
-                                    }
+                }
+                .scaleEffect(scale)
+                .offset(offset)
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            let delta = value / lastScale
+                            lastScale = value
+                            scale = min(max(scale * delta, 1.0), 4.0)
+                        }
+                        .onEnded { _ in
+                            lastScale = 1.0
+                            // Snap back to bounds if needed
+                            if scale < 1.0 {
+                                withAnimation(.easeOut(duration: 0.3)) {
+                                    scale = 1.0
+                                    offset = .zero
                                 }
                             }
-                    )
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 15)
-                            .onChanged { value in
-                                // Only handle drag when zoomed in
-                                if scale > 1.0 {
-                                    let delta = CGSize(
-                                        width: value.translation.width - lastOffset.width,
-                                        height: value.translation.height - lastOffset.height
-                                    )
-                                    lastOffset = value.translation
-                                    
-                                    let maxOffsetX = (geometry.size.width * (scale - 1.0)) / 2
-                                    let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
-                                    
-                                    offset = CGSize(
-                                        width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
-                                        height: max(-maxOffsetY, min(maxOffsetY, offset.height + delta.height))
-                                    )
-                                }
-                            }
-                            .onEnded { _ in
-                                lastOffset = .zero
-                            }
-                    )
-                    .onTapGesture(count: 2) {
-                        withAnimation(.easeInOut(duration: 0.3)) {
+                        }
+                )
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 15)
+                        .onChanged { value in
+                            // Only handle drag when zoomed in
                             if scale > 1.0 {
-                                scale = 1.0
-                                offset = .zero
-                            } else {
-                                scale = 2.0
+                                let delta = CGSize(
+                                    width: value.translation.width - lastOffset.width,
+                                    height: value.translation.height - lastOffset.height
+                                )
+                                lastOffset = value.translation
+                                
+                                let maxOffsetX = (geometry.size.width * (scale - 1.0)) / 2
+                                let maxOffsetY = (geometry.size.height * (scale - 1.0)) / 2
+                                
+                                offset = CGSize(
+                                    width: max(-maxOffsetX, min(maxOffsetX, offset.width + delta.width)),
+                                    height: max(-maxOffsetY, min(maxOffsetY, offset.height + delta.height))
+                                )
                             }
+                        }
+                        .onEnded { _ in
+                            lastOffset = .zero
+                        }
+                )
+                .onTapGesture(count: 2) {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        if scale > 1.0 {
+                            scale = 1.0
+                            offset = .zero
+                        } else {
+                            scale = 2.0
                         }
                     }
                 }
