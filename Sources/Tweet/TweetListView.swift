@@ -118,9 +118,9 @@ struct TweetListView<RowView: View>: View {
                 await refreshTweets()
             }
             .task {
-                // Only refresh if tweets are empty and we haven't completed initial load
+                // Only load if tweets are empty and we haven't completed initial load
                 if tweets.isEmpty && !initialLoadComplete {
-                    await refreshTweets()
+                    await performInitialLoad()
                 } else if !tweets.isEmpty {
                     // If we already have tweets, mark as loaded
                     initialLoadComplete = true
@@ -180,17 +180,18 @@ struct TweetListView<RowView: View>: View {
                 // Update VideoLoadingManager with new tweet list
                 let tweetIds = tweets.map { $0.mid }
                 videoLoadingManager.updateTweetList(tweetIds)
-            }
-            
-            // Step 2: Always load from server to get the most up-to-date data
-            await loadFromServer(page: page, pageSize: pageSize) { _ in
-                // Initial load completion handled separately
-            }
-            
-            // Set loading complete after both cache and server loading
-            await MainActor.run {
+                
+                // Mark as loaded immediately after cache load for instant UX
                 isLoading = false
                 initialLoadComplete = true
+            }
+            
+            // Step 2: Load from server in background to get the most up-to-date data
+            // This happens asynchronously and won't block the UI
+            Task.detached(priority: .background) {
+                await self.loadFromServer(page: page, pageSize: self.pageSize) { _ in
+                    // Server load completion handled separately
+                }
             }
             
             // Trigger preloading after initial load completes

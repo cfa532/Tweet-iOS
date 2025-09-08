@@ -141,7 +141,7 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Initialize app user with default values
-    private func initializeAppUser() async {
+    func initializeAppUser() async {
         await MainActor.run {
             // Get user ID from preferences or use guest ID
             let userId = preferenceHelper?.getUserId() ?? Constants.GUEST_ID

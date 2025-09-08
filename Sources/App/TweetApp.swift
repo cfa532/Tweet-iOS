@@ -7,36 +7,53 @@ class AppState: ObservableObject {
     @Published var isInitialized = false
     @Published var error: Error?
     @Published var isLoading = true  // Add loading state
+    @Published var canShowCachedContent = false  // Allow showing cached content immediately
     
     func initialize() async {
         isLoading = true  // Set loading state at start
-        do {
-            try await HproseInstance.shared.initialize()
-            isInitialized = true
-            
-            // Load chat sessions after user is properly initialized
-            ChatSessionManager.shared.loadSessionsWhenUserAvailable()
-            
-            // Refresh mute state from preferences after HproseInstance is ready
-            MuteState.shared.refreshFromPreferences()
-            
-            // Refresh theme state from preferences after HproseInstance is ready
-            ThemeManager.shared.refreshFromPreferences()
-            
-            // Initialize audio session manager for call-friendly audio handling
-            _ = AudioSessionManager.shared
-            
-            // Cleanup caches after a delay
-            Task.detached(priority: .background) {
-                // Wait 30 seconds after app initialization
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
-                // Clean up image cache
-                ImageCacheManager.shared.cleanupOldCache()
+        
+        // Initialize basic components first (no network calls)
+        // Initialize preference helper and basic app user (no network calls)
+        HproseInstance.shared.preferenceHelper = PreferenceHelper()
+        await HproseInstance.shared.initializeAppUser()
+        
+        // Allow showing cached content immediately
+        canShowCachedContent = true
+        isLoading = false
+        
+        // Continue with full network initialization in background
+        Task.detached(priority: .background) {
+            do {
+                try await HproseInstance.shared.initAppEntry()
+                await MainActor.run {
+                    self.isInitialized = true
+                }
+                
+                // Load chat sessions after user is properly initialized
+                await ChatSessionManager.shared.loadSessionsWhenUserAvailable()
+                
+                // Refresh mute state from preferences after HproseInstance is ready
+                MuteState.shared.refreshFromPreferences()
+                
+                // Refresh theme state from preferences after HproseInstance is ready
+                await ThemeManager.shared.refreshFromPreferences()
+                
+                // Initialize audio session manager for call-friendly audio handling
+                _ = AudioSessionManager.shared
+                
+                // Cleanup caches after a delay
+                Task.detached(priority: .background) {
+                    // Wait 30 seconds after app initialization
+                    try? await Task.sleep(nanoseconds: 30_000_000_000)
+                    // Clean up image cache
+                    ImageCacheManager.shared.cleanupOldCache()
+                }
+            } catch {
+                await MainActor.run {
+                    self.error = error
+                }
             }
-        } catch {
-            self.error = error
         }
-        isLoading = false  // Clear loading state when done
     }
 }
 
@@ -60,17 +77,17 @@ struct TweetApp: App {
         WindowGroup {
             Group {
                 if appState.isLoading {
-                    // Show loading view during initialization
+                    // Show loading view during basic initialization
                     ProgressView(NSLocalizedString("Initializing...", comment: "App initialization progress"))
                         .task {
                             await appState.initialize()
                         }
-                } else if appState.isInitialized {
-                    // Only show content view after initialization is complete
+                } else if appState.canShowCachedContent {
+                    // Show content view immediately with cached data
                     ContentView()
                         .environmentObject(themeManager)
                         .environmentObject(orientationManager)
-                } else {
+                } else if appState.error != nil {
                     // Show error state if initialization failed
                     VStack {
                         Text(NSLocalizedString("Failed to initialize app", comment: "App initialization error"))
@@ -84,6 +101,9 @@ struct TweetApp: App {
                             }
                         }
                     }
+                } else {
+                    // Fallback loading state
+                    ProgressView(NSLocalizedString("Loading...", comment: "App loading progress"))
                 }
             }
             .alert(isPresented: $showGlobalAlert) {
