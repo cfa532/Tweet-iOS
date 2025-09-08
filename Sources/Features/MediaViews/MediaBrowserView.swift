@@ -23,6 +23,7 @@ struct MediaBrowserView: View {
     @State private var dragOffset = CGSize.zero
     @State private var isDragging = false
     @State private var previousIndex: Int = -1 // Track previous index for video management
+    @State private var isImageZoomed = false // Track if current image is zoomed
 
 
     private var attachments: [MimeiFileType] {
@@ -52,6 +53,7 @@ struct MediaBrowserView: View {
             isVisible: $isVisible,
             baseUrl: baseUrl,
             imageStates: $imageStates,
+            isImageZoomed: $isImageZoomed,
             dismiss: { dismiss() },
             startControlsTimer: startControlsTimer,
             resetControlsTimer: resetControlsTimer,
@@ -72,6 +74,7 @@ struct MediaBrowserView: View {
         @Binding var isVisible: Bool
         let baseUrl: URL
         @Binding var imageStates: [Int: ImageState]
+        @Binding var isImageZoomed: Bool
         let dismiss: () -> Void
         let startControlsTimer: () -> Void
         let resetControlsTimer: () -> Void
@@ -129,14 +132,16 @@ struct MediaBrowserView: View {
             .gesture(
                 DragGesture()
                     .onChanged { value in
-                        if value.translation.height > 0 {
+                        // Only allow drag-down-to-exit if no image is zoomed
+                        if value.translation.height > 0 && !isImageZoomed {
                             dragOffset = value.translation
                             isDragging = true
                             showControls = true
                         }
                     }
                     .onEnded { value in
-                        if value.translation.height > 100 || value.velocity.height > 500 {
+                        // Only allow exit if no image is zoomed
+                        if !isImageZoomed && (value.translation.height > 100 || value.velocity.height > 500) {
                             dismiss()
                         } else {
                             withAnimation(.spring()) {
@@ -188,7 +193,9 @@ struct MediaBrowserView: View {
                 attachment: attachment,
                 baseUrl: baseUrl,
                 url: url,
-                imageState: imageStates[index] ?? .loading
+                imageState: imageStates[index] ?? .loading,
+                isImageZoomed: $isImageZoomed,
+                isCurrentIndex: index == currentIndex
             )
             .onAppear {
                 loadImageIfNeededClosure(attachment, index)
@@ -291,6 +298,8 @@ struct ImageViewWithPlaceholder: View {
     let baseUrl: URL
     let url: URL
     let imageState: ImageState
+    @Binding var isImageZoomed: Bool
+    let isCurrentIndex: Bool
     
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
@@ -446,6 +455,20 @@ struct ImageViewWithPlaceholder: View {
             }
         }
         .clipped()
+        .onChange(of: scale) { _, newScale in
+            // Update the zoom state for the current image
+            if isCurrentIndex {
+                isImageZoomed = newScale > 1.0
+            }
+        }
+        .onChange(of: isCurrentIndex) { _, newIsCurrent in
+            // Reset zoom state when switching to a different image
+            if newIsCurrent {
+                isImageZoomed = scale > 1.0
+            } else {
+                isImageZoomed = false
+            }
+        }
     }
 }
 
