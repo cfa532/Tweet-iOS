@@ -30,22 +30,10 @@ class ImageCacheManager {
         cache.countLimit = 100 // Maximum number of images in memory
         cache.totalCostLimit = 50 * 1024 * 1024 // 50MB limit
         
-        // Register for memory warnings
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleMemoryWarning),
-            name: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil
-        )
     }
     
     deinit {
         NotificationCenter.default.removeObserver(self)
-    }
-    
-    @objc private func handleMemoryWarning() {
-        cache.removeAllObjects()
-        cleanupOldCache()
     }
     
     func cleanupOldCache() {
@@ -143,6 +131,38 @@ class ImageCacheManager {
             }
         } catch {
             print("Error clearing all avatar cache: \(error)")
+        }
+    }
+    
+    /// Release a percentage of image cache to free memory
+    func releasePartialCache(percentage: Int) {
+        let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range
+        print("DEBUG: [ImageCacheManager] Releasing \(percentageToRemove)% of image cache")
+        
+        // Clear memory cache completely (NSCache doesn't support partial clearing)
+        cache.removeAllObjects()
+        
+        // Remove percentage of disk cache files (oldest first)
+        do {
+            let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
+            
+            // Sort by modification date (oldest first)
+            let sortedFiles = contents.sorted { url1, url2 in
+                let date1 = (try? fileManager.attributesOfItem(atPath: url1.path)[.modificationDate] as? Date) ?? Date.distantPast
+                let date2 = (try? fileManager.attributesOfItem(atPath: url2.path)[.modificationDate] as? Date) ?? Date.distantPast
+                return date1 < date2
+            }
+            
+            let countToRemove = max(1, (sortedFiles.count * percentageToRemove) / 100)
+            let filesToRemove = Array(sortedFiles.prefix(countToRemove))
+            
+            for fileURL in filesToRemove {
+                try? fileManager.removeItem(at: fileURL)
+            }
+            
+            print("DEBUG: [ImageCacheManager] Released \(filesToRemove.count) image files from cache")
+        } catch {
+            print("Error releasing partial image cache: \(error)")
         }
     }
     

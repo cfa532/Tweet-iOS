@@ -13,13 +13,6 @@ class TweetCacheManager {
         // Set up periodic cleanup
         setupPeriodicCleanup()
         
-        // Register for memory warnings
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleMemoryWarning),
-            name: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil
-        )
     }
     
     deinit {
@@ -34,9 +27,6 @@ class TweetCacheManager {
         }
     }
     
-    @objc private func handleMemoryWarning() {
-        performPeriodicCleanup()
-    }
     
     private func performPeriodicCleanup() {
         context.performAndWait {

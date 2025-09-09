@@ -16,6 +16,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Setup app lifecycle notifications
         setupAppLifecycleNotifications()
         
+        // Initialize memory warning manager
+        _ = MemoryWarningManager.shared
+        
         // Request notification permissions
         Task {
             await requestNotificationPermission()

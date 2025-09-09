@@ -28,7 +28,6 @@ class VideoLoadingManager: ObservableObject {
     private let maxConcurrentLoads: Int = 5 // Increased from 3 to 5 for better performance
     private var loadingQueue: [String] = [] // Queue for pending video loads
     private var isProcessingQueue = false
-    private var isUnderMemoryPressure = false
     
     // MARK: - Background Cancellation
     private var backgroundCancellationTimer: Timer?
@@ -156,12 +155,6 @@ class VideoLoadingManager: ObservableObject {
             }
         }
         
-        // Poll memory usage periodically (every 2s)
-        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            Task { @MainActor in
-                self.checkMemoryPressure()
-            }
-        }
     }
     
     /// Start background cancellation timer to process cancellations without blocking main actor
@@ -229,7 +222,6 @@ class VideoLoadingManager: ObservableObject {
     
     private func isLoadingTooFrequently() -> Bool {
         let timeSinceLastLoad = Date().timeIntervalSince(lastLoadTime)
-        if isUnderMemoryPressure { return true }
         return timeSinceLastLoad < 0.3 && loadCountInLastMinute > 20 // Increased frequency limit from 15 to 20
     }
     
@@ -263,7 +255,7 @@ class VideoLoadingManager: ObservableObject {
             let index = currentVisibleTweetIndex + i
             if index < allTweetIds.count {
                 let tweetId = allTweetIds[index]
-                if !isUnderMemoryPressure && shouldPreloadVideos(for: tweetId) {
+                if shouldPreloadVideos(for: tweetId) {
                     if activeLoadingCount < maxConcurrentLoads {
                         triggerVideoPreloading(for: tweetId)
                         print("DEBUG: [VideoLoadingManager] Triggered video preloading for tweet \(tweetId)")
@@ -287,7 +279,7 @@ class VideoLoadingManager: ObservableObject {
         Task { @MainActor in
             while !loadingQueue.isEmpty && activeLoadingCount < maxConcurrentLoads {
                 let tweetId = loadingQueue.removeFirst()
-                if !isUnderMemoryPressure && shouldPreloadVideos(for: tweetId) {
+                if shouldPreloadVideos(for: tweetId) {
                     triggerVideoPreloading(for: tweetId)
                     print("DEBUG: [VideoLoadingManager] Processed queued video preloading for tweet \(tweetId)")
                 }
@@ -300,56 +292,6 @@ class VideoLoadingManager: ObservableObject {
         }
     }
 
-    // MARK: - Memory Monitoring
-    private func currentResidentMemoryBytes() -> UInt64 {
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
-        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
-            }
-        }
-        if kerr == KERN_SUCCESS {
-            return UInt64(info.resident_size)
-        }
-        return 0
-    }
-    
-    private func checkMemoryPressure() {
-        let bytes = currentResidentMemoryBytes()
-        let threshold: UInt64 = 1_024 * 1_024 * 1_024 // 1GB
-        let wasUnderPressure = isUnderMemoryPressure
-        isUnderMemoryPressure = bytes > threshold
-        
-        if isUnderMemoryPressure {
-            // Cancel non-essential preloads and queued loads
-            loadingQueue.removeAll()
-            
-            // Release 30% of video and tweet caches on first threshold crossing
-            if wasUnderPressure == false {
-                Task { @MainActor in
-                    await releaseMemoryCaches()
-                }
-            }
-            
-            print("DEBUG: [VideoLoadingManager] Memory pressure detected (\(bytes) bytes). Throttling preloads and clearing queue.")
-        } else if wasUnderPressure {
-            print("DEBUG: [VideoLoadingManager] Memory pressure relieved (\(bytes) bytes). Resuming normal behavior.")
-        }
-    }
-    
-    /// Release 30% of video and tweet caches to free memory
-    private func releaseMemoryCaches() async {
-        print("DEBUG: [VideoLoadingManager] Releasing 30% of memory caches...")
-        
-        // Release 30% of video caches (preserve current playing videos)
-        SharedAssetCache.shared.releasePartialCache(percentage: 30)
-        
-        // Release 30% of tweet caches
-        TweetCacheManager.shared.releasePartialCache(percentage: 30)
-        
-        print("DEBUG: [VideoLoadingManager] Memory cache release completed")
-    }
     
     /// Legacy method - now handled by background cancellation
     private func cancelVideoLoading(for tweetId: String) {
