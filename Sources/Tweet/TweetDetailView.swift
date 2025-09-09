@@ -292,6 +292,11 @@ struct TweetDetailView: View {
         self.tweet = tweet
     }
     
+    // Check if this is a retweet or quoted tweet
+    private var isRetweetOrQuotedTweet: Bool {
+        return tweet.originalTweetId != nil && tweet.originalAuthorId != nil
+    }
+    
     private var displayTweet: Tweet {
         // Check if we need to update the cached value
         let isRetweet = (tweet.content == nil || tweet.content?.isEmpty == true) &&
@@ -326,24 +331,41 @@ struct TweetDetailView: View {
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    mediaSection
-                    tweetHeader
-                    tweetContent
-                    actionButtons
-                    Divider()
-                        .padding(.top, 8)
-                        .padding(.bottom, 4)
-                    commentsListView
-                        .padding(.leading, -4)
+        Group {
+            // Hide retweets/quoted tweets if their original tweets failed to load
+            if isRetweetOrQuotedTweet && originalTweet == nil && hasLoadedOriginalTweet {
+                // This is a retweet/quoted tweet but original tweet failed to load - show error message
+                VStack {
+                    Spacer()
+                    Text("Original tweet not found")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    Text("The original tweet may have been deleted or is no longer accessible.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    Spacer()
                 }
-                .task {
-                    setupInitialData()
-                }
-            }
-            .coordinateSpace(name: "scroll")
+            } else {
+                VStack(spacing: 0) {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            mediaSection
+                            tweetHeader
+                            tweetContent
+                            actionButtons
+                            Divider()
+                                .padding(.top, 8)
+                                .padding(.bottom, 4)
+                            commentsListView
+                                .padding(.leading, -4)
+                        }
+                        .task {
+                            setupInitialData()
+                        }
+                    }
+                    .coordinateSpace(name: "scroll")
             .simultaneousGesture(
                 DragGesture()
                     .onChanged { value in
@@ -377,6 +399,8 @@ struct TweetDetailView: View {
                     initialExpanded: shouldShowExpandedReply
                 )
                 .padding(.bottom, 48) // Add padding to avoid navigation bar
+            }
+                }
             }
         }
         .background(Color(.systemBackground))

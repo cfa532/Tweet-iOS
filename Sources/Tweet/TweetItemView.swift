@@ -24,6 +24,11 @@ struct TweetItemView: View, Equatable {
     @State private var showEmbeddedBrowser = false
     @State private var selectedEmbeddedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
+    
+    // Check if this is a retweet or quoted tweet
+    private var isRetweetOrQuotedTweet: Bool {
+        return tweet.originalTweetId != nil && tweet.originalAuthorId != nil
+    }
 
     private func mediaGrid(for tweet: Tweet) -> some View {
         Group {
@@ -39,7 +44,11 @@ struct TweetItemView: View, Equatable {
 
     var body: some View {
         Group {
-            if onTap == nil {
+            // Hide retweets/quoted tweets if their original tweets failed to load
+            if isRetweetOrQuotedTweet && originalTweet == nil && hasLoadedOriginalTweet {
+                // This is a retweet/quoted tweet but original tweet failed to load - don't show it
+                EmptyView()
+            } else if onTap == nil {
                 // Use NavigationLink when no onTap callback is provided
                 // For retweets with no content, navigate to the original tweet
                 let navigationValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
