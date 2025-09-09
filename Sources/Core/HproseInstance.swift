@@ -77,6 +77,32 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - Helper Methods
     
+    /// Generic retry helper with exponential backoff
+    private func retryOperation<T>(
+        maxRetries: Int = 3,
+        baseDelay: UInt64 = 1_000_000_000, // 1 second in nanoseconds
+        operation: @escaping () async throws -> T
+    ) async throws -> T {
+        var lastError: Error?
+        
+        for attempt in 1...maxRetries {
+            do {
+                return try await operation()
+            } catch {
+                lastError = error
+                print("DEBUG: [retryOperation] Attempt \(attempt)/\(maxRetries) failed: \(error)")
+                
+                if attempt < maxRetries {
+                    let delay = baseDelay * UInt64(attempt) // Exponential backoff
+                    print("DEBUG: [retryOperation] Retrying in \(delay / 1_000_000_000) seconds...")
+                    try await Task.sleep(nanoseconds: delay)
+                }
+            }
+        }
+        
+        throw lastError ?? NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "All retry attempts failed"])
+    }
+    
     /// Print detailed app user content for debugging
     private func printAppUserContent(_ context: String) {
         print("=== APP USER CONTENT [\(context)] ===")
@@ -195,25 +221,8 @@ final class HproseInstance: ObservableObject {
                     
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
                         print("provider ip:  \(providerIp)")
-                        // Try to fetch user with retry logic
-                        var user: User? = nil
-                        
-                        // First attempt
-                        do {
-                            user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
-                        } catch {
-                            print("DEBUG: [initAppEntry] First fetchUser attempt failed: \(error)")
-                            
-                            // Retry once after a short delay
-                            do {
-                                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
-                                print("DEBUG: [initAppEntry] Retrying fetchUser...")
-                                user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
-                                print("DEBUG: [initAppEntry] fetchUser retry successful")
-                            } catch {
-                                print("DEBUG: [initAppEntry] fetchUser retry also failed: \(error)")
-                            }
-                        }
+                        // Try to fetch user (retry logic is now built into fetchUser method)
+                        let user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
                         
                         if let user = user {
                             // Valid login user is found, use its provider IP as base.
@@ -575,22 +584,24 @@ final class HproseInstance: ObservableObject {
             return TweetCacheManager.shared.fetchUser(mid: userId)
         }
         
-        // Step 2: Fetch from server. No instance available in memory or cache.
-        if baseUrl.isEmpty {
-            guard let providerIP = try await getProviderIP(userId) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provide not found"])
+        // Step 2: Fetch from server with retry logic. No instance available in memory or cache.
+        return try await retryOperation(maxRetries: 3) {
+            if baseUrl.isEmpty {
+                guard let providerIP = try await self.getProviderIP(userId) else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provider not found"])
+                }
+                await MainActor.run {
+                    user.baseUrl = URL(string: "http://\(providerIP)")!
+                }
+                try await self.updateUserFromServer(user)
+                return user
+            } else {
+                await MainActor.run {
+                    user.baseUrl = URL(string: baseUrl)!
+                }
+                try await self.updateUserFromServer(user)
+                return user
             }
-            await MainActor.run {
-                user.baseUrl = URL(string: "http://\(providerIP)")!
-            }
-            try await updateUserFromServer(user)
-            return user
-        } else {
-            await MainActor.run {
-                user.baseUrl = URL(string: baseUrl)!
-            }
-            try await updateUserFromServer(user)
-            return user
         }
     }
     
@@ -602,55 +613,56 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
         ]
         
-        // Call runMApp following the sample code pattern
-        guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
-            print("DEBUG: [updateUserFromServer] No hprose client available for user: \(user.mid)")
-            return
-        }
-        
-        // Check for IP address response first (user not found on this node)
-        if let ipAddress = response as? String {
-            print("DEBUG: [updateUserFromServer] User not found on current node, redirecting to IP: \(ipAddress)")
-            // the user is not found on this node, a provider IP of the user is returned.
-            // point server to this new IP.
-            await MainActor.run {
-                user.baseUrl = URL(string: "http://\(ipAddress)")!
+        try await retryOperation(maxRetries: 3) {
+            // Call runMApp following the sample code pattern
+            guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No hprose client available for user: \(user.mid)"])
             }
             
-            // Create a new client for the new IP
-            let newClient = HproseHttpClient()
-            newClient.timeout = 300
-            newClient.uri = "\(user.baseUrl?.absoluteString ?? "")/webapi/"
-            
-            // Call runMApp with the new client following the sample code pattern
-            let newResponse = newClient.invoke("runMApp", withArgs: [entry, params])
-            
-            if let newUserDict = newResponse as? [String: Any] {
+            // Check for IP address response first (user not found on this node)
+            if let ipAddress = response as? String {
+                print("DEBUG: [updateUserFromServer] User not found on current node, redirecting to IP: \(ipAddress)")
+                // the user is not found on this node, a provider IP of the user is returned.
+                // point server to this new IP.
+                await MainActor.run {
+                    user.baseUrl = URL(string: "http://\(ipAddress)")!
+                }
+                
+                // Create a new client for the new IP
+                let newClient = HproseHttpClient()
+                newClient.timeout = 300
+                newClient.uri = "\(user.baseUrl?.absoluteString ?? "")/webapi/"
+                
+                // Call runMApp with the new client following the sample code pattern
+                let newResponse = newClient.invoke("runMApp", withArgs: [entry, params])
+                
+                if let newUserDict = newResponse as? [String: Any] {
+                    await MainActor.run {
+                        do {
+                            _ = try User.from(dict: newUserDict)
+                        } catch {
+                            print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
+                        }
+                    }
+                } else if let newIpAddress = newResponse as? String {
+                    print("DEBUG: [updateUserFromServer] User still not found on redirected IP: \(newIpAddress)")
+                }
+                
+                // Close the new client
+                newClient.close()
+            } else if let userDict = response as? [String: Any] {
+                // User found on current node
                 await MainActor.run {
                     do {
-                        _ = try User.from(dict: newUserDict)
+                        _ = try User.from(dict: userDict)
                     } catch {
-                        print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
+                        print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
+                        print("DEBUG: [updateUserFromServer] Response that caused error: \(response)")
                     }
                 }
-            } else if let newIpAddress = newResponse as? String {
-                print("DEBUG: [updateUserFromServer] User still not found on redirected IP: \(newIpAddress)")
+            } else {
+                print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: response)), value: \(response)")
             }
-            
-            // Close the new client
-            newClient.close()
-        } else if let userDict = response as? [String: Any] {
-            // User found on current node
-            await MainActor.run {
-                do {
-                    _ = try User.from(dict: userDict)
-                } catch {
-                    print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
-                    print("DEBUG: [updateUserFromServer] Response that caused error: \(response)")
-                }
-            }
-        } else {
-            print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: response)), value: \(response)")
         }
     }
     
@@ -662,38 +674,42 @@ final class HproseInstance: ObservableObject {
             "username": loginUser.username!,
             "password": loginUser.password!
         ]
-        let newClient = HproseHttpClient()
-        newClient.timeout = 300  // Increased from 60 to 300 seconds for large uploads
-        newClient.uri = "\(loginUser.baseUrl!.absoluteString)/webapi/"
-        guard let response = newClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-            newClient.close()
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in login"])
-        }
-        newClient.close()
         
-        if let status = response["status"] as? String {
-            if status == "failure" {
-                if let reason = response["reason"] as? String {
-                    return ["reason": reason, "status": "failure"]
-                }
-                return ["reason": "Unknown error occurred", "status": "failure"]
-            } else if status == "success" {
-                await MainActor.run {
-                    // Update the appUser reference to point to the new user instance
-                    preferenceHelper?.setUserId(loginUser.mid)
-                    // Update appUser to the logged-in user
-                    self.appUser = loginUser
-                }
-                
-                // Populate fans and following lists for the logged-in user
-                Task {
-                    await populateUserLists(user: loginUser)
-                }
-                
-                return ["reason": "Success", "status": "success"]
+        return try await retryOperation(maxRetries: 3) {
+            let newClient = HproseHttpClient()
+            newClient.timeout = 300  // Increased from 60 to 300 seconds for large uploads
+            newClient.uri = "\(loginUser.baseUrl!.absoluteString)/webapi/"
+            
+            defer { newClient.close() }
+            
+            guard let response = newClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Nil response from server in login"])
             }
+            
+            if let status = response["status"] as? String {
+                if status == "failure" {
+                    if let reason = response["reason"] as? String {
+                        return ["reason": reason, "status": "failure"]
+                    }
+                    return ["reason": "Unknown error occurred", "status": "failure"]
+                } else if status == "success" {
+                    await MainActor.run {
+                        // Update the appUser reference to point to the new user instance
+                        self.preferenceHelper?.setUserId(loginUser.mid)
+                        // Update appUser to the logged-in user
+                        self.appUser = loginUser
+                    }
+                    
+                    // Populate fans and following lists for the logged-in user
+                    Task {
+                        await self.populateUserLists(user: loginUser)
+                    }
+                    
+                    return ["reason": "Success", "status": "success"]
+                }
+            }
+            return ["reason": "Invalid response status", "status": "failure"]
         }
-        return ["reason": "Invalid response status", "status": "failure"]
     }
     
     func logout() {
@@ -3199,10 +3215,18 @@ final class HproseInstance: ObservableObject {
             "ver": "last",
             "mid": mid
         ]
-        if let response = client.invoke("runMApp", withArgs: ["get_provider_ip", params]) {
-            return response as? String
+        
+        return try await retryOperation(maxRetries: 3) {
+            guard let response = self.client.invoke("runMApp", withArgs: ["get_provider_ip", params]) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for get_provider_ip"])
+            }
+            
+            guard let ipAddress = response as? String else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format for get_provider_ip"])
+            }
+            
+            return ipAddress
         }
-        return nil
     }
     
     /// Find IP addresses of given nodeId
