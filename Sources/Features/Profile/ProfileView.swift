@@ -13,7 +13,7 @@ struct ProfileView: View {
     @State private var showUserList = false
     @State private var showTweetList = false
     @State private var selectedTweetForNavigation: Tweet? = nil
-
+    
     @State private var userListType: UserListType = .FOLLOWER
     @State private var tweetListType: TweetListType = .BOOKMARKS
     
@@ -364,9 +364,9 @@ struct ProfileView: View {
                 TweetDetailView(tweet: tweet)
             }
         }
-
-
-
+        
+        
+        
         .onReceive(NotificationCenter.default.publisher(for: .bookmarkAdded)) { notification in
             if let tweet = notification.userInfo?["tweet"] as? Tweet,
                isAppUser {
@@ -458,7 +458,7 @@ struct ProfileView: View {
         } message: {
             Text(NSLocalizedString("This action cannot be undone.", comment: "Delete account confirmation message"))
         }
-
+        
     }
     
     // MARK: - Scroll Handling
@@ -485,7 +485,7 @@ struct ProfileView: View {
                 isInertiaScrolling = true
             }
         }
-                
+        
         // Only change navigation state if we're not in inertia scrolling
         if !isInertiaScrolling {
             // Determine scroll direction
