@@ -145,7 +145,10 @@ final class HproseInstance: ObservableObject {
         await MainActor.run {
             // Get user ID from preferences or use guest ID
             let userId = preferenceHelper?.getUserId() ?? Constants.GUEST_ID
-            _appUser = User.getInstance(mid: userId)
+            
+            // Try to load cached user first, then fall back to new instance
+            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+            _appUser = cachedUser
             
             // Set base URL from preferences or use default
             let baseUrlString = preferenceHelper?.getAppUrls().first ?? AppConfig.baseUrl
