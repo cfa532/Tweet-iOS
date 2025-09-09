@@ -316,6 +316,9 @@ struct TweetListView<RowView: View>: View {
                     // Update VideoLoadingManager with new tweet list
                     let tweetIds = tweets.map { $0.mid }
                     videoLoadingManager.updateTweetList(tweetIds)
+                    
+                    // Clear loading state immediately after showing cached content
+                    isLoadingMore = false
                 }
                 
                 // Step 2: Load from server to update with fresh data (non-blocking, no retry)
@@ -380,8 +383,6 @@ struct TweetListView<RowView: View>: View {
                 errorMessage = "Unable to load fresh content. Showing cached data."
             }
         }
-        
-        await MainActor.run { isLoadingMore = false }
         completion(true)
     }
 

@@ -5,8 +5,8 @@ import UIKit
 class TweetCacheManager {
     static let shared = TweetCacheManager()
     private let coreDataManager = CoreDataManager.shared
-    private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days
-    private let maxCacheSize: Int = 1000 // Maximum number of tweets to cache
+    private let maxCacheAge: TimeInterval = 30 * 24 * 60 * 60 // 30 days
+    private let maxCacheSize: Int = 5000 // Maximum number of tweets to cache
     private var cleanupTimer: Timer?
 
     private init() {
