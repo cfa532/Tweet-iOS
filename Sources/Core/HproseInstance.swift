@@ -205,6 +205,32 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /// Fetch alphaId user from backend for guest users
+    private func fetchAlphaIdUserForGuest() async {
+        guard appUser.isGuest else { return }
+        
+        do {
+            print("DEBUG: [HproseInstance] Fetching alphaId user for guest user: \(AppConfig.alphaId)")
+            
+            // Create alphaId user with proper baseUrl
+            let alphaUser = User.getInstance(mid: AppConfig.alphaId)
+            alphaUser.baseUrl = HproseInstance.baseUrl
+            
+            // Fetch user data from server
+            try await updateUserFromServer(alphaUser)
+            
+            print("DEBUG: [HproseInstance] Successfully fetched alphaId user for guest")
+            
+            // Notify FollowingsTweetView to refresh
+            await MainActor.run {
+                NotificationCenter.default.post(name: .appUserReady, object: nil)
+            }
+            
+        } catch {
+            print("DEBUG: [HproseInstance] Failed to fetch alphaId user for guest: \(error)")
+        }
+    }
+    
     func initAppEntry() async throws {
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
@@ -241,6 +267,9 @@ final class HproseInstance: ObservableObject {
                                 
                                 // Print detailed app user content after successful login
                                 self.printAppUserContent("After successful login")
+                                
+                                // Notify FollowingsTweetView to refresh for logged-in user
+                                NotificationCenter.default.post(name: .appUserReady, object: nil)
                             }
                             return
                         } else {
@@ -264,6 +293,10 @@ final class HproseInstance: ObservableObject {
                             // Update domain to share with the new base URL
                             self._domainToShare = HproseInstance.baseUrl.absoluteString
                         }
+                        
+                        // For guest users, fetch the alphaId user from backend now that we have proper IP
+                        await fetchAlphaIdUserForGuest()
+                        
                         return
                     }
                 }

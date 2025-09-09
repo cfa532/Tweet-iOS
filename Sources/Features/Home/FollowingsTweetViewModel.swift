@@ -113,5 +113,16 @@ class FollowingsTweetViewModel: ObservableObject {
         TweetCacheManager.shared.clearCacheForUser(userId: "main_feed")
     }
     
+    // Method to load page 0 tweets when app user is ready
+    func loadPage0Tweets() async {
+        do {
+            print("[FollowingsTweetViewModel] Loading page 0 tweets for user: \(hproseInstance.appUser.mid)")
+            let serverTweets = try await fetchTweets(page: 0, pageSize: 20, shouldCache: true)
+            print("[FollowingsTweetViewModel] Loaded \(serverTweets.compactMap { $0 }.count) tweets")
+        } catch {
+            print("[FollowingsTweetViewModel] Error loading tweets: \(error)")
+        }
+    }
+    
 
 }

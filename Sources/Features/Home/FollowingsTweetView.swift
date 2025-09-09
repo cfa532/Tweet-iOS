@@ -88,6 +88,12 @@ struct FollowingsTweetView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in
+            // Load page 0 tweets when user is ready (guest or logged-in)
+            Task {
+                await viewModel.loadPage0Tweets()
+            }
+        }
         .onAppear {
             // Set initial navigation state
             isNavigationVisible = true
