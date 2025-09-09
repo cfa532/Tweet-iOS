@@ -761,6 +761,11 @@ final class HproseInstance: ObservableObject {
         guestUser.baseUrl = appUser.baseUrl
         guestUser.followingList = Gadget.getAlphaIds()
         self.appUser = guestUser
+        
+        // Fetch alphaId user for guest and notify FollowingsTweetView
+        Task {
+            await fetchAlphaIdUserForGuest()
+        }
     }
     
     /*
