@@ -974,7 +974,7 @@ final class HproseInstance: ObservableObject {
             guard let client = appUser.hproseClient else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
-                    guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
+            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "toggleFollowing: No response"])
             }
             return response
