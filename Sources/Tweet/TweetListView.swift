@@ -484,7 +484,7 @@ struct TweetListContentView<RowView: View>: View {
                         }
                         rowView(tweet)
                             // Add stable identity to prevent unnecessary re-composition
-                            .id("tweet_\(tweet.mid)_\(index)")
+                            .id("tweet_\(tweet.mid)")
                             .onAppear {
                                 // Update VideoLoadingManager when tweet becomes visible
                                 videoLoadingManager.updateVisibleTweetIndex(index)
