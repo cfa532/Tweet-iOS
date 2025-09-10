@@ -18,7 +18,6 @@ struct UserListView: View {
     @State private var errorMessage: String? = nil
     @State private var refreshTask: Task<Void, Never>?
     @State private var loadMoreTask: Task<Void, Never>?
-    @State private var sequentialLoadingTask: Task<Void, Never>?
     @State private var currentLoadIndex: Int = 0 // Track which user we're currently trying to load
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -102,7 +101,6 @@ struct UserListView: View {
             // Cancel any ongoing tasks when view disappears
             refreshTask?.cancel()
             loadMoreTask?.cancel()
-            sequentialLoadingTask?.cancel()
         }
     }
     
@@ -159,69 +157,26 @@ struct UserListView: View {
         loadMoreTask = Task {
             isLoadingMore = true
             
-            let startIndex = displayedUserIds.count
-            let endIndex = min(startIndex + pageSize, allUserIds.count)
-            
-            // If we've reached the end of the list, update state and return
-            if startIndex >= allUserIds.count {
-                await MainActor.run {
-                    // Check if task was cancelled before updating UI
-                    guard !Task.isCancelled else { return }
-                    hasMoreUsers = false
-                    isLoadingMore = false
+            // Load next 4 users one by one
+            for _ in 0..<pageSize {
+                // Check if we have more users to load
+                guard currentLoadIndex < allUserIds.count else {
+                    await MainActor.run {
+                        hasMoreUsers = false
+                        isLoadingMore = false
+                    }
+                    return
                 }
-                return
+                
+                await loadNextUser()
             }
-            
-            let nextBatchIds = Array(allUserIds[startIndex..<endIndex])
-            // Defensive: If no more IDs to load, stop
-            if nextBatchIds.isEmpty {
-                await MainActor.run {
-                    // Check if task was cancelled before updating UI
-                    guard !Task.isCancelled else { return }
-                    hasMoreUsers = false
-                    isLoadingMore = false
-                }
-                return
-            }
-            
-            // Load next batch sequentially
-            await loadUsersSequentially(nextBatchIds)
             
             await MainActor.run {
                 // Check if task was cancelled before updating UI
                 guard !Task.isCancelled else { return }
-                // If we loaded fewer users than requested, or none, stop loading more
-                if endIndex >= allUserIds.count {
-                    hasMoreUsers = false
-                } else {
-                    hasMoreUsers = true
-                }
+                // Check if we have more users to load
+                hasMoreUsers = currentLoadIndex < allUserIds.count
                 isLoadingMore = false
-            }
-        }
-    }
-    
-    // MARK: - Sequential Loading
-    private func loadUsersSequentially(_ userIds: [String]) async {
-        // Cancel any existing sequential loading task
-        sequentialLoadingTask?.cancel()
-        
-        // Create a new sequential loading task
-        sequentialLoadingTask = Task {
-            for (index, userId) in userIds.enumerated() {
-                // Check if task was cancelled
-                guard !Task.isCancelled else { return }
-                
-                // Add user to displayed list
-                await MainActor.run {
-                    displayedUserIds.append(userId)
-                }
-                
-                // Add delay between users (except for the last one)
-                if index < userIds.count - 1 {
-                    try? await Task.sleep(nanoseconds: 200_000_000) // 200ms delay
-                }
             }
         }
     }
