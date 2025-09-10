@@ -56,9 +56,9 @@ struct UserListView: View {
                                 displayedUserIds.removeAll { $0 == failedUserId }
                                 allUserIds.removeAll { $0 == failedUserId }
                                 
-                                // Try to load the next user
+                                // Try to load the next user to fill the gap
                                 Task {
-                                    await loadNextUser()
+                                    await loadNextUserToFillGap()
                                 }
                             }
                         )
@@ -131,8 +131,8 @@ struct UserListView: View {
                     isLoading = false
                 }
                 
-                // Start loading users one by one
-                await loadNextUser()
+                // Start loading first batch
+                await loadBatch(Array(uniqueUserIds.prefix(pageSize)))
             } catch is CancellationError {
                 print("DEBUG: [UserListView] Refresh cancelled")
             } catch {
@@ -157,19 +157,20 @@ struct UserListView: View {
         loadMoreTask = Task {
             isLoadingMore = true
             
-            // Load next 4 users one by one
-            for _ in 0..<pageSize {
-                // Check if we have more users to load
-                guard currentLoadIndex < allUserIds.count else {
-                    await MainActor.run {
-                        hasMoreUsers = false
-                        isLoadingMore = false
-                    }
-                    return
+            // Load next batch
+            let startIndex = currentLoadIndex
+            let endIndex = min(startIndex + pageSize, allUserIds.count)
+            
+            guard startIndex < allUserIds.count else {
+                await MainActor.run {
+                    hasMoreUsers = false
+                    isLoadingMore = false
                 }
-                
-                await loadNextUser()
+                return
             }
+            
+            let nextBatchIds = Array(allUserIds[startIndex..<endIndex])
+            await loadBatch(nextBatchIds)
             
             await MainActor.run {
                 // Check if task was cancelled before updating UI
@@ -181,8 +182,20 @@ struct UserListView: View {
         }
     }
     
-    // MARK: - Single User Loading
-    private func loadNextUser() async {
+    // MARK: - Batch Loading
+    private func loadBatch(_ userIds: [String]) async {
+        // Add all users to displayed list at once for faster loading
+        await MainActor.run {
+            displayedUserIds.append(contentsOf: userIds)
+            currentLoadIndex += userIds.count
+        }
+        
+        // Add a small delay for smooth visual feedback
+        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms delay
+    }
+    
+    // MARK: - Gap Filling
+    private func loadNextUserToFillGap() async {
         // Check if we have more users to load
         guard currentLoadIndex < allUserIds.count else { return }
         
@@ -194,7 +207,7 @@ struct UserListView: View {
             displayedUserIds.append(nextUserId)
         }
         
-        // Add a small delay before potentially loading the next user
-        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms delay
+        // Add a small delay for smooth visual feedback
+        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms delay
     }
 }
