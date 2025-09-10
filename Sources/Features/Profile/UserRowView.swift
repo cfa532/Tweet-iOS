@@ -11,12 +11,17 @@ struct UserRowView: View {
     let userId: String
     let onFollowToggle: ((User) async -> Void)?
     let onTap: ((User) -> Void)?
+    let onLoadFailed: ((String) -> Void)?
     @State private var user: User?
     @State private var isFollowing: Bool = false
     @State private var showFullProfile: Bool = false
     @State private var isLoading: Bool = true
+    @State private var loadFailed: Bool = false
     @State private var loadingTask: Task<Void, Never>?
     @EnvironmentObject private var hproseInstance: HproseInstance
+    
+    // Sequential loading control
+    @State private var shouldStartLoading: Bool = false
     
     private func formatRegistrationDate(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -26,7 +31,10 @@ struct UserRowView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            if isLoading {
+            if loadFailed {
+                // Don't display anything when load fails
+                EmptyView()
+            } else if isLoading {
                 HStack {
                     ProgressView()
                         .scaleEffect(0.8)
@@ -115,18 +123,6 @@ struct UserRowView: View {
                 .onTapGesture {
                     onTap?(user)
                 }
-            } else {
-                // Error state or user not found
-                HStack {
-                    Image(systemName: "person.crop.circle.badge.exclamationmark")
-                        .foregroundColor(.secondary)
-                    Text(NSLocalizedString("User not found", comment: "User not found message"))
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
             }
             
             Divider()
@@ -150,21 +146,36 @@ struct UserRowView: View {
             do {
                 print("DEBUG: [UserRowView] Loading user with ID: \(userId)")
                 if let fetchedUser = try await hproseInstance.fetchUser(userId) {
-                    print("DEBUG: [UserRowView] Successfully fetched user: \(fetchedUser.mid)")
-                    await MainActor.run {
-                        // Check if task was cancelled before updating UI
-                        guard !Task.isCancelled else { return }
-                        self.user = fetchedUser
-                        self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
-                        self.isLoading = false
+                    // Validate user has required fields
+                    if fetchedUser.mid.isEmpty || (fetchedUser.username?.isEmpty ?? true) {
+                        print("DEBUG: [UserRowView] Invalid user data for ID: \(userId) - missing mid or username")
+                        await MainActor.run {
+                            // Check if task was cancelled before updating UI
+                            guard !Task.isCancelled else { return }
+                            self.loadFailed = true
+                            self.isLoading = false
+                            // Notify parent that this user failed to load
+                            self.onLoadFailed?(userId)
+                        }
+                    } else {
+                        print("DEBUG: [UserRowView] Successfully fetched user: \(fetchedUser.mid)")
+                        await MainActor.run {
+                            // Check if task was cancelled before updating UI
+                            guard !Task.isCancelled else { return }
+                            self.user = fetchedUser
+                            self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
+                            self.isLoading = false
+                        }
                     }
                 } else {
                     print("DEBUG: [UserRowView] No user found for ID: \(userId)")
                     await MainActor.run {
                         // Check if task was cancelled before updating UI
                         guard !Task.isCancelled else { return }
-                        self.user = nil
+                        self.loadFailed = true
                         self.isLoading = false
+                        // Notify parent that this user failed to load
+                        self.onLoadFailed?(userId)
                     }
                 }
             } catch is CancellationError {
@@ -174,8 +185,10 @@ struct UserRowView: View {
                 await MainActor.run {
                     // Check if task was cancelled before updating UI
                     guard !Task.isCancelled else { return }
-                    self.user = nil
+                    self.loadFailed = true
                     self.isLoading = false
+                    // Notify parent that this user failed to load
+                    self.onLoadFailed?(userId)
                 }
             }
         }

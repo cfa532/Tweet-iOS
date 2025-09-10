@@ -14,10 +14,12 @@ struct UserListView: View {
     @State private var isLoadingMore: Bool = false
     @State private var hasMoreUsers: Bool = true
     @State private var currentPage: Int = 0
-    private let pageSize: Int = 10
+    private let pageSize: Int = 4
     @State private var errorMessage: String? = nil
     @State private var refreshTask: Task<Void, Never>?
     @State private var loadMoreTask: Task<Void, Never>?
+    @State private var sequentialLoadingTask: Task<Void, Never>?
+    @State private var currentLoadIndex: Int = 0 // Track which user we're currently trying to load
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var navigationPath: NavigationPath
@@ -49,6 +51,16 @@ struct UserListView: View {
                             onFollowToggle: onFollowToggle,
                             onTap: { selectedUser in
                                 navigationPath.append(selectedUser)
+                            },
+                            onLoadFailed: { failedUserId in
+                                // Remove failed user from both lists
+                                displayedUserIds.removeAll { $0 == failedUserId }
+                                allUserIds.removeAll { $0 == failedUserId }
+                                
+                                // Try to load the next user
+                                Task {
+                                    await loadNextUser()
+                                }
                             }
                         )
                         .id(userId)
@@ -90,6 +102,7 @@ struct UserListView: View {
             // Cancel any ongoing tasks when view disappears
             refreshTask?.cancel()
             loadMoreTask?.cancel()
+            sequentialLoadingTask?.cancel()
         }
     }
     
@@ -113,12 +126,15 @@ struct UserListView: View {
                     // Check if task was cancelled before updating UI
                     guard !Task.isCancelled else { return }
                     allUserIds = uniqueUserIds
-                    // Load initial page
-                    let initialUserIds = Array(uniqueUserIds.prefix(pageSize))
-                    displayedUserIds = initialUserIds
-                    hasMoreUsers = uniqueUserIds.count > pageSize
+                    // Start with empty displayed list for sequential loading
+                    displayedUserIds = []
+                    currentLoadIndex = 0
+                    hasMoreUsers = uniqueUserIds.count > 0
                     isLoading = false
                 }
+                
+                // Start loading users one by one
+                await loadNextUser()
             } catch is CancellationError {
                 print("DEBUG: [UserListView] Refresh cancelled")
             } catch {
@@ -169,12 +185,14 @@ struct UserListView: View {
                 return
             }
             
+            // Load next batch sequentially
+            await loadUsersSequentially(nextBatchIds)
+            
             await MainActor.run {
                 // Check if task was cancelled before updating UI
                 guard !Task.isCancelled else { return }
-                displayedUserIds.append(contentsOf: nextBatchIds)
                 // If we loaded fewer users than requested, or none, stop loading more
-                if nextBatchIds.isEmpty || endIndex >= allUserIds.count {
+                if endIndex >= allUserIds.count {
                     hasMoreUsers = false
                 } else {
                     hasMoreUsers = true
@@ -182,5 +200,46 @@ struct UserListView: View {
                 isLoadingMore = false
             }
         }
+    }
+    
+    // MARK: - Sequential Loading
+    private func loadUsersSequentially(_ userIds: [String]) async {
+        // Cancel any existing sequential loading task
+        sequentialLoadingTask?.cancel()
+        
+        // Create a new sequential loading task
+        sequentialLoadingTask = Task {
+            for (index, userId) in userIds.enumerated() {
+                // Check if task was cancelled
+                guard !Task.isCancelled else { return }
+                
+                // Add user to displayed list
+                await MainActor.run {
+                    displayedUserIds.append(userId)
+                }
+                
+                // Add delay between users (except for the last one)
+                if index < userIds.count - 1 {
+                    try? await Task.sleep(nanoseconds: 200_000_000) // 200ms delay
+                }
+            }
+        }
+    }
+    
+    // MARK: - Single User Loading
+    private func loadNextUser() async {
+        // Check if we have more users to load
+        guard currentLoadIndex < allUserIds.count else { return }
+        
+        let nextUserId = allUserIds[currentLoadIndex]
+        currentLoadIndex += 1
+        
+        // Add user to displayed list
+        await MainActor.run {
+            displayedUserIds.append(nextUserId)
+        }
+        
+        // Add a small delay before potentially loading the next user
+        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms delay
     }
 }
