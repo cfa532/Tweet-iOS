@@ -60,6 +60,7 @@ struct Avatar: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: size, height: size)
+                    .colorMultiply(Color.gray.opacity(0.3))
                     .clipShape(Circle())
             }
         }
