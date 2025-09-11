@@ -214,7 +214,9 @@ final class HproseInstance: ObservableObject {
             
             // Create alphaId user with proper baseUrl
             let alphaUser = User.getInstance(mid: AppConfig.alphaId)
-            alphaUser.baseUrl = HproseInstance.baseUrl
+            await MainActor.run {
+                alphaUser.baseUrl = HproseInstance.baseUrl
+            }
             
             // Fetch user data from server
             try await updateUserFromServer(alphaUser)
@@ -745,7 +747,7 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    func logout() {
+    func logout() async {
         preferenceHelper?.setUserId(nil as String?)
         
         // Clear all caches
@@ -758,9 +760,11 @@ final class HproseInstance: ObservableObject {
         
         // Reset appUser to guest user
         let guestUser = User.getInstance(mid: Constants.GUEST_ID)
-        guestUser.baseUrl = appUser.baseUrl
-        guestUser.followingList = Gadget.getAlphaIds()
-        self.appUser = guestUser
+        await MainActor.run {
+            guestUser.baseUrl = appUser.baseUrl
+            guestUser.followingList = Gadget.getAlphaIds()
+            self.appUser = guestUser
+        }
         
         // Fetch alphaId user for guest and notify FollowingsTweetView
         Task {
@@ -1771,41 +1775,17 @@ final class HproseInstance: ObservableObject {
         ) async throws -> (MimeiFileType?, String?) {
             print("Uploading original video to backend for conversion, data size: \(data.count) bytes")
             
-            // Get the user's cloudDrivePort with fallback to default
-            let cloudDrivePort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-            
-            // Ensure writableUrl is available
-            var writableUrl = appUser.writableUrl
-            if writableUrl == nil {
-                writableUrl = try await appUser.resolveWritableUrl()
-            }
-            
+            // Always resolve writableUrl to ensure we have the correct IP address
+            let writableUrl = try await appUser.resolveWritableUrl()
             guard let writableUrl = writableUrl else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
-            // Construct convert-video endpoint URL
-            let scheme = writableUrl.scheme ?? "http"
-            let host: String
-            
-            if let urlHost = writableUrl.host {
-                host = urlHost
-            } else {
-                // Fallback: extract host from absoluteString
-                let urlString = writableUrl.absoluteString
-                if let schemeRange = urlString.range(of: "://") {
-                    let afterScheme = String(urlString[schemeRange.upperBound...])
-                    if let colonRange = afterScheme.firstIndex(of: ":") {
-                        host = String(afterScheme[..<colonRange])
-                    } else {
-                        host = afterScheme
-                    }
-                } else {
-                    host = writableUrl.absoluteString
-                }
-            }
-            
-            let convertVideoURL = "\(scheme)://\(host):\(cloudDrivePort)/convert-video"
+            // For HLS video uploads, use the cloud drive port instead of writableUrl port
+            let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
+            let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
+            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            let convertVideoURL = cloudBaseURL.appendingPathComponent("convert-video").absoluteString
             print("DEBUG: Constructed convert-video URL: \(convertVideoURL)")
             guard let url = URL(string: convertVideoURL) else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid convert-video URL"])
@@ -1931,14 +1911,10 @@ final class HproseInstance: ObservableObject {
         ) async throws -> MimeiFileType {
             print("Uploading regular file: type=\(mediaType.rawValue), size=\(data.count) bytes")
             
-            // Get upload client
-            var uploadClient = appUser.uploadClient
-            if uploadClient == nil {
-                _ = try await appUser.resolveWritableUrl()
-                uploadClient = appUser.uploadClient
-                if uploadClient == nil {
-                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload client not available"])
-                }
+            // Always resolve writableUrl to ensure we have the correct IP address
+            _ = try await appUser.resolveWritableUrl()
+            guard let uploadClient = appUser.uploadClient else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload client not available"])
             }
             
             // Create temporary file
@@ -1967,7 +1943,7 @@ final class HproseInstance: ObservableObject {
                 
                 let nsData = chunkData as NSData
                 let response = try await uploadChunk(
-                    uploadClient: uploadClient!,
+                    uploadClient: uploadClient,
                     request: request,
                     data: nsData,
                     chunkNumber: chunkCount
@@ -1988,7 +1964,7 @@ final class HproseInstance: ObservableObject {
                 request["referenceid"] = referenceId
             }
             
-            let finalResponse = uploadClient!.invoke("runMApp", withArgs: ["upload_ipfs", request])
+            let finalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
             
             guard let cid = finalResponse as? String else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get CID from final upload response"])
@@ -2176,7 +2152,11 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid base URL for status polling"])
             }
             
-            let statusURL = baseURL.appendingPathComponent("convert-video/status/\(jobId)")
+            // For HLS video status polling, use the cloud drive port
+            let host = baseURL.host ?? HproseInstance.baseUrl.host ?? "localhost"
+            let cloudPort = HproseInstance.shared.appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
+            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            let statusURL = cloudBaseURL.appendingPathComponent("convert-video/status/\(jobId)")
             print("DEBUG: Polling status at: \(statusURL)")
             
             let config = URLSessionConfiguration.default
@@ -2442,10 +2422,56 @@ final class HproseInstance: ObservableObject {
                 return try await block()
             } catch {
                 retryCount += 1
-                try await initAppEntry()
+                if retryCount < 2 {
+                    // Refresh appUser from server instead of full app reinitialization
+                    try await refreshAppUserFromServer()
+                }
             }
         }
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Network error: All retries failed."])
+    }
+    
+    /// Refresh appUser from server without full app reinitialization
+    private func refreshAppUserFromServer() async throws {
+        print("DEBUG: [HproseInstance] Refreshing appUser from server...")
+        
+        guard !appUser.isGuest else {
+            print("DEBUG: [HproseInstance] Skipping refresh for guest user")
+            return
+        }
+        
+        do {
+            // Get provider IP for the current user
+            guard let providerIp = try await getProviderIP(appUser.mid) else {
+                print("DEBUG: [HproseInstance] No provider IP found for user: \(appUser.mid)")
+                return
+            }
+            
+            print("DEBUG: [HproseInstance] Refreshing user from provider IP: \(providerIp)")
+            
+            // Fetch updated user data from server
+            if let refreshedUser = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)") {
+                // Update base URL if needed
+                if HproseInstance.baseUrl.absoluteString != "http://\(providerIp)" {
+                    HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
+                    client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
+                }
+                
+                // Update appUser with refreshed data
+                await MainActor.run {
+                    refreshedUser.baseUrl = HproseInstance.baseUrl
+                    self.appUser = refreshedUser
+                    self._domainToShare = HproseInstance.baseUrl.absoluteString
+                }
+                
+                print("DEBUG: [HproseInstance] Successfully refreshed appUser from server")
+            } else {
+                print("DEBUG: [HproseInstance] Failed to refresh user from server")
+            }
+        } catch {
+            print("DEBUG: [HproseInstance] Error refreshing appUser: \(error)")
+            // Don't throw here - let the retry continue with existing appUser
+        }
     }
     
     // MARK: - Background Upload
@@ -2590,7 +2616,7 @@ final class HproseInstance: ObservableObject {
             // Update tweet with uploaded attachments
             tweet.attachments = uploadedAttachments
             
-            // Upload the tweet
+            // Upload the tweet - this will handle retries internally via withRetry
             if let uploadedTweet = try await self.uploadTweet(tweet) {
                 // Success - remove pending upload and notify
                 await removePendingUpload()
@@ -2610,7 +2636,8 @@ final class HproseInstance: ObservableObject {
         } catch {
             print("Error uploading tweet: \(error)")
             
-            // No retry - just notify failure but keep pending upload for manual retry
+            // Show toast error only after all retries have failed
+            // The withRetry mechanism in uploadTweet() handles the retries internally
             await MainActor.run {
                 NotificationCenter.default.post(
                     name: .backgroundUploadFailed,
@@ -2895,8 +2922,14 @@ final class HproseInstance: ObservableObject {
     private func resumeVideoJobPolling(pendingUpload: PendingTweetUpload, jobId: String) async {
         print("DEBUG: Resuming video job polling for job ID: \(jobId)")
         
-        // Get base URL for polling
-        let baseURL = appUser.writableUrl?.deletingLastPathComponent()
+        // Get base URL for polling - ensure writableUrl is resolved
+        _ = try? await appUser.resolveWritableUrl()
+        let originalBaseURL = appUser.writableUrl?.deletingLastPathComponent()
+        
+        // For HLS video polling, use the cloud drive port
+        let host = originalBaseURL?.host ?? HproseInstance.baseUrl.host ?? "localhost"
+        let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
+        let baseURL = URL(string: "http://\(host):\(cloudPort)")
         
         // Find the video item to get its data
         guard let videoItem = pendingUpload.itemData.first(where: { 
@@ -2980,8 +3013,14 @@ final class HproseInstance: ObservableObject {
                 if let videoJobId = pendingUpload.videoJobId {
                     print("DEBUG: Found video job ID: \(videoJobId), checking status...")
                     
-                    // Get base URL for status checking
-                    let baseURL = appUser.writableUrl?.deletingLastPathComponent()
+                    // Get base URL for status checking - ensure writableUrl is resolved
+                    _ = try? await appUser.resolveWritableUrl()
+                    let originalBaseURL = appUser.writableUrl?.deletingLastPathComponent()
+                    
+                    // For HLS video status checking, use the cloud drive port
+                    let host = originalBaseURL?.host ?? HproseInstance.baseUrl.host ?? "localhost"
+                    let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
+                    let baseURL = URL(string: "http://\(host):\(cloudPort)")
                     
                     if let status = await checkVideoJobStatus(jobId: videoJobId, baseURL: baseURL) {
                         switch status.status {

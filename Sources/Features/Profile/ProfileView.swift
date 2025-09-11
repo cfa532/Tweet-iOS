@@ -699,9 +699,9 @@ struct ProfileView: View {
     
     // MARK: - Logout Handling
     private func handleLogout() async {
+        // Use the same logout logic as Settings
+        await hproseInstance.logout()
         await MainActor.run {
-            // Use the same logout logic as Settings
-            hproseInstance.logout()
             NotificationCenter.default.post(name: .userDidLogout, object: nil)
             
             // Show success message
@@ -720,24 +720,27 @@ struct ProfileView: View {
             // Call the backend to delete the account
             let result = try await hproseInstance.deleteAccount()
             
-            await MainActor.run {
-                if let success = result["success"] as? Bool, success {
+            if let success = result["success"] as? Bool, success {
+                // Clear all cached data
+                TweetCacheManager.shared.clearAllCache()
+                ImageCacheManager.shared.clearAllCache()
+                
+                // Use the same logout logic as Settings to reset the app state
+                await hproseInstance.logout()
+                
+                await MainActor.run {
                     // Show success message first
                     showToastMessage(NSLocalizedString("Account deleted successfully", comment: "Account deletion success message"), type: .success)
                     
-                    // Clear all cached data
-                    TweetCacheManager.shared.clearAllCache()
-                    ImageCacheManager.shared.clearAllCache()
-                    
-                    // Use the same logout logic as Settings to reset the app state
-                    hproseInstance.logout()
                     NotificationCenter.default.post(name: .userDidLogout, object: nil)
                     
                     // Call the onLogout callback if provided
                     if let onLogout = onLogout {
                         onLogout()
                     }
-                } else {
+                }
+            } else {
+                await MainActor.run {
                     // Handle failure case
                     let errorMessage = result["message"] as? String ?? "Unknown error occurred"
                     showToastMessage(String(format: NSLocalizedString("Failed to delete account: %@", comment: "Delete account error message"), errorMessage), type: .error)
