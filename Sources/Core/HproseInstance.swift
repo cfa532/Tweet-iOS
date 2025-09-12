@@ -3430,7 +3430,7 @@ final class HproseInstance: ObservableObject {
             "aid": appId,
             "ver": "last",
             "nodeid": nodeId,
-            "v4only": "false"
+            "v4only": v4Only
         ]
         if let response = client.invoke("runMApp", withArgs: ["get_node_ip", params]) {
             return response as? String
