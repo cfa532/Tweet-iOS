@@ -75,6 +75,7 @@ struct SimpleVideoPlayer: View {
     private var instanceId: String { mid }
     @State private var isLongPressing = false
     @State private var nativeControlsTimer: Timer?
+    @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -180,6 +181,9 @@ struct SimpleVideoPlayer: View {
             if mode == .mediaBrowser {
                 UIApplication.shared.isIdleTimerDisabled = false
             }
+            
+            // Remove observers to prevent memory leaks
+            removePlayerObservers()
             
             // Cache the current video state before pausing
             if let player = player {
@@ -577,6 +581,9 @@ struct SimpleVideoPlayer: View {
     private func setupPlayerObservers(_ player: AVPlayer) {
         guard let playerItem = player.currentItem else { return }
         
+        // Store reference for cleanup
+        self.playerItem = playerItem
+        
         // Video finished observer
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -599,10 +606,22 @@ struct SimpleVideoPlayer: View {
         // Player status monitoring is handled through notification observers and periodic checks
     }
     
+    private func removePlayerObservers() {
+        // Remove observers to prevent memory leaks
+        if let playerItem = playerItem {
+            NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: playerItem)
+            NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: playerItem)
+        }
+        playerItem = nil
+    }
+    
     private func handleLoadFailure() {
         loadFailed = true
         isLoading = false
         print("DEBUG: [VIDEO ERROR] Load failed for \(mid), retry count: \(retryCount)")
+        
+        // Remove observers to prevent memory leaks
+        removePlayerObservers()
         
         // Clear the current player since it's in an invalid state
         player = nil
