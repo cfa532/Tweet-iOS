@@ -160,22 +160,18 @@ struct TweetListView<RowView: View>: View {
 
     // MARK: - Methods
     func performInitialLoad() async {
-        print("[TweetListView] Starting initial load for user: \(hproseInstance.appUser.mid)")
         isLoading = true
         initialLoadComplete = false
         currentPage = 0
         let page: UInt = 0
 
         do {
-            print("[TweetListView] Loading page \(page) for user: \(hproseInstance.appUser.mid)")
-            
             // Step 1: Load from cache first for instant UX (always try cache)
             let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
             let validCachedTweets = tweetsFromCache.compactMap { $0 }
             
             await MainActor.run {
                 tweets.mergeTweets(validCachedTweets)
-                print("[TweetListView] Loaded \(validCachedTweets.count) tweets from cache")
                 
                 // Update VideoLoadingManager with new tweet list
                 let tweetIds = tweets.map { $0.mid }
@@ -196,28 +192,24 @@ struct TweetListView<RowView: View>: View {
             
             // Trigger preloading after initial load completes
             if hasMoreTweets {
-                print("[TweetListView] Initial load complete, triggering preloading of next two pages")
                 await MainActor.run {
                     loadNextTwoPages(startingFrom: 1)
                 }
             }
             
         } catch {
-            print("[TweetListView] Error during initial load for user \(hproseInstance.appUser.mid): \(error)")
+            print("[TweetListView] Error during initial load: \(error)")
             errorMessage = error.localizedDescription
             await MainActor.run {
                 isLoading = false
                 initialLoadComplete = true
             }
         }
-        
-        print("[TweetListView] Initial load complete - total tweets: \(tweets.count), hasMoreTweets: \(hasMoreTweets) for user: \(hproseInstance.appUser.mid)")
     }
 
     func refreshTweets() async {
         guard !isLoading else { return }
         
-        print("[TweetListView] Starting refresh for user: \(hproseInstance.appUser.mid)")
         isLoading = true
         initialLoadComplete = false
         currentPage = 0
@@ -229,24 +221,28 @@ struct TweetListView<RowView: View>: View {
             let hasValidTweet = !validTweets.isEmpty
             
             await MainActor.run {
-                // Always use server data if we have valid tweets
+                // Update tweets with server data while preserving cached tweets for failed IDs
                 if hasValidTweet {
-                    tweets = validTweets
+                    // Use mergeTweets to preserve cached tweets that weren't in server response
+                    tweets.mergeTweets(validTweets)
                     currentPage = 0
                     hasMoreTweets = freshTweets.count >= pageSize
-                    print("[TweetListView] Refreshed with \(tweets.count) fresh tweets from server for user: \(hproseInstance.appUser.mid)")
                     
                     // Update VideoLoadingManager with new tweet list
                     let tweetIds = tweets.map { $0.mid }
                     videoLoadingManager.updateTweetList(tweetIds)
                 } else {
-                    // Only clear if server returned no valid tweets
-                    tweets = []
-                    hasMoreTweets = false
-                    print("[TweetListView] Server returned no valid tweets, cleared list for user: \(hproseInstance.appUser.mid)")
-                    
-                    // Update VideoLoadingManager with empty tweet list
-                    videoLoadingManager.updateTweetList([])
+                    // Only clear if server returned no valid tweets AND we have no cached tweets
+                    if tweets.isEmpty {
+                        tweets = []
+                        hasMoreTweets = false
+                        
+                        // Update VideoLoadingManager with empty tweet list
+                        videoLoadingManager.updateTweetList([])
+                    } else {
+                        // Keep cached tweets if server returned no valid tweets
+                        hasMoreTweets = false
+                    }
                 }
                 
                 isLoading = false
@@ -254,21 +250,17 @@ struct TweetListView<RowView: View>: View {
             }
             
         } catch {
-            print("[TweetListView] Refresh failed for user \(hproseInstance.appUser.mid): \(error)")
+            print("[TweetListView] Refresh failed: \(error)")
             await MainActor.run {
                 isLoading = false
                 initialLoadComplete = true
                 // Keep existing tweets on refresh failure
             }
         }
-        
-        print("[TweetListView] Refresh complete - total tweets: \(tweets.count), hasMoreTweets: \(hasMoreTweets) for user: \(hproseInstance.appUser.mid)")
     }
 
     func loadMoreTweets(page: UInt? = nil) {
-        print("[TweetListView] loadMoreTweets called for user: \(hproseInstance.appUser.mid) - hasMoreTweets: \(hasMoreTweets), isLoadingMore: \(isLoadingMore), initialLoadComplete: \(initialLoadComplete), currentPage: \(currentPage)")
         guard hasMoreTweets, !isLoadingMore, initialLoadComplete else { 
-            print("[TweetListView] loadMoreTweets guard failed for user: \(hproseInstance.appUser.mid) - hasMoreTweets: \(hasMoreTweets), isLoadingMore: \(isLoadingMore), initialLoadComplete: \(initialLoadComplete)")
             return 
         }
         
@@ -280,15 +272,12 @@ struct TweetListView<RowView: View>: View {
     
     // MARK: - Batch Loading for Prefetching
     private func loadNextTwoPages(startingFrom startPage: UInt) {
-        print("[TweetListView] Starting batch load of next two pages from page \(startPage) for user: \(hproseInstance.appUser.mid)")
-        
         // Load first page immediately
         loadSinglePage(page: startPage) { success in
             if success && self.hasMoreTweets {
                 // Load second page after 3 seconds
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                     if self.hasMoreTweets && !self.isLoadingMore {
-                        print("[TweetListView] Loading second prefetch page \(startPage + 1) for user: \(self.hproseInstance.appUser.mid)")
                         self.loadSinglePage(page: startPage + 1) { _ in
                             // Second page load complete
                         }
@@ -305,12 +294,9 @@ struct TweetListView<RowView: View>: View {
             isLoadingMore = true
             
             do {
-                print("[TweetListView] Starting to load page \(page) for user: \(hproseInstance.appUser.mid)")
-                
                 // Step 1: Load from cache first for instant UX
                 let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
                 await MainActor.run {
-                    print("[TweetListView] Got \(tweetsFromCache.count) tweets from cache for page \(page)")
                     tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
                     
                     // Update VideoLoadingManager with new tweet list
@@ -344,18 +330,14 @@ struct TweetListView<RowView: View>: View {
             let hasValidTweet = !validServerTweets.isEmpty
             
             await MainActor.run {
-                print("[TweetListView] Got \(tweetsFromServer.count) tweets from server, \(validServerTweets.count) valid for user: \(hproseInstance.appUser.mid)")
-                
-                // Always use server data if we have valid tweets
+                // Update tweets with server data (existing mergeTweets already preserves cached tweets for failed IDs)
                 if hasValidTweet {
                     if page == 0 {
                         // For first page, replace all tweets with server data
                         tweets = validServerTweets
-                        print("[TweetListView] Replaced tweets with server data for page 0")
                     } else {
                         // For subsequent pages, merge server data
                         tweets.mergeTweets(validServerTweets)
-                        print("[TweetListView] Merged server data for page \(page)")
                     }
                     
                     // Update VideoLoadingManager with new tweet list
@@ -363,13 +345,10 @@ struct TweetListView<RowView: View>: View {
                     videoLoadingManager.updateTweetList(tweetIds)
                     
                     currentPage = page
-                    print("[TweetListView] Updated currentPage to \(currentPage) for user: \(hproseInstance.appUser.mid)")
                 } else if tweetsFromServer.count < pageSize {
                     hasMoreTweets = false
-                    print("[TweetListView] No more tweets available for user: \(hproseInstance.appUser.mid)")
                 } else {
                     // All tweets are nil but we got a full page, continue to next page
-                    print("[TweetListView] All tweets nil for page \(page), but got full page size (\(tweetsFromServer.count)), continuing to next page")
                     currentPage = page
                     // Don't call loadMoreTweets recursively here, let the normal flow continue
                 }
@@ -377,10 +356,10 @@ struct TweetListView<RowView: View>: View {
             
         } catch {
             print("[TweetListView] Server load failed: \(error)")
-            print("[TweetListView] Continuing with cached data only")
             
             await MainActor.run {
                 errorMessage = "Unable to load fresh content. Showing cached data."
+                // Don't modify tweets array - keep cached data intact
             }
         }
         completion(true)

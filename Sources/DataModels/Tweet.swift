@@ -480,7 +480,6 @@ class Tweet: Identifiable, Codable, ObservableObject {
 extension Array where Element == Tweet {
     /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.
     mutating func mergeTweets(_ newTweets: [Tweet]) {
-        print("[TweetListView] Merging \(newTweets.count) tweets")
         // Create a dictionary to track unique tweets by their mid
         var uniqueTweets: [String: Tweet] = [:]
         
@@ -496,13 +495,10 @@ extension Array where Element == Tweet {
         
         // Convert back to array and sort by timestamp in descending order
         self = Array(uniqueTweets.values).sorted { $0.timestamp > $1.timestamp }
-        print("[TweetListView] After merge: \(self.count) tweets")
     }
     
     /// Merge new tweets smoothly, preserving existing positions to prevent UI jumping
     mutating func mergeTweetsSmoothly(_ newTweets: [Tweet]) {
-        print("[TweetListView] Smoothly merging \(newTweets.count) tweets")
-        
         // Create a set of existing tweet IDs for quick lookup
         let existingIds = Set(self.map { $0.mid })
         
@@ -510,7 +506,6 @@ extension Array where Element == Tweet {
         let trulyNewTweets = newTweets.filter { !existingIds.contains($0.mid) }
         
         if trulyNewTweets.isEmpty {
-            print("[TweetListView] No new tweets to merge")
             return
         }
         
@@ -530,7 +525,6 @@ extension Array where Element == Tweet {
             self.sort { $0.timestamp > $1.timestamp }
         }
         
-        print("[TweetListView] After smooth merge: \(self.count) tweets (added \(trulyNewTweets.count) new)")
     }
 }
 
