@@ -139,6 +139,9 @@ final class HproseInstance: ObservableObject {
     // MARK: - Initialization
     private init() {}
     
+    // Flag to track if app is still initializing to prevent error dialogs during startup
+    private var isAppInitializing = true
+    
     // MARK: - Public Methods
     func initialize() async throws {
         print("DEBUG: [HproseInstance] Starting initialization")
@@ -160,10 +163,14 @@ final class HproseInstance: ObservableObject {
         // Step 5: Clean up expired tweets
         TweetCacheManager.shared.deleteExpiredTweets()
         
-        // Step 6: Schedule background tasks
+        // Step 6: Clean up any problematic pending uploads that might cause startup issues
+        await cleanupProblematicPendingUploads()
+        
+        // Step 7: Schedule background tasks
         scheduleBackgroundTasks()
         
         print("DEBUG: [HproseInstance] Initialization completed")
+        isAppInitializing = false
     }
     
     /// Initialize app user with default values
@@ -200,7 +207,7 @@ final class HproseInstance: ObservableObject {
             // Check for domain updates
             await self.checkAndUpdateDomain()
             
-            // Recover any pending uploads
+            // Recover any pending uploads (function handles errors internally)
             await self.recoverPendingUploads()
         }
     }
@@ -2754,14 +2761,18 @@ final class HproseInstance: ObservableObject {
         } catch {
             print("Error uploading tweet: \(error)")
             
-            // Show toast error only after all retries have failed
+            // Show toast error only after all retries have failed and app is initialized
             // The withRetry mechanism in uploadTweet() handles the retries internally
             await MainActor.run {
-                NotificationCenter.default.post(
-                    name: .backgroundUploadFailed,
-                    object: nil,
-                    userInfo: ["error": error]
-                )
+                if !self.isAppInitializing {
+                    NotificationCenter.default.post(
+                        name: .backgroundUploadFailed,
+                        object: nil,
+                        userInfo: ["error": error]
+                    )
+                } else {
+                    print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
+                }
             }
         }
     }
@@ -3015,13 +3026,17 @@ final class HproseInstance: ObservableObject {
             } catch {
                 print("Error uploading tweet: \(error)")
                 
-                // Notify failure but keep pending upload for manual retry
+                // Notify failure but keep pending upload for manual retry (only if app is initialized)
                 await MainActor.run {
-                    NotificationCenter.default.post(
-                        name: .backgroundUploadFailed,
-                        object: nil,
-                        userInfo: ["error": error]
-                    )
+                    if !self.isAppInitializing {
+                        NotificationCenter.default.post(
+                            name: .backgroundUploadFailed,
+                            object: nil,
+                            userInfo: ["error": error]
+                        )
+                    } else {
+                        print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
+                    }
                 }
             }
         } else {
@@ -3111,7 +3126,9 @@ final class HproseInstance: ObservableObject {
     }
     
     // MARK: - Recovery Methods
-    func recoverPendingUploads() async {
+    
+    /// Clean up any problematic pending uploads that might cause startup issues
+    private func cleanupProblematicPendingUploads() async {
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
         
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
@@ -3122,9 +3139,39 @@ final class HproseInstance: ObservableObject {
             let data = try Data(contentsOf: fileURL)
             let pendingUpload = try JSONDecoder().decode(PendingTweetUpload.self, from: data)
             
+            // Check if the pending upload is too old (older than 7 days) or has too many retries
+            let maxAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days
+            let isTooOld = Date().timeIntervalSince(pendingUpload.timestamp) > maxAge
+            let hasTooManyRetries = pendingUpload.retryCount > 5
+            
+            if isTooOld || hasTooManyRetries {
+                print("DEBUG: Cleaning up problematic pending upload (age: \(Date().timeIntervalSince(pendingUpload.timestamp))s, retries: \(pendingUpload.retryCount))")
+                try FileManager.default.removeItem(at: fileURL)
+                print("DEBUG: Removed problematic pending upload file")
+            }
+        } catch {
+            print("DEBUG: Failed to check/cleanup pending upload during initialization: \(error)")
+            // If we can't even read the file, remove it to prevent future issues
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+    
+    func recoverPendingUploads() async {
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
+        
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("DEBUG: No pending upload file found")
+            return
+        }
+        
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let pendingUpload = try JSONDecoder().decode(PendingTweetUpload.self, from: data)
+            
             // Check if the pending upload is not too old (e.g., within 24 hours)
             let maxAge: TimeInterval = 24 * 60 * 60 // 24 hours
             if Date().timeIntervalSince(pendingUpload.timestamp) < maxAge {
+                print("DEBUG: Found valid pending upload from \(pendingUpload.timestamp), attempting recovery...")
                 print("Recovering pending upload from \(pendingUpload.timestamp)")
                 
                 // Check if we have video job IDs to check first
@@ -3182,9 +3229,14 @@ final class HproseInstance: ObservableObject {
                 print("Removed old pending upload from \(pendingUpload.timestamp)")
             }
         } catch {
-            print("Failed to recover pending upload: \(error)")
-            // Remove corrupted file
-            try? FileManager.default.removeItem(at: fileURL)
+            print("DEBUG: Failed to recover pending upload: \(error)")
+            // Remove corrupted file to prevent future issues
+            do {
+                try FileManager.default.removeItem(at: fileURL)
+                print("DEBUG: Removed corrupted pending upload file")
+            } catch {
+                print("DEBUG: Failed to remove corrupted pending upload file: \(error)")
+            }
         }
     }
     
@@ -3206,11 +3258,15 @@ final class HproseInstance: ObservableObject {
                     } catch {
                         print("Error uploading pair \(pairIndex + 1): \(error)")
                         await MainActor.run {
-                            NotificationCenter.default.post(
-                                name: .backgroundUploadFailed,
-                                object: nil,
-                                userInfo: ["error": error]
-                            )
+                            if !self.isAppInitializing {
+                                NotificationCenter.default.post(
+                                    name: .backgroundUploadFailed,
+                                    object: nil,
+                                    userInfo: ["error": error]
+                                )
+                            } else {
+                                print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
+                            }
                         }
                         return
                     }
@@ -3219,11 +3275,15 @@ final class HproseInstance: ObservableObject {
                 if itemData.count != uploadedAttachments.count {
                     let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
                     await MainActor.run {
-                        NotificationCenter.default.post(
-                            name: .backgroundUploadFailed,
-                            object: nil,
-                            userInfo: ["error": error]
-                        )
+                        if !self.isAppInitializing {
+                            NotificationCenter.default.post(
+                                name: .backgroundUploadFailed,
+                                object: nil,
+                                userInfo: ["error": error]
+                            )
+                        } else {
+                            print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
+                        }
                     }
                     return
                 }
@@ -3242,20 +3302,28 @@ final class HproseInstance: ObservableObject {
                 } else {
                     let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment returned nil"])
                     await MainActor.run {
+                        if !self.isAppInitializing {
+                            NotificationCenter.default.post(
+                                name: .backgroundUploadFailed,
+                                object: nil,
+                                userInfo: ["error": error]
+                            )
+                        } else {
+                            print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
+                        }
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    if !self.isAppInitializing {
                         NotificationCenter.default.post(
                             name: .backgroundUploadFailed,
                             object: nil,
                             userInfo: ["error": error]
                         )
+                    } else {
+                        print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
                     }
-                }
-            } catch {
-                await MainActor.run {
-                    NotificationCenter.default.post(
-                        name: .backgroundUploadFailed,
-                        object: nil,
-                        userInfo: ["error": error]
-                    )
                 }
             }
         }
