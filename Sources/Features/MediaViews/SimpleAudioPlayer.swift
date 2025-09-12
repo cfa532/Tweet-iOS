@@ -5,12 +5,13 @@ struct SimpleAudioPlayer: View {
     let url: URL
     var autoPlay: Bool = true
     
-    @State private var player: AVPlayer?
+    @State private var player: AVAudioPlayer?
     @State private var isPlaying: Bool = false
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
     @StateObject private var muteState = MuteState.shared
     private let preferenceHelper = PreferenceHelper()
+    @State private var timer: Timer?
     
     var body: some View {
         VStack(spacing: 12) {
@@ -84,56 +85,58 @@ struct SimpleAudioPlayer: View {
             setupPlayer()
         }
         .onDisappear {
-            player?.pause()
+            cleanup()
         }
         .onChange(of: muteState.isMuted) { _, newMuteState in
             // Update player mute state when global mute state changes
-            player?.isMuted = newMuteState
+            player?.volume = newMuteState ? 0.0 : 1.0
             print("DEBUG: [AUDIO PLAYER] Global mute state changed to: \(newMuteState)")
+        }
+        .onReceive(MuteState.shared.$isMuted) { globalMuteState in
+            // Always sync with global mute state changes
+            player?.volume = globalMuteState ? 0.0 : 1.0
+            print("DEBUG: [AUDIO PLAYER] Synced with global mute state: \(globalMuteState)")
         }
     }
     
     private func setupPlayer() {
-        let playerItem = AVPlayerItem(url: url)
-        player = AVPlayer(playerItem: playerItem)
-        player?.isMuted = muteState.isMuted
-        print("DEBUG: [AUDIO PLAYER] Setting initial mute state: \(muteState.isMuted)")
-        
-        // Get duration using the new load(.duration) method
-        Task {
-            do {
-                let durationTime = try await playerItem.asset.load(.duration)
-                await MainActor.run {
-                    self.duration = durationTime.seconds
-                }
-            } catch {
-                print("Error loading duration: \(error)")
-                await MainActor.run {
-                    self.duration = 0
-                }
+        do {
+            // Ensure mute state is refreshed from preferences before setting up player
+            muteState.refreshFromPreferences()
+            
+            // Configure audio session for playback
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
+            
+            // Initialize AVAudioPlayer
+            player = try AVAudioPlayer(contentsOf: url)
+            player?.prepareToPlay()
+            player?.volume = muteState.isMuted ? 0.0 : 1.0
+            
+            // Get duration
+            duration = player?.duration ?? 0
+            
+            print("DEBUG: [AUDIO PLAYER] Setting initial mute state: \(muteState.isMuted)")
+            
+            // Start timer for progress updates
+            startProgressTimer()
+            
+            if autoPlay {
+                player?.play()
+                isPlaying = true
             }
-        }
-        
-        // Add time observer
-        player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { time in
-            currentTime = time.seconds
-        }
-        
-        if autoPlay {
-            // Activate audio session for audio playback
-            AudioSessionManager.shared.activateForVideoPlayback()
-            player?.play()
-            isPlaying = true
+        } catch {
+            print("Error setting up audio player: \(error)")
         }
     }
     
     private func togglePlayback() {
         if isPlaying {
             player?.pause()
+            stopProgressTimer()
         } else {
-            // Activate audio session for audio playback
-            AudioSessionManager.shared.activateForVideoPlayback()
             player?.play()
+            startProgressTimer()
         }
         isPlaying.toggle()
     }
@@ -148,5 +151,31 @@ struct SimpleAudioPlayer: View {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+    
+    private func startProgressTimer() {
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            if let player = player {
+                currentTime = player.currentTime
+                
+                // Check if playback finished
+                if !player.isPlaying && isPlaying {
+                    isPlaying = false
+                    currentTime = 0
+                    stopProgressTimer()
+                }
+            }
+        }
+    }
+    
+    private func stopProgressTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+    
+    private func cleanup() {
+        stopProgressTimer()
+        player?.stop()
+        player = nil
     }
 } 

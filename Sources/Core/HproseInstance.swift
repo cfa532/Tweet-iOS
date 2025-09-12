@@ -648,56 +648,55 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
         ]
         
-        try await retryOperation(maxRetries: 3) {
-            // Call runMApp following the sample code pattern
-            guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No hprose client available for user: \(user.mid)"])
+        // Call runMApp following the sample code pattern
+        guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No hprose client available for user: \(user.mid)"])
+        }
+        
+        // Check for IP address response first (user not found on this node)
+        if let ipAddress = response as? String, !ipAddress.isEmpty {
+            print("DEBUG: [updateUserFromServer] User not found on current node, redirecting to IP: \(ipAddress)")
+            // the user is not found on this node, a provider IP of the user is returned.
+            // point server to this new IP.
+            await MainActor.run {
+                user.baseUrl = URL(string: "http://\(ipAddress)")!
             }
             
-            // Check for IP address response first (user not found on this node)
-            if let ipAddress = response as? String {
-                print("DEBUG: [updateUserFromServer] User not found on current node, redirecting to IP: \(ipAddress)")
-                // the user is not found on this node, a provider IP of the user is returned.
-                // point server to this new IP.
-                await MainActor.run {
-                    user.baseUrl = URL(string: "http://\(ipAddress)")!
-                }
-                
-                // Create a new client for the new IP
-                let newClient = HproseHttpClient()
-                newClient.timeout = 300
-                newClient.uri = "\(user.baseUrl?.absoluteString ?? "")/webapi/"
-                
-                // Call runMApp with the new client following the sample code pattern
-                let newResponse = newClient.invoke("runMApp", withArgs: [entry, params])
-                
-                if let newUserDict = newResponse as? [String: Any] {
-                    await MainActor.run {
-                        do {
-                            _ = try User.from(dict: newUserDict)
-                        } catch {
-                            print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
-                        }
-                    }
-                } else if let newIpAddress = newResponse as? String {
-                    print("DEBUG: [updateUserFromServer] User still not found on redirected IP: \(newIpAddress)")
-                }
-                
-                // Close the new client
-                newClient.close()
-            } else if let userDict = response as? [String: Any] {
-                // User found on current node
+            // Create a new client for the new IP
+            let newClient = HproseHttpClient()
+            newClient.timeout = 300
+            newClient.uri = "\(user.baseUrl?.absoluteString ?? "")/webapi/"
+            
+            // Call runMApp with the new client following the sample code pattern
+            let newResponse = newClient.invoke("runMApp", withArgs: [entry, params])
+            
+            if let newUserDict = newResponse as? [String: Any] {
                 await MainActor.run {
                     do {
-                        _ = try User.from(dict: userDict)
+                        _ = try User.from(dict: newUserDict)
                     } catch {
-                        print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
-                        print("DEBUG: [updateUserFromServer] Response that caused error: \(response)")
+                        print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
                     }
                 }
-            } else {
-                print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: response)), value: \(response)")
+            } else if let newIpAddress = newResponse as? String {
+                print("DEBUG: [updateUserFromServer] User still not found on redirected IP: \(newIpAddress)")
             }
+            
+            // Close the new client
+            newClient.close()
+        } else if let userDict = response as? [String: Any] {
+            // User found on current node
+            await MainActor.run {
+                do {
+                    _ = try User.from(dict: userDict)
+                } catch {
+                    print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
+                    print("DEBUG: [updateUserFromServer] Response that caused error: \(response)")
+                }
+            }
+        } else {
+            print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: response)), value: \(response)")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected response from server: \(response))"])
         }
     }
     
