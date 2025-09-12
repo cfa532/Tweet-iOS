@@ -1370,9 +1370,9 @@ final class HproseInstance: ObservableObject {
         // Force refresh upload service to ensure we have a fresh connection
         appUser.refreshUploadClient()
         
-        // Use VideoProcessor to determine media type and handle upload
-        let videoProcessor = VideoProcessor()
-        return try await videoProcessor.processAndUpload(
+        // Use MediaProcessor to determine media type and handle upload
+        let mediaProcessor = MediaProcessor()
+        return try await mediaProcessor.processAndUpload(
             data: data,
             typeIdentifier: typeIdentifier,
             fileName: fileName,
@@ -1384,9 +1384,9 @@ final class HproseInstance: ObservableObject {
         )
     }
     
-    // MARK: - Video Processing
-    /// Consolidated video processing class that handles all video-related operations
-    class VideoProcessor {
+    // MARK: - Media Processing
+    /// Consolidated media processing class that handles all media-related operations (images, videos, audio, documents)
+    class MediaProcessor {
         
         /// Robust file type detection utility using multiple methods
         private class FileTypeDetector {
@@ -1673,7 +1673,7 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        /// Process and upload video or other media files
+        /// Process and upload media files (images, videos, audio, documents)
         func processAndUpload(
             data: Data,
             typeIdentifier: String,
@@ -1689,30 +1689,149 @@ final class HproseInstance: ObservableObject {
             let mediaType = await detectMediaType(from: typeIdentifier, fileName: fileName, data: data)
             print("DEBUG: Detected media type: \(mediaType.rawValue)")
             
-            // Handle video files with backend conversion
-            if mediaType == .video {
+            // Route to appropriate media type handler
+            switch mediaType {
+            case .video:
                 print("Processing video with backend conversion")
-                return try await uploadVideoForBackendConversion(
+                return try await processVideo(
                     data: data,
+                    typeIdentifier: typeIdentifier,
                     fileName: fileName,
                     referenceId: referenceId,
                     noResample: noResample,
                     appUser: appUser,
                     progressCallback: progressCallback
                 )
-            } else {
-                print("Processing non-video file with regular upload")
-                let result = try await uploadRegularFile(
+            case .image:
+                print("Processing image file")
+                return try await processImage(
+                    data: data,
+                    typeIdentifier: typeIdentifier,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    noResample: noResample,
+                    appUser: appUser,
+                    appId: appId,
+                    progressCallback: progressCallback
+                )
+            case .audio:
+                print("Processing audio file")
+                return try await processAudio(
+                    data: data,
+                    typeIdentifier: typeIdentifier,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    appUser: appUser,
+                    appId: appId,
+                    progressCallback: progressCallback
+                )
+            default:
+                print("Processing document file: \(mediaType.rawValue)")
+                return try await processDocument(
                     data: data,
                     typeIdentifier: typeIdentifier,
                     fileName: fileName,
                     referenceId: referenceId,
                     mediaType: mediaType,
                     appUser: appUser,
-                    appId: appId
+                    appId: appId,
+                    progressCallback: progressCallback
                 )
-                return (result, nil) // No job ID for non-video files
             }
+        }
+        
+        // MARK: - Media Type Specific Methods
+        
+        /// Process and upload image files
+        func processImage(
+            data: Data,
+            typeIdentifier: String,
+            fileName: String?,
+            referenceId: String?,
+            noResample: Bool,
+            appUser: User,
+            appId: String,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async throws -> (MimeiFileType?, String?) {
+            print("Processing image file")
+            let result = try await uploadRegularFile(
+                data: data,
+                typeIdentifier: typeIdentifier,
+                fileName: fileName,
+                referenceId: referenceId,
+                mediaType: .image,
+                appUser: appUser,
+                appId: appId
+            )
+            return (result, nil)
+        }
+        
+        /// Process and upload video files
+        func processVideo(
+            data: Data,
+            typeIdentifier: String,
+            fileName: String?,
+            referenceId: String?,
+            noResample: Bool,
+            appUser: User,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async throws -> (MimeiFileType?, String?) {
+            print("Processing video file")
+            return try await uploadVideoForBackendConversion(
+                data: data,
+                fileName: fileName,
+                referenceId: referenceId,
+                noResample: noResample,
+                appUser: appUser,
+                progressCallback: progressCallback
+            )
+        }
+        
+        /// Process and upload audio files
+        func processAudio(
+            data: Data,
+            typeIdentifier: String,
+            fileName: String?,
+            referenceId: String?,
+            appUser: User,
+            appId: String,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async throws -> (MimeiFileType?, String?) {
+            print("Processing audio file")
+            let result = try await uploadRegularFile(
+                data: data,
+                typeIdentifier: typeIdentifier,
+                fileName: fileName,
+                referenceId: referenceId,
+                mediaType: .audio,
+                appUser: appUser,
+                appId: appId
+            )
+            return (result, nil)
+        }
+        
+        /// Process and upload document files (PDF, Word, Excel, etc.)
+        func processDocument(
+            data: Data,
+            typeIdentifier: String,
+            fileName: String?,
+            referenceId: String?,
+            mediaType: MediaType,
+            appUser: User,
+            appId: String,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async throws -> (MimeiFileType?, String?) {
+            print("Processing document file: \(mediaType.rawValue)")
+            let result = try await uploadRegularFile(
+                data: data,
+                typeIdentifier: typeIdentifier,
+                fileName: fileName,
+                referenceId: referenceId,
+                mediaType: mediaType,
+                appUser: appUser,
+                appId: appId
+            )
+            return (result, nil)
         }
         
         /// Detect media type from type identifier, filename, and file header
@@ -1777,7 +1896,7 @@ final class HproseInstance: ObservableObject {
             // Always resolve writableUrl to ensure we have the correct IP address
             let writableUrl = try await appUser.resolveWritableUrl()
             guard let writableUrl = writableUrl else {
-                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
             // For HLS video uploads, use the cloud drive port instead of writableUrl port
@@ -1913,7 +2032,7 @@ final class HproseInstance: ObservableObject {
             // Always resolve writableUrl to ensure we have the correct IP address
             _ = try await appUser.resolveWritableUrl()
             guard let uploadClient = appUser.uploadClient else {
-                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload client not available"])
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload client not available"])
             }
             
             // Create temporary file
@@ -2940,8 +3059,8 @@ final class HproseInstance: ObservableObject {
         
         // Resume polling with the stored job ID
         do {
-            let videoProcessor = VideoProcessor()
-            let result = try await videoProcessor.pollVideoConversionStatus(
+            let mediaProcessor = MediaProcessor()
+            let result = try await mediaProcessor.pollVideoConversionStatus(
                 jobId: jobId,
                 baseURL: baseURL,
                 data: videoItem.data,
