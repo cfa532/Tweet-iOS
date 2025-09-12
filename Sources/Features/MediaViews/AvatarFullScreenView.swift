@@ -5,6 +5,8 @@ struct AvatarFullScreenView: View {
     let user: User
     @Binding var isPresented: Bool
     @State private var imageState: AvatarImageState = .loading
+    @State private var showCopyToast = false
+    @State private var copyToastMessage = ""
     
     private let baseUrl: URL
     
@@ -37,11 +39,22 @@ struct AvatarFullScreenView: View {
                 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(user.mid)
+                        .onLongPressGesture {
+                            copyToClipboard(user.mid, label: "User ID")
+                        }
+                    
                     if let baseUrl = user.baseUrl {
                         Text(baseUrl.absoluteString)
+                            .onLongPressGesture {
+                                copyToClipboard(baseUrl.absoluteString, label: "Base URL")
+                            }
                     }
+                    
                     if let hostId = user.hostIds?.first {
                         Text(hostId)
+                            .onLongPressGesture {
+                                copyToClipboard(hostId, label: "Host ID")
+                            }
                     }
                 }
                 .foregroundColor(.white)
@@ -63,6 +76,32 @@ struct AvatarFullScreenView: View {
                 }
                 Spacer()
             }
+            
+            // Copy toast overlay
+            if showCopyToast {
+                VStack {
+                    Spacer()
+                    Text(copyToastMessage)
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Color.black.opacity(0.8))
+                        .cornerRadius(8)
+                        .padding(.bottom, 100)
+                }
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.3), value: showCopyToast)
+            }
+        }
+    }
+    
+    private func copyToClipboard(_ text: String, label: String) {
+        UIPasteboard.general.string = text
+        copyToastMessage = "\(label) copied to clipboard"
+        showCopyToast = true
+        
+        // Hide toast after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            showCopyToast = false
         }
     }
     
