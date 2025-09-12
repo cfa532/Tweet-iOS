@@ -19,6 +19,7 @@ struct UserListView: View {
     @State private var refreshTask: Task<Void, Never>?
     @State private var loadMoreTask: Task<Void, Never>?
     @State private var currentLoadIndex: Int = 0 // Track which user we're currently trying to load
+    @State private var cancellationToken: UUID = UUID() // Token to cancel all UserRowView tasks
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var navigationPath: NavigationPath
@@ -47,6 +48,7 @@ struct UserListView: View {
                     ForEach(displayedUserIds, id: \.self) { userId in
                         UserRowView(
                             userId: userId,
+                            cancellationToken: cancellationToken,
                             onFollowToggle: onFollowToggle,
                             onTap: { selectedUser in
                                 navigationPath.append(selectedUser)
@@ -101,6 +103,8 @@ struct UserListView: View {
             // Cancel any ongoing tasks when view disappears
             refreshTask?.cancel()
             loadMoreTask?.cancel()
+            // Generate new cancellation token to cancel all UserRowView tasks
+            cancellationToken = UUID()
         }
     }
     

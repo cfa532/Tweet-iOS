@@ -9,6 +9,7 @@ import SwiftUI
 @available(iOS 16.0, *)
 struct UserRowView: View {
     let userId: String
+    let cancellationToken: UUID
     let onFollowToggle: ((User) async -> Void)?
     let onTap: ((User) -> Void)?
     let onLoadFailed: ((String) -> Void)?
@@ -18,10 +19,27 @@ struct UserRowView: View {
     @State private var isLoading: Bool = true
     @State private var loadFailed: Bool = false
     @State private var loadingTask: Task<Void, Never>?
+    @State private var currentCancellationToken: UUID
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     // Sequential loading control
     @State private var shouldStartLoading: Bool = false
+    
+    // MARK: - Initialization
+    init(
+        userId: String,
+        cancellationToken: UUID,
+        onFollowToggle: ((User) async -> Void)? = nil,
+        onTap: ((User) -> Void)? = nil,
+        onLoadFailed: ((String) -> Void)? = nil
+    ) {
+        self.userId = userId
+        self.cancellationToken = cancellationToken
+        self.onFollowToggle = onFollowToggle
+        self.onTap = onTap
+        self.onLoadFailed = onLoadFailed
+        self._currentCancellationToken = State(initialValue: cancellationToken)
+    }
     
     private func formatRegistrationDate(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -135,23 +153,45 @@ struct UserRowView: View {
             // Cancel any ongoing loading task when view disappears
             loadingTask?.cancel()
         }
+        .onChange(of: cancellationToken) { newToken in
+            // Cancel loading task when cancellation token changes
+            if newToken != currentCancellationToken {
+                loadingTask?.cancel()
+                currentCancellationToken = newToken
+            }
+        }
     }
     
     private func loadUser() {
         // Cancel any existing loading task
         loadingTask?.cancel()
         
+        // Store the current cancellation token for this task
+        let taskCancellationToken = currentCancellationToken
+        
         // Create a new loading task
         loadingTask = Task {
             do {
+                // Check if this task should be cancelled before starting
+                guard taskCancellationToken == currentCancellationToken else {
+                    print("DEBUG: [UserRowView] Task cancelled before starting for user \(userId)")
+                    return
+                }
+                
                 print("DEBUG: [UserRowView] Loading user with ID: \(userId)")
                 if let fetchedUser = try await hproseInstance.fetchUser(userId) {
+                    // Check if task should be cancelled before processing
+                    guard taskCancellationToken == currentCancellationToken else {
+                        print("DEBUG: [UserRowView] Task cancelled during processing for user \(userId)")
+                        return
+                    }
+                    
                     // Validate user has required fields
                     if fetchedUser.mid.isEmpty || (fetchedUser.username?.isEmpty ?? true) {
                         print("DEBUG: [UserRowView] Invalid user data for ID: \(userId) - missing mid or username")
                         await MainActor.run {
                             // Check if task was cancelled before updating UI
-                            guard !Task.isCancelled else { return }
+                            guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
                             self.loadFailed = true
                             self.isLoading = false
                             // Notify parent that this user failed to load
@@ -161,7 +201,7 @@ struct UserRowView: View {
                         print("DEBUG: [UserRowView] Successfully fetched user: \(fetchedUser.mid)")
                         await MainActor.run {
                             // Check if task was cancelled before updating UI
-                            guard !Task.isCancelled else { return }
+                            guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
                             self.user = fetchedUser
                             self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
                             self.isLoading = false
@@ -171,7 +211,7 @@ struct UserRowView: View {
                     print("DEBUG: [UserRowView] No user found for ID: \(userId)")
                     await MainActor.run {
                         // Check if task was cancelled before updating UI
-                        guard !Task.isCancelled else { return }
+                        guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
                         self.loadFailed = true
                         self.isLoading = false
                         // Notify parent that this user failed to load
@@ -184,7 +224,7 @@ struct UserRowView: View {
                 print("DEBUG: [UserRowView] Error loading user \(userId): \(error)")
                 await MainActor.run {
                     // Check if task was cancelled before updating UI
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
                     self.loadFailed = true
                     self.isLoading = false
                     // Notify parent that this user failed to load
