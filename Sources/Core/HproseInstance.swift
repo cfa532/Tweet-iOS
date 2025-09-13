@@ -190,9 +190,6 @@ final class HproseInstance: ObservableObject {
             // Set following list
             _appUser.followingList = Gadget.getAlphaIds()
             
-            // Update domain to share
-            _domainToShare = baseUrlString
-            
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(baseUrlString)")
         }
     }
@@ -271,8 +268,6 @@ final class HproseInstance: ObservableObject {
                                 user.followingList = followings
                                 user.userBlackList = blackList
                                 self.appUser = user
-                                // Update domain to share with the new base URL
-                                self._domainToShare = HproseInstance.baseUrl.absoluteString
                                 
                                 // Print detailed app user content after successful login
                                 self.printAppUserContent("After successful login")
@@ -288,8 +283,6 @@ final class HproseInstance: ObservableObject {
                                 user.baseUrl = HproseInstance.baseUrl
                                 user.followingList = Gadget.getAlphaIds()
                                 _appUser = user
-                                // Update domain to share with the new base URL
-                                self._domainToShare = HproseInstance.baseUrl.absoluteString
                             }
                             return
                         }
@@ -299,8 +292,6 @@ final class HproseInstance: ObservableObject {
                             user.baseUrl = HproseInstance.baseUrl
                             user.followingList = Gadget.getAlphaIds()
                             _appUser = user
-                            // Update domain to share with the new base URL
-                            self._domainToShare = HproseInstance.baseUrl.absoluteString
                         }
                         
                         // For guest users, fetch the alphaId user from backend now that we have proper IP
@@ -2586,7 +2577,6 @@ final class HproseInstance: ObservableObject {
                 await MainActor.run {
                     refreshedUser.baseUrl = HproseInstance.baseUrl
                     self.appUser = refreshedUser
-                    self._domainToShare = HproseInstance.baseUrl.absoluteString
                 }
                 
                 print("DEBUG: [HproseInstance] Successfully refreshed appUser from server")
