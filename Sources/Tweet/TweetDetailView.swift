@@ -163,6 +163,10 @@ struct DetailMediaCell: View {
                                     .scaleEffect(1.5)
                             )
                     }
+                case .audio:
+                    // Show audio player with SimpleAudioPlayer
+                    SimpleAudioPlayer(url: url, autoPlay: false)
+                        .environmentObject(MuteState.shared)
                 case .image:
                     // Images still go to full-screen when tapped
                     Group {
