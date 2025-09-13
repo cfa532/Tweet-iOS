@@ -648,12 +648,8 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
         ]
         
-        // Debug logging
-        print("DEBUG: [updateUserFromServer] User: \(user.mid), baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
-        
         // Use the user's hproseClient property
         guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
-            print("DEBUG: [updateUserFromServer] hproseClient is nil for user: \(user.mid), baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No hprose client available for user: \(user.mid)"])
         }
         

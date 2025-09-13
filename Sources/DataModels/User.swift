@@ -129,10 +129,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     private var _uploadClient: HproseClient?
     public var uploadClient: HproseClient? {
         get {
-            guard let writableUrl = writableUrl else { 
-                print("DEBUG: uploadClient - writableUrl is nil")
-                return nil 
-            }
+            guard let writableUrl = writableUrl else { return nil }
 
             if let cached = _uploadClient {
                 return cached
@@ -146,7 +143,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     _uploadClient = client
                     return client
                 } else {
-                    print("DEBUG: uploadClient - creating client for different baseUrl")
                     let client = HproseHttpClient()
                     client.timeout = 180000
                     client.uri = "\(writableUrl)/webapi/"
