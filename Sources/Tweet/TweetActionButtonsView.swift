@@ -433,7 +433,7 @@ struct TweetActionButtonsView: View {
             let maxLength = 40
             let truncatedContent = content.count > maxLength ? String(content.prefix(maxLength)) + "..." : content
             shareText += truncatedContent
-        
+        }
         // Add URL
         let domainToUse = shareDomain ?? AppConfig.baseUrl
         var text = domainToUse
