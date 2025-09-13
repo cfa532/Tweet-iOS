@@ -21,13 +21,6 @@ final class HproseInstance: ObservableObject {
     static let shared = HproseInstance()
     static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
     // Removed _HproseClient as we now use client directly
-    private var _domainToShare: String = AppConfig.baseUrl
-    
-    /// The domain to use for sharing links
-    var domainToShare: String {
-        get { _domainToShare }
-        set { _domainToShare = newValue }
-    }
     
     @Published private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
     var appUser: User {
@@ -190,8 +183,7 @@ final class HproseInstance: ObservableObject {
             // Set following list
             _appUser.followingList = Gadget.getAlphaIds()
             
-            // Update domain to share
-            _domainToShare = baseUrlString
+            // Domain sharing will be handled locally in UI components
             
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(baseUrlString)")
         }
@@ -199,13 +191,10 @@ final class HproseInstance: ObservableObject {
     
     /// Schedule background tasks
     private func scheduleBackgroundTasks() {
-        // Schedule domain update and pending upload recovery
+        // Schedule pending upload recovery
         Task.detached(priority: .background) {
-            // Wait for 30 seconds to ensure app is fully initialized
+            // Wait for 15 seconds to ensure app is fully initialized
             try? await Task.sleep(nanoseconds: 15_000_000_000) // 15 seconds
-            
-            // Check for domain updates
-            await self.checkAndUpdateDomain()
             
             // Recover any pending uploads (function handles errors internally)
             await self.recoverPendingUploads()
@@ -271,8 +260,7 @@ final class HproseInstance: ObservableObject {
                                 user.followingList = followings
                                 user.userBlackList = blackList
                                 self.appUser = user
-                                // Update domain to share with the new base URL
-                                self._domainToShare = HproseInstance.baseUrl.absoluteString
+                                // Domain sharing will be handled locally in UI components
                                 
                                 // Print detailed app user content after successful login
                                 self.printAppUserContent("After successful login")
@@ -288,8 +276,7 @@ final class HproseInstance: ObservableObject {
                                 user.baseUrl = HproseInstance.baseUrl
                                 user.followingList = Gadget.getAlphaIds()
                                 _appUser = user
-                                // Update domain to share with the new base URL
-                                self._domainToShare = HproseInstance.baseUrl.absoluteString
+                                // Domain sharing will be handled locally in UI components
                             }
                             return
                         }
@@ -299,8 +286,6 @@ final class HproseInstance: ObservableObject {
                             user.baseUrl = HproseInstance.baseUrl
                             user.followingList = Gadget.getAlphaIds()
                             _appUser = user
-                            // Update domain to share with the new base URL
-                            self._domainToShare = HproseInstance.baseUrl.absoluteString
                         }
                         
                         // For guest users, fetch the alphaId user from backend now that we have proper IP
@@ -2586,7 +2571,7 @@ final class HproseInstance: ObservableObject {
                 await MainActor.run {
                     refreshedUser.baseUrl = HproseInstance.baseUrl
                     self.appUser = refreshedUser
-                    self._domainToShare = HproseInstance.baseUrl.absoluteString
+                    // Domain sharing will be handled locally in UI components
                 }
                 
                 print("DEBUG: [HproseInstance] Successfully refreshed appUser from server")
@@ -3735,39 +3720,6 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    /// Check for app upgrades and update domain in preferences
-    private func checkAndUpdateDomain() async {
-        print("[checkAndUpdateDomain] Starting background upgrade check")
-        
-        let entry = "check_upgrade"
-        let params: [String: Any] = [
-            "aid": appId,
-            "ver": "last",
-            "entry": entry
-        ]
-        
-        guard let client = appUser.hproseClient else {
-            print("[checkAndUpdateDomain] Client not initialized")
-            return
-        }
-        
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-            print("[checkAndUpdateDomain] Invalid response format")
-            return
-        }
-        
-        guard let domain = response["domain"] as? String else {
-            print("[checkAndUpdateDomain] No upgrade domain received")
-            return
-        }
-        
-        print("[checkAndUpdateDomain] Received domain: \(domain)")
-        
-        // Update domain to share and save to preferences
-        await MainActor.run {
-            _domainToShare = "http://" + domain
-        }
-    }
     /// Localizes backend error messages
     private func localizeBackendError(_ errorMessage: String) -> String {
         // Common backend error patterns that can be localized

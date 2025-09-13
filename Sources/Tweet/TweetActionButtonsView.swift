@@ -17,11 +17,56 @@ struct TweetActionButtonsView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
+    @State private var shareDomain: String? = nil
+    @State private var isFetchingShareDomain = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     private func handleGuestAction() {
         if hproseInstance.appUser.isGuest {
             showLoginSheet = true
+        }
+    }
+    
+    private func fetchSharingDomain() async {
+        await MainActor.run {
+            isFetchingShareDomain = true
+        }
+        
+        guard let client = hproseInstance.appUser.hproseClient else {
+            print("[TweetActionButtonsView] Client not initialized for sharing domain fetch")
+            await MainActor.run {
+                isFetchingShareDomain = false
+            }
+            return
+        }
+        
+        let entry = "check_upgrade"
+        let params: [String: Any] = [
+            "aid": AppConfig.appId,
+            "ver": "last",
+            "entry": entry
+        ]
+        
+        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+            print("[TweetActionButtonsView] Invalid response format for sharing domain")
+            await MainActor.run {
+                isFetchingShareDomain = false
+            }
+            return
+        }
+        
+        guard let domain = response["domain"] as? String else {
+            print("[TweetActionButtonsView] No domain received for sharing")
+            await MainActor.run {
+                isFetchingShareDomain = false
+            }
+            return
+        }
+        
+        await MainActor.run {
+            shareDomain = "http://" + domain
+            isFetchingShareDomain = false
+            print("[TweetActionButtonsView] Updated shareDomain to: \(shareDomain ?? "nil")")
         }
     }
     
@@ -279,11 +324,23 @@ struct TweetActionButtonsView: View {
                 enableAnimation: true,
                 enableVibration: false
             ) {
-                showShareSheet = true
+                if !isFetchingShareDomain {
+                    Task {
+                        await fetchSharingDomain()
+                        showShareSheet = true
+                    }
+                }
             } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .frame(width: 20)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                if isFetchingShareDomain {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                        .frame(width: 20)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                } else {
+                    Image(systemName: "square.and.arrow.up")
+                        .frame(width: 20)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
         }
         .foregroundColor(.themeSecondaryText)
@@ -376,14 +433,10 @@ struct TweetActionButtonsView: View {
             let maxLength = 40
             let truncatedContent = content.count > maxLength ? String(content.prefix(maxLength)) + "..." : content
             shareText += truncatedContent
-        } else if let attachments = tweet.attachments, !attachments.isEmpty {
-            // Create string from attachment types
-            let attachmentTypes = attachments.compactMap { $0.type.rawValue }.joined(separator: ", ")
-            shareText += attachmentTypes.isEmpty ? NSLocalizedString("[attachments]", comment: "Indicator for tweets with attachments but no text content") : attachmentTypes
-        }
         
         // Add URL
-        var text = hproseInstance.domainToShare
+        let domainToUse = shareDomain ?? AppConfig.baseUrl
+        var text = domainToUse
         text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
         shareText += "\n\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
         
