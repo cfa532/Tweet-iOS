@@ -47,7 +47,15 @@ struct TweetActionButtonsView: View {
             "entry": entry
         ]
         
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        // Make the network call on a background queue to prevent UI freezing
+        let response = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = client.invoke("runMApp", withArgs: [entry, params])
+                continuation.resume(returning: result)
+            }
+        }
+        
+        guard let responseDict = response as? [String: Any] else {
             print("[TweetActionButtonsView] Invalid response format for sharing domain")
             await MainActor.run {
                 isFetchingShareDomain = false
@@ -55,7 +63,7 @@ struct TweetActionButtonsView: View {
             return
         }
         
-        guard let domain = response["domain"] as? String else {
+        guard let domain = responseDict["domain"] as? String else {
             print("[TweetActionButtonsView] No domain received for sharing")
             await MainActor.run {
                 isFetchingShareDomain = false
@@ -326,7 +334,10 @@ struct TweetActionButtonsView: View {
             ) {
                 if !isFetchingShareDomain {
                     Task {
-                        await fetchSharingDomain()
+                        // Only fetch domain if we don't have it yet
+                        if shareDomain == nil {
+                            await fetchSharingDomain()
+                        }
                         showShareSheet = true
                     }
                 }
@@ -438,7 +449,7 @@ struct TweetActionButtonsView: View {
         let domainToUse = shareDomain ?? AppConfig.baseUrl
         var text = domainToUse
         text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
-        shareText += "\n\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
+        shareText += (shareText.isEmpty ? "" : "\n\n") + text.trimmingCharacters(in: .whitespacesAndNewlines)
         
         return shareText
     }
