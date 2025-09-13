@@ -365,7 +365,7 @@ struct TweetActionButtonsView: View {
         // Create a share text that includes app branding
         var shareText = ""
         
-        // Priority: title > content > attachment types
+        // Priority: title > content (no attachment types)
         if let title = tweet.title, !title.isEmpty {
             // Use title if available
             let maxLength = 40
@@ -376,16 +376,18 @@ struct TweetActionButtonsView: View {
             let maxLength = 40
             let truncatedContent = content.count > maxLength ? String(content.prefix(maxLength)) + "..." : content
             shareText += truncatedContent
-        } else if let attachments = tweet.attachments, !attachments.isEmpty {
-            // Create string from attachment types
-            let attachmentTypes = attachments.compactMap { $0.type.rawValue }.joined(separator: ", ")
-            shareText += attachmentTypes.isEmpty ? NSLocalizedString("[attachments]", comment: "Indicator for tweets with attachments but no text content") : attachmentTypes
         }
         
         // Add URL
         var text = hproseInstance.domainToShare
         text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
-        shareText += "\n\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
+        
+        // Only add newlines if there's content before the URL
+        if !shareText.isEmpty {
+            shareText += "\n\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
+        } else {
+            shareText += text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         
         return shareText
     }
