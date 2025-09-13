@@ -620,11 +620,19 @@ final class HproseInstance: ObservableObject {
                 await MainActor.run {
                     user.baseUrl = URL(string: "http://\(providerIP)")!
                 }
+                // Ensure baseUrl is set before proceeding
+                guard user.baseUrl != nil else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to set baseUrl for user: \(userId)"])
+                }
                 try await self.updateUserFromServer(user)
                 return user
             } else {
                 await MainActor.run {
                     user.baseUrl = URL(string: baseUrl)!
+                }
+                // Ensure baseUrl is set before proceeding
+                guard user.baseUrl != nil else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to set baseUrl for user: \(userId)"])
                 }
                 try await self.updateUserFromServer(user)
                 return user
@@ -640,8 +648,12 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
         ]
         
-        // Call runMApp following the sample code pattern
+        // Debug logging
+        print("DEBUG: [updateUserFromServer] User: \(user.mid), baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
+        
+        // Use the user's hproseClient property
         guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
+            print("DEBUG: [updateUserFromServer] hproseClient is nil for user: \(user.mid), baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No hprose client available for user: \(user.mid)"])
         }
         
@@ -656,7 +668,7 @@ final class HproseInstance: ObservableObject {
             
             // Create a new client for the new IP
             let newClient = HproseHttpClient()
-            newClient.timeout = 300
+            newClient.timeout = 30000
             newClient.uri = "\(user.baseUrl?.absoluteString ?? "")/webapi/"
             
             // Call runMApp with the new client following the sample code pattern

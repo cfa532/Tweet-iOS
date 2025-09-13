@@ -1,4 +1,5 @@
 import SwiftUI
+import hprose
 
 enum UserActions: Int {
     case FAVORITE = 0
@@ -32,8 +33,8 @@ struct TweetActionButtonsView: View {
             isFetchingShareDomain = true
         }
         
-        guard let client = hproseInstance.appUser.hproseClient else {
-            print("[TweetActionButtonsView] Client not initialized for sharing domain fetch")
+        guard let baseUrl = hproseInstance.appUser.baseUrl else {
+            print("[TweetActionButtonsView] BaseUrl not available for sharing domain fetch")
             await MainActor.run {
                 isFetchingShareDomain = false
             }
@@ -48,8 +49,13 @@ struct TweetActionButtonsView: View {
         ]
         
         // Make the network call on a background queue to prevent UI freezing
-        let response = await withCheckedContinuation { continuation in
+        let response = await withCheckedContinuation { (continuation: CheckedContinuation<Any?, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
+                let client = HproseHttpClient()
+                client.timeout = 30000
+                client.uri = "\(baseUrl)/webapi/"
+                defer { client.close() }
+                
                 let result = client.invoke("runMApp", withArgs: [entry, params])
                 continuation.resume(returning: result)
             }
