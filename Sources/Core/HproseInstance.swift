@@ -163,17 +163,11 @@ final class HproseInstance: ObservableObject {
         // Step 5: Clean up expired tweets
         TweetCacheManager.shared.deleteExpiredTweets()
         
-        // Step 6: Clean up any problematic pending uploads that might cause startup issues
-        await cleanupProblematicPendingUploads()
-        
-        // Step 7: Schedule background tasks
-        scheduleBackgroundTasks()
-        
         print("DEBUG: [HproseInstance] Initialization completed")
         isAppInitializing = false
     }
     
-    /// Initialize app user with default values
+    /// Initialize app user with cached or default values
     func initializeAppUser() async {
         await MainActor.run {
             // Get user ID from preferences or use guest ID
@@ -198,8 +192,9 @@ final class HproseInstance: ObservableObject {
     private func scheduleBackgroundTasks() {
         // Schedule domain update and pending upload recovery
         Task.detached(priority: .background) {
-            // Wait for 30 seconds to ensure app is fully initialized
-            try? await Task.sleep(nanoseconds: 15_000_000_000) // 15 seconds
+            // Wait for 15 seconds to ensure app is fully initialized
+            print("DEBUG: [HproseInstance] Scheduling background tasks")
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             
             // Check for domain updates
             await self.checkAndUpdateDomain()
@@ -275,7 +270,6 @@ final class HproseInstance: ObservableObject {
                                 // Notify FollowingsTweetView to refresh for logged-in user
                                 NotificationCenter.default.post(name: .appUserReady, object: nil)
                             }
-                            return
                         } else {
                             print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
                             let user = User.getInstance(mid: Constants.GUEST_ID)
@@ -284,7 +278,6 @@ final class HproseInstance: ObservableObject {
                                 user.followingList = Gadget.getAlphaIds()
                                 _appUser = user
                             }
-                            return
                         }
                     } else {
                         let user = User.getInstance(mid: Constants.GUEST_ID)
@@ -296,9 +289,13 @@ final class HproseInstance: ObservableObject {
                         
                         // For guest users, fetch the alphaId user from backend now that we have proper IP
                         await fetchAlphaIdUserForGuest()
-                        
-                        return
                     }
+                    // Step 6: Clean up any problematic pending uploads that might cause startup issues
+                    await cleanupProblematicPendingUploads()
+                    
+                    // Step 7: Schedule background tasks
+                    scheduleBackgroundTasks()
+                    return
                 }
             } catch {
                 print("Error processing URL \(url): \(error)")
