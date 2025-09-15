@@ -125,6 +125,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppDidBecomeActive() {
         print("[AppDelegate] App did become active - posting notification")
         
+        // Refresh mute state from preferences when app becomes active
+        // This ensures videos respect the current mute setting even if it was changed while app was in background
+        MuteState.shared.refreshFromPreferences()
+        
         // Post notification to restore video state (handled by SimpleVideoPlayer)
         NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
     }
