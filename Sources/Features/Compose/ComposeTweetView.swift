@@ -23,78 +23,8 @@ struct ComposeTweetView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        TextEditor(text: $viewModel.tweetContent)
-                            .frame(minHeight: 150)
-                            .padding()
-                            .focused($isEditorFocused)
-                            .background(Color(.systemBackground))
-                            .onTapGesture {
-                                isEditorFocused = true
-                            }
-                        
-                        // Thumbnail preview section
-                        MediaPreviewGrid(
-                            selectedItems: viewModel.selectedItems,
-                            onRemoveItem: { index in
-                                viewModel.selectedItems.remove(at: index)
-                            },
-                            onRemoveImage: { _ in }
-                        )
-                        .frame(height: viewModel.selectedItems.isEmpty ? 0 : 120)
-                        .background(Color(.systemBackground))
-                        
-                        // Attachment toolbar
-                        HStack(spacing: 20) {
-                            MediaPicker(
-                                selectedItems: $viewModel.selectedItems,
-                                showCamera: .constant(false),
-                                error: .constant(nil),
-                                maxSelectionCount: 4,
-                                supportedTypes: [.image, .movie]
-                            )
-                            
-                            Spacer()
-                            
-                            #if DEBUG
-                            // Private toggle - only show on debug builds
-                            HStack(spacing: 8) {
-                                Image(systemName: "lock")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(viewModel.isPrivate ? .themeAccent : .themeSecondaryText)
-                                
-                                Toggle(NSLocalizedString("Private", comment: "Private tweet toggle"), isOn: $viewModel.isPrivate)
-                                    .toggleStyle(SwitchToggleStyle(tint: .themeAccent))
-                                    .labelsHidden()
-                            }
-                            #endif
-                            
-                            Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.tweetContent.count))")
-                                .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .themeSecondaryText)
-                        }
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
-                        .background(Color.themeBackground)
-                        .overlay(
-                            Rectangle()
-                                .frame(height: 1)
-                                .foregroundColor(Color.themeBorder),
-                            alignment: .top
-                        )
-                    }
-                }
-                
-                // Error toast overlay (only for validation errors)
-                if viewModel.showToast {
-                    VStack {
-                        Spacer()
-                        ToastView(message: viewModel.toastMessage, type: viewModel.toastType)
-                            .padding(.bottom, 40)
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.easeInOut(duration: 0.3), value: viewModel.showToast)
-                }
+                mainContent
+                toastOverlay
             }
             .navigationTitle(NSLocalizedString("New Tweet", comment: "New tweet screen title"))
             .navigationBarTitleDisplayMode(.inline)
@@ -141,9 +71,107 @@ struct ComposeTweetView: View {
                     isEditorFocused = true
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .errorOccurred)) { notification in
+                if let error = notification.object as? Error {
+                    viewModel.toastMessage = error.localizedDescription
+                    viewModel.toastType = .error
+                    viewModel.showToast = true
+                    
+                    // Auto-hide toast after 5 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        withAnimation { viewModel.showToast = false }
+                    }
+                }
+            }
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(viewModel.tweetContent.count > 0)
+    }
+    
+    private var mainContent: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                textEditor
+                mediaPreview
+                attachmentToolbar
+            }
+        }
+    }
+    
+    private var textEditor: some View {
+        TextEditor(text: $viewModel.tweetContent)
+            .frame(minHeight: 150)
+            .padding()
+            .focused($isEditorFocused)
+            .background(Color(.systemBackground))
+            .onTapGesture {
+                isEditorFocused = true
+            }
+    }
+    
+    private var mediaPreview: some View {
+        MediaPreviewGrid(
+            selectedItems: viewModel.selectedItems,
+            onRemoveItem: { index in
+                viewModel.selectedItems.remove(at: index)
+            },
+            onRemoveImage: { _ in }
+        )
+        .frame(height: viewModel.selectedItems.isEmpty ? 0 : 120)
+        .background(Color(.systemBackground))
+    }
+    
+    private var attachmentToolbar: some View {
+        HStack(spacing: 20) {
+            MediaPicker(
+                selectedItems: $viewModel.selectedItems,
+                showCamera: .constant(false),
+                error: $viewModel.error,
+                maxSelectionCount: 4,
+                supportedTypes: [.image, .movie]
+            )
+            
+            Spacer()
+            
+            #if DEBUG
+            // Private toggle - only show on debug builds
+            HStack(spacing: 8) {
+                Image(systemName: "lock")
+                    .font(.system(size: 16))
+                    .foregroundColor(viewModel.isPrivate ? .themeAccent : .themeSecondaryText)
+                
+                Toggle(NSLocalizedString("Private", comment: "Private tweet toggle"), isOn: $viewModel.isPrivate)
+                    .toggleStyle(SwitchToggleStyle(tint: .themeAccent))
+                    .labelsHidden()
+            }
+            #endif
+            
+            Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.tweetContent.count))")
+                .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .themeSecondaryText)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color.themeBackground)
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundColor(Color.themeBorder),
+            alignment: .top
+        )
+    }
+    
+    private var toastOverlay: some View {
+        Group {
+            if viewModel.showToast {
+                VStack {
+                    Spacer()
+                    ToastView(message: viewModel.toastMessage, type: viewModel.toastType)
+                        .padding(.bottom, 40)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.3), value: viewModel.showToast)
+            }
+        }
     }
 }

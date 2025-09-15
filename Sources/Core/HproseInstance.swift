@@ -1771,7 +1771,7 @@ final class HproseInstance: ObservableObject {
             appUser: User,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing video file with local FFmpeg HLS conversion")
+            print("Processing video file with local FFmpeg HLS conversion (size: \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB)")
             return try await uploadVideoWithLocalHLSConversion(
                 data: data,
                 fileName: fileName,

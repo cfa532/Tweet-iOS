@@ -46,7 +46,11 @@ struct MediaPicker: View {
                     .foregroundColor(.blue)
                     .font(.system(size: 20))
             }
-            .onChange(of: selectedItems) { _, _ in
+            .onChange(of: selectedItems) { oldItems, newItems in
+                // Check for oversized videos and remove them from selection
+                Task {
+                    await filterOversizedVideos(from: newItems)
+                }
                 onItemAdded?()
             }
             
@@ -59,6 +63,61 @@ struct MediaPicker: View {
                         .foregroundColor(.blue)
                         .font(.system(size: 20))
                 }
+            }
+        }
+    }
+    
+    private func filterOversizedVideos(from items: [PhotosPickerItem]) async {
+        let maxFileSize = 120 * 1024 * 1024 // 120MB in bytes
+        var validItems: [PhotosPickerItem] = []
+        
+        for item in items {
+            do {
+                // Check if it's a video
+                let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+                let isVideo = typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
+                             typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
+                             typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
+                             typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
+                             typeIdentifier.contains("webm")
+                
+                if isVideo {
+                    // Load video data to check size
+                    if let data = try await item.loadTransferable(type: Data.self) {
+                        if data.count > maxFileSize {
+                            let fileSizeMB = Double(data.count) / (1024 * 1024)
+                            let maxSizeMB = Double(maxFileSize) / (1024 * 1024)
+                            
+                            // Show error message
+                            let errorMessage = NSError(
+                                domain: "VideoProcessing", 
+                                code: -1, 
+                                userInfo: [
+                                    NSLocalizedDescriptionKey: "Video file is too large (\(String(format: "%.1f", fileSizeMB))MB). Maximum allowed size is \(String(format: "%.0f", maxSizeMB))MB."
+                                ]
+                            )
+                            await MainActor.run {
+                                NotificationCenter.default.post(name: .errorOccurred, object: errorMessage)
+                            }
+                            continue // Skip this oversized video
+                        }
+                    }
+                }
+                
+                // Add valid items (images and videos under size limit)
+                validItems.append(item)
+                
+            } catch {
+                print("DEBUG: Error checking video size: \(error)")
+                // If we can't check the size, allow the item (fallback)
+                validItems.append(item)
+            }
+        }
+        
+        // Update selection to only include valid items
+        if validItems.count != items.count {
+            await MainActor.run {
+                selectedItems = validItems
             }
         }
     }
@@ -167,6 +226,7 @@ struct MediaUploadHelper {
                     // Get the type identifier and determine file extension
                     let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
                     let fileExtension = getFileExtension(for: typeIdentifier)
+                    
                     
                     // Create a unique filename with timestamp
                     let timestamp = Int(Date().timeIntervalSince1970)

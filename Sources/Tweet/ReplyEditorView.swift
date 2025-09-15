@@ -127,6 +127,11 @@ struct ReplyEditorView: View {
             }
                 .animation(.easeInOut(duration: 0.3), value: showToast)
         )
+        .onReceive(NotificationCenter.default.publisher(for: .errorOccurred)) { notification in
+            if let error = notification.object as? Error {
+                showToastMessage(error.localizedDescription, type: .error)
+            }
+        }
         
     }
     
@@ -306,7 +311,7 @@ struct ReplyEditorView: View {
         showToast = true
         
         // Auto-hide toast after appropriate duration
-        let duration: TimeInterval = type == .success ? 2.0 : 3.0
+        let duration: TimeInterval = type == .success ? 2.0 : 5.0
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
             withAnimation { showToast = false }
         }

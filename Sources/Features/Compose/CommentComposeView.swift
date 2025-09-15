@@ -184,6 +184,11 @@ struct CommentComposeView: View {
                 isEditorFocused = true
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .errorOccurred)) { notification in
+            if let error = notification.object as? Error {
+                showToastMessage(error.localizedDescription, type: .error)
+            }
+        }
     }
     
     private func showToastMessage(_ message: String, type: ToastView.ToastType) {
@@ -192,7 +197,7 @@ struct CommentComposeView: View {
         showToast = true
         
         // Hide toast after delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + (type == .error ? 3 : 2)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (type == .error ? 5 : 2)) {
             withAnimation { showToast = false }
         }
     }

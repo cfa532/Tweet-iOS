@@ -31,32 +31,32 @@ struct ToastView: View {
     private var backgroundColor: Color {
         switch type {
         case .success: return Color(.systemGray6).opacity(0.95)
-        case .error: return Color.red.opacity(0.9)
-        case .info: return Color.blue.opacity(0.9)
+        case .error: return Color(.systemGray6).opacity(0.95)
+        case .info: return Color(.systemGray6).opacity(0.95)
         }
     }
     
     private var borderColor: Color {
         switch type {
         case .success: return Color(.systemGray4).opacity(0.8)
-        case .error: return Color.red.opacity(0.7)
-        case .info: return Color.blue.opacity(0.7)
+        case .error: return Color(.systemGray4).opacity(0.8)
+        case .info: return Color(.systemGray4).opacity(0.8)
         }
     }
     
     private var textColor: Color {
         switch type {
         case .success: return Color(.label)
-        case .error: return .white
-        case .info: return .white
+        case .error: return Color(.label)
+        case .info: return Color(.label)
         }
     }
     
     private var iconName: String {
         switch type {
         case .success: return "checkmark.circle.fill"
-        case .error: return "xmark.octagon.fill"
-        case .info: return "arrow.2.squarepath"
+        case .error: return "exclamationmark.triangle.fill"
+        case .info: return "info.circle.fill"
         }
     }
 } 
