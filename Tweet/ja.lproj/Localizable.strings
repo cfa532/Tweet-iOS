@@ -139,6 +139,7 @@
 
 // MARK: - UI Elements
 "Private" = "プライベート";
+"Public" = "公開";
 "Make Public" = "公開にする";
 "Make Private" = "プライベートにする";
 "Tweet set to private" = "ツイートをプライベートに設定しました";

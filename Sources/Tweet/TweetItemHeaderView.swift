@@ -64,9 +64,6 @@ struct TweetMenu: View {
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var isCurrentlyPinned: Bool
-    @State private var showToast = false
-    @State private var toastMessage = ""
-    @State private var toastType: ToastView.ToastType = .info
     @State private var isPressed = false
     @State private var showReportSheet = false
     @State private var showFilterSheet = false
@@ -138,17 +135,52 @@ struct TweetMenu: View {
                                     // Update Core Data cache with the new privacy status
                                     TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: hproseInstance.appUser.mid)
                                     
-                                    toastMessage = newPrivacyStatus ? NSLocalizedString("Tweet set to private", comment: "Toast message when tweet is set to private") : NSLocalizedString("Tweet set to public", comment: "Toast message when tweet is set to public")
-                                    toastType = .success
-                                    showToast = true
+                                    // Send notification to update tweet list views
+                                    // Send tweetId for removal (handles both private->public and public->private)
+                                    NotificationCenter.default.post(
+                                        name: .tweetPrivacyChanged,
+                                        object: nil,
+                                        userInfo: [
+                                            "tweetId": tweet.mid
+                                        ]
+                                    )
+                                    
+                                    // If tweet became public, also send it as a new tweet to add it back
+                                    if !newPrivacyStatus {
+                                        NotificationCenter.default.post(
+                                            name: .newTweetCreated,
+                                            object: nil,
+                                            userInfo: [
+                                                "tweet": tweet
+                                            ]
+                                        )
+                                    }
+                                    
+                                    // Send notification for global toast
+                                    let message = newPrivacyStatus ? NSLocalizedString("Tweet set to private", comment: "Toast message when tweet is set to private") : NSLocalizedString("Tweet set to public", comment: "Toast message when tweet is set to public")
+                                    NotificationCenter.default.post(
+                                        name: .tweetPrivacyUpdated,
+                                        object: nil,
+                                        userInfo: [
+                                            "message": message,
+                                            "type": "success"
+                                        ]
+                                    )
                                 }
                             } catch {
                                 await MainActor.run {
                                     print("[TweetMenu] Privacy update failed: \(error.localizedDescription)")
                                     
-                                    toastMessage = NSLocalizedString("Failed to update privacy setting", comment: "Error message when privacy toggle fails")
-                                    toastType = .error
-                                    showToast = true
+                                    // Send notification for global toast
+                                    let message = NSLocalizedString("Failed to update privacy setting", comment: "Error message when privacy toggle fails")
+                                    NotificationCenter.default.post(
+                                        name: .tweetPrivacyUpdated,
+                                        object: nil,
+                                        userInfo: [
+                                            "message": message,
+                                            "type": "error"
+                                        ]
+                                    )
                                 }
                             }
                         }
@@ -204,19 +236,6 @@ struct TweetMenu: View {
                     .accessibilityHint("Double tap to open tweet menu")
             }
         }
-        .overlay(
-            Group {
-                if showToast {
-                    VStack {
-                        Spacer()
-                        ToastView(message: toastMessage, type: toastType)
-                            .padding(.bottom, 40)
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.easeInOut(duration: 0.3), value: showToast)
-                }
-            }
-        )
         .sheet(isPresented: $showFilterSheet) {
             ContentFilterView(tweet: tweet)
         }
@@ -261,9 +280,11 @@ struct TweetMenu: View {
                 userInfo: ["tweetId": tweet.mid]
             )
             await MainActor.run {
-                toastMessage = "Failed to delete tweet."
-                toastType = .error
-                showToast = true
+                // Send notification for global error toast
+                NotificationCenter.default.post(
+                    name: .errorOccurred,
+                    object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet."])
+                )
             }
         }
     }

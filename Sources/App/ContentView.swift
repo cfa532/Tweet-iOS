@@ -130,6 +130,20 @@ struct ContentView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .tweetPrivacyUpdated)) { notification in
+            if let message = notification.userInfo?["message"] as? String,
+               let typeString = notification.userInfo?["type"] as? String {
+                toastMessage = message
+                toastType = typeString == "error" ? .error : .success
+                showToast = true
+                
+                // Auto-hide toast after 2 seconds for success, 5 seconds for error
+                let delay = typeString == "error" ? 5.0 : 2.0
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    withAnimation { showToast = false }
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .navigationVisibilityChanged)) { notification in
             if let isVisible = notification.userInfo?["isVisible"] as? Bool {
                 print("[ContentView] Navigation visibility changed to: \(isVisible)")

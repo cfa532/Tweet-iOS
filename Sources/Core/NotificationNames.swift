@@ -24,6 +24,12 @@ extension Notification.Name {
     /// Posted when a tweet's pin status changes
     static let tweetPinStatusChanged = Notification.Name("TweetPinStatusChanged")
     
+    /// Posted when a tweet's privacy status changes
+    static let tweetPrivacyChanged = Notification.Name("TweetPrivacyChanged")
+    
+    /// Posted when a tweet's privacy status is successfully updated (for toast notification)
+    static let tweetPrivacyUpdated = Notification.Name("TweetPrivacyUpdated")
+    
     /// Posted when a new comment is added
     static let newCommentAdded = Notification.Name("newCommentAdded")
     static let commentDeleted = Notification.Name("commentDeleted")

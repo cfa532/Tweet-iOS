@@ -38,6 +38,12 @@ struct FollowingsTweetView: View {
                     key: "tweetId",
                     shouldAccept: { _ in true },
                     action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
+                ),
+                TweetListNotification(
+                    name: .tweetPrivacyChanged,
+                    key: "tweetId",
+                    shouldAccept: { _ in true },
+                    action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
                 )
             ],
             onScroll: { offset in

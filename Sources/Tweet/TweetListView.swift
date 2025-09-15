@@ -139,11 +139,23 @@ struct TweetListView<RowView: View>: View {
                         if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
                             notification.action(tweet)
                         }
-                        // Special case: tweetDeleted may send tweetId as String
+                        // Special case: tweetId notifications send String instead of Tweet
                         if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
-                            tweets.removeAll { $0.id == tweetId }
-                            TweetCacheManager.shared.deleteTweet(mid: tweetId)
+                            if notification.name == .tweetDeleted {
+                                // For tweet deletion, handle directly in TweetListView
+                                tweets.removeAll { $0.id == tweetId }
+                                TweetCacheManager.shared.deleteTweet(mid: tweetId)
+                            } else {
+                                // For other notifications (like privacy changes), call the custom handler
+                                // Find the actual tweet in the list and pass it to the handler
+                                if let actualTweet = tweets.first(where: { $0.mid == tweetId }) {
+                                    notification.action(actualTweet)
+                                }
+                            }
                         }
+                        // Special case: tweetPrivacyChanged sends tweetId and privacy info
+                        // This is handled by custom handlers in each view (FollowingsTweetView, ProfileTweetsSection)
+                        // No built-in handling here to avoid conflicts
                         // Special case: blockUser may send blockedUserId to remove all tweets from that user
                         if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
                             let originalCount = tweets.count

@@ -154,6 +154,7 @@
 
 // MARK: - UI Elements
 "Private" = "Private";
+"Public" = "Public";
 "Make Public" = "Make Public";
 "Make Private" = "Make Private";
 "Tweet set to private" = "Tweet set to private";

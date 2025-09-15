@@ -94,6 +94,20 @@ class ProfileTweetsViewModel: ObservableObject {
         tweets.removeAll { $0.mid == tweetId }
         TweetCacheManager.shared.deleteTweet(mid: tweetId)
     }
+    
+    func handlePrivacyChange(tweetId: String) {
+        // For profile view, handle privacy changes based on user type
+        if user.mid == hproseInstance.appUser.mid {
+            // For appUser's profile, keep all tweets (public and private)
+            // Privacy change will be reflected in UI, no need to remove/add
+            print("[ProfileTweetsViewModel] Privacy changed for appUser's tweet: \(tweetId)")
+        } else {
+            // For other users' profiles, remove the tweet since it became private
+            tweets.removeAll { $0.mid == tweetId }
+            print("[ProfileTweetsViewModel] Removed private tweet from other user's profile: \(tweetId)")
+        }
+    }
+    
 }
 
 private struct TweetListScrollOffsetKey: PreferenceKey {
@@ -179,6 +193,12 @@ struct ProfileTweetsSection<Header: View>: View {
                     key: "tweetId",
                     shouldAccept: { _ in true },
                     action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
+                ),
+                TweetListNotification(
+                    name: .tweetPrivacyChanged,
+                    key: "tweetId",
+                    shouldAccept: { _ in true },
+                    action: { tweet in viewModel.handlePrivacyChange(tweetId: tweet.mid) }
                 )
             ], onScroll: onScroll,
             header: {

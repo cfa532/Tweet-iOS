@@ -143,7 +143,7 @@ struct ComposeTweetView: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(viewModel.isPrivate ? .themeAccent : .themeSecondaryText)
                     
-                    Text(viewModel.isPrivate ? "Private" : "Public")
+                    Text(viewModel.isPrivate ? LocalizedStringKey("Private") : LocalizedStringKey("Public"))
                         .font(.system(size: 14, weight: .medium))
                         .foregroundColor(viewModel.isPrivate ? .themeAccent : .themeSecondaryText)
                 }

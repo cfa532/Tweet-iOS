@@ -142,6 +142,7 @@
 
 // MARK: - UI Elements
 "Private" = "私密";
+"Public" = "公开";
 "Make Public" = "设为公开";
 "Make Private" = "设为私密";
 "Tweet set to private" = "推文已设为私密";
