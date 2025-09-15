@@ -8,6 +8,7 @@
 import Foundation
 import AVFoundation
 import UIKit
+import ffmpegkit
 
 /// HLSVideoProcessor provides video metadata extraction for backend-based video processing
 /// Since video conversion is now handled on the backend, this class focuses on aspect ratio detection
@@ -242,5 +243,88 @@ public class HLSVideoProcessor {
         }
         
         print("=== END VIDEO PARAMETERS ===")
+    }
+    
+    /// Get video info using FFmpeg (like the server does)
+    public func getVideoInfoWithFFmpeg(filePath: String) async -> (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)? {
+        return await withCheckedContinuation { continuation in
+            let command = "ffprobe -v quiet -print_format json -show_format -show_streams \"\(filePath)\""
+            print("DEBUG: [FFMPEG PROBE] Running command: \(command)")
+            
+            FFmpegKit.executeAsync(command) { session in
+                guard let session = session else {
+                    print("DEBUG: [FFMPEG PROBE] Failed to create session")
+                    continuation.resume(returning: nil)
+                    return
+                }
+                
+                let returnCode = session.getReturnCode()
+                print("DEBUG: [FFMPEG PROBE] Return code: \(String(describing: returnCode))")
+                
+                if ReturnCode.isSuccess(returnCode) {
+                    if let logs = session.getLogs() as? [Log] {
+                        var output = ""
+                        for log in logs {
+                            output += log.getMessage()
+                        }
+                        print("DEBUG: [FFMPEG PROBE] Raw output: \(output)")
+                        
+                        // Parse JSON output
+                        if let data = output.data(using: .utf8),
+                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let streams = json["streams"] as? [[String: Any]] {
+                            
+                            print("DEBUG: [FFMPEG PROBE] Found \(streams.count) streams")
+                            
+                            for stream in streams {
+                                if stream["codec_type"] as? String == "video" {
+                                    let width = stream["width"] as? Int ?? 0
+                                    let height = stream["height"] as? Int ?? 0
+                                    
+                                    var rotation = 0
+                                    if let sideDataList = stream["side_data_list"] as? [[String: Any]] {
+                                        print("DEBUG: [FFMPEG PROBE] Found side_data_list with \(sideDataList.count) items")
+                                        for sideData in sideDataList {
+                                            if sideData["side_data_type"] as? String == "Display Matrix" {
+                                                if let matrix = sideData["rotation"] as? Int {
+                                                    rotation = matrix
+                                                }
+                                                break
+                                            }
+                                        }
+                                    } else {
+                                        print("DEBUG: [FFMPEG PROBE] No side_data_list found")
+                                    }
+                                    
+                                    var displayWidth = width
+                                    var displayHeight = height
+                                    
+                                    if rotation == 90 || rotation == -90 {
+                                        displayWidth = height
+                                        displayHeight = width
+                                    }
+                                    
+                                    print("DEBUG: [FFMPEG PROBE] Video dimensions: \(width)x\(height)")
+                                    print("DEBUG: [FFMPEG PROBE] Display dimensions (after rotation): \(displayWidth)x\(displayHeight)")
+                                    print("DEBUG: [FFMPEG PROBE] Rotation: \(rotation) degrees")
+                                    
+                                    continuation.resume(returning: (width, height, displayWidth, displayHeight, rotation))
+                                    return
+                                }
+                            }
+                            print("DEBUG: [FFMPEG PROBE] No video stream found")
+                        } else {
+                            print("DEBUG: [FFMPEG PROBE] Failed to parse JSON")
+                        }
+                    } else {
+                        print("DEBUG: [FFMPEG PROBE] No logs found")
+                    }
+                    continuation.resume(returning: nil)
+                } else {
+                    print("DEBUG: [FFMPEG PROBE] Command failed with return code: \(String(describing: returnCode))")
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
     }
 } 

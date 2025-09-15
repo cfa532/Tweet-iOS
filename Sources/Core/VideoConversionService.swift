@@ -150,6 +150,13 @@ class VideoConversionService {
         aspectRatio: Float?,
         completion: @escaping (HLSConversionResult) -> Void
     ) async {
+        // Calculate actual resolutions based on aspect ratio
+        let actual720pResolution = calculateActualResolution(targetResolution: 720, aspectRatio: aspectRatio)
+        let actual480pResolution = calculateActualResolution(targetResolution: 480, aspectRatio: aspectRatio)
+        
+        print("DEBUG: [MASTER PLAYLIST] Calculated 720p resolution: \(actual720pResolution)")
+        print("DEBUG: [MASTER PLAYLIST] Calculated 480p resolution: \(actual480pResolution)")
+        
         // Step 1: Convert to 720p HLS (50% of progress)
         await updateProgress(stage: "Converting to 720p HLS...", progress: 10)
         logMemoryUsage("before 720p conversion")
@@ -203,7 +210,9 @@ class VideoConversionService {
         let masterPlaylistCreated = await createMasterPlaylist(
             masterPlaylistURL: masterPlaylistURL,
             hls720pURL: hls720pURL,
-            hls480pURL: hls480pURL
+            hls480pURL: hls480pURL,
+            actual720pResolution: actual720pResolution,
+            actual480pResolution: actual480pResolution
         )
         
         logMemoryUsage("after master playlist creation")
@@ -238,24 +247,50 @@ class VideoConversionService {
     private func createMasterPlaylist(
         masterPlaylistURL: URL,
         hls720pURL: URL,
-        hls480pURL: URL
+        hls480pURL: URL,
+        actual720pResolution: String,
+        actual480pResolution: String
     ) async -> Bool {
         let masterPlaylistContent = """
         #EXTM3U
         #EXT-X-VERSION:3
-        #EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720
+        #EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=\(actual720pResolution)
         720p/playlist.m3u8
-        #EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=854x480
+        #EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=\(actual480pResolution)
         480p/playlist.m3u8
         """
         
         do {
             try masterPlaylistContent.write(to: masterPlaylistURL, atomically: true, encoding: .utf8)
             print("DEBUG: [VIDEO CONVERSION] Master playlist created at: \(masterPlaylistURL.path)")
+            print("DEBUG: [MASTER PLAYLIST] Content: \(masterPlaylistContent)")
             return true
         } catch {
             print("DEBUG: [VIDEO CONVERSION] Failed to create master playlist: \(error)")
             return false
+        }
+    }
+    
+    private func calculateActualResolution(targetResolution: Int, aspectRatio: Float?) -> String {
+        guard let aspectRatio = aspectRatio else {
+            // Default to landscape if no aspect ratio
+            return targetResolution == 720 ? "1280x720" : "854x480"
+        }
+        
+        if aspectRatio < 1.0 {
+            // Portrait: scale to target width, calculate height
+            let width = targetResolution
+            let height = Int(Float(targetResolution) / aspectRatio)
+            // Ensure height is even
+            let evenHeight = height % 2 == 0 ? height : height - 1
+            return "\(width)x\(evenHeight)"
+        } else {
+            // Landscape: scale to target height, calculate width
+            let height = targetResolution
+            let width = Int(Float(targetResolution) * aspectRatio)
+            // Ensure width is even
+            let evenWidth = width % 2 == 0 ? width : width - 1
+            return "\(evenWidth)x\(height)"
         }
     }
     
@@ -273,7 +308,8 @@ class VideoConversionService {
                 inputURL: inputURL,
                 outputURL: outputURL,
                 resolution: resolution,
-                bitrate: bitrate
+                bitrate: bitrate,
+                aspectRatio: aspectRatio
             ) { success in
                 continuation.resume(returning: success)
             }
@@ -286,67 +322,28 @@ class VideoConversionService {
         outputURL: URL,
         resolution: String,
         bitrate: String,
+        aspectRatio: Float?,
         completion: @escaping (Bool) -> Void
     ) {
-        // First, get video information to determine orientation
-        let infoCommand = """
-        -i "\(inputURL.path)" \
-        -f null \
-        -
-        """
-        
-        print("DEBUG: [VIDEO CONVERSION] Getting video info for orientation detection")
-        
-        FFmpegKit.executeAsync(infoCommand) { infoSession in
-            guard let infoSession = infoSession else {
-                print("DEBUG: [VIDEO CONVERSION] Failed to get video info")
-                completion(false)
-                return
-            }
-            
-            // Parse video information to determine if it's portrait
-            let logs = infoSession.getLogs()
-            var isPortrait = false
-            var videoWidth = 0
-            var videoHeight = 0
-            
-            for log in logs {
-                if let message = log.getMessage() {
-                    // Look for video stream information
-                    if message.contains("Video:") && message.contains("x") {
-                        // Extract dimensions from log like "Video: hevc (hvc1 / 0x31637668), yuv420p(tv, bt709), 720x800"
-                        let components = message.components(separatedBy: " ")
-                        for component in components {
-                            if component.contains("x") && component.count > 5 {
-                                let dimensions = component.components(separatedBy: "x")
-                                if dimensions.count == 2,
-                                   let width = Int(dimensions[0]),
-                                   let height = Int(dimensions[1]) {
-                                    videoWidth = width
-                                    videoHeight = height
-                                    isPortrait = height > width
-                                    print("DEBUG: [VIDEO CONVERSION] Detected video dimensions: \(width)x\(height), isPortrait: \(isPortrait)")
-                                    break
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Build conversion command based on orientation
-            let scaleFilter: String
-            if isPortrait {
-                // For portrait videos, scale to height instead of width
-                scaleFilter = "scale=-2:\(resolution)"
-                print("DEBUG: [VIDEO CONVERSION] Using portrait scaling: scale=-2:\(resolution)")
-            } else {
-                // For landscape videos, use width scaling
+        // Use the same logic as the server: determine scaling based on orientation
+        let scaleFilter: String
+        if let aspectRatio = aspectRatio {
+            // If aspect ratio < 1.0, it's portrait (height > width)
+            if aspectRatio < 1.0 {
+                // Portrait: scale to target width, calculate height
+                // This will maintain portrait orientation: 720x1280 instead of 394x720
                 scaleFilter = "scale=\(resolution):-2"
-                print("DEBUG: [VIDEO CONVERSION] Using landscape scaling: scale=\(resolution):-2")
+            } else {
+                // Landscape: scale to target height, calculate width
+                // This will maintain landscape orientation: 1280x720 instead of 720x405
+                scaleFilter = "scale=-2:\(resolution)"
             }
-            
-            let command = """
+        } else {
+            // Fallback to height-based scaling
+            scaleFilter = "scale=-2:\(resolution)"
+        }
+        
+        let command = """
             -i "\(inputURL.path)" \
             -c:v libx264 \
             -c:a aac \
@@ -362,6 +359,7 @@ class VideoConversionService {
             -max_interleave_delta 0 \
             -bufsize \(bitrate) \
             -maxrate \(bitrate) \
+            -metadata:s:v:0 rotate=0 \
             -f hls \
             -hls_time 10 \
             -hls_list_size 0 \
@@ -369,8 +367,7 @@ class VideoConversionService {
             -hls_flags delete_segments+independent_segments \
             "\(outputURL.path)"
             """
-            
-            print("DEBUG: [VIDEO CONVERSION] Converting to \(resolution) with command: \(command)")
+        
             
             FFmpegKit.executeAsync(command) { session in
             guard let session = session else {
@@ -409,7 +406,6 @@ class VideoConversionService {
             } else {
                 print("DEBUG: [VIDEO CONVERSION] Conversion failed for \(resolution)")
                 completion(false)
-            }
             }
         }
     }

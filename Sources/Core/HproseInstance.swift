@@ -1898,11 +1898,24 @@ final class HproseInstance: ObservableObject {
             let originalVideoURL = tempDir.appendingPathComponent(originalFileName)
             try data.write(to: originalVideoURL)
             
+            // Get video info using FFmpeg (like the server does)
+            let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: originalVideoURL.path)
+            let videoAspectRatio: Float?
+            if let info = videoInfo {
+                // Calculate aspect ratio from display dimensions (after rotation correction)
+                videoAspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
+                print("DEBUG: [HLS CONVERSION] FFmpeg detected: \(info.width)x\(info.height), display: \(info.displayWidth)x\(info.displayHeight), rotation: \(info.rotation)°, aspect ratio: \(videoAspectRatio!)")
+            } else {
+                videoAspectRatio = await getVideoAspectRatioWithFallback(from: data)
+                print("DEBUG: [HLS CONVERSION] Fallback to AVFoundation, aspect ratio: \(videoAspectRatio ?? 0.0)")
+            }
+            
             // Convert to HLS using FFmpeg with background processing
             let conversionResult = await withCheckedContinuation { continuation in
                 VideoConversionService.shared.convertVideoToHLS(
                     inputURL: originalVideoURL,
                     outputDirectory: tempDir,
+                    aspectRatio: videoAspectRatio,
                     progressCallback: { progress in
                         DispatchQueue.main.async {
                             progressCallback?(progress.stage, 10 + Int(Double(progress.progress) * 0.2)) // 10-30% for conversion
@@ -1945,8 +1958,12 @@ final class HproseInstance: ObservableObject {
             // We already have the CID from the upload response, no need to poll
             print("DEBUG: Using CID from upload response: \(cid)")
             
-            // Create result with the CID we received
-            let mimeiFileType = MimeiFileType(mid: cid, mediaType: .hls_video)
+            // Create result with the CID we received and the correct aspect ratio
+            let mimeiFileType = MimeiFileType(
+                mid: cid, 
+                mediaType: .hls_video,
+                aspectRatio: videoAspectRatio
+            )
             let result: (MimeiFileType?, String?) = (mimeiFileType, cid)
             
             // Clean up temp files
@@ -1957,6 +1974,7 @@ final class HproseInstance: ObservableObject {
             
             return result
         }
+        
         
         /// Compress HLS directory into a zip file
         private func compressHLSDirectory(hlsDirectory: URL, originalFileName: String) async throws -> URL {
