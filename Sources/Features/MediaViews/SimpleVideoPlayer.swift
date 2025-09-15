@@ -311,6 +311,18 @@ struct SimpleVideoPlayer: View {
                 restoreCachedVideoState()
             }
             
+            // Ensure mute state is properly applied when app becomes active
+            // This handles cases where MuteState was refreshed after video was created
+            if let player = player {
+                if mode == .mediaCell {
+                    player.isMuted = MuteState.shared.isMuted
+                    print("DEBUG: [VIDEO APP ACTIVE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
+                } else if mode == .mediaBrowser {
+                    player.isMuted = false
+                    print("DEBUG: [VIDEO APP ACTIVE] Forced unmuted for full screen mode")
+                }
+            }
+            
             // If video is visible and should play, resume playback
             if isVisible && currentAutoPlay && shouldLoadVideo {
                 print("DEBUG: [VIDEO APP ACTIVE] Resuming playback for \(mid)")
@@ -518,8 +530,8 @@ struct SimpleVideoPlayer: View {
         // For MediaCell mode, always use the current global mute state instead of the cached one
         // This ensures videos respect the current global mute setting when returning from full screen
         if mode == .mediaCell {
-            cachedState.player.isMuted = isMuted
-            print("DEBUG: [VIDEO CACHE] Applied current global mute state (\(isMuted)) for MediaCell mode")
+            cachedState.player.isMuted = MuteState.shared.isMuted
+            print("DEBUG: [VIDEO CACHE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
         } else {
             // For full screen modes (mediaBrowser), always unmute regardless of cached state
             // This ensures full screen videos are never muted
@@ -558,7 +570,10 @@ struct SimpleVideoPlayer: View {
             player.isMuted = false
             print("DEBUG: [VIDEO CONFIGURE] Forced unmuted for full screen mode")
         } else {
-            player.isMuted = isMuted
+            // For MediaCell mode, always use the current global mute state to ensure
+            // videos respect the current mute setting even if MuteState was refreshed after initialization
+            player.isMuted = MuteState.shared.isMuted
+            print("DEBUG: [VIDEO CONFIGURE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
         }
         
         // Reset player position to beginning (in case it was cached at the end)
