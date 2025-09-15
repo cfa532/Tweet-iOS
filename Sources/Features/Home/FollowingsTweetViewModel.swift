@@ -89,7 +89,8 @@ class FollowingsTweetViewModel: ObservableObject {
         if let tweet = tweet {
             // Don't show private tweets in the home feed
             if !(tweet.isPrivate ?? false) {
-                tweets.insert(tweet, at: 0)
+                // Use mergeTweets to maintain proper chronological ordering
+                tweets.mergeTweets([tweet])
             }
         }
     }

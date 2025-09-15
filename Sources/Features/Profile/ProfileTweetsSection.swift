@@ -83,7 +83,8 @@ class ProfileTweetsViewModel: ObservableObject {
             // Don't add the tweet if it's pinned
             if !pinnedTweetIds.contains(tweet.mid) {
                 print("DEBUG: [ProfileTweetsViewModel] Adding new tweet to list: \(tweet.mid)")
-                tweets.insert(tweet, at: 0)
+                // Use mergeTweets to maintain proper chronological ordering
+                tweets.mergeTweets([tweet])
             } else {
                 print("DEBUG: [ProfileTweetsViewModel] Skipping pinned tweet: \(tweet.mid)")
             }
