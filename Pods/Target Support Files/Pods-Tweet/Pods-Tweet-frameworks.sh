@@ -179,11 +179,27 @@ if [[ "$CONFIGURATION" == "Debug" ]]; then
   install_framework "${BUILT_PRODUCTS_DIR}/SDWebImage/SDWebImage.framework"
   install_framework "${BUILT_PRODUCTS_DIR}/SDWebImageSwiftUI/SDWebImageSwiftUI.framework"
   install_framework "${BUILT_PRODUCTS_DIR}/hprose/hprose.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/ffmpegkit.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libavcodec.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libavdevice.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libavfilter.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libavformat.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libavutil.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libswresample.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libswscale.framework"
 fi
 if [[ "$CONFIGURATION" == "Release" ]]; then
   install_framework "${BUILT_PRODUCTS_DIR}/SDWebImage/SDWebImage.framework"
   install_framework "${BUILT_PRODUCTS_DIR}/SDWebImageSwiftUI/SDWebImageSwiftUI.framework"
   install_framework "${BUILT_PRODUCTS_DIR}/hprose/hprose.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/ffmpegkit.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libavcodec.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libavdevice.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libavfilter.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libavformat.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libavutil.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libswresample.framework"
+  install_framework "${PODS_XCFRAMEWORKS_BUILD_DIR}/ffmpeg-kit-ios/libswscale.framework"
 fi
 if [ "${COCOAPODS_PARALLEL_CODE_SIGN}" == "true" ]; then
   wait

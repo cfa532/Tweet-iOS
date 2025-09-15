@@ -1771,8 +1771,8 @@ final class HproseInstance: ObservableObject {
             appUser: User,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing video file")
-            return try await uploadVideoForBackendConversion(
+            print("Processing video file with local FFmpeg HLS conversion")
+            return try await uploadVideoWithLocalHLSConversion(
                 data: data,
                 fileName: fileName,
                 referenceId: referenceId,
@@ -1875,6 +1875,292 @@ final class HproseInstance: ObservableObject {
                 print("DEBUG: File header analysis detected type: \(detectedType.rawValue)")
                 return detectedType
             }
+        }
+        
+        /// Upload video with local FFmpeg HLS conversion
+        private func uploadVideoWithLocalHLSConversion(
+            data: Data,
+            fileName: String?,
+            referenceId: String?,
+            noResample: Bool,
+            appUser: User,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async throws -> (MimeiFileType?, String?) {
+            print("Starting local HLS conversion with FFmpeg")
+            progressCallback?("Converting video to HLS...", 10)
+            
+            // Create temporary directory for conversion
+            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            
+            // Save original video to temp file
+            let originalFileName = fileName ?? "video.mp4"
+            let originalVideoURL = tempDir.appendingPathComponent(originalFileName)
+            try data.write(to: originalVideoURL)
+            
+            // Convert to HLS using FFmpeg with background processing
+            let conversionResult = await withCheckedContinuation { continuation in
+                VideoConversionService.shared.convertVideoToHLS(
+                    inputURL: originalVideoURL,
+                    outputDirectory: tempDir,
+                    progressCallback: { progress in
+                        DispatchQueue.main.async {
+                            progressCallback?(progress.stage, 10 + Int(Double(progress.progress) * 0.2)) // 10-30% for conversion
+                        }
+                    }
+                ) { result in
+                    continuation.resume(returning: result)
+                }
+            }
+            
+            guard conversionResult.success,
+                  let hlsDirectory = conversionResult.hlsDirectoryURL else {
+                print("DEBUG: Video conversion failed: \(conversionResult.errorMessage ?? "Unknown error")")
+                progressCallback?("Video conversion failed", 0)
+                // Clean up temp files
+                try? FileManager.default.removeItem(at: tempDir)
+                throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to HLS"])
+            }
+            
+            progressCallback?("Compressing HLS files...", 40)
+            
+            // Compress the HLS directory
+            let compressedURL = try await compressHLSDirectory(
+                hlsDirectory: hlsDirectory,
+                originalFileName: originalFileName
+            )
+            
+            progressCallback?("Uploading HLS zip to server...", 60)
+            
+            // Upload compressed HLS to server
+            let cid = try await uploadCompressedHLS(
+                compressedURL: compressedURL,
+                fileName: "\(originalFileName)_hls.zip",
+                referenceId: referenceId,
+                appUser: appUser
+            )
+            
+            progressCallback?("HLS processing completed", 80)
+            
+            // We already have the CID from the upload response, no need to poll
+            print("DEBUG: Using CID from upload response: \(cid)")
+            
+            // Create result with the CID we received
+            let mimeiFileType = MimeiFileType(mid: cid, mediaType: .hls_video)
+            let result: (MimeiFileType?, String?) = (mimeiFileType, cid)
+            
+            // Clean up temp files
+            try? FileManager.default.removeItem(at: tempDir)
+            try? FileManager.default.removeItem(at: compressedURL)
+            
+            progressCallback?("HLS conversion completed", 100)
+            
+            return result
+        }
+        
+        /// Compress HLS directory into a zip file
+        private func compressHLSDirectory(hlsDirectory: URL, originalFileName: String) async throws -> URL {
+            let zipFileName = "\(originalFileName)_hls.zip"
+            let tempDir = hlsDirectory.deletingLastPathComponent()
+            let zipURL = tempDir.appendingPathComponent(zipFileName)
+            
+            print("DEBUG: Compressing HLS directory: \(hlsDirectory.path)")
+            print("DEBUG: Zip file will be created at: \(zipURL.path)")
+            
+            // Create a temporary directory to hold the zip contents (without the hls directory wrapper)
+            let tempZipDir = tempDir.appendingPathComponent("temp_zip_\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: tempZipDir, withIntermediateDirectories: true)
+            
+            defer {
+                // Clean up temp directory
+                try? FileManager.default.removeItem(at: tempZipDir)
+            }
+            
+            // Copy contents of HLS directory to temp directory (this puts master.m3u8, 720p/, 480p/ at root)
+            let contents = try FileManager.default.contentsOfDirectory(at: hlsDirectory, includingPropertiesForKeys: nil)
+            for item in contents {
+                let destination = tempZipDir.appendingPathComponent(item.lastPathComponent)
+                try FileManager.default.copyItem(at: item, to: destination)
+                print("DEBUG: Copied \(item.lastPathComponent) to temp zip directory")
+            }
+            
+            // Use FileManager to create zip archive from temp directory
+            let coordinator = NSFileCoordinator()
+            var error: NSError?
+            
+            return try await withCheckedThrowingContinuation { continuation in
+                coordinator.coordinate(readingItemAt: tempZipDir, options: [.forUploading], error: &error) { (url) in
+                    do {
+                        // Move the temporary zip file to our desired location
+                        try FileManager.default.moveItem(at: url, to: zipURL)
+                        print("DEBUG: Successfully created zip file at: \(zipURL.path)")
+                        continuation.resume(returning: zipURL)
+                    } catch {
+                        print("DEBUG: Failed to move zip file: \(error)")
+                        continuation.resume(throwing: error)
+                    }
+                }
+                
+                if let error = error {
+                    print("DEBUG: File coordinator error: \(error)")
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+        
+        /// Upload compressed HLS to server via process-zip route
+        private func uploadCompressedHLS(
+            compressedURL: URL,
+            fileName: String,
+            referenceId: String?,
+            appUser: User
+        ) async throws -> String {
+            // Always resolve writableUrl to ensure we have the correct IP address
+            let writableUrl = try await appUser.resolveWritableUrl()
+            guard let writableUrl = writableUrl else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
+            }
+            
+            // Use the cloud drive port for HLS uploads
+            let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
+            let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
+            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            let uploadURL = cloudBaseURL.appendingPathComponent("process-zip").absoluteString
+            
+            print("DEBUG: Constructed process-zip URL: \(uploadURL)")
+            guard let url = URL(string: uploadURL) else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid process-zip URL"])
+            }
+            
+            // Read compressed file data
+            let compressedData = try Data(contentsOf: compressedURL)
+            
+            // Create multipart form data
+            let boundary = "Boundary-\(UUID().uuidString)"
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            
+            var body = Data()
+            
+            // Add filename
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"filename\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(fileName)\r\n".data(using: .utf8)!)
+            
+            // Add reference ID if provided
+            if let referenceId = referenceId {
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n\r\n".data(using: .utf8)!)
+                body.append("\(referenceId)\r\n".data(using: .utf8)!)
+            }
+            
+            // Add the compressed HLS file
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
+            body.append(compressedData)
+            body.append("\r\n".data(using: .utf8)!)
+            
+            // End boundary
+            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+            
+            request.httpBody = body
+            request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
+            
+            // Upload the file
+            let (responseData, response) = try await URLSession.shared.data(for: request)
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 200 {
+                    // Parse response to get CID
+                    if let responseString = String(data: responseData, encoding: .utf8) {
+                        print("DEBUG: process-zip upload response: \(responseString)")
+                        
+                        // Parse JSON response to extract CID
+                        if let jsonData = responseString.data(using: .utf8),
+                           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                           let cid = json["cid"] as? String {
+                            print("DEBUG: Extracted CID from response: \(cid)")
+                            return cid
+                        } else {
+                            // Fallback: try to extract CID from response string
+                            return responseString.trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                    } else {
+                        throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
+                    }
+                } else {
+                    throw NSError(domain: "VideoUpload", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Upload failed with status code: \(httpResponse.statusCode)"])
+                }
+            }
+            
+            throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+        }
+        
+        /// Wait for server to return CID via message pull
+        private func waitForServerCID(cid: String, appUser: User) async throws -> (MimeiFileType?, String?) {
+            print("DEBUG: Waiting for server CID: \(cid)")
+            
+            // Poll for server response with timeout
+            let maxAttempts = 30 // 30 attempts
+            let pollInterval: UInt64 = 2_000_000_000 // 2 seconds in nanoseconds
+            
+            for attempt in 1...maxAttempts {
+                print("DEBUG: Polling attempt \(attempt)/\(maxAttempts) for CID: \(cid)")
+                
+                // Check for server response via message pull
+                if let result = try await checkForServerResponse(cid: cid, appUser: appUser) {
+                    print("DEBUG: Received server response for CID: \(cid)")
+                    return result
+                }
+                
+                // Wait before next attempt
+                try await Task.sleep(nanoseconds: pollInterval)
+            }
+            
+            throw NSError(domain: "VideoProcessing", code: -1, userInfo: [NSLocalizedDescriptionKey: "Timeout waiting for server response"])
+        }
+        
+        /// Check for server response via message pull
+        private func checkForServerResponse(cid: String, appUser: User) async throws -> (MimeiFileType?, String?)? {
+            guard let client = appUser.hproseClient else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            }
+            
+            let entry = "check_video_processing"
+            let params: [String: Any] = [
+                "aid": "Tweet",
+                "ver": "last",
+                "userid": appUser.mid,
+                "cid": cid
+            ]
+            
+            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+                return nil // No response yet
+            }
+            
+            if let status = response["status"] as? String, status == "completed" {
+                // Parse the completed video result
+                if let fileData = response["file"] as? [String: Any] {
+                    let mid = fileData["mid"] as? String ?? UUID().uuidString
+                    let fileName = fileData["fileName"] as? String ?? "video.m3u8"
+                    let fileSize = fileData["fileSize"] as? Int ?? 0
+                    let aspectRatio = fileData["aspectRatio"] as? Float ?? 16.0/9.0
+                    
+                    let mimeiFile = MimeiFileType(
+                        mid: mid,
+                        mediaType: .hls_video,
+                        size: Int64(fileSize),
+                        fileName: fileName,
+                        aspectRatio: aspectRatio
+                    )
+                    
+                    return (mimeiFile, nil)
+                }
+            }
+            
+            return nil // Still processing
         }
         
         /// Upload video to backend for conversion
