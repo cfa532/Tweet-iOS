@@ -1946,17 +1946,25 @@ final class HproseInstance: ObservableObject {
             progressCallback?("Uploading HLS zip to server...", 60)
             
             // Upload compressed HLS to server
-            let cid = try await uploadCompressedHLS(
+            let jobId = try await uploadCompressedHLS(
                 compressedURL: compressedURL,
                 fileName: "\(originalFileName)_hls.zip",
                 referenceId: referenceId,
                 appUser: appUser
             )
             
-            progressCallback?("HLS processing completed", 80)
+            progressCallback?("HLS uploaded, waiting for processing...", 70)
             
-            // We already have the CID from the upload response, no need to poll
-            print("DEBUG: Using CID from upload response: \(cid)")
+            // Poll for processing completion
+            let cid = try await pollProcessZipStatus(
+                jobId: jobId,
+                appUser: appUser,
+                progressCallback: progressCallback
+            )
+            
+            progressCallback?("HLS processing completed", 90)
+            
+            print("DEBUG: Received CID from processing: \(cid)")
             
             // Create result with the CID we received and the correct aspect ratio
             let mimeiFileType = MimeiFileType(
@@ -2089,31 +2097,113 @@ final class HproseInstance: ObservableObject {
             // Upload the file
             let (responseData, response) = try await URLSession.shared.data(for: request)
             
-            if let httpResponse = response as? HTTPURLResponse {
-                if httpResponse.statusCode == 200 {
-                    // Parse response to get CID
-                    if let responseString = String(data: responseData, encoding: .utf8) {
-                        print("DEBUG: process-zip upload response: \(responseString)")
-                        
-                        // Parse JSON response to extract CID
-                        if let jsonData = responseString.data(using: .utf8),
-                           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                           let cid = json["cid"] as? String {
-                            print("DEBUG: Extracted CID from response: \(cid)")
-                            return cid
+                    if let httpResponse = response as? HTTPURLResponse {
+                        if httpResponse.statusCode == 200 {
+                            // Parse response to get job ID
+                            if let responseString = String(data: responseData, encoding: .utf8) {
+                                print("DEBUG: process-zip upload response: \(responseString)")
+                                
+                                // Parse JSON response to extract job ID
+                                if let jsonData = responseString.data(using: .utf8),
+                                   let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                                   let jobId = json["jobId"] as? String {
+                                    print("DEBUG: Extracted job ID from response: \(jobId)")
+                                    return jobId
+                                } else {
+                                    // Fallback: try to extract job ID from response string
+                                    return responseString.trimmingCharacters(in: .whitespacesAndNewlines)
+                                }
+                            } else {
+                                throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
+                            }
                         } else {
-                            // Fallback: try to extract CID from response string
-                            return responseString.trimmingCharacters(in: .whitespacesAndNewlines)
+                            throw NSError(domain: "VideoUpload", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Upload failed with status code: \(httpResponse.statusCode)"])
                         }
-                    } else {
-                        throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
                     }
-                } else {
-                    throw NSError(domain: "VideoUpload", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Upload failed with status code: \(httpResponse.statusCode)"])
-                }
-            }
             
             throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+        }
+        
+        /// Poll process-zip status to get CID when processing is complete
+        private func pollProcessZipStatus(jobId: String, appUser: User, progressCallback: ((String, Int) -> Void)?) async throws -> String {
+            print("DEBUG: Polling process-zip status for job ID: \(jobId)")
+            
+            // Always resolve writableUrl to ensure we have the correct IP address
+            let writableUrl = try await appUser.resolveWritableUrl()
+            guard let writableUrl = writableUrl else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
+            }
+            
+            // Use the cloud drive port for HLS status polling
+            let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
+            let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
+            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            let statusURL = cloudBaseURL.appendingPathComponent("process-zip/status/\(jobId)")
+            print("DEBUG: Polling status at: \(statusURL)")
+            
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 30  // 30 seconds for status checks
+            config.timeoutIntervalForResource = 30
+            let session = URLSession(configuration: config)
+            
+            var attempts = 0
+            let maxAttempts = 2880 // 4 hours with 5-second intervals (4 * 60 * 60 / 5 = 2880)
+            let pollInterval: TimeInterval = 5.0
+            
+            while attempts < maxAttempts {
+                attempts += 1
+                print("DEBUG: Process-zip status polling attempt \(attempts)/\(maxAttempts)")
+                
+                do {
+                    let (responseData, response) = try await session.data(from: statusURL)
+                    
+                    if let httpResponse = response as? HTTPURLResponse {
+                        if httpResponse.statusCode == 200 {
+                            if let responseString = String(data: responseData, encoding: .utf8) {
+                                print("DEBUG: Process-zip status response: \(responseString)")
+                                
+                                // Parse JSON response
+                                if let jsonData = responseString.data(using: .utf8),
+                                   let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+                                    
+                                    if let status = json["status"] as? String {
+                                        if status == "completed" {
+                                            if let cid = json["cid"] as? String {
+                                                print("DEBUG: Process-zip completed with CID: \(cid)")
+                                                return cid
+                                            } else {
+                                                throw NSError(domain: "ProcessZip", code: -1, userInfo: [NSLocalizedDescriptionKey: "Process completed but no CID found"])
+                                            }
+                                        } else if status == "failed" {
+                                            let errorMessage = json["error"] as? String ?? "Unknown error"
+                                            throw NSError(domain: "ProcessZip", code: -1, userInfo: [NSLocalizedDescriptionKey: "Process failed: \(errorMessage)"])
+                                        } else if status == "processing" {
+                                            // Still processing, continue polling
+                                            progressCallback?("Processing HLS video... (\(attempts * 5)s)", 70 + (attempts * 2))
+                                            try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+                                            continue
+                                        }
+                                    }
+                                }
+                            }
+                        } else if httpResponse.statusCode == 404 {
+                            // Job not found, might still be starting
+                            print("DEBUG: Job not found yet, continuing to poll...")
+                            try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+                            continue
+                        } else {
+                            print("DEBUG: Status check failed with status code: \(httpResponse.statusCode)")
+                        }
+                    }
+                } catch {
+                    print("DEBUG: Status check error: \(error)")
+                }
+                
+                // Wait before next attempt
+                try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+            }
+            
+            throw NSError(domain: "ProcessZip", code: -1, userInfo: [NSLocalizedDescriptionKey: "Process-zip timeout after 4 hours"])
         }
         
         /// Wait for server to return CID via message pull
@@ -2582,7 +2672,7 @@ final class HproseInstance: ObservableObject {
             let session = URLSession(configuration: config)
             
             var attempts = 0
-            let maxAttempts = 120 // 10 minutes with 5-second intervals
+            let maxAttempts = 2880 // 4 hours with 5-second intervals (4 * 60 * 60 / 5 = 2880)
             let pollInterval: TimeInterval = 5.0
             
             while attempts < maxAttempts {
@@ -2641,7 +2731,7 @@ final class HproseInstance: ObservableObject {
                 try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
             }
             
-            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video conversion timed out after \(maxAttempts * Int(pollInterval)) seconds"])
+            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video conversion timed out after 4 hours"])
         }
         
         /// Parse video status response
