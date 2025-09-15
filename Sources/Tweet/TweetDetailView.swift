@@ -510,7 +510,11 @@ struct TweetDetailView: View {
                 .buttonStyle(PlainButtonStyle())
             }
             TweetItemHeaderView(tweet: displayTweet)
-            TweetMenu(tweet: displayTweet, isPinned: displayTweet.isPinned(in: pinnedTweets))
+            TweetMenu(
+                tweet: displayTweet, 
+                isPinned: displayTweet.isPinned(in: pinnedTweets),
+                showDeleteButton: displayTweet.authorId == hproseInstance.appUser.mid
+            )
         }
         .padding(.horizontal, 8)
         .padding(.top)
