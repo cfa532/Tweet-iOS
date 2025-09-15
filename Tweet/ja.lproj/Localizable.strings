@@ -23,6 +23,14 @@
 "Login Successful. Wait for a few minutes before login." = "ログインに成功しました。数分待ってからログインしてください。";
 "Welcome back!" = "おかえりなさい！";
 "OK" = "OK";
+"Enter your username" = "ユーザー名を入力してください";
+"Enter your password" = "パスワードを入力してください";
+"Wrong password" = "パスワードが間違っています";
+"Invalid username" = "無効なユーザー名です";
+"User not found" = "ユーザーが見つかりません";
+"Login failed" = "ログインに失敗しました";
+"Authentication failed" = "認証に失敗しました";
+"Account not found" = "アカウントが見つかりません";
 
 // MARK: - Registration Screen
 "Username *" = "ユーザー名 *";
@@ -131,6 +139,13 @@
 
 // MARK: - UI Elements
 "Private" = "プライベート";
+"Make Public" = "公開にする";
+"Make Private" = "プライベートにする";
+"Tweet set to private" = "ツイートをプライベートに設定しました";
+"Tweet set to public" = "ツイートを公開に設定しました";
+"Failed to update privacy setting" = "プライバシー設定の更新に失敗しました";
+"Pin" = "ピン留め";
+"Unpin" = "ピン留めを解除";
 "Initializing..." = "初期化中...";
 "Failed to initialize app" = "アプリの初期化に失敗しました";
 "Background upload failed." = "バックグラウンドアップロードに失敗しました。";

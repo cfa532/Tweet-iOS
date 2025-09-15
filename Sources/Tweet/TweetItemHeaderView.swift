@@ -120,9 +120,43 @@ struct TweetMenu: View {
                         }
                     }) {
                         if isCurrentlyPinned {
-                            Label("Unpin", systemImage: "pin.slash")
+                            Label(LocalizedStringKey("Unpin"), systemImage: "pin.slash")
                         } else {
-                            Label("Pin", systemImage: "pin")
+                            Label(LocalizedStringKey("Pin"), systemImage: "pin")
+                        }
+                    }
+                    
+                    // Privacy toggle button
+                    Button(action: {
+                        Task {
+                            do {
+                                let newPrivacyStatus = try await hproseInstance.updateTweetPrivacy(tweetId: tweet.mid)
+                                await MainActor.run {
+                                    // Update the tweet's privacy status locally
+                                    tweet.isPrivate = newPrivacyStatus
+                                    
+                                    // Update Core Data cache with the new privacy status
+                                    TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: hproseInstance.appUser.mid)
+                                    
+                                    toastMessage = newPrivacyStatus ? NSLocalizedString("Tweet set to private", comment: "Toast message when tweet is set to private") : NSLocalizedString("Tweet set to public", comment: "Toast message when tweet is set to public")
+                                    toastType = .success
+                                    showToast = true
+                                }
+                            } catch {
+                                await MainActor.run {
+                                    print("[TweetMenu] Privacy update failed: \(error.localizedDescription)")
+                                    
+                                    toastMessage = NSLocalizedString("Failed to update privacy setting", comment: "Error message when privacy toggle fails")
+                                    toastType = .error
+                                    showToast = true
+                                }
+                            }
+                        }
+                    }) {
+                        if tweet.isPrivate == true {
+                            Label(LocalizedStringKey("Make Public"), systemImage: "globe")
+                        } else {
+                            Label(LocalizedStringKey("Make Private"), systemImage: "lock")
                         }
                     }
                 }
@@ -135,9 +169,10 @@ struct TweetMenu: View {
                             } catch {
                                 print("Tweet deletion failed. \(tweet)")
                                 await MainActor.run {
-                                    toastMessage = "Failed to delete tweet."
-                                    toastType = .error
-                                    showToast = true
+                                    NotificationCenter.default.post(
+                                        name: .errorOccurred,
+                                        object: error
+                                    )
                                 }
                             }
                         }
@@ -168,16 +203,20 @@ struct TweetMenu: View {
                     .accessibilityLabel("Tweet options")
                     .accessibilityHint("Double tap to open tweet menu")
             }
-            if showToast {
-                VStack {
-                    Spacer()
-                    ToastView(message: toastMessage, type: toastType)
-                        .padding(.bottom, 40)
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .animation(.easeInOut(duration: 0.3), value: showToast)
-            }
         }
+        .overlay(
+            Group {
+                if showToast {
+                    VStack {
+                        Spacer()
+                        ToastView(message: toastMessage, type: toastType)
+                            .padding(.bottom, 40)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.3), value: showToast)
+                }
+            }
+        )
         .sheet(isPresented: $showFilterSheet) {
             ContentFilterView(tweet: tweet)
         }

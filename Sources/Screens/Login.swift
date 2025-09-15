@@ -95,7 +95,8 @@ struct LoginView: View {
                 if let errorMessage = errorMessage {
                     Text(errorMessage)
                         .foregroundColor(.red)
-                        .font(.caption)
+                        .font(.body)
+                        .multilineTextAlignment(.center)
                 }
                 
                 DebounceButton(

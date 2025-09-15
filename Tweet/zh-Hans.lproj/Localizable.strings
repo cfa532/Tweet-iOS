@@ -23,6 +23,14 @@
 "Login Successful. Wait for a few minutes before login." = "登录成功。请等待几分钟后再登录。";
 "Welcome back!" = "欢迎回来！";
 "OK" = "确定";
+"Enter your username" = "请输入用户名";
+"Enter your password" = "请输入密码";
+"Wrong password" = "密码错误";
+"Invalid username" = "用户名无效";
+"User not found" = "用户未找到";
+"Login failed" = "登录失败";
+"Authentication failed" = "认证失败";
+"Account not found" = "账户未找到";
 
 // MARK: - Registration Screen
 "Username *" = "用户名 *";
@@ -134,6 +142,13 @@
 
 // MARK: - UI Elements
 "Private" = "私密";
+"Make Public" = "设为公开";
+"Make Private" = "设为私密";
+"Tweet set to private" = "推文已设为私密";
+"Tweet set to public" = "推文已设为公开";
+"Failed to update privacy setting" = "隐私设置更新失败";
+"Pin" = "置顶";
+"Unpin" = "取消置顶";
 "Initializing..." = "正在初始化...";
 "Failed to initialize app" = "应用初始化失败";
 "Background upload failed." = "后台上传失败。";

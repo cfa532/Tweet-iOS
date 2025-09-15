@@ -44,9 +44,8 @@ class ComposeTweetViewModel: ObservableObject {
     
     init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
-        #if !DEBUG
+        // Default to public (false) for all builds
         self.isPrivate = false
-        #endif
     }
     
     var canPostTweet: Bool {

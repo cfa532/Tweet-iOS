@@ -134,18 +134,31 @@ struct ComposeTweetView: View {
             
             Spacer()
             
-            #if DEBUG
-            // Private toggle - only show on debug builds
-            HStack(spacing: 8) {
-                Image(systemName: "lock")
-                    .font(.system(size: 16))
-                    .foregroundColor(viewModel.isPrivate ? .themeAccent : .themeSecondaryText)
-                
-                Toggle(NSLocalizedString("Private", comment: "Private tweet toggle"), isOn: $viewModel.isPrivate)
-                    .toggleStyle(SwitchToggleStyle(tint: .themeAccent))
-                    .labelsHidden()
+            // Privacy toggle button - consistent with dropdown menu style
+            Button(action: {
+                viewModel.isPrivate.toggle()
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: viewModel.isPrivate ? "lock.fill" : "globe")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(viewModel.isPrivate ? .themeAccent : .themeSecondaryText)
+                    
+                    Text(viewModel.isPrivate ? "Private" : "Public")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(viewModel.isPrivate ? .themeAccent : .themeSecondaryText)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(viewModel.isPrivate ? Color.themeAccent.opacity(0.1) : Color.themeSecondaryText.opacity(0.1))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(viewModel.isPrivate ? Color.themeAccent : Color.themeSecondaryText, lineWidth: 1)
+                )
             }
-            #endif
+            .buttonStyle(PlainButtonStyle())
             
             Text("\(max(0, Constants.MAX_TWEET_SIZE - viewModel.tweetContent.count))")
                 .foregroundColor(viewModel.tweetContent.count > Constants.MAX_TWEET_SIZE ? .red : .themeSecondaryText)

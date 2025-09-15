@@ -23,6 +23,14 @@
 "Login Successful. Wait for a few minutes before login." = "Login Successful. Wait for a few minutes before login.";
 "Welcome back!" = "Welcome back!";
 "OK" = "OK";
+"Enter your username" = "Enter your username";
+"Enter your password" = "Enter your password";
+"Wrong password" = "Wrong password";
+"Invalid username" = "Invalid username";
+"User not found" = "User not found";
+"Login failed" = "Login failed";
+"Authentication failed" = "Authentication failed";
+"Account not found" = "Account not found";
 
 // MARK: - Registration Screen
 "Username *" = "Username *";
@@ -146,6 +154,13 @@
 
 // MARK: - UI Elements
 "Private" = "Private";
+"Make Public" = "Make Public";
+"Make Private" = "Make Private";
+"Tweet set to private" = "Tweet set to private";
+"Tweet set to public" = "Tweet set to public";
+"Failed to update privacy setting" = "Failed to update privacy setting";
+"Pin" = "Pin";
+"Unpin" = "Unpin";
 "Initializing..." = "Initializing...";
 "Failed to initialize app" = "Failed to initialize app";
 "Background upload failed." = "Background upload failed.";

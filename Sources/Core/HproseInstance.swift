@@ -718,9 +718,10 @@ final class HproseInstance: ObservableObject {
             if let status = response["status"] as? String {
                 if status == "failure" {
                     if let reason = response["reason"] as? String {
-                        return ["reason": reason, "status": "failure"]
+                        let localizedReason = self.localizeLoginError(reason)
+                        return ["reason": localizedReason, "status": "failure"]
                     }
-                    return ["reason": "Unknown error occurred", "status": "failure"]
+                    return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
                 } else if status == "success" {
                     await MainActor.run {
                         // Update the appUser reference to point to the new user instance
@@ -737,8 +738,38 @@ final class HproseInstance: ObservableObject {
                     return ["reason": "Success", "status": "success"]
                 }
             }
-            return ["reason": "Invalid response status", "status": "failure"]
+            return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
+    }
+    
+    /// Maps backend login error messages to localized versions
+    private func localizeLoginError(_ backendError: String) -> String {
+        let lowercasedError = backendError.lowercased()
+        
+        // Common backend error patterns and their localized equivalents
+        if lowercasedError.contains("wrong password") || lowercasedError.contains("invalid password") || lowercasedError.contains("incorrect password") {
+            return NSLocalizedString("Wrong password", comment: "Wrong password error message")
+        }
+        
+        if lowercasedError.contains("invalid username") || lowercasedError.contains("username not found") {
+            return NSLocalizedString("Invalid username", comment: "Invalid username error message")
+        }
+        
+        if lowercasedError.contains("user not found") || lowercasedError.contains("account not found") {
+            return NSLocalizedString("User not found", comment: "User not found error message")
+        }
+        
+        if lowercasedError.contains("authentication failed") || lowercasedError.contains("auth failed") {
+            return NSLocalizedString("Authentication failed", comment: "Authentication failed error message")
+        }
+        
+        if lowercasedError.contains("login failed") {
+            return NSLocalizedString("Login failed", comment: "Login failed error message")
+        }
+        
+        // If no specific pattern matches, return the original error message
+        // This allows for custom error messages from the backend to pass through
+        return backendError
     }
     
     func logout() async {
@@ -1152,6 +1183,83 @@ final class HproseInstance: ObservableObject {
             TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
         } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "updateRetweetCount: No response"])
+        }
+    }
+    
+    /**
+     * Update tweet privacy (public/private). Only appUser can update its own tweet.
+     * Returns the new privacy status as a boolean.
+     * */
+    func updateTweetPrivacy(tweetId: String) async throws -> Bool {
+        return try await withRetry {
+            let entry = "update_tweet_privacy"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "appuserid": appUser.mid,
+                "tweetid": tweetId
+            ]
+            guard let client = appUser.hproseClient else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            }
+            
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            print("[updateTweetPrivacy] Raw response: \(String(describing: rawResponse))")
+            
+            // Handle different response formats
+            if let isPrivateBool = rawResponse as? Bool {
+                // Backend returns just a boolean directly
+                print("[updateTweetPrivacy] Direct boolean response: \(isPrivateBool)")
+                return isPrivateBool
+            }
+            
+            // Handle numeric responses (0 = false, 1 = true)
+            if let numericResponse = rawResponse as? NSNumber {
+                let isPrivate = numericResponse.boolValue
+                print("[updateTweetPrivacy] Numeric response: \(numericResponse) -> boolean: \(isPrivate)")
+                return isPrivate
+            }
+            
+            // Handle integer responses (0 = false, 1 = true)
+            if let intResponse = rawResponse as? Int {
+                let isPrivate = intResponse != 0
+                print("[updateTweetPrivacy] Integer response: \(intResponse) -> boolean: \(isPrivate)")
+                return isPrivate
+            }
+            
+            guard let response = rawResponse as? [String: Any] else {
+                print("[updateTweetPrivacy] Unexpected response format: \(String(describing: rawResponse))")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "updateTweetPrivacy: Invalid response format"])
+            }
+            
+            print("[updateTweetPrivacy] Response dictionary: \(response)")
+            
+            // Check if the operation was successful
+            guard let success = response["success"] as? Bool, success else {
+                let errorMessage = response["error"] as? String ?? "updateTweetPrivacy: Operation failed"
+                print("[updateTweetPrivacy] Operation failed: \(errorMessage)")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            }
+            
+            // Parse the new privacy status from dictionary
+            if let isPrivate = response["isPrivate"] as? Bool {
+                print("[updateTweetPrivacy] Privacy status from dictionary: \(isPrivate)")
+                return isPrivate
+            }
+            
+            // Try alternative key names
+            if let isPrivate = response["private"] as? Bool {
+                print("[updateTweetPrivacy] Privacy status from 'private' key: \(isPrivate)")
+                return isPrivate
+            }
+            
+            if let isPrivate = response["privacy"] as? Bool {
+                print("[updateTweetPrivacy] Privacy status from 'privacy' key: \(isPrivate)")
+                return isPrivate
+            }
+            
+            print("[updateTweetPrivacy] No privacy status found in response keys: \(response.keys)")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "updateTweetPrivacy: No privacy status returned"])
         }
     }
     
