@@ -9,6 +9,7 @@ struct ComposeTweetView: View {
     @State private var shouldFocus = false
     @State private var showMediaPicker = false
     @State private var showCancelConfirmation = false
+    @State private var showCamera = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
@@ -18,7 +19,7 @@ struct ComposeTweetView: View {
     
     // Check if there's content or attachments that would be lost
     private var hasContentOrAttachments: Bool {
-        !viewModel.tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !viewModel.selectedItems.isEmpty
+        !viewModel.tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !viewModel.selectedItems.isEmpty || !viewModel.selectedImages.isEmpty || !viewModel.selectedVideos.isEmpty
     }
 
     init() {
@@ -108,6 +109,16 @@ struct ComposeTweetView: View {
         } message: {
             Text(NSLocalizedString("Your tweet will be discarded and cannot be recovered.", comment: "Cancel confirmation message"))
         }
+        .sheet(isPresented: $showCamera) {
+            CameraView { image, videoURL in
+                if let image = image {
+                    viewModel.selectedImages.append(image)
+                }
+                if let videoURL = videoURL {
+                    viewModel.selectedVideos.append(videoURL)
+                }
+            }
+        }
     }
     
     private var mainContent: some View {
@@ -134,12 +145,19 @@ struct ComposeTweetView: View {
     private var mediaPreview: some View {
         MediaPreviewGrid(
             selectedItems: viewModel.selectedItems,
+            selectedImages: viewModel.selectedImages,
+            selectedVideos: viewModel.selectedVideos,
             onRemoveItem: { index in
                 viewModel.selectedItems.remove(at: index)
             },
-            onRemoveImage: { _ in }
+            onRemoveImage: { index in
+                viewModel.selectedImages.remove(at: index)
+            },
+            onRemoveVideo: { index in
+                viewModel.selectedVideos.remove(at: index)
+            }
         )
-        .frame(height: viewModel.selectedItems.isEmpty ? 0 : 120)
+        .frame(height: (viewModel.selectedItems.isEmpty && viewModel.selectedImages.isEmpty && viewModel.selectedVideos.isEmpty) ? 0 : 120)
         .background(Color(.systemBackground))
     }
     
@@ -147,7 +165,9 @@ struct ComposeTweetView: View {
         HStack(spacing: 20) {
             MediaPicker(
                 selectedItems: $viewModel.selectedItems,
-                showCamera: .constant(false),
+                selectedImages: $viewModel.selectedImages,
+                selectedVideos: $viewModel.selectedVideos,
+                showCamera: $showCamera,
                 error: $viewModel.error,
                 maxSelectionCount: 20,
                 supportedTypes: [.image, .movie]
@@ -208,4 +228,5 @@ struct ComposeTweetView: View {
             }
         }
     }
+    
 }

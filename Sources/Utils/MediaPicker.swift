@@ -6,6 +6,7 @@ import AVFoundation
 struct MediaPicker: View {
     @Binding var selectedItems: [PhotosPickerItem]
     @Binding var selectedImages: [UIImage]
+    @Binding var selectedVideos: [URL]
     @Binding var showCamera: Bool
     @Binding var error: Error?
     
@@ -17,6 +18,7 @@ struct MediaPicker: View {
     init(
         selectedItems: Binding<[PhotosPickerItem]>,
         selectedImages: Binding<[UIImage]> = .constant([]),
+        selectedVideos: Binding<[URL]> = .constant([]),
         showCamera: Binding<Bool>,
         error: Binding<Error?> = .constant(nil),
         maxSelectionCount: Int = 20,
@@ -26,6 +28,7 @@ struct MediaPicker: View {
     ) {
         self._selectedItems = selectedItems
         self._selectedImages = selectedImages
+        self._selectedVideos = selectedVideos
         self._showCamera = showCamera
         self._error = error
         self.maxSelectionCount = maxSelectionCount
@@ -54,8 +57,8 @@ struct MediaPicker: View {
                 onItemAdded?()
             }
             
-            // Camera button (only show if images are supported)
-            if supportedTypes.contains(.image) {
+            // Camera button (show if images or videos are supported)
+            if supportedTypes.contains(.image) || supportedTypes.contains(.movie) {
                 Button(action: {
                     showCamera = true
                 }) {
@@ -144,29 +147,43 @@ struct MediaPicker: View {
 struct MediaPreviewGrid: View {
     let selectedItems: [PhotosPickerItem]
     let selectedImages: [UIImage]
+    let selectedVideos: [URL]
     let onRemoveItem: (Int) -> Void
     let onRemoveImage: (Int) -> Void
+    let onRemoveVideo: (Int) -> Void
     
     init(
         selectedItems: [PhotosPickerItem],
         selectedImages: [UIImage] = [],
+        selectedVideos: [URL] = [],
         onRemoveItem: @escaping (Int) -> Void,
-        onRemoveImage: @escaping (Int) -> Void
+        onRemoveImage: @escaping (Int) -> Void,
+        onRemoveVideo: @escaping (Int) -> Void
     ) {
         self.selectedItems = selectedItems
         self.selectedImages = selectedImages
+        self.selectedVideos = selectedVideos
         self.onRemoveItem = onRemoveItem
         self.onRemoveImage = onRemoveImage
+        self.onRemoveVideo = onRemoveVideo
     }
     
     var body: some View {
-        if !selectedImages.isEmpty || !selectedItems.isEmpty {
+        if !selectedImages.isEmpty || !selectedItems.isEmpty || !selectedVideos.isEmpty {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
                 // Camera images
                 ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
                     MediaPreviewItem(
                         image: image,
                         onRemove: { onRemoveImage(index) }
+                    )
+                }
+                
+                // Camera videos
+                ForEach(Array(selectedVideos.enumerated()), id: \.offset) { index, videoURL in
+                    MediaPreviewItem(
+                        videoURL: videoURL,
+                        onRemove: { onRemoveVideo(index) }
                     )
                 }
                 
@@ -185,17 +202,27 @@ struct MediaPreviewGrid: View {
 @available(iOS 16.0, *)
 struct MediaPreviewItem: View {
     let image: UIImage?
+    let videoURL: URL?
     let item: PhotosPickerItem?
     let onRemove: () -> Void
     
     init(image: UIImage, onRemove: @escaping () -> Void) {
         self.image = image
+        self.videoURL = nil
+        self.item = nil
+        self.onRemove = onRemove
+    }
+    
+    init(videoURL: URL, onRemove: @escaping () -> Void) {
+        self.image = nil
+        self.videoURL = videoURL
         self.item = nil
         self.onRemove = onRemove
     }
     
     init(item: PhotosPickerItem, onRemove: @escaping () -> Void) {
         self.image = nil
+        self.videoURL = nil
         self.item = item
         self.onRemove = onRemove
     }
@@ -208,6 +235,10 @@ struct MediaPreviewItem: View {
                     .aspectRatio(contentMode: .fill)
                     .frame(width: 60, height: 60)
                     .clipped()
+                    .cornerRadius(8)
+            } else if let videoURL = videoURL {
+                VideoThumbnailView(videoURL: videoURL)
+                    .frame(width: 60, height: 60)
                     .cornerRadius(8)
             } else if let item = item {
                 ThumbnailView(item: item)
@@ -230,7 +261,8 @@ struct MediaPreviewItem: View {
 struct MediaUploadHelper {
     static func prepareItemData(
         selectedItems: [PhotosPickerItem],
-        selectedImages: [UIImage]
+        selectedImages: [UIImage],
+        selectedVideos: [URL] = []
     ) async throws -> [HproseInstance.PendingTweetUpload.ItemData] {
         var itemData: [HproseInstance.PendingTweetUpload.ItemData] = []
         
@@ -295,6 +327,26 @@ struct MediaUploadHelper {
             }
         }
         
+        // Process camera videos
+        for videoURL in selectedVideos {
+            do {
+                let videoData = try Data(contentsOf: videoURL)
+                let timestamp = Int(Date().timeIntervalSince1970)
+                let filename = "\(timestamp)_\(UUID().uuidString).mov"
+                
+                itemData.append(HproseInstance.PendingTweetUpload.ItemData(
+                    identifier: UUID().uuidString,
+                    typeIdentifier: "video/quicktime",
+                    data: videoData,
+                    fileName: filename,
+                    noResample: false
+                ))
+            } catch {
+                print("Error reading camera video data: \(error)")
+                throw error
+            }
+        }
+        
         return itemData
     }
     
@@ -323,10 +375,11 @@ struct MediaUploadHelper {
     static func validateContent(
         content: String,
         selectedItems: [PhotosPickerItem],
-        selectedImages: [UIImage]
+        selectedImages: [UIImage],
+        selectedVideos: [URL] = []
     ) -> Bool {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmedContent.isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty
+        return !trimmedContent.isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty
     }
     
     private static func getFileTypeDescription(from typeIdentifier: String) -> String {
@@ -351,6 +404,52 @@ struct MediaUploadHelper {
             return "Document"
         } else {
             return "File"
+        }
+    }
+}
+
+@available(iOS 16.0, *)
+struct VideoThumbnailView: View {
+    let videoURL: URL
+    @State private var thumbnail: UIImage?
+    
+    var body: some View {
+        Group {
+            if let thumbnail = thumbnail {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay(
+                        Image(systemName: "video")
+                            .foregroundColor(.gray)
+                    )
+            }
+        }
+        .onAppear {
+            generateThumbnail()
+        }
+    }
+    
+    private func generateThumbnail() {
+        Task {
+            let asset = AVURLAsset(url: videoURL)
+            let imageGenerator = AVAssetImageGenerator(asset: asset)
+            imageGenerator.appliesPreferredTrackTransform = true
+            imageGenerator.maximumSize = CGSize(width: 120, height: 120)
+            
+            do {
+                let cgImage = try await imageGenerator.image(at: CMTime.zero).image
+                let uiImage = UIImage(cgImage: cgImage)
+                
+                await MainActor.run {
+                    self.thumbnail = uiImage
+                }
+            } catch {
+                print("Error generating video thumbnail: \(error)")
+            }
         }
     }
 }

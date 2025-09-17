@@ -10,11 +10,14 @@ struct CommentComposeView: View {
     @State private var error: Error?
     @State private var isQuoting = false
     @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var selectedImages: [UIImage] = []
+    @State private var selectedVideos: [URL] = []
     // Note: isSubmitting state is now managed by DebounceButton
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
     @State private var showCancelConfirmation = false
+    @State private var showCamera = false
     @FocusState private var isEditorFocused: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
     
@@ -25,7 +28,7 @@ struct CommentComposeView: View {
     
     // Check if there's content or attachments that would be lost
     private var hasContentOrAttachments: Bool {
-        !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty
+        !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty
     }
 
     var body: some View {
@@ -88,19 +91,28 @@ struct CommentComposeView: View {
                         // Thumbnail preview section
                         MediaPreviewGrid(
                             selectedItems: selectedItems,
+                            selectedImages: selectedImages,
+                            selectedVideos: selectedVideos,
                             onRemoveItem: { index in
                                 selectedItems.remove(at: index)
                             },
-                            onRemoveImage: { _ in }
+                            onRemoveImage: { index in
+                                selectedImages.remove(at: index)
+                            },
+                            onRemoveVideo: { index in
+                                selectedVideos.remove(at: index)
+                            }
                         )
-                        .frame(height: selectedItems.isEmpty ? 0 : 120)
+                        .frame(height: (selectedItems.isEmpty && selectedImages.isEmpty && selectedVideos.isEmpty) ? 0 : 120)
                         .background(Color(.systemBackground))
                         
                         // Attachment toolbar
                         HStack(spacing: 20) {
                             MediaPicker(
                                 selectedItems: $selectedItems,
-                                showCamera: .constant(false),
+                                selectedImages: $selectedImages,
+                                selectedVideos: $selectedVideos,
+                                showCamera: $showCamera,
                                 error: $error,
                                 maxSelectionCount: 20,
                                 supportedTypes: [.image, .movie]
@@ -165,7 +177,7 @@ struct CommentComposeView: View {
                             await submitComment()
                         }
                     }
-                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedItems.isEmpty)
+                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedItems.isEmpty && selectedImages.isEmpty && selectedVideos.isEmpty)
                     // Note: Progress indicator is now managed by DebounceButton
                 }
             }
@@ -209,6 +221,16 @@ struct CommentComposeView: View {
         } message: {
             Text(NSLocalizedString("Your comment will be discarded and cannot be recovered.", comment: "Cancel confirmation message"))
         }
+        .sheet(isPresented: $showCamera) {
+            CameraView { image, videoURL in
+                if let image = image {
+                    selectedImages.append(image)
+                }
+                if let videoURL = videoURL {
+                    selectedVideos.append(videoURL)
+                }
+            }
+        }
     }
     
     private func showToastMessage(_ message: String, type: ToastView.ToastType) {
@@ -229,7 +251,8 @@ struct CommentComposeView: View {
         guard MediaUploadHelper.validateContent(
             content: commentText,
             selectedItems: selectedItems,
-            selectedImages: []
+            selectedImages: selectedImages,
+            selectedVideos: selectedVideos
         ) else {
             print("DEBUG: Comment validation failed - empty content and no attachments")
             await MainActor.run {
@@ -257,7 +280,8 @@ struct CommentComposeView: View {
         do {
             itemData = try await MediaUploadHelper.prepareItemData(
                 selectedItems: selectedItems,
-                selectedImages: []
+                selectedImages: selectedImages,
+                selectedVideos: selectedVideos
             )
         } catch {
             print("DEBUG: Error preparing item data: \(error)")
@@ -274,6 +298,8 @@ struct CommentComposeView: View {
         await MainActor.run {
             commentText = ""
             selectedItems = []
+            selectedImages = []
+            selectedVideos = []
             
             // Show success toast before dismissing
             showToastMessage(NSLocalizedString("Comment submitted", comment: "Comment submitted message"), type: .success)
@@ -284,4 +310,5 @@ struct CommentComposeView: View {
             }
         }
     }
+    
 } 

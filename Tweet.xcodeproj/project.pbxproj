@@ -366,6 +366,7 @@
 				1A1A1A1A1A1A1A1A1A1A1A2B /* PollCreationView.swift */,
 				46E5B3562DDF74B500AEF31F /* CommentComposeView.swift */,
 				46E5B3582DE005EC00AEF31F /* ThumbnailView.swift */,
+				46B03D862E48866C000E08DF /* ReplyEditorView.swift */,
 			);
 			path = Compose;
 			sourceTree = "<group>";
@@ -470,7 +471,6 @@
 			isa = PBXGroup;
 			children = (
 				46B03D882E488EC0000E08DF /* CameraView.swift */,
-				46B03D862E48866C000E08DF /* ReplyEditorView.swift */,
 				467494162DF4A13E0082FAC6 /* CommentDetailView.swift */,
 				467494122DF33BF50082FAC6 /* CommentMenu.swift */,
 				4674940E2DF2C4D00082FAC6 /* CommentListView.swift */,
@@ -609,9 +609,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -875,7 +879,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 23;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -928,7 +932,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 23;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;

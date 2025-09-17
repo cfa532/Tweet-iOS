@@ -18,6 +18,7 @@ struct ReplyEditorView: View {
     @State private var showExitConfirmation = false
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImages: [UIImage] = []
+    @State private var selectedVideos: [URL] = []
     // Note: isSubmitting state is now managed by DebounceButton
     @State private var showCamera = false
     @State private var showImagePicker = false
@@ -60,9 +61,12 @@ struct ReplyEditorView: View {
             Text(NSLocalizedString("You have unsaved content. Are you sure you want to discard your reply?", comment: "Discard reply confirmation"))
         }
         .sheet(isPresented: $showCamera) {
-            CameraView { image in
+            CameraView { image, videoURL in
                 if let image = image {
                     selectedImages.append(image)
+                }
+                if let videoURL = videoURL {
+                    selectedVideos.append(videoURL)
                 }
             }
         }
@@ -227,11 +231,15 @@ struct ReplyEditorView: View {
             MediaPreviewGrid(
                 selectedItems: selectedItems,
                 selectedImages: selectedImages,
+                selectedVideos: selectedVideos,
                 onRemoveItem: { index in
                     selectedItems.remove(at: index)
                 },
                 onRemoveImage: { index in
                     selectedImages.remove(at: index)
+                },
+                onRemoveVideo: { index in
+                    selectedVideos.remove(at: index)
                 }
             )
             
@@ -241,6 +249,7 @@ struct ReplyEditorView: View {
                 MediaPicker(
                     selectedItems: $selectedItems,
                     selectedImages: $selectedImages,
+                    selectedVideos: $selectedVideos,
                     showCamera: $showCamera,
                     error: $error,
                     maxSelectionCount: 20,
@@ -302,7 +311,7 @@ struct ReplyEditorView: View {
     }
     
     private var canSubmit: Bool {
-        !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty
+        !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty
     }
     
     private func showToastMessage(_ message: String, type: ToastView.ToastType) {
@@ -318,7 +327,7 @@ struct ReplyEditorView: View {
     }
     
     private func hasUnsavedContent() -> Bool {
-        !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty
+        !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty
     }
     
     private func handleCloseAttempt() {
@@ -333,6 +342,7 @@ struct ReplyEditorView: View {
         replyText = ""
         selectedImages.removeAll()
         selectedItems.removeAll()
+        selectedVideos.removeAll()
         isExpanded = false
         showExitConfirmation = false
         isTextFieldFocused = false
@@ -348,7 +358,8 @@ struct ReplyEditorView: View {
         guard MediaUploadHelper.validateContent(
             content: replyText,
             selectedItems: selectedItems,
-            selectedImages: selectedImages
+            selectedImages: selectedImages,
+            selectedVideos: selectedVideos
         ) else {
             print("DEBUG: Reply validation failed - empty content and no attachments")
             showToastMessage(NSLocalizedString("Comment cannot be empty.", comment: "Empty comment error"), type: .error)
@@ -372,7 +383,8 @@ struct ReplyEditorView: View {
                 // Prepare item data for background upload using helper
                 let itemData = try await MediaUploadHelper.prepareItemData(
                     selectedItems: selectedItems,
-                    selectedImages: selectedImages
+                    selectedImages: selectedImages,
+                    selectedVideos: selectedVideos
                 )
                 
                 // Schedule comment upload in background (same as CommentComposeView)
@@ -394,6 +406,7 @@ struct ReplyEditorView: View {
             }
         }
     }
+    
 }
 
 #Preview {

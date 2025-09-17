@@ -32,6 +32,8 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var showLocationPicker = false
     @Published var error: Error?
     @Published var selectedItems: [PhotosPickerItem] = []
+    @Published var selectedImages: [UIImage] = []
+    @Published var selectedVideos: [URL] = []
     @Published var selectedMedia: [MimeiFileType] = []
     // Note: isUploading state is now managed by DebounceButton
     @Published var uploadProgress = 0.0
@@ -52,7 +54,8 @@ class ComposeTweetViewModel: ObservableObject {
         MediaUploadHelper.validateContent(
             content: tweetContent,
             selectedItems: selectedItems,
-            selectedImages: []
+            selectedImages: selectedImages,
+            selectedVideos: selectedVideos
         )
     }
     
@@ -63,7 +66,8 @@ class ComposeTweetViewModel: ObservableObject {
         guard MediaUploadHelper.validateContent(
             content: tweetContent,
             selectedItems: selectedItems,
-            selectedImages: []
+            selectedImages: selectedImages,
+            selectedVideos: selectedVideos
         ) else {
             print("DEBUG: Tweet validation failed - empty content and no attachments")
             toastMessage = NSLocalizedString("Tweet cannot be empty.", comment: "Empty tweet error")
@@ -97,7 +101,8 @@ class ComposeTweetViewModel: ObservableObject {
         do {
             itemData = try await MediaUploadHelper.prepareItemData(
                 selectedItems: selectedItems,
-                selectedImages: []
+                selectedImages: selectedImages,
+                selectedVideos: selectedVideos
             )
         } catch {
             print("DEBUG: Error preparing item data: \(error)")
@@ -117,6 +122,8 @@ class ComposeTweetViewModel: ObservableObject {
     func clearForm() {
         tweetContent = ""
         selectedItems = []
+        selectedImages = []
+        selectedVideos = []
         isPrivate = false
     }
 }
