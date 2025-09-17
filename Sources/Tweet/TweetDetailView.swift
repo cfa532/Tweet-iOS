@@ -47,7 +47,7 @@ struct DetailVideoPlayerView: View {
                         }
                     )
             } else if isLoading {
-                ProgressView("Loading video...")
+                ProgressView(NSLocalizedString("Loading video...", comment: "Video loading message"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black.opacity(0.1))
             } else {

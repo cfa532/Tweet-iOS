@@ -258,7 +258,7 @@ struct ProfileView: View {
                     } else {
                         // Reset submission state
                         isSubmittingProfile = false
-                        throw NSError(domain: "ProfileUpdate", code: -1, userInfo: [NSLocalizedDescriptionKey: "Profile update failed"])
+                        throw NSError(domain: "ProfileUpdate", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Profile update failed", comment: "Profile update error")])
                     }
                 },
                 onAvatarUploadStateChange: { isUploading in

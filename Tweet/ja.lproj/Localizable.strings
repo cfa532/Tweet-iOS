@@ -350,3 +350,19 @@
 
 // MARK: - Badge
 "99+" = "99+";
+
+// MARK: - Confirmation Dialogs
+"Discard Tweet?" = "ツイートを破棄しますか？";
+"Discard Comment?" = "コメントを破棄しますか？";
+"Your tweet will be discarded and cannot be recovered." = "ツイートは破棄され、復元できません。";
+"Your comment will be discarded and cannot be recovered." = "コメントは破棄され、復元できません。";
+
+// MARK: - Additional Error Messages
+"All retry attempts failed" = "すべての再試行が失敗しました";
+"Retweet upload failed" = "リツイートのアップロードに失敗しました";
+"Video conversion failed" = "動画の変換に失敗しました";
+"Chat message upload failed" = "チャットメッセージのアップロードに失敗しました";
+"Profile update failed" = "プロフィールの更新に失敗しました";
+"Success" = "成功";
+"Processing..." = "処理中...";
+"Invalid response format from server" = "サーバーからの無効な応答形式";

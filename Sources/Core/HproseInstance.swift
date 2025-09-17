@@ -100,7 +100,7 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        throw lastError ?? NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "All retry attempts failed"])
+        throw lastError ?? NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("All retry attempts failed", comment: "Network retry error")])
     }
     
     /// Print detailed app user content for debugging
@@ -591,7 +591,7 @@ final class HproseInstance: ObservableObject {
                 "username": username,
             ]
             guard let response = client.invoke("runMApp", withArgs: [entry, params]) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserId"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
             return response as? String
         }
@@ -735,7 +735,7 @@ final class HproseInstance: ObservableObject {
                         await self.populateUserLists(user: loginUser)
                     }
                     
-                    return ["reason": "Success", "status": "success"]
+                    return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
@@ -812,7 +812,7 @@ final class HproseInstance: ObservableObject {
         guard let client = user.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
-
+        
         guard let response = client.invoke("runMApp", withArgs: [entry.rawValue, params]) as? [[String: Any]] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "getFollows: No response"])
         }
@@ -1136,7 +1136,7 @@ final class HproseInstance: ObservableObject {
             return (updatedTweet, updatedUser)
         }
     }
-
+    
     func retweet(_ tweet: Tweet) async throws -> Tweet? {
         if let retweet = try await uploadTweet(
             await MainActor.run {
@@ -1150,7 +1150,7 @@ final class HproseInstance: ObservableObject {
         ) {
             return retweet
         }
-        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "retweet: Upload failed"])
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Retweet upload failed", comment: "Retweet error")])
     }
     
     /**
@@ -1298,7 +1298,7 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
         }
     }
-        
+    
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
         // Check if app user is blacklisted by the tweet author
         if let tweetAuthor = tweet.author {
@@ -1413,7 +1413,7 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
         }
     }
-
+    
     // both author and tweet author can delete this comment
     func deleteComment(parentTweet: Tweet, commentId: String) async throws -> [String: Any]? {
         let entry = "delete_comment"
@@ -1583,42 +1583,42 @@ final class HproseInstance: ObservableObject {
                         
                         // Map UTI to MediaType
                         if typeIdentifier.hasPrefix("public.image") || 
-                           typeIdentifier.contains("jpeg") || 
-                           typeIdentifier.contains("png") || 
-                           typeIdentifier.contains("gif") || 
-                           typeIdentifier.contains("heic") || 
-                           typeIdentifier.contains("heif") ||
-                           typeIdentifier.contains("tiff") ||
-                           typeIdentifier.contains("bmp") ||
-                           typeIdentifier.contains("webp") {
+                            typeIdentifier.contains("jpeg") || 
+                            typeIdentifier.contains("png") || 
+                            typeIdentifier.contains("gif") || 
+                            typeIdentifier.contains("heic") || 
+                            typeIdentifier.contains("heif") ||
+                            typeIdentifier.contains("tiff") ||
+                            typeIdentifier.contains("bmp") ||
+                            typeIdentifier.contains("webp") {
                             return .image
                         } else if typeIdentifier.hasPrefix("public.movie") || 
-                                  typeIdentifier.contains("quicktime") || 
-                                  typeIdentifier.contains("movie") ||
-                                  typeIdentifier.contains("video") ||
-                                  typeIdentifier.contains("mp4") ||
-                                  typeIdentifier.contains("mov") ||
-                                  typeIdentifier.contains("m4v") ||
-                                  typeIdentifier.contains("avi") ||
-                                  typeIdentifier.contains("mkv") ||
-                                  typeIdentifier.contains("wmv") ||
-                                  typeIdentifier.contains("flv") ||
-                                  typeIdentifier.contains("webm") {
+                                    typeIdentifier.contains("quicktime") || 
+                                    typeIdentifier.contains("movie") ||
+                                    typeIdentifier.contains("video") ||
+                                    typeIdentifier.contains("mp4") ||
+                                    typeIdentifier.contains("mov") ||
+                                    typeIdentifier.contains("m4v") ||
+                                    typeIdentifier.contains("avi") ||
+                                    typeIdentifier.contains("mkv") ||
+                                    typeIdentifier.contains("wmv") ||
+                                    typeIdentifier.contains("flv") ||
+                                    typeIdentifier.contains("webm") {
                             return .video
                         } else if typeIdentifier.hasPrefix("public.audio") || 
-                                  typeIdentifier.contains("audio") ||
-                                  typeIdentifier.contains("mp3") ||
-                                  typeIdentifier.contains("m4a") ||
-                                  typeIdentifier.contains("wav") ||
-                                  typeIdentifier.contains("aac") ||
-                                  typeIdentifier.contains("flac") ||
-                                  typeIdentifier.contains("ogg") {
+                                    typeIdentifier.contains("audio") ||
+                                    typeIdentifier.contains("mp3") ||
+                                    typeIdentifier.contains("m4a") ||
+                                    typeIdentifier.contains("wav") ||
+                                    typeIdentifier.contains("aac") ||
+                                    typeIdentifier.contains("flac") ||
+                                    typeIdentifier.contains("ogg") {
                             return .audio
                         } else if typeIdentifier == "public.composite-content" || 
-                                  typeIdentifier.contains("pdf") {
+                                    typeIdentifier.contains("pdf") {
                             return .pdf
                         } else if typeIdentifier == "public.zip-archive" || 
-                                  typeIdentifier.contains("zip") {
+                                    typeIdentifier.contains("zip") {
                             return .zip
                         }
                     }
@@ -1660,8 +1660,8 @@ final class HproseInstance: ObservableObject {
                 if bytes.count >= 12 {
                     let ftypString = String(bytes: bytes[4...11], encoding: .ascii) ?? ""
                     if ftypString.hasPrefix("ftyp") && (ftypString.contains("heic") || ftypString.contains("heix") || 
-                                                       ftypString.contains("heis") || ftypString.contains("heim") ||
-                                                       ftypString.contains("hevc") || ftypString.contains("hevx")) {
+                                                        ftypString.contains("heis") || ftypString.contains("heim") ||
+                                                        ftypString.contains("hevc") || ftypString.contains("hevx")) {
                         print("DEBUG: [FILE TYPE] Detected HEIC/HEIF from ftyp")
                         return .image
                     }
@@ -1738,9 +1738,9 @@ final class HproseInstance: ObservableObject {
                 
                 // Video codecs
                 if codecString.contains("mp4") || codecString.contains("M4V") || codecString.contains("isom") ||
-                   codecString.contains("iso2") || codecString.contains("avc1") || codecString.contains("mp41") ||
-                   codecString.contains("mp42") || codecString.contains("3gp") || codecString.contains("qt") ||
-                   codecString.contains("M4A") || codecString.contains("M4B") || codecString.contains("M4P") {
+                    codecString.contains("iso2") || codecString.contains("avc1") || codecString.contains("mp41") ||
+                    codecString.contains("mp42") || codecString.contains("3gp") || codecString.contains("qt") ||
+                    codecString.contains("M4A") || codecString.contains("M4B") || codecString.contains("M4P") {
                     return .video
                 }
                 
@@ -2037,7 +2037,7 @@ final class HproseInstance: ObservableObject {
             guard conversionResult.success,
                   let hlsDirectory = conversionResult.hlsDirectoryURL else {
                 print("DEBUG: Video conversion failed: \(conversionResult.errorMessage ?? "Unknown error")")
-                progressCallback?("Video conversion failed", 0)
+                progressCallback?(NSLocalizedString("Video conversion failed", comment: "Video processing error"), 0)
                 // Clean up temp files
                 try? FileManager.default.removeItem(at: tempDir)
                 throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to HLS"])
@@ -2205,29 +2205,29 @@ final class HproseInstance: ObservableObject {
             // Upload the file
             let (responseData, response) = try await URLSession.shared.data(for: request)
             
-                    if let httpResponse = response as? HTTPURLResponse {
-                        if httpResponse.statusCode == 200 {
-                            // Parse response to get job ID
-                            if let responseString = String(data: responseData, encoding: .utf8) {
-                                print("DEBUG: process-zip upload response: \(responseString)")
-                                
-                                // Parse JSON response to extract job ID
-                                if let jsonData = responseString.data(using: .utf8),
-                                   let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                                   let jobId = json["jobId"] as? String {
-                                    print("DEBUG: Extracted job ID from response: \(jobId)")
-                                    return jobId
-                                } else {
-                                    // Fallback: try to extract job ID from response string
-                                    return responseString.trimmingCharacters(in: .whitespacesAndNewlines)
-                                }
-                            } else {
-                                throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
-                            }
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode == 200 {
+                    // Parse response to get job ID
+                    if let responseString = String(data: responseData, encoding: .utf8) {
+                        print("DEBUG: process-zip upload response: \(responseString)")
+                        
+                        // Parse JSON response to extract job ID
+                        if let jsonData = responseString.data(using: .utf8),
+                           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                           let jobId = json["jobId"] as? String {
+                            print("DEBUG: Extracted job ID from response: \(jobId)")
+                            return jobId
                         } else {
-                            throw NSError(domain: "VideoUpload", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Upload failed with status code: \(httpResponse.statusCode)"])
+                            // Fallback: try to extract job ID from response string
+                            return responseString.trimmingCharacters(in: .whitespacesAndNewlines)
                         }
+                    } else {
+                        throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
                     }
+                } else {
+                    throw NSError(domain: "VideoUpload", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Upload failed with status code: \(httpResponse.statusCode)"])
+                }
+            }
             
             throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
         }
@@ -2706,19 +2706,19 @@ final class HproseInstance: ObservableObject {
                     return (result, jobId)
                 } else if httpResponse.statusCode == 400 {
                     // Bad request - don't retry, parse error message
-                    let errorMessage = String(data: responseData, encoding: .utf8) ?? "Bad request"
-                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Bad request: \(errorMessage)"])
+                    let errorMessage = String(data: responseData, encoding: .utf8) ?? NSLocalizedString("Bad request", comment: "HTTP error message")
+                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Bad request: %@", comment: "HTTP error message"), errorMessage)])
                 } else if httpResponse.statusCode == 413 {
                     // Payload too large - don't retry
-                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Video file too large for processing"])
+                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Video file too large for processing", comment: "Video processing error")])
                 } else if httpResponse.statusCode >= 500 {
                     // Server error - throw error
-                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Server error (HTTP \(httpResponse.statusCode))"])
+                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Server error (HTTP %d)", comment: "Server error message"), httpResponse.statusCode)])
                 } else {
-                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode) error"])
+                    throw NSError(domain: "VideoProcessor", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("HTTP %d error", comment: "HTTP error message"), httpResponse.statusCode)])
                 }
             } else {
-                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid HTTP response"])
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid HTTP response", comment: "HTTP error message")])
             }
         }
         
@@ -2809,12 +2809,12 @@ final class HproseInstance: ObservableObject {
                                 )
                                 
                             case "failed":
-                                let errorMessage = statusResult.message ?? "Video conversion failed"
+                                let errorMessage = statusResult.message ?? NSLocalizedString("Video conversion failed", comment: "Video processing error")
                                 print("DEBUG: Video conversion failed: \(errorMessage)")
                                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video conversion failed: \(errorMessage)"])
                                 
                             case "uploading", "processing":
-                                let message = statusResult.message ?? "Processing..."
+                                let message = statusResult.message ?? NSLocalizedString("Processing...", comment: "Processing status")
                                 print("DEBUG: Video conversion in progress: \(message) (\(statusResult.progress)%)")
                                 progressCallback?(message, statusResult.progress)
                                 // Continue polling
@@ -3012,7 +3012,7 @@ final class HproseInstance: ObservableObject {
             throw error
         }
     }
-
+    
     /// Process BlackList candidates (move eligible ones to blacklist)
     func processBlackListCandidates() {
         blackList.processCandidates()
@@ -3288,7 +3288,7 @@ final class HproseInstance: ObservableObject {
             
             // No retry - the message will show with a failure icon
             // No need to post notification since the UI already handles failed messages
-            print("Chat message upload failed")
+            print(NSLocalizedString("Chat message upload failed", comment: "Chat upload error"))
         }
     }
     
@@ -3834,7 +3834,7 @@ final class HproseInstance: ObservableObject {
         }
         return response
     }
-
+    
     /**
      * Return a list of {tweetId, timestamp} for each pinned Tweet. The timestamp is when
      * the tweet is pinned.
@@ -3913,7 +3913,7 @@ final class HproseInstance: ObservableObject {
         if let hostId = hostId, !hostId.isEmpty {
             updatedUser.hostIds = [hostId]
         }
-
+        
         let entry = "set_author_core_data"
         let params = [
             "aid": appId,
@@ -3947,7 +3947,7 @@ final class HproseInstance: ObservableObject {
         print("DEBUG: updateUserCore - unexpected response format")
         return false
     }
-
+    
     // MARK: - User Avatar
     /// Sets the user's avatar on the server
     func setUserAvatar(user: User, avatar: MimeiId) async throws {
@@ -3960,7 +3960,7 @@ final class HproseInstance: ObservableObject {
         ]
         _ = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
     }
-
+    
     private func getProviderIP(_ mid: String) async throws -> String? {
         let params = [
             "aid": appId,
@@ -4006,7 +4006,7 @@ final class HproseInstance: ObservableObject {
         if recipient.isUserBlacklisted(appUser.mid) {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot send a message to this user because you are blocked"])
         }
-
+        
         let entry = "message_outgoing"
         let params: [String: Any] = [
             "aid": appId,

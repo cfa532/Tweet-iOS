@@ -445,3 +445,19 @@
 "Failed to delete account: %@" = "删除账户失败：%@";
 "Failed to logout: %@" = "注销失败：%@";
 "Failed to block user: %@" = "屏蔽用户失败：%@";
+
+// MARK: - Confirmation Dialogs
+"Discard Tweet?" = "丢弃推文？";
+"Discard Comment?" = "丢弃评论？";
+"Your tweet will be discarded and cannot be recovered." = "您的推文将被丢弃且无法恢复。";
+"Your comment will be discarded and cannot be recovered." = "您的评论将被丢弃且无法恢复。";
+
+// MARK: - Additional Error Messages
+"All retry attempts failed" = "所有重试尝试均失败";
+"Retweet upload failed" = "转发上传失败";
+"Video conversion failed" = "视频转换失败";
+"Chat message upload failed" = "聊天消息上传失败";
+"Profile update failed" = "个人资料更新失败";
+"Success" = "成功";
+"Processing..." = "处理中...";
+"Invalid response format from server" = "服务器响应格式无效";

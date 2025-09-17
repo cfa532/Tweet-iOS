@@ -443,3 +443,17 @@
 "Discard Changes" = "Discard Changes";
 "Continue Editing" = "Continue Editing";
 "You have unsaved changes. Are you sure you want to exit without saving?" = "You have unsaved changes. Are you sure you want to exit without saving?";
+"Discard Tweet?" = "Discard Tweet?";
+"Discard Comment?" = "Discard Comment?";
+"Your tweet will be discarded and cannot be recovered." = "Your tweet will be discarded and cannot be recovered.";
+"Your comment will be discarded and cannot be recovered." = "Your comment will be discarded and cannot be recovered.";
+
+// MARK: - Additional Error Messages
+"All retry attempts failed" = "All retry attempts failed";
+"Retweet upload failed" = "Retweet upload failed";
+"Video conversion failed" = "Video conversion failed";
+"Chat message upload failed" = "Chat message upload failed";
+"Profile update failed" = "Profile update failed";
+"Success" = "Success";
+"Processing..." = "Processing...";
+"Invalid response format from server" = "Invalid response format from server";

@@ -243,7 +243,7 @@ struct ChatScreen: View {
                 showToastMessage(NSLocalizedString("Failed to send message", comment: "Chat error"), type: .error)
             }
         }
-
+        
         .task {
             print("[ChatScreen] Starting to load chat for receiptId: \(receiptId)")
             
@@ -589,17 +589,17 @@ struct ChatScreen: View {
     
     private func getFileTypeDescription(from typeIdentifier: String) -> String {
         if typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
-           typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
-           typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
-           typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
-           typeIdentifier.contains("webm") {
+            typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
+            typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
+            typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
+            typeIdentifier.contains("webm") {
             return "Video"
         } else if typeIdentifier.contains("image") || typeIdentifier.contains("jpeg") || 
-                  typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
-                  typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+                    typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
+                    typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
             return "Image"
         } else if typeIdentifier.contains("audio") || typeIdentifier.contains("mp3") || 
-                  typeIdentifier.contains("wav") || typeIdentifier.contains("m4a") {
+                    typeIdentifier.contains("wav") || typeIdentifier.contains("m4a") {
             return "Audio"
         } else if typeIdentifier.contains("pdf") {
             return "PDF"
@@ -652,7 +652,7 @@ struct ChatScreen: View {
                     let maxSizeMB = Double(Constants.MAX_FILE_SIZE) / (1024 * 1024)
                     
                     await MainActor.run {
-                        showToastMessage("\(fileType) file is too large (\(String(format: "%.1f", fileSizeMB))MB). Maximum allowed size is \(String(format: "%.0f", maxSizeMB))MB.", type: .error)
+                        showToastMessage(String(format: NSLocalizedString("%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB.", comment: "File size error message"), fileType, fileSizeMB, maxSizeMB), type: .error)
                     }
                     return
                 }
@@ -663,10 +663,10 @@ struct ChatScreen: View {
                 
                 // Determine media type and extension from type identifier
                 let isVideo = typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
-                             typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
-                             typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
-                             typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
-                             typeIdentifier.contains("webm")
+                typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
+                typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
+                typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
+                typeIdentifier.contains("webm")
                 
                 if isVideo {
                     mediaType = .video

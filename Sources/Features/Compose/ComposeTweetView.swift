@@ -8,11 +8,17 @@ struct ComposeTweetView: View {
     @FocusState private var isEditorFocused: Bool
     @State private var shouldFocus = false
     @State private var showMediaPicker = false
+    @State private var showCancelConfirmation = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
     private var identifiableItems: [IdentifiablePhotosPickerItem] {
         viewModel.selectedItems.map { IdentifiablePhotosPickerItem(item: $0) }
+    }
+    
+    // Check if there's content or attachments that would be lost
+    private var hasContentOrAttachments: Bool {
+        !viewModel.tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !viewModel.selectedItems.isEmpty
     }
 
     init() {
@@ -31,8 +37,12 @@ struct ComposeTweetView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(NSLocalizedString("Cancel", comment: "Cancel button")) {
-                        viewModel.clearForm()
-                        dismiss()
+                        if hasContentOrAttachments {
+                            showCancelConfirmation = true
+                        } else {
+                            viewModel.clearForm()
+                            dismiss()
+                        }
                     }
                 }
                 
@@ -87,6 +97,17 @@ struct ComposeTweetView: View {
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(viewModel.tweetContent.count > 0)
+        .alert(NSLocalizedString("Discard Tweet?", comment: "Cancel confirmation title"), isPresented: $showCancelConfirmation) {
+            Button(NSLocalizedString("Discard", comment: "Discard button"), role: .destructive) {
+                viewModel.clearForm()
+                dismiss()
+            }
+            Button(NSLocalizedString("Keep Editing", comment: "Keep editing button"), role: .cancel) {
+                // Do nothing, just dismiss the alert
+            }
+        } message: {
+            Text(NSLocalizedString("Your tweet will be discarded and cannot be recovered.", comment: "Cancel confirmation message"))
+        }
     }
     
     private var mainContent: some View {
@@ -128,7 +149,7 @@ struct ComposeTweetView: View {
                 selectedItems: $viewModel.selectedItems,
                 showCamera: .constant(false),
                 error: $viewModel.error,
-                maxSelectionCount: 4,
+                maxSelectionCount: 20,
                 supportedTypes: [.image, .movie]
             )
             

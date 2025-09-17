@@ -19,7 +19,7 @@ struct MediaPicker: View {
         selectedImages: Binding<[UIImage]> = .constant([]),
         showCamera: Binding<Bool>,
         error: Binding<Error?> = .constant(nil),
-        maxSelectionCount: Int = 4,
+        maxSelectionCount: Int = 20,
         supportedTypes: [UTType] = [.image, .movie],
         onItemAdded: (() -> Void)? = nil,
         onItemRemoved: (() -> Void)? = nil
@@ -86,7 +86,7 @@ struct MediaPicker: View {
                             domain: "FileProcessing", 
                             code: -1, 
                             userInfo: [
-                                NSLocalizedDescriptionKey: "\(fileType) file is too large (\(String(format: "%.1f", fileSizeMB))MB). Maximum allowed size is \(String(format: "%.0f", maxSizeMB))MB."
+                                NSLocalizedDescriptionKey: String(format: NSLocalizedString("%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB.", comment: "File size error message"), fileType, fileSizeMB, maxSizeMB)
                             ]
                         )
                         await MainActor.run {
@@ -251,7 +251,7 @@ struct MediaUploadHelper {
                             domain: "FileProcessing", 
                             code: -1, 
                             userInfo: [
-                                NSLocalizedDescriptionKey: "\(fileType) file is too large (\(String(format: "%.1f", fileSizeMB))MB). Maximum allowed size is \(String(format: "%.0f", maxSizeMB))MB."
+                                NSLocalizedDescriptionKey: String(format: NSLocalizedString("%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB.", comment: "File size error message"), fileType, fileSizeMB, maxSizeMB)
                             ]
                         )
                     }

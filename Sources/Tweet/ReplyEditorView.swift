@@ -243,7 +243,7 @@ struct ReplyEditorView: View {
                     selectedImages: $selectedImages,
                     showCamera: $showCamera,
                     error: $error,
-                    maxSelectionCount: 4,
+                    maxSelectionCount: 20,
                     supportedTypes: [.image, .movie]
                 )
                 

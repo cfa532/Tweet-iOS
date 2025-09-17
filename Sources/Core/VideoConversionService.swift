@@ -105,9 +105,9 @@ class VideoConversionService {
         let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
             $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
                 task_info(mach_task_self_,
-                         task_flavor_t(MACH_TASK_BASIC_INFO),
-                         $0,
-                         &count)
+                          task_flavor_t(MACH_TASK_BASIC_INFO),
+                          $0,
+                          &count)
             }
         }
         
@@ -350,7 +350,7 @@ class VideoConversionService {
             -vf "\(scaleFilter)" \
             -b:v \(bitrate) \
             -b:a 128k \
-            -preset ultrafast \
+            -preset superfast \
             -tune zerolatency \
             -threads 2 \
             -max_muxing_queue_size 512 \
@@ -368,8 +368,8 @@ class VideoConversionService {
             "\(outputURL.path)"
             """
         
-            
-            FFmpegKit.executeAsync(command) { session in
+        
+        FFmpegKit.executeAsync(command) { session in
             guard let session = session else {
                 print("DEBUG: [VIDEO CONVERSION] Failed to create FFmpeg session")
                 completion(false)

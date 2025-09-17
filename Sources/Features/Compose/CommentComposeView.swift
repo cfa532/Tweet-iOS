@@ -14,12 +14,18 @@ struct CommentComposeView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
+    @State private var showCancelConfirmation = false
     @FocusState private var isEditorFocused: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
     private var identifiableItems: [IdentifiablePhotosPickerItem] {
         selectedItems.map { IdentifiablePhotosPickerItem(item: $0) }
+    }
+    
+    // Check if there's content or attachments that would be lost
+    private var hasContentOrAttachments: Bool {
+        !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty
     }
 
     var body: some View {
@@ -96,7 +102,7 @@ struct CommentComposeView: View {
                                 selectedItems: $selectedItems,
                                 showCamera: .constant(false),
                                 error: $error,
-                                maxSelectionCount: 4,
+                                maxSelectionCount: 20,
                                 supportedTypes: [.image, .movie]
                             )
                             
@@ -140,7 +146,11 @@ struct CommentComposeView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(NSLocalizedString("Cancel", comment: "Cancel button")) {
-                        dismiss()
+                        if hasContentOrAttachments {
+                            showCancelConfirmation = true
+                        } else {
+                            dismiss()
+                        }
                     }
                 }
                 
@@ -188,6 +198,16 @@ struct CommentComposeView: View {
             if let error = notification.object as? Error {
                 showToastMessage(error.localizedDescription, type: .error)
             }
+        }
+        .alert(NSLocalizedString("Discard Comment?", comment: "Cancel confirmation title"), isPresented: $showCancelConfirmation) {
+            Button(NSLocalizedString("Discard", comment: "Discard button"), role: .destructive) {
+                dismiss()
+            }
+            Button(NSLocalizedString("Keep Editing", comment: "Keep editing button"), role: .cancel) {
+                // Do nothing, just dismiss the alert
+            }
+        } message: {
+            Text(NSLocalizedString("Your comment will be discarded and cannot be recovered.", comment: "Cancel confirmation message"))
         }
     }
     
