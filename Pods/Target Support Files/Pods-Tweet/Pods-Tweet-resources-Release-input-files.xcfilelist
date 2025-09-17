@@ -1,0 +1,3 @@
+${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-resources.sh
+${PODS_CONFIGURATION_BUILD_DIR}/SDWebImage/SDWebImage.bundle
+${PODS_CONFIGURATION_BUILD_DIR}/SDWebImageSwiftUI/SDWebImageSwiftUI.bundle

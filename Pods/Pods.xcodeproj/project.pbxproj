@@ -1550,15 +1550,25 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 69331E77243F97AB3F211AA7BAFF86F9 /* SDWebImage.debug.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				CODE_SIGNING_ALLOWED = NO;
 				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/SDWebImage";
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
+				ENABLE_BITCODE = NO;
 				IBSC_MODULE = SDWebImage;
 				INFOPLIST_FILE = "Target Support Files/SDWebImage/ResourceBundle-SDWebImage-SDWebImage-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_NAME = SDWebImage;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
 				WRAPPER_EXTENSION = bundle;
 			};
 			name = Debug;
@@ -1567,14 +1577,20 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 15F8D66452E27EF804F6D3919292ECA7 /* SDWebImage.release.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "";
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEFINES_MODULE = YES;
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_BITCODE = NO;
 				ENABLE_MODULE_VERIFIER = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_PREFIX_HEADER = "Target Support Files/SDWebImage/SDWebImage-prefix.pch";
@@ -1588,15 +1604,19 @@
 					"@loader_path/Frameworks",
 				);
 				MODULEMAP_FILE = "Target Support Files/SDWebImage/SDWebImage.modulemap";
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_MODULE_NAME = SDWebImage;
 				PRODUCT_NAME = SDWebImage;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ";
 				SWIFT_INSTALL_OBJC_HEADER = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
+				VALID_ARCHS = arm64;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
 			};
@@ -1606,15 +1626,21 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C59CB0C78D8A6AEA7BDF5B82043202EC /* SDWebImageSwiftUI.release.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "";
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEFINES_MODULE = YES;
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_BITCODE = NO;
 				ENABLE_MODULE_VERIFIER = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_PREFIX_HEADER = "Target Support Files/SDWebImageSwiftUI/SDWebImageSwiftUI-prefix.pch";
@@ -1628,15 +1654,19 @@
 					"@loader_path/Frameworks",
 				);
 				MODULEMAP_FILE = "Target Support Files/SDWebImageSwiftUI/SDWebImageSwiftUI.modulemap";
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_MODULE_NAME = SDWebImageSwiftUI;
 				PRODUCT_NAME = SDWebImageSwiftUI;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ";
 				SWIFT_INSTALL_OBJC_HEADER = YES;
 				SWIFT_VERSION = 5.3;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
+				VALID_ARCHS = arm64;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
 			};
@@ -1646,14 +1676,20 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 9284FE42D6E89816F941DA39657E21EF /* hprose.release.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "";
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEFINES_MODULE = YES;
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_BITCODE = NO;
 				ENABLE_MODULE_VERIFIER = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_PREFIX_HEADER = "Target Support Files/hprose/hprose-prefix.pch";
@@ -1667,15 +1703,19 @@
 					"@loader_path/Frameworks",
 				);
 				MODULEMAP_FILE = "Target Support Files/hprose/hprose.modulemap";
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_MODULE_NAME = hprose;
 				PRODUCT_NAME = hprose;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ";
 				SWIFT_INSTALL_OBJC_HEADER = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
+				VALID_ARCHS = arm64;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
 			};
@@ -1685,18 +1725,28 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 8449F3F5057ABCA39C726A31582BCB8A /* ffmpeg-kit-ios.release.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
+				ENABLE_BITCODE = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				ONLY_ACTIVE_ARCH = NO;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
+				STRIP_INSTALLED_PRODUCT = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
+				VALID_ARCHS = arm64;
 			};
 			name = Release;
 		};
@@ -1704,15 +1754,25 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C59CB0C78D8A6AEA7BDF5B82043202EC /* SDWebImageSwiftUI.release.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				CODE_SIGNING_ALLOWED = NO;
 				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/SDWebImageSwiftUI";
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
+				ENABLE_BITCODE = NO;
 				IBSC_MODULE = SDWebImageSwiftUI;
 				INFOPLIST_FILE = "Target Support Files/SDWebImageSwiftUI/ResourceBundle-SDWebImageSwiftUI-SDWebImageSwiftUI-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_NAME = SDWebImageSwiftUI;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
 				WRAPPER_EXTENSION = bundle;
 			};
 			name = Release;
@@ -1722,15 +1782,21 @@
 			baseConfigurationReference = 3A88BB8F8DFF834F43B5042B4612F3A2 /* Pods-Tweet.debug.xcconfig */;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = NO;
+				ARCHS = arm64;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "";
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEFINES_MODULE = YES;
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_BITCODE = NO;
 				ENABLE_MODULE_VERIFIER = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = "Target Support Files/Pods-Tweet/Pods-Tweet-Info.plist";
@@ -1743,14 +1809,18 @@
 				);
 				MACH_O_TYPE = staticlib;
 				MODULEMAP_FILE = "Target Support Files/Pods-Tweet/Pods-Tweet.modulemap";
+				ONLY_ACTIVE_ARCH = NO;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
 				PODS_ROOT = "$(SRCROOT)";
 				PRODUCT_BUNDLE_IDENTIFIER = "org.cocoapods.${PRODUCT_NAME:rfc1034identifier}";
 				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
 			};
@@ -1760,15 +1830,25 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 6E14EBC06B313B8CA5FE7C46C967B62D /* SDWebImageSwiftUI.debug.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				CODE_SIGNING_ALLOWED = NO;
 				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/SDWebImageSwiftUI";
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
+				ENABLE_BITCODE = NO;
 				IBSC_MODULE = SDWebImageSwiftUI;
 				INFOPLIST_FILE = "Target Support Files/SDWebImageSwiftUI/ResourceBundle-SDWebImageSwiftUI-SDWebImageSwiftUI-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_NAME = SDWebImageSwiftUI;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
 				WRAPPER_EXTENSION = bundle;
 			};
 			name = Debug;
@@ -1777,15 +1857,25 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 15F8D66452E27EF804F6D3919292ECA7 /* SDWebImage.release.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				CODE_SIGNING_ALLOWED = NO;
 				CONFIGURATION_BUILD_DIR = "$(BUILD_DIR)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/SDWebImage";
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
+				ENABLE_BITCODE = NO;
 				IBSC_MODULE = SDWebImage;
 				INFOPLIST_FILE = "Target Support Files/SDWebImage/ResourceBundle-SDWebImage-SDWebImage-Info.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_NAME = SDWebImage;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
 				WRAPPER_EXTENSION = bundle;
 			};
 			name = Release;
@@ -1794,14 +1884,20 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = A62EEBEE922D25373F41134740BF3117 /* hprose.debug.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "";
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEFINES_MODULE = YES;
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_BITCODE = NO;
 				ENABLE_MODULE_VERIFIER = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_PREFIX_HEADER = "Target Support Files/hprose/hprose-prefix.pch";
@@ -1815,14 +1911,18 @@
 					"@loader_path/Frameworks",
 				);
 				MODULEMAP_FILE = "Target Support Files/hprose/hprose.modulemap";
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_MODULE_NAME = hprose;
 				PRODUCT_NAME = hprose;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ";
 				SWIFT_INSTALL_OBJC_HEADER = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
 			};
@@ -1960,15 +2060,21 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 6E14EBC06B313B8CA5FE7C46C967B62D /* SDWebImageSwiftUI.debug.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "";
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEFINES_MODULE = YES;
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_BITCODE = NO;
 				ENABLE_MODULE_VERIFIER = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_PREFIX_HEADER = "Target Support Files/SDWebImageSwiftUI/SDWebImageSwiftUI-prefix.pch";
@@ -1982,14 +2088,18 @@
 					"@loader_path/Frameworks",
 				);
 				MODULEMAP_FILE = "Target Support Files/SDWebImageSwiftUI/SDWebImageSwiftUI.modulemap";
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_MODULE_NAME = SDWebImageSwiftUI;
 				PRODUCT_NAME = SDWebImageSwiftUI;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ";
 				SWIFT_INSTALL_OBJC_HEADER = YES;
 				SWIFT_VERSION = 5.3;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
 			};
@@ -1999,17 +2109,27 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = B619D00446305EDB84A2ED4D4B914241 /* ffmpeg-kit-ios.debug.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_ENABLE_OBJC_WEAK = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
+				ENABLE_BITCODE = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				ONLY_ACTIVE_ARCH = NO;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
+				STRIP_INSTALLED_PRODUCT = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
 			};
 			name = Debug;
 		};
@@ -2018,15 +2138,21 @@
 			baseConfigurationReference = 937EBCAC4BE9C5AD9A6550E238A752C4 /* Pods-Tweet.release.xcconfig */;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = NO;
+				ARCHS = arm64;
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "";
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEFINES_MODULE = YES;
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_BITCODE = NO;
 				ENABLE_MODULE_VERIFIER = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = "Target Support Files/Pods-Tweet/Pods-Tweet-Info.plist";
@@ -2039,15 +2165,19 @@
 				);
 				MACH_O_TYPE = staticlib;
 				MODULEMAP_FILE = "Target Support Files/Pods-Tweet/Pods-Tweet.modulemap";
+				ONLY_ACTIVE_ARCH = NO;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
 				PODS_ROOT = "$(SRCROOT)";
 				PRODUCT_BUNDLE_IDENTIFIER = "org.cocoapods.${PRODUCT_NAME:rfc1034identifier}";
 				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
+				VALID_ARCHS = arm64;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
 			};
@@ -2057,14 +2187,20 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 69331E77243F97AB3F211AA7BAFF86F9 /* SDWebImage.debug.xcconfig */;
 			buildSettings = {
+				ARCHS = arm64;
 				"CODE_SIGN_IDENTITY[sdk=appletvos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";
 				"CODE_SIGN_IDENTITY[sdk=watchos*]" = "";
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEFINES_MODULE = YES;
+				DWARF_DSYM_FILE_NAME = "$(EXECUTABLE_NAME).dSYM";
+				DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT = YES;
+				DWARF_DSYM_FOLDER_PATH = "$(CONFIGURATION_BUILD_DIR)";
 				DYLIB_COMPATIBILITY_VERSION = 1;
 				DYLIB_CURRENT_VERSION = 1;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				ENABLE_BITCODE = NO;
 				ENABLE_MODULE_VERIFIER = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_PREFIX_HEADER = "Target Support Files/SDWebImage/SDWebImage-prefix.pch";
@@ -2078,14 +2214,18 @@
 					"@loader_path/Frameworks",
 				);
 				MODULEMAP_FILE = "Target Support Files/SDWebImage/SDWebImage.modulemap";
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_MODULE_NAME = SDWebImage;
 				PRODUCT_NAME = SDWebImage;
 				SDKROOT = iphoneos;
+				SEPARATE_STRIP = NO;
 				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ";
 				SWIFT_INSTALL_OBJC_HEADER = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				VALID_ARCHS = arm64;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
 			};
