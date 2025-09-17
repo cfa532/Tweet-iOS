@@ -47,9 +47,9 @@ struct MediaPicker: View {
                     .font(.system(size: 20))
             }
             .onChange(of: selectedItems) { oldItems, newItems in
-                // Check for oversized videos and remove them from selection
+                // Check for oversized files and remove them from selection
                 Task {
-                    await filterOversizedVideos(from: newItems)
+                    await filterOversizedFiles(from: newItems)
                 }
                 onItemAdded?()
             }
@@ -67,48 +67,40 @@ struct MediaPicker: View {
         }
     }
     
-    private func filterOversizedVideos(from items: [PhotosPickerItem]) async {
-        let maxFileSize = 120 * 1024 * 1024 // 120MB in bytes
+    private func filterOversizedFiles(from items: [PhotosPickerItem]) async {
+        let maxFileSize = Constants.MAX_FILE_SIZE
         var validItems: [PhotosPickerItem] = []
         
         for item in items {
             do {
-                // Check if it's a video
-                let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                let isVideo = typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
-                             typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
-                             typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
-                             typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
-                             typeIdentifier.contains("webm")
-                
-                if isVideo {
-                    // Load video data to check size
-                    if let data = try await item.loadTransferable(type: Data.self) {
-                        if data.count > maxFileSize {
-                            let fileSizeMB = Double(data.count) / (1024 * 1024)
-                            let maxSizeMB = Double(maxFileSize) / (1024 * 1024)
-                            
-                            // Show error message
-                            let errorMessage = NSError(
-                                domain: "VideoProcessing", 
-                                code: -1, 
-                                userInfo: [
-                                    NSLocalizedDescriptionKey: "Video file is too large (\(String(format: "%.1f", fileSizeMB))MB). Maximum allowed size is \(String(format: "%.0f", maxSizeMB))MB."
-                                ]
-                            )
-                            await MainActor.run {
-                                NotificationCenter.default.post(name: .errorOccurred, object: errorMessage)
-                            }
-                            continue // Skip this oversized video
+                // Load file data to check size for all file types
+                if let data = try await item.loadTransferable(type: Data.self) {
+                    if data.count > maxFileSize {
+                        let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+                        let fileType = getFileTypeDescription(from: typeIdentifier)
+                        let fileSizeMB = Double(data.count) / (1024 * 1024)
+                        let maxSizeMB = Double(maxFileSize) / (1024 * 1024)
+                        
+                        // Show error message
+                        let errorMessage = NSError(
+                            domain: "FileProcessing", 
+                            code: -1, 
+                            userInfo: [
+                                NSLocalizedDescriptionKey: "\(fileType) file is too large (\(String(format: "%.1f", fileSizeMB))MB). Maximum allowed size is \(String(format: "%.0f", maxSizeMB))MB."
+                            ]
+                        )
+                        await MainActor.run {
+                            NotificationCenter.default.post(name: .errorOccurred, object: errorMessage)
                         }
+                        continue // Skip this oversized file
                     }
                 }
                 
-                // Add valid items (images and videos under size limit)
+                // Add valid items (all file types under size limit)
                 validItems.append(item)
                 
             } catch {
-                print("DEBUG: Error checking video size: \(error)")
+                print("DEBUG: Error checking file size: \(error)")
                 // If we can't check the size, allow the item (fallback)
                 validItems.append(item)
             }
@@ -119,6 +111,31 @@ struct MediaPicker: View {
             await MainActor.run {
                 selectedItems = validItems
             }
+        }
+    }
+    
+    private func getFileTypeDescription(from typeIdentifier: String) -> String {
+        if typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
+           typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
+           typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
+           typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
+           typeIdentifier.contains("webm") {
+            return "Video"
+        } else if typeIdentifier.contains("image") || typeIdentifier.contains("jpeg") || 
+                  typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
+                  typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+            return "Image"
+        } else if typeIdentifier.contains("audio") || typeIdentifier.contains("mp3") || 
+                  typeIdentifier.contains("wav") || typeIdentifier.contains("m4a") {
+            return "Audio"
+        } else if typeIdentifier.contains("pdf") {
+            return "PDF"
+        } else if typeIdentifier.contains("zip") {
+            return "ZIP"
+        } else if typeIdentifier.contains("doc") || typeIdentifier.contains("word") {
+            return "Document"
+        } else {
+            return "File"
         }
     }
 }
@@ -223,6 +240,22 @@ struct MediaUploadHelper {
                 if let data = try await item.loadTransferable(type: Data.self) {
                     print("DEBUG: Successfully loaded media data: \(data.count) bytes")
                     
+                    // Check file size limit
+                    if data.count > Constants.MAX_FILE_SIZE {
+                        let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
+                        let fileType = getFileTypeDescription(from: typeIdentifier)
+                        let fileSizeMB = Double(data.count) / (1024 * 1024)
+                        let maxSizeMB = Double(Constants.MAX_FILE_SIZE) / (1024 * 1024)
+                        
+                        throw NSError(
+                            domain: "FileProcessing", 
+                            code: -1, 
+                            userInfo: [
+                                NSLocalizedDescriptionKey: "\(fileType) file is too large (\(String(format: "%.1f", fileSizeMB))MB). Maximum allowed size is \(String(format: "%.0f", maxSizeMB))MB."
+                            ]
+                        )
+                    }
+                    
                     // Get the type identifier and determine file extension
                     let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
                     let fileExtension = getFileExtension(for: typeIdentifier)
@@ -294,5 +327,30 @@ struct MediaUploadHelper {
     ) -> Bool {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmedContent.isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty
+    }
+    
+    private static func getFileTypeDescription(from typeIdentifier: String) -> String {
+        if typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
+           typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
+           typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
+           typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
+           typeIdentifier.contains("webm") {
+            return "Video"
+        } else if typeIdentifier.contains("image") || typeIdentifier.contains("jpeg") || 
+                  typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
+                  typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+            return "Image"
+        } else if typeIdentifier.contains("audio") || typeIdentifier.contains("mp3") || 
+                  typeIdentifier.contains("wav") || typeIdentifier.contains("m4a") {
+            return "Audio"
+        } else if typeIdentifier.contains("pdf") {
+            return "PDF"
+        } else if typeIdentifier.contains("zip") {
+            return "ZIP"
+        } else if typeIdentifier.contains("doc") || typeIdentifier.contains("word") {
+            return "Document"
+        } else {
+            return "File"
+        }
     }
 }

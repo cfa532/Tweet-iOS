@@ -158,6 +158,11 @@ struct ChatScreen: View {
                             .font(.system(size: 20))
                             .foregroundColor(.blue)
                     }
+                    .onChange(of: selectedPhotos) { oldItems, newItems in
+                        Task {
+                            await handlePhotoSelection(newItems)
+                        }
+                    }
                     
                     // Text input
                     TextField(NSLocalizedString("Type a message...", comment: "Chat message input placeholder"), text: $messageText, axis: .vertical)
@@ -582,6 +587,31 @@ struct ChatScreen: View {
         }
     }
     
+    private func getFileTypeDescription(from typeIdentifier: String) -> String {
+        if typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
+           typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
+           typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
+           typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
+           typeIdentifier.contains("webm") {
+            return "Video"
+        } else if typeIdentifier.contains("image") || typeIdentifier.contains("jpeg") || 
+                  typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
+                  typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+            return "Image"
+        } else if typeIdentifier.contains("audio") || typeIdentifier.contains("mp3") || 
+                  typeIdentifier.contains("wav") || typeIdentifier.contains("m4a") {
+            return "Audio"
+        } else if typeIdentifier.contains("pdf") {
+            return "PDF"
+        } else if typeIdentifier.contains("zip") {
+            return "ZIP"
+        } else if typeIdentifier.contains("doc") || typeIdentifier.contains("word") {
+            return "Document"
+        } else {
+            return "File"
+        }
+    }
+    
     // MARK: - Periodic Message Refresh
     
     private func startPeriodicMessageRefresh() {
@@ -615,12 +645,30 @@ struct ChatScreen: View {
                 let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
                 print("[ChatScreen] Type identifier: \(typeIdentifier)")
                 
+                // Check file size for all file types
+                if data.count > Constants.MAX_FILE_SIZE {
+                    let fileType = getFileTypeDescription(from: typeIdentifier)
+                    let fileSizeMB = Double(data.count) / (1024 * 1024)
+                    let maxSizeMB = Double(Constants.MAX_FILE_SIZE) / (1024 * 1024)
+                    
+                    await MainActor.run {
+                        showToastMessage("\(fileType) file is too large (\(String(format: "%.1f", fileSizeMB))MB). Maximum allowed size is \(String(format: "%.0f", maxSizeMB))MB.", type: .error)
+                    }
+                    return
+                }
+                
                 // Detect media type and set appropriate file extension
                 let mediaType: MediaType
                 let fileExtension: String
                 
                 // Determine media type and extension from type identifier
-                if typeIdentifier.contains("movie") || typeIdentifier.contains("video") || typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || typeIdentifier.contains("webm") {
+                let isVideo = typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
+                             typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
+                             typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
+                             typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
+                             typeIdentifier.contains("webm")
+                
+                if isVideo {
                     mediaType = .video
                     if typeIdentifier.contains("mp4") || typeIdentifier.contains("mpeg-4") {
                         fileExtension = "mp4"

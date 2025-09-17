@@ -29,9 +29,15 @@ struct ThumbnailView: View {
                     // Add play button overlay for videos
                     if mediaType == .video {
                         Image(systemName: "play.circle.fill")
-                            .font(.system(size: 40))
+                            .font(.system(size: 24))
                             .foregroundColor(.white)
-                            .shadow(radius: 3)
+                            .background(
+                                Circle()
+                                    .fill(Color.black)
+                                    .frame(width: 40, height: 40)
+                            )
+                            .opacity(0.5)
+                            .shadow(radius: 2)
                     }
                 }
             } else if isLoading {

@@ -12,6 +12,8 @@ enum Constants {
     static let MIMEI_ID_LENGTH = 27
     static let DEFAULT_CLOUD_PORT = 8010
     static let VIDEO_CACHE_POOL_SIZE = 50
+    static let MAX_FILE_SIZE = 120 * 1024 * 1024 // 120MB in bytes - applies to all file types
+    static let MAX_VIDEO_FILE_SIZE = MAX_FILE_SIZE // Keep for backward compatibility
 }
 
 enum UserContentType: String {
