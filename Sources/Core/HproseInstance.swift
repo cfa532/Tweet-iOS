@@ -3037,7 +3037,14 @@ final class HproseInstance: ObservableObject {
                 return try await block()
             } catch {
                 retryCount += 1
+                print("DEBUG: [withRetry] Attempt \(retryCount)/2 failed: \(error)")
+                
                 if retryCount < 2 {
+                    // Add delay before retry
+                    let delay = UInt64(retryCount) * 2_000_000_000 // 2 seconds, 4 seconds
+                    print("DEBUG: [withRetry] Retrying in \(delay / 1_000_000_000) seconds...")
+                    try await Task.sleep(nanoseconds: delay)
+                    
                     // Refresh appUser from server instead of full app reinitialization
                     try await refreshAppUserFromServer()
                 }
@@ -3219,6 +3226,8 @@ final class HproseInstance: ObservableObject {
     }
     
     private func uploadTweetWithPersistenceAndRetry(tweet: Tweet, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0, videoJobId: String? = nil) async {
+        print("DEBUG: [uploadTweetWithPersistenceAndRetry] Starting upload with retry count: \(retryCount)")
+        
         // Save pending upload to disk for persistence
         let pendingUpload = PendingTweetUpload(tweet: tweet, itemData: itemData, retryCount: retryCount, videoJobId: videoJobId)
         await savePendingUpload(pendingUpload)
@@ -3631,7 +3640,7 @@ final class HproseInstance: ObservableObject {
             // Check if the pending upload is too old (older than 7 days) or has too many retries
             let maxAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days
             let isTooOld = Date().timeIntervalSince(pendingUpload.timestamp) > maxAge
-            let hasTooManyRetries = pendingUpload.retryCount > 5
+            let hasTooManyRetries = pendingUpload.retryCount >= 3
             
             if isTooOld || hasTooManyRetries {
                 print("DEBUG: Cleaning up problematic pending upload (age: \(Date().timeIntervalSince(pendingUpload.timestamp))s, retries: \(pendingUpload.retryCount))")
@@ -3705,11 +3714,37 @@ final class HproseInstance: ObservableObject {
                     }
                 }
                 
-                // Fallback to normal recovery (re-upload)
+                // Check if we've exceeded the maximum retry limit
+                let maxBackgroundRetries = 3
+                if pendingUpload.retryCount >= maxBackgroundRetries {
+                    print("DEBUG: Background retry limit reached (\(pendingUpload.retryCount)/\(maxBackgroundRetries)), removing pending upload")
+                    
+                    // Show toast error message to user
+                    await MainActor.run {
+                        NotificationCenter.default.post(
+                            name: .backgroundUploadFailed,
+                            object: nil,
+                            userInfo: ["error": NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload failed after multiple attempts. Please check your network connection and try again.", comment: "Background upload failed after retries")])]
+                        )
+                    }
+                    
+                    try? FileManager.default.removeItem(at: fileURL)
+                    return
+                }
+                
+                // Increment retry count and attempt recovery
+                let newRetryCount = pendingUpload.retryCount + 1
+                print("DEBUG: Background retry attempt \(newRetryCount)/\(maxBackgroundRetries)")
+                
+                // Add delay before background retry (exponential backoff)
+                let delay = UInt64(newRetryCount) * 2_000_000_000 // 2, 4, 6 seconds
+                print("DEBUG: Background retry delay: \(delay / 1_000_000_000) seconds")
+                try? await Task.sleep(nanoseconds: delay)
+                
                 await uploadTweetWithPersistenceAndRetry(
                     tweet: pendingUpload.tweet,
                     itemData: pendingUpload.itemData,
-                    retryCount: pendingUpload.retryCount,
+                    retryCount: newRetryCount,
                     videoJobId: pendingUpload.videoJobId
                 )
             } else {

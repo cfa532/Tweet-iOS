@@ -60,7 +60,7 @@ struct ReplyEditorView: View {
         } message: {
             Text(NSLocalizedString("You have unsaved content. Are you sure you want to discard your reply?", comment: "Discard reply confirmation"))
         }
-        .sheet(isPresented: $showCamera) {
+        .fullScreenCover(isPresented: $showCamera) {
             CameraView { image, videoURL in
                 if let image = image {
                     selectedImages.append(image)

@@ -8,6 +8,7 @@
 import SwiftUI
 import UIKit
 import AVFoundation
+import Photos
 
 @available(iOS 16.0, *)
 struct CameraView: UIViewControllerRepresentable {
@@ -20,6 +21,7 @@ struct CameraView: UIViewControllerRepresentable {
             let picker = UIImagePickerController()
             picker.sourceType = .photoLibrary // Fallback to photo library
             picker.delegate = context.coordinator
+            picker.modalPresentationStyle = .fullScreen
             return picker
         }
         
@@ -28,6 +30,9 @@ struct CameraView: UIViewControllerRepresentable {
         picker.mediaTypes = ["public.image", "public.movie"]
         picker.allowsEditing = false
         picker.delegate = context.coordinator
+        
+        // Configure for full screen presentation
+        picker.modalPresentationStyle = .fullScreen
         
         // Enhanced camera configuration for better focus and capture
         picker.cameraDevice = .rear
@@ -69,11 +74,19 @@ struct CameraView: UIViewControllerRepresentable {
             // Handle image capture
             if let image = info[.originalImage] as? UIImage {
                 print("DEBUG: Image captured successfully: \(image.size)")
+                
+                // Save image to system album
+                saveImageToAlbum(image)
+                
                 parent.onMediaCaptured(image, nil)
             }
             // Handle video capture
             else if let videoURL = info[.mediaURL] as? URL {
                 print("DEBUG: Video captured successfully: \(videoURL)")
+                
+                // Save video to system album
+                saveVideoToAlbum(videoURL)
+                
                 parent.onMediaCaptured(nil, videoURL)
             }
             // No media captured
@@ -88,6 +101,50 @@ struct CameraView: UIViewControllerRepresentable {
             print("DEBUG: Camera picker cancelled")
             parent.onMediaCaptured(nil, nil)
             picker.dismiss(animated: true)
+        }
+        
+        // MARK: - Save to System Album
+        
+        private func saveImageToAlbum(_ image: UIImage) {
+            PHPhotoLibrary.requestAuthorization { status in
+                guard status == .authorized else {
+                    print("DEBUG: Photo library access not authorized")
+                    return
+                }
+                
+                PHPhotoLibrary.shared().performChanges({
+                    PHAssetChangeRequest.creationRequestForAsset(from: image)
+                }) { success, error in
+                    DispatchQueue.main.async {
+                        if success {
+                            print("DEBUG: Image saved to system album successfully")
+                        } else {
+                            print("DEBUG: Failed to save image to system album: \(error?.localizedDescription ?? "Unknown error")")
+                        }
+                    }
+                }
+            }
+        }
+        
+        private func saveVideoToAlbum(_ videoURL: URL) {
+            PHPhotoLibrary.requestAuthorization { status in
+                guard status == .authorized else {
+                    print("DEBUG: Photo library access not authorized")
+                    return
+                }
+                
+                PHPhotoLibrary.shared().performChanges({
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: videoURL)
+                }) { success, error in
+                    DispatchQueue.main.async {
+                        if success {
+                            print("DEBUG: Video saved to system album successfully")
+                        } else {
+                            print("DEBUG: Failed to save video to system album: \(error?.localizedDescription ?? "Unknown error")")
+                        }
+                    }
+                }
+            }
         }
     }
 }

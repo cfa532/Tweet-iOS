@@ -221,7 +221,7 @@ struct CommentComposeView: View {
         } message: {
             Text(NSLocalizedString("Your comment will be discarded and cannot be recovered.", comment: "Cancel confirmation message"))
         }
-        .sheet(isPresented: $showCamera) {
+        .fullScreenCover(isPresented: $showCamera) {
             CameraView { image, videoURL in
                 if let image = image {
                     selectedImages.append(image)

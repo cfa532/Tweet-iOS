@@ -109,7 +109,7 @@ struct ComposeTweetView: View {
         } message: {
             Text(NSLocalizedString("Your tweet will be discarded and cannot be recovered.", comment: "Cancel confirmation message"))
         }
-        .sheet(isPresented: $showCamera) {
+        .fullScreenCover(isPresented: $showCamera) {
             CameraView { image, videoURL in
                 if let image = image {
                     viewModel.selectedImages.append(image)
