@@ -389,6 +389,12 @@
 
 // MARK: - Video Player
 "Failed to load video" = "视频加载失败";
+
+// MARK: - Photo Library Access
+"This app needs access to your photo library to save captured photos and videos." = "此应用需要访问您的照片库以保存拍摄的照片和视频。";
+"This app uses the camera to allow you to take photos and record videos for your replies and tweets." = "此应用使用摄像头让您为回复和推文拍摄照片和录制视频。";
+"This app uses the microphone to record audio for videos you create with the camera." = "此应用使用麦克风为您用摄像头创建的视频录制音频。";
+"This app uses notifications to alert you about new chat messages." = "此应用使用通知来提醒您新的聊天消息。";
 "Loading HLS stream..." = "正在加载 HLS 流...";
 
 // MARK: - Media Grid
