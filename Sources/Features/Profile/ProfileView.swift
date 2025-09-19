@@ -295,6 +295,17 @@ struct ProfileView: View {
                 await refreshPinnedTweets()
                 isLoading = false
                 didLoad = true
+                
+                // Resync user data in detached task to update user object in memory
+                let userId = user.mid
+                Task.detached {
+                    do {
+                        _ = try await hproseInstance.resyncUser(userId: userId)
+                        print("DEBUG: [ProfileView] Successfully resynced user \(userId) - user object updated in memory")
+                    } catch {
+                        print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
+                    }
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in

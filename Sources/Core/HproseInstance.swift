@@ -724,11 +724,8 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "resyncUser: No user data in response"])
             }
             
-            // Create or update the user instance
-            guard let user = try await fetchUser(userId) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "resyncUser: No User"])
-
-            }
+            // Get or create the user instance directly
+            let user = User.getInstance(mid: userId)
             
             // Update user properties from the response
             await MainActor.run {
