@@ -904,7 +904,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Tweet/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = dTweet;
+				INFOPLIST_KEY_CFBundleDisplayName = "M2O";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -934,7 +934,7 @@
 					"-liconv",
 					"-Wl,-w",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.Tweet;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.Tweet.debug;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Bridging-Header.h";
