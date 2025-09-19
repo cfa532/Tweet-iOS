@@ -153,7 +153,7 @@ struct UserRowView: View {
             // Cancel any ongoing loading task when view disappears
             loadingTask?.cancel()
         }
-        .onChange(of: cancellationToken) { newToken in
+        .onChange(of: cancellationToken) { _, newToken in
             // Cancel loading task when cancellation token changes
             if newToken != currentCancellationToken {
                 loadingTask?.cancel()

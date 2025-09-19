@@ -519,7 +519,6 @@
 				1A1A1A1A1A1A1A1A1A1A1A02 /* Frameworks */,
 				1A1A1A1A1A1A1A1A1A1A1A11 /* Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A12 /* Resources */,
-				46D44EE52E7AE17700E987F5 /* Run Script */,
 				9C5162FBFA79188DC00146B1 /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
@@ -580,24 +579,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		46D44EE52E7AE17700E987F5 /* Run Script */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Run Script";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\n   \"${SRCROOT}/generate_dsyms.sh\"\n";
-		};
 		5499E604271535F4C9305C6D /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -904,7 +885,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Tweet/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "M2O";
+				INFOPLIST_KEY_CFBundleDisplayName = M2O;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
