@@ -133,7 +133,7 @@ struct ComposeTweetView: View {
     
     private var textEditor: some View {
         TextEditor(text: $viewModel.tweetContent)
-            .frame(minHeight: 150)
+            .frame(minHeight: 150, maxHeight: 300) // Max height for ~12 lines
             .padding()
             .focused($isEditorFocused)
             .background(Color(.systemBackground))

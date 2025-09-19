@@ -80,7 +80,7 @@ struct CommentComposeView: View {
                         }
                         
                         TextEditor(text: $commentText)
-                            .frame(minHeight: 150)
+                            .frame(minHeight: 150, maxHeight: 250) // Max height for ~10 lines
                             .padding()
                             .focused($isEditorFocused)
                             .background(Color(.systemBackground))

@@ -223,7 +223,7 @@ struct ReplyEditorView: View {
                     .padding(.horizontal, 1)
                     .padding(.vertical, 1)
                     .background(Color.clear)
-                    .frame(minHeight: 80)
+                    .frame(minHeight: 80, maxHeight: 200) // Max height for ~8 lines
                     .cornerRadius(8)
             }
             
