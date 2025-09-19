@@ -695,6 +695,66 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /// Resyncs a user from the backend and returns the updated user object
+    func resyncUser(userId: String) async throws -> User {
+        return try await withRetry {
+            let entry = "resync_user"
+            let params = [
+                "aid": appId,
+                "ver": "last",
+                "userid": userId
+            ]
+            
+            guard let client = appUser.hproseClient else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
+            }
+            
+            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "resyncUser: No response"])
+            }
+            
+            // Check if the operation was successful
+            guard let success = response["success"] as? Bool, success else {
+                let errorMessage = response["error"] as? String ?? "resyncUser: Operation failed"
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            }
+            
+            // Extract the resynced user data
+            guard let userData = response["resyncedUser"] as? [String: Any] else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "resyncUser: No user data in response"])
+            }
+            
+            // Create or update the user instance
+            guard let user = try await fetchUser(userId) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "resyncUser: No User"])
+
+            }
+            
+            // Update user properties from the response
+            await MainActor.run {
+                user.name = userData["name"] as? String
+                user.username = userData["username"] as? String
+                user.email = userData["email"] as? String
+                user.profile = userData["profile"] as? String
+                user.avatar = userData["avatar"] as? String
+                user.tweetCount = userData["tweetCount"] as? Int
+                user.followingCount = userData["followingCount"] as? Int
+                user.followersCount = userData["followersCount"] as? Int
+                user.bookmarksCount = userData["bookmarksCount"] as? Int
+                user.favoritesCount = userData["favoritesCount"] as? Int
+                user.commentsCount = userData["commentsCount"] as? Int
+                
+                // Update cloudDrivePort if provided
+                if let cloudDrivePort = userData["cloudDrivePort"] as? Int {
+                    user.cloudDrivePort = cloudDrivePort
+                }
+            }
+            TweetCacheManager.shared.saveUser(user)
+
+            return user
+        }
+    }
+    
     func login(_ loginUser: User) async throws -> [String: Any] {
         let entry = "login"
         let params = [
