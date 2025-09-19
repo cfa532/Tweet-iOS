@@ -15,6 +15,7 @@ class AppState: ObservableObject {
         // Initialize basic components first (no network calls)
         // Initialize preference helper and basic app user (no network calls)
         HproseInstance.shared.preferenceHelper = PreferenceHelper()
+        HproseInstance.shared.setAppState(self) // Set AppState reference for state-based network calls
         await HproseInstance.shared.initializeAppUser()
         
         // Allow showing cached content immediately
