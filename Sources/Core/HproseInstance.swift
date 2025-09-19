@@ -77,22 +77,6 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - Helper Methods
     
-    /// Check if network calls should be made based on app initialization state
-    private func shouldMakeNetworkCall() async -> Bool {
-        // Check if HproseInstance is still initializing
-        if isAppInitializing {
-            return false
-        }
-        
-        // Check if AppState indicates the app is fully initialized
-        if let appState = appState {
-            return await MainActor.run { appState.isInitialized }
-        }
-        
-        // If no AppState reference, allow network calls after HproseInstance initialization
-        return true
-    }
-    
     /// Generic retry helper with exponential backoff
     private func retryOperation<T>(
         maxRetries: Int = 3,
@@ -158,16 +142,7 @@ final class HproseInstance: ObservableObject {
     // Flag to track if app is still initializing to prevent error dialogs during startup
     private var isAppInitializing = true
     
-    // Reference to AppState to check initialization status
-    private weak var appState: AppState?
-    
     // MARK: - Public Methods
-    
-    /// Set the AppState reference for checking initialization status
-    func setAppState(_ appState: AppState) {
-        self.appState = appState
-    }
-    
     func initialize() async throws {
         print("DEBUG: [HproseInstance] Starting initialization")
         
@@ -387,13 +362,6 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweet_feed"
     ) async throws -> [Tweet?] {
-        // Skip network calls if app is not fully initialized
-        guard await shouldMakeNetworkCall() else {
-            print("DEBUG: [fetchTweetFeed] Skipping network call - app not fully initialized")
-            // Return empty array to allow UI to show cached data
-            return []
-        }
-        
         guard let client = appUser.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
@@ -490,13 +458,6 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweets_by_user"
     ) async throws -> [Tweet?] {
-        // Skip network calls if app is not fully initialized
-        guard await shouldMakeNetworkCall() else {
-            print("DEBUG: [fetchUserTweets] Skipping network call - app not fully initialized")
-            // Return empty array to allow UI to show cached data
-            return []
-        }
-        
         guard let client = user.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
@@ -675,12 +636,6 @@ final class HproseInstance: ObservableObject {
     }
     
     func updateUserFromServer(_ user: User) async throws {
-        // Skip network calls if app is not fully initialized
-        guard await shouldMakeNetworkCall() else {
-            print("DEBUG: [updateUserFromServer] Skipping network call - app not fully initialized")
-            return
-        }
-        
         let entry = "get_user"
         let params = [
             "aid": appId,
@@ -772,6 +727,7 @@ final class HproseInstance: ObservableObject {
             // Create or update the user instance
             guard let user = try await fetchUser(userId) else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "resyncUser: No User"])
+
             }
             
             // Update user properties from the response
