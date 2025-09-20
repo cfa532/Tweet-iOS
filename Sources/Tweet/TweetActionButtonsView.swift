@@ -333,7 +333,7 @@ struct TweetActionButtonsView: View {
             let rect = CGRect(origin: .zero, size: size)
             
             // Draw the actual app icon
-            if let appIcon = UIImage(named: "AppIcon") {
+            if let appIcon = UIImage(named: "ic_splash") {
                 let iconSize = CGSize(width: 80, height: 80)
                 let iconRect = CGRect(
                     x: rect.midX - iconSize.width / 2,
@@ -348,7 +348,7 @@ struct TweetActionButtonsView: View {
                     .font: UIFont.systemFont(ofSize: 40),
                     .foregroundColor: UIColor.black
                 ]
-                let iconString = NSAttributedString(string: "🐦", attributes: iconAttributes)
+                let iconString = NSAttributedString(string: "😊", attributes: iconAttributes)
                 let iconStringSize = iconString.size()
                 let iconStringRect = CGRect(
                     x: rect.midX - iconStringSize.width / 2,
@@ -365,7 +365,7 @@ struct TweetActionButtonsView: View {
         // Create a share text that includes app branding
         var shareText = ""
         
-        // Priority: title > content (no attachment types)
+        // Priority: title > content > attachment types
         if let title = tweet.title, !title.isEmpty {
             // Use title if available
             let maxLength = 40
@@ -374,17 +374,23 @@ struct TweetActionButtonsView: View {
         } else if let content = tweet.content, !content.isEmpty {
             // Use content if title is not available
             let maxLength = 40
-            let truncatedContent = content.count > maxLength ? String(content.prefix(maxLength)) + "..." : content
+            // Replace newlines with spaces in the content
+            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
+            let truncatedContent = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
             shareText += truncatedContent
+        } else if let attachments = tweet.attachments, !attachments.isEmpty {
+            // Use attachment types if neither title nor content is available
+            let attachmentTypes = attachments.map { $0.type.rawValue }.joined(separator: ", ")
+            shareText += attachmentTypes
         }
         
         // Add URL
         var text = hproseInstance.domainToShare
         text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
         
-        // Only add newlines if there's content before the URL
+        // Only add space if there's content before the URL
         if !shareText.isEmpty {
-            shareText += "\n\n\(text.trimmingCharacters(in: .whitespacesAndNewlines))"
+            shareText += " \(text.trimmingCharacters(in: .whitespacesAndNewlines))"
         } else {
             shareText += text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -424,13 +430,33 @@ class CustomShareItem: NSObject, UIActivityItemSource {
     }
     
     func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
-        // Custom app name with bird icon
-        if let content = tweet.content, !content.isEmpty {
+        // Custom app name with bird icon using the same algorithm as share text
+        var previewText = ""
+        
+        // Priority: title > content > attachment types
+        if let title = tweet.title, !title.isEmpty {
+            // Use title if available
             let maxLength = 40
-            let truncatedContent = content.count > maxLength ? String(content.prefix(maxLength)) + "..." : content
-            return "🐦 Tweet: \(truncatedContent)"
+            let truncatedTitle = title.count > maxLength ? String(title.prefix(maxLength)) + "..." : title
+            previewText = truncatedTitle
+        } else if let content = tweet.content, !content.isEmpty {
+            // Use content if title is not available
+            let maxLength = 40
+            // Replace newlines with spaces in the content
+            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
+            let truncatedContent = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
+            previewText = truncatedContent
+        } else if let attachments = tweet.attachments, !attachments.isEmpty {
+            // Use attachment types if neither title nor content is available
+            let attachmentTypes = attachments.map { $0.type.rawValue }.joined(separator: ", ")
+            previewText = attachmentTypes
+        }
+        
+        // Add smiling face emoji prefix
+        if !previewText.isEmpty {
+            return "😊 Tweet: \(previewText)"
         } else {
-            return "🐦 Tweet"
+            return "😊 Tweet"
         }
     }
 }
