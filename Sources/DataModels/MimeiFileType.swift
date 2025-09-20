@@ -20,7 +20,7 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
         case url
     }
     
-    init(mid: MimeiId, mediaType: MediaType, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(), aspectRatio: Float? = nil, url: String? = nil) {
+    init(mid: MimeiId, mediaType: MediaType, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), aspectRatio: Float? = nil, url: String? = nil) {
         self.mid = mid
         self.type = mediaType
         self.size = size
@@ -31,7 +31,7 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
     }
     
     // Convenience initializer that accepts String for backward compatibility during transition
-    init(mid: String, type: String, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(), aspectRatio: Float? = nil, url: String? = nil) {
+    init(mid: String, type: String, size: Int64? = nil, fileName: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), aspectRatio: Float? = nil, url: String? = nil) {
         self.mid = mid
         self.type = MediaType.fromString(type)
         self.size = size
@@ -66,8 +66,22 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
                   let doubleValue = Double(stringValue) {
             timestamp = Date(timeIntervalSince1970: doubleValue / 1000)
         } else {
-            timestamp = Date()
+            timestamp = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
         }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mid, forKey: .mid)
+        try container.encode(type, forKey: .type)
+        try container.encodeIfPresent(size, forKey: .size)
+        try container.encodeIfPresent(fileName, forKey: .fileName)
+        try container.encodeIfPresent(aspectRatio, forKey: .aspectRatio)
+        try container.encodeIfPresent(url, forKey: .url)
+        
+        // Encode timestamp as Unix timestamp in milliseconds
+        let timestampMillis = Int64(timestamp.timeIntervalSince1970 * 1000)
+        try container.encode(timestampMillis, forKey: .timestamp)
     }
     
     func getUrl(_ baseUrl: URL) -> URL? {

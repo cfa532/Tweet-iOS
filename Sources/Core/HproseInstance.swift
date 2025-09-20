@@ -2135,7 +2135,11 @@ final class HproseInstance: ObservableObject {
             let mimeiFileType = MimeiFileType(
                 mid: cid, 
                 mediaType: .hls_video,
-                aspectRatio: videoAspectRatio
+                size: Int64(data.count), // Use original video data size
+                fileName: fileName,
+                timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970), // Use current time as Date object (will be encoded as Unix timestamp in milliseconds)
+                aspectRatio: videoAspectRatio,
+                url: nil
             )
             let result: (MimeiFileType?, String?) = (mimeiFileType, cid)
             
@@ -2396,7 +2400,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Check for server response via message pull
-        private func checkForServerResponse(cid: String, appUser: User) async throws -> (MimeiFileType?, String?)? {
+        private func checkForServerResponse(cid: String, appUser: User, originalVideoDataSize: Int64? = nil) async throws -> (MimeiFileType?, String?)? {
             guard let client = appUser.hproseClient else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
@@ -2418,13 +2422,25 @@ final class HproseInstance: ObservableObject {
                 if let fileData = response["file"] as? [String: Any] {
                     let mid = fileData["mid"] as? String ?? UUID().uuidString
                     let fileName = fileData["fileName"] as? String ?? "video.m3u8"
-                    let fileSize = fileData["fileSize"] as? Int ?? 0
+                    let serverFileSize = fileData["fileSize"] as? Int ?? 0
                     let aspectRatio = fileData["aspectRatio"] as? Float ?? 16.0/9.0
+                    
+                    // Use original video data size instead of server response size
+                    let finalSize = originalVideoDataSize ?? Int64(serverFileSize)
+                    
+                    print("DEBUG: [checkForServerResponse] Server response file data:")
+                    print("DEBUG: - MID: \(mid)")
+                    print("DEBUG: - File name: \(fileName)")
+                    print("DEBUG: - Server file size: \(serverFileSize)")
+                    print("DEBUG: - Original video data size: \(originalVideoDataSize ?? -1)")
+                    print("DEBUG: - Final size used: \(finalSize)")
+                    print("DEBUG: - Aspect ratio: \(aspectRatio)")
+                    print("DEBUG: - Full fileData: \(fileData)")
                     
                     let mimeiFile = MimeiFileType(
                         mid: mid,
                         mediaType: .hls_video,
-                        size: Int64(fileSize),
+                        size: finalSize,
                         fileName: fileName,
                         aspectRatio: aspectRatio
                     )
@@ -2854,13 +2870,18 @@ final class HproseInstance: ObservableObject {
                             switch statusResult.status {
                             case "completed":
                                 print("DEBUG: Video conversion completed, CID: \(statusResult.cid ?? "unknown")")
+                                print("DEBUG: [pollVideoConversionStatus] Creating MimeiFileType with:")
+                                print("DEBUG: - CID: \(statusResult.cid ?? "unknown")")
+                                print("DEBUG: - Original data size: \(data.count) bytes")
+                                print("DEBUG: - File name: \(fileName ?? "unknown")")
+                                print("DEBUG: - Aspect ratio: \(aspectRatio ?? 0)")
                                 progressCallback?("Video conversion completed!", 100)
                                 return MimeiFileType(
                                     mid: statusResult.cid ?? "",
                                     mediaType: .hls_video,
                                     size: Int64(data.count),
                                     fileName: fileName,
-                                    timestamp: Date(),
+                                    timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970), // Use current time as Date object (will be encoded as Unix timestamp in milliseconds)
                                     aspectRatio: aspectRatio,
                                     url: nil
                                 )
@@ -2962,7 +2983,7 @@ final class HproseInstance: ObservableObject {
                             mediaType: .hls_video,
                             size: Int64(data.count),
                             fileName: fileName,
-                            timestamp: Date(),
+                            timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970), // Use current time as Date object (will be encoded as Unix timestamp in milliseconds)
                             aspectRatio: aspectRatio,
                             url: nil
                         )
@@ -3184,7 +3205,7 @@ final class HproseInstance: ObservableObject {
         init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0, videoJobId: String? = nil) {
             self.tweet = tweet
             self.itemData = itemData
-            self.timestamp = Date()
+            self.timestamp = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
             self.retryCount = retryCount
             self.videoJobId = videoJobId
         }
@@ -3518,13 +3539,37 @@ final class HproseInstance: ObservableObject {
                 hasVideoItem = true
                 
                 // Create MimeiFileType for the completed video
+                // Calculate aspect ratio from original video data
+                var aspectRatio: Float?
+                do {
+                    // Create temporary file to extract aspect ratio
+                    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
+                    try item.data.write(to: tempURL)
+                    aspectRatio = try await HLSVideoProcessor.shared.getVideoAspectRatio(filePath: tempURL.path)
+                    try? FileManager.default.removeItem(at: tempURL)
+                } catch {
+                    print("DEBUG: Could not determine video aspect ratio: \(error), using default 16:9")
+                    aspectRatio = 16.0 / 9.0 // Default to 16:9 aspect ratio
+                }
+                
+                // Create Date object from current time (this will be properly encoded as Unix timestamp in milliseconds)
+                let currentDate = Date()
+                
+                print("DEBUG: [handleCompletedVideoJob] Creating MimeiFileType for video:")
+                print("DEBUG: - CID: \(cid)")
+                print("DEBUG: - Original video data size: \(item.data.count) bytes")
+                print("DEBUG: - File name: \(item.fileName)")
+                print("DEBUG: - Aspect ratio: \(aspectRatio ?? 0)")
+                print("DEBUG: - Current timestamp: \(currentDate)")
+                print("DEBUG: - Unix timestamp (ms): \(Int64(currentDate.timeIntervalSince1970 * 1000))")
+                
                 let videoFile = MimeiFileType(
                     mid: cid,
                     mediaType: .hls_video,
                     size: Int64(item.data.count),
                     fileName: item.fileName,
-                    timestamp: Date(),
-                    aspectRatio: nil, // We don't have aspect ratio from job status
+                    timestamp: currentDate,
+                    aspectRatio: aspectRatio,
                     url: nil
                 )
                 uploadedAttachments.append(videoFile)

@@ -268,7 +268,7 @@ struct CommentComposeView: View {
             mid: UUID().uuidString,         // temporary ID that will be replaced by server
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
-            timestamp: Date(),
+            timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
             originalTweetId: isQuoting ? tweet.mid : nil,
             originalAuthorId: isQuoting ? tweet.authorId : nil
         )

@@ -5,7 +5,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     private static var instances: [MimeiId: Tweet] = [:]
     private static let instanceLock = NSLock()
     
-    private static func getInstance(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
+    private static func getInstance(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), title: String? = nil,
                           originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, author: User? = nil,
                           favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
                           commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
@@ -55,7 +55,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     var mid: MimeiId
     let authorId: MimeiId // mid of the author
     var content: String?
-    var timestamp: Date = Date()
+    var timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
     var title: String?
     
     var originalTweetId: MimeiId? // retweet id of the original tweet
@@ -147,7 +147,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         downloadable = try container.decodeIfPresent(Bool.self, forKey: .downloadable)
     }
     
-    init(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(), title: String? = nil,
+    init(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), title: String? = nil,
          originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, author: User? = nil,
          favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
          commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,

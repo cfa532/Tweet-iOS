@@ -432,7 +432,7 @@ struct ChatImageThumbnail: View {
             mid: MimeiId("chat_message_\(attachment.mid)"),
             authorId: MimeiId(isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? "")),
             content: "",
-            timestamp: Date(),
+            timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
             author: mockAuthor,
             attachments: [attachment]
         )

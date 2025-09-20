@@ -374,7 +374,7 @@ struct ReplyEditorView: View {
                 mid: UUID().uuidString, // Temporary ID, will be replaced by server
                 authorId: hproseInstance.appUser.mid,
                 content: trimmedContent,
-                timestamp: Date(),
+                timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
                 originalTweetId: isQuoting ? parentTweet.mid : nil,
                 originalAuthorId: isQuoting ? parentTweet.authorId : nil
             )

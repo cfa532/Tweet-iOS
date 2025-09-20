@@ -412,6 +412,8 @@ struct MediaUploadHelper {
 struct VideoThumbnailView: View {
     let videoURL: URL
     @State private var thumbnail: UIImage?
+    @State private var isLoading = true
+    @State private var hasError = false
     
     var body: some View {
         Group {
@@ -419,12 +421,37 @@ struct VideoThumbnailView: View {
                 Image(uiImage: thumbnail)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-            } else {
+            } else if isLoading {
+                // Show loading indicator
+                Rectangle()
+                    .fill(Color.gray.opacity(0.2))
+                    .overlay(
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .scaleEffect(0.8)
+                    )
+            } else if hasError {
+                // Show error state with video icon
                 Rectangle()
                     .fill(Color.gray.opacity(0.3))
                     .overlay(
-                        Image(systemName: "video")
+                        VStack(spacing: 4) {
+                            Image(systemName: "video.fill")
+                                .foregroundColor(.gray)
+                                .font(.system(size: 16))
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                                .font(.system(size: 8))
+                        }
+                    )
+            } else {
+                // Fallback state
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay(
+                        Image(systemName: "video.fill")
                             .foregroundColor(.gray)
+                            .font(.system(size: 16))
                     )
             }
         }
@@ -434,21 +461,86 @@ struct VideoThumbnailView: View {
     }
     
     private func generateThumbnail() {
+        print("DEBUG: [VideoThumbnailView] Starting thumbnail generation for: \(videoURL.lastPathComponent)")
+        
         Task {
-            let asset = AVURLAsset(url: videoURL)
-            let imageGenerator = AVAssetImageGenerator(asset: asset)
-            imageGenerator.appliesPreferredTrackTransform = true
-            imageGenerator.maximumSize = CGSize(width: 120, height: 120)
-            
             do {
-                let cgImage = try await imageGenerator.image(at: CMTime.zero).image
-                let uiImage = UIImage(cgImage: cgImage)
-                
-                await MainActor.run {
-                    self.thumbnail = uiImage
+                // Check if file exists and is accessible
+                guard FileManager.default.fileExists(atPath: videoURL.path) else {
+                    print("DEBUG: [VideoThumbnailView] Video file does not exist at path: \(videoURL.path)")
+                    await MainActor.run {
+                        self.isLoading = false
+                        self.hasError = true
+                    }
+                    return
                 }
+                
+                let asset = AVURLAsset(url: videoURL)
+                print("DEBUG: [VideoThumbnailView] Created AVURLAsset for: \(videoURL.lastPathComponent)")
+                
+                // Check if asset is playable
+                let isPlayable = try await asset.load(.isPlayable)
+                guard isPlayable else {
+                    print("DEBUG: [VideoThumbnailView] Video asset is not playable: \(videoURL.lastPathComponent)")
+                    await MainActor.run {
+                        self.isLoading = false
+                        self.hasError = true
+                    }
+                    return
+                }
+                
+                let imageGenerator = AVAssetImageGenerator(asset: asset)
+                imageGenerator.appliesPreferredTrackTransform = true
+                imageGenerator.maximumSize = CGSize(width: 120, height: 120)
+                imageGenerator.requestedTimeToleranceBefore = .zero
+                imageGenerator.requestedTimeToleranceAfter = .zero
+                
+                print("DEBUG: [VideoThumbnailView] Attempting to generate thumbnail at CMTime.zero")
+                
+                // Try different time positions if zero fails
+                let timePositions: [CMTime] = [
+                    CMTime.zero,
+                    CMTime(seconds: 0.1, preferredTimescale: 600),
+                    CMTime(seconds: 0.5, preferredTimescale: 600),
+                    CMTime(seconds: 1.0, preferredTimescale: 600)
+                ]
+                
+                var thumbnailGenerated = false
+                
+                for timePosition in timePositions {
+                    do {
+                        let cgImage = try await imageGenerator.image(at: timePosition).image
+                        let uiImage = UIImage(cgImage: cgImage)
+                        
+                        print("DEBUG: [VideoThumbnailView] Successfully generated thumbnail at time: \(timePosition.seconds)")
+                        
+                        await MainActor.run {
+                            self.thumbnail = uiImage
+                            self.isLoading = false
+                            self.hasError = false
+                        }
+                        thumbnailGenerated = true
+                        break
+                    } catch {
+                        print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at time \(timePosition.seconds): \(error)")
+                        continue
+                    }
+                }
+                
+                if !thumbnailGenerated {
+                    print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at any time position")
+                    await MainActor.run {
+                        self.isLoading = false
+                        self.hasError = true
+                    }
+                }
+                
             } catch {
-                print("Error generating video thumbnail: \(error)")
+                print("DEBUG: [VideoThumbnailView] Error generating video thumbnail: \(error)")
+                await MainActor.run {
+                    self.isLoading = false
+                    self.hasError = true
+                }
             }
         }
     }

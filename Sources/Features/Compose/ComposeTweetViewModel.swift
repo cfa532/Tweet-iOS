@@ -90,7 +90,7 @@ class ComposeTweetViewModel: ObservableObject {
             mid: Constants.GUEST_ID,        // placeholder Mimei Id
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
-            timestamp: Date(),
+            timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
             attachments: nil,
             isPrivate: isPrivateValue
         )
