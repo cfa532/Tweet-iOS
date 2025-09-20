@@ -143,6 +143,13 @@ struct MediaPicker: View {
     }
 }
 
+// Helper struct to maintain stable order for PhotosPicker items
+struct IndexedPhotosPickerItem: Identifiable {
+    let id = UUID()
+    let item: PhotosPickerItem
+    let originalIndex: Int
+}
+
 @available(iOS 16.0, *)
 struct MediaPreviewGrid: View {
     let selectedItems: [PhotosPickerItem]
@@ -168,6 +175,15 @@ struct MediaPreviewGrid: View {
         self.onRemoveVideo = onRemoveVideo
     }
     
+    // Create indexed items that maintain their original position
+    private var indexedItems: [IndexedPhotosPickerItem] {
+        selectedItems.enumerated().map { index, item in
+            IndexedPhotosPickerItem(item: item, originalIndex: index)
+        }
+    }
+    
+    
+    
     var body: some View {
         if !selectedImages.isEmpty || !selectedItems.isEmpty || !selectedVideos.isEmpty {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
@@ -188,10 +204,10 @@ struct MediaPreviewGrid: View {
                 }
                 
                 // PhotosPicker items
-                ForEach(Array(selectedItems.enumerated()), id: \.offset) { index, item in
+                ForEach(indexedItems) { indexedItem in
                     MediaPreviewItem(
-                        item: item,
-                        onRemove: { onRemoveItem(index) }
+                        item: indexedItem.item,
+                        onRemove: { onRemoveItem(indexedItem.originalIndex) }
                     )
                 }
             }
