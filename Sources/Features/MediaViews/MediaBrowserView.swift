@@ -104,6 +104,9 @@ struct MediaBrowserView: View {
                 .onChange(of: currentIndex) { _, newIndex in
                     print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
                     previousIndex = newIndex
+                    
+                    // Clean up non-visible images to free memory
+                    cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
                 }
                 
                 // Close button overlay
@@ -172,6 +175,9 @@ struct MediaBrowserView: View {
             .onDisappear {
                 isVisible = false
                 UIApplication.shared.isIdleTimerDisabled = false
+                
+                // Clean up all image states to free memory
+                cleanupImageStates(attachments: attachments, imageStates: $imageStates, baseUrl: baseUrl)
             }
         }
         
@@ -252,25 +258,39 @@ struct MediaBrowserView: View {
     }
     
     private func loadImageIfNeeded(for attachment: MimeiFileType, at index: Int) {
-        // Show compressed image as placeholder first
+        let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
+        print("DEBUG: [MediaBrowserView] loadImageIfNeeded called for \(loadId)")
+        
+        // First, try to get compressed image immediately
         if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-            imageStates[index] = .placeholder(compressedImage)
-        } else {
-            imageStates[index] = .loading
+            print("DEBUG: [MediaBrowserView] Found cached image for \(loadId)")
+            imageStates[index] = .loaded(compressedImage)
+            return
         }
         
-        // Load original image from backend
-        guard let url = attachment.getUrl(baseUrl) else { return }
+        // If no compressed image available, show loading state
+        print("DEBUG: [MediaBrowserView] Starting network load for \(loadId)")
+        imageStates[index] = .loading
         
-        Task {
-            if let originalImage = await ImageCacheManager.shared.loadOriginalImage(from: url, for: attachment, baseUrl: baseUrl) {
-                await MainActor.run {
-                    imageStates[index] = .loaded(originalImage)
-                }
+        // Load and cache compressed image
+        guard let url = attachment.getUrl(baseUrl) else { 
+            print("DEBUG: [MediaBrowserView] No URL for \(loadId)")
+            imageStates[index] = .error
+            return 
+        }
+        
+        // Use normal priority to load and cache compressed image
+        GlobalImageLoadManager.shared.loadImageNormalPriority(
+            id: loadId,
+            url: url,
+            attachment: attachment,
+            baseUrl: baseUrl
+        ) { compressedImage in
+            print("DEBUG: [MediaBrowserView] Load completed for \(loadId), success: \(compressedImage != nil)")
+            if let compressedImage = compressedImage {
+                self.imageStates[index] = .loaded(compressedImage)
             } else {
-                await MainActor.run {
-                    imageStates[index] = .error
-                }
+                self.imageStates[index] = .error
             }
         }
     }
@@ -281,6 +301,39 @@ struct MediaBrowserView: View {
     
     private func getCachedPlaceholder(for attachment: MimeiFileType) -> UIImage? {
         return ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl)
+    }
+    
+    private static func cleanupImageStates(attachments: [MimeiFileType], imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {
+        // Cancel all pending image loads
+        for (index, attachment) in attachments.enumerated() {
+            let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
+            GlobalImageLoadManager.shared.cancelLoad(id: loadId)
+        }
+        
+        // Clear image states to free memory
+        imageStates.wrappedValue.removeAll()
+        
+        print("DEBUG: [MediaBrowserView] Cleaned up image states and cancelled loads")
+    }
+    
+    private static func cleanupNonVisibleImages(attachments: [MimeiFileType], currentIndex: Int, imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {
+        // Since we're using compressed images (small), we can keep more in memory
+        // Keep current image and 2 images on each side
+        let keepRange = max(0, currentIndex - 2)...min(attachments.count - 1, currentIndex + 2)
+        
+        for (index, _) in imageStates.wrappedValue {
+            if !keepRange.contains(index) {
+                // Cancel load for non-visible images
+                if index < attachments.count {
+                    let attachment = attachments[index]
+                    let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
+                    GlobalImageLoadManager.shared.cancelLoad(id: loadId)
+                }
+                
+                // Remove from image states
+                imageStates.wrappedValue.removeValue(forKey: index)
+            }
+        }
     }
 }
 

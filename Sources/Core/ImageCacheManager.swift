@@ -205,23 +205,49 @@ class ImageCacheManager {
         let key = getCacheKey(for: attachment, baseUrl: baseUrl)
         
         // Create UIImage from data
-        guard let image = UIImage(data: data) else { return }
+        guard let image = UIImage(data: data) else { 
+            print("DEBUG: [ImageCacheManager] Failed to create UIImage from data for \(key)")
+            return 
+        }
         
         // Create compressed version (under 300KB)
         let compressedImage = compressImageToSize(image, maxSize: maxCompressedImageSize)
         let compressedFileURL = getCompressedCacheFileURL(for: key)
-        try? compressedImage.write(to: compressedFileURL)
-        cache.setObject(UIImage(data: compressedImage)!, forKey: "\(key)_compressed" as NSString)
+        
+        // Write compressed data to disk
+        do {
+            try compressedImage.write(to: compressedFileURL)
+        } catch {
+            print("DEBUG: [ImageCacheManager] Failed to write compressed image to disk for \(key): \(error)")
+        }
+        
+        // Add to memory cache if we can create UIImage from compressed data
+        if let compressedUIImage = UIImage(data: compressedImage) {
+            cache.setObject(compressedUIImage, forKey: "\(key)_compressed" as NSString)
+            print("DEBUG: [ImageCacheManager] Successfully cached compressed image for \(key)")
+        } else {
+            print("DEBUG: [ImageCacheManager] Failed to create UIImage from compressed data for \(key)")
+        }
     }
     
     private func compressImageToSize(_ image: UIImage, maxSize: Int) -> Data {
         var compression: CGFloat = 1.0
-        var data = image.jpegData(compressionQuality: compression)!
+        
+        // Try to get initial JPEG data
+        guard var data = image.jpegData(compressionQuality: compression) else {
+            print("DEBUG: [ImageCacheManager] Failed to create JPEG data from image")
+            // Fallback to PNG if JPEG fails
+            return image.pngData() ?? Data()
+        }
         
         // Reduce quality until size is under maxSize
         while data.count > maxSize && compression > 0.1 {
             compression -= 0.1
-            data = image.jpegData(compressionQuality: compression)!
+            guard let newData = image.jpegData(compressionQuality: compression) else {
+                print("DEBUG: [ImageCacheManager] Failed to create JPEG data with compression \(compression)")
+                break
+            }
+            data = newData
         }
         
         // If still too large, reduce image size
@@ -237,8 +263,11 @@ class ImageCacheManager {
             let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
             UIGraphicsEndImageContext()
             
-            if let resizedImage = resizedImage {
-                data = resizedImage.jpegData(compressionQuality: 0.8)!
+            if let resizedImage = resizedImage,
+               let resizedData = resizedImage.jpegData(compressionQuality: 0.8) {
+                data = resizedData
+            } else {
+                print("DEBUG: [ImageCacheManager] Failed to create JPEG data from resized image")
             }
         }
         

@@ -108,7 +108,7 @@ struct DetailMediaCell: View {
     let aspectRatio: Float
     @State private var play: Bool
     let shouldLoadVideo: Bool
-    @State private var isVisible: Bool = false
+    @State private var isVisible: Bool = true
     @State private var image: UIImage?
     @State private var loading = false
     let showMuteButton: Bool
@@ -217,8 +217,10 @@ struct DetailMediaCell: View {
             }
         }
         .onAppear {
+            print("DEBUG: [DetailMediaCell] Cell appeared for attachment \(attachmentIndex): \(attachment.type), mid: \(attachment.mid)")
             isVisible = true
             if attachment.type == .image && image == nil {
+                print("DEBUG: [DetailMediaCell] Starting image load for attachment \(attachmentIndex)")
                 loadImage()
             }
             
@@ -233,26 +235,30 @@ struct DetailMediaCell: View {
     private func loadImage() {
         guard let url = attachment.getUrl(baseUrl) else { return }
         
+        let loadId = "\(attachment.mid)_\(baseUrl.absoluteString)"
+        print("DEBUG: [TweetDetailView] loadImage called for \(loadId)")
+        
         // First, try to get cached image immediately
         if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            print("DEBUG: [TweetDetailView] Found cached image for \(loadId)")
             self.image = cachedImage
             return
         }
         
-        // If no cached image, start loading
+        // If no cached image, start loading with global manager
+        print("DEBUG: [TweetDetailView] Starting network load for \(loadId)")
         loading = true
         
-        Task {
-            if let loadedImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: baseUrl) {
-                await MainActor.run {
-                    self.image = loadedImage
-                    self.loading = false
-                }
-            } else {
-                await MainActor.run {
-                    self.loading = false
-                }
-            }
+        // Use high priority for visible images in detail view
+        GlobalImageLoadManager.shared.loadImageHighPriority(
+            id: loadId,
+            url: url,
+            attachment: attachment,
+            baseUrl: baseUrl
+        ) { loadedImage in
+            print("DEBUG: [TweetDetailView] Load completed for \(loadId), success: \(loadedImage != nil)")
+            self.image = loadedImage
+            self.loading = false
         }
     }
     
@@ -279,7 +285,6 @@ struct TweetDetailView: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     @State private var isVisible = true
-    @State private var imageAspectRatios: [Int: CGFloat] = [:] // index: aspectRatio
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
     @State private var cachedDisplayTweet: Tweet?
@@ -428,6 +433,17 @@ struct TweetDetailView: View {
             }
         }
         .onAppear {
+            print("DEBUG: [TweetDetailView] ===== VIEW APPEARED =====")
+            print("DEBUG: [TweetDetailView] Tweet ID: \(tweet.mid)")
+            print("DEBUG: [TweetDetailView] Attachments count: \(tweet.attachments?.count ?? 0)")
+            
+            // Log all attachments
+            if let attachments = tweet.attachments {
+                for (index, attachment) in attachments.enumerated() {
+                    print("DEBUG: [TweetDetailView] Attachment \(index): \(attachment.type), mid: \(attachment.mid)")
+                }
+            }
+            
             // Load original tweet immediately when view appears (like TweetItemView)
             if !hasLoadedOriginalTweet,
                let originalTweetId = tweet.originalTweetId,
@@ -444,6 +460,7 @@ struct TweetDetailView: View {
                     }
                 }
             }
+            
             
             // Ensure top navigation is visible when view appears
             isTopNavigationVisible = true
@@ -465,12 +482,27 @@ struct TweetDetailView: View {
         }
         .overlay(toastOverlay)
         .onDisappear {
+            print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
+            print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
+            
             refreshTimer?.invalidate()
             refreshTimer = nil
             isVisible = false
             
             // Clear the DetailVideoManager to prevent cached player issues
             DetailVideoManager.shared.clearCurrentVideo()
+            
+            // Cancel any pending image loads to prevent memory leaks
+            if let attachments = displayTweet.attachments {
+                for attachment in attachments {
+                    let baseUrl = displayTweet.author?.baseUrl ?? HproseInstance.baseUrl
+                    let mainLoadId = "\(attachment.mid)_\(baseUrl.absoluteString)"
+                    
+                    print("DEBUG: [TweetDetailView] Cancelling load: \(mainLoadId)")
+                    
+                    GlobalImageLoadManager.shared.cancelLoad(id: mainLoadId)
+                }
+            }
         }
     }
     
@@ -494,6 +526,9 @@ struct TweetDetailView: View {
                     }
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
+                .onChange(of: selectedMediaIndex) { _, newIndex in
+                    // User swiped to new image - no aspect ratio loading needed
+                }
                 .frame(maxWidth: .infinity)
                 .frame(height: UIScreen.main.bounds.width / aspect)
                 .background(Color.black)
@@ -738,41 +773,11 @@ struct TweetDetailView: View {
         if attachment.type == .video || attachment.type == .hls_video {
             return CGFloat(attachment.aspectRatio ?? (4.0/3.0))
         } else if attachment.type == .image {
-            if let ratio = imageAspectRatios[index] {
-                return ratio
-            } else {
-                // Try to get cached image first
-                let baseUrl = displayTweet.author?.baseUrl ?? HproseInstance.baseUrl
-                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-                    let ratio = cachedImage.size.width / cachedImage.size.height
-                    DispatchQueue.main.async {
-                        imageAspectRatios[index] = ratio
-                    }
-                    return ratio
-                } else if let url = attachment.getUrl(baseUrl) {
-                    // If not cached, load from network
-                    loadImageAspectRatio(from: url, for: index)
-                }
-                return 4.0/3.0 // placeholder until loaded
-            }
-        } else {
-            return 4.0/3.0
+            return CGFloat(attachment.aspectRatio ?? 1.0)
         }
+        return 1.0 // Default aspect ratio
     }
     
-    private func loadImageAspectRatio(from url: URL, for index: Int) {
-        // Only load if not already loaded
-        guard imageAspectRatios[index] == nil else { return }
-        DispatchQueue.global().async {
-            if let data = try? Data(contentsOf: url),
-               let image = UIImage(data: data) {
-                let ratio = image.size.width / image.size.height
-                DispatchQueue.main.async {
-                    imageAspectRatios[index] = ratio
-                }
-            }
-        }
-    }
     
     @State private var scrollEndTimer: Timer?
     @State private var consecutiveSmallMovements: Int = 0

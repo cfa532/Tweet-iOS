@@ -77,6 +77,8 @@
 		46B03D9B2E4D7336000E08DF /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D9A2E4D7336000E08DF /* NotificationManager.swift */; };
 		46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */; };
 		46B95F4C2E0EF77500D81590 /* ImageCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */; };
+		326BBBB32DFA4E70BEDBF1CD /* GlobalImageLoadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */; };
+		7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */; };
 		46B95F4E2E0F98CE00D81590 /* ThemeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */; };
 		46B95F502E1269F500D81590 /* IdentifiablePhotosPickerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */; };
 		46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */; };
@@ -183,6 +185,8 @@
 		46B03D9A2E4D7336000E08DF /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSVideoProcessor.swift; sourceTree = "<group>"; };
 		46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCacheManager.swift; sourceTree = "<group>"; };
+		68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalImageLoadManager.swift; sourceTree = "<group>"; };
+		8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadManagerDebugView.swift; sourceTree = "<group>"; };
 		46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeManager.swift; sourceTree = "<group>"; };
 		46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentifiablePhotosPickerItem.swift; sourceTree = "<group>"; };
 		46E5B3012DD9FC3B00AEF31F /* ProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProfileView.swift; path = Sources/Features/Profile/ProfileView.swift; sourceTree = SOURCE_ROOT; };
@@ -305,6 +309,7 @@
 				46B03D9A2E4D7336000E08DF /* NotificationManager.swift */,
 				46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */,
 				46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */,
+				68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */,
 				46B03D902E49E35B000E08DF /* SharedAssetCache.swift */,
 				4614381C2E3F69AD002D1B22 /* CoreDataManager.swift */,
 				4614381A2E3F5E97002D1B22 /* BlackList.swift */,
@@ -403,6 +408,7 @@
 			children = (
 				46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */,
 				46B03D962E4C44E2000E08DF /* DebounceButtonWrapper.swift */,
+				8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */,
 				46B03D8A2E48D760000E08DF /* MediaPicker.swift */,
 				46B03D842E486D36000E08DF /* MuteState.swift */,
 				461438262E44DCCB002D1B22 /* VideoManager.swift */,
@@ -630,6 +636,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				46B03D972E4C44E2000E08DF /* DebounceButtonWrapper.swift in Sources */,
+				7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */,
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
 				46B03D892E488EC0000E08DF /* CameraView.swift in Sources */,
@@ -684,6 +691,7 @@
 				469A994D2DEB31EF00954049 /* NotificationNames.swift in Sources */,
 				46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */,
 				46B95F4C2E0EF77500D81590 /* ImageCacheManager.swift in Sources */,
+				326BBBB32DFA4E70BEDBF1CD /* GlobalImageLoadManager.swift in Sources */,
 				46E5B3652DE21A3400AEF31F /* UserListView.swift in Sources */,
 				469A995F2DEF300900954049 /* TweetCacheManager.swift in Sources */,
 				46E5B36A2DE35E0A00AEF31F /* ProfileStatsView.swift in Sources */,
@@ -879,7 +887,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -932,7 +940,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;

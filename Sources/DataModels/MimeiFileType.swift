@@ -68,6 +68,7 @@ struct MimeiFileType: Identifiable, Codable, Hashable { // Conform to Hashable
         } else {
             timestamp = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
         }
+        
     }
     
     func encode(to encoder: Encoder) throws {

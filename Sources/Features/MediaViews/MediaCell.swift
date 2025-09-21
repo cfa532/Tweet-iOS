@@ -211,8 +211,8 @@ struct MediaCell: View, Equatable {
             // Set visibility to true immediately when cell appears
             isVisible = true
             
-            // Load image if not already loaded
-            if image == nil {
+            // Load image if not already loaded - ONLY for image attachments
+            if attachment.type == .image && image == nil {
                 loadImage()
             }
             
@@ -225,6 +225,9 @@ struct MediaCell: View, Equatable {
             
             // Cancel any ongoing preload tasks
             cancelPreloadTask()
+            
+            // Cancel any pending image loads to prevent memory leaks
+            GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(baseUrl.absoluteString)")
         }
         .onChange(of: isVisible) { _, newValue in
             // Handle visibility changes - image loading is now handled in onAppear
@@ -316,19 +319,18 @@ struct MediaCell: View, Equatable {
             return
         }
         
-        // If no cached image, start loading
+        // If no cached image, start loading with global manager
         isLoading = true
-        Task {
-            if let loadedImage = await imageCache.loadAndCacheImage(from: url, for: attachment, baseUrl: baseUrl) {
-                await MainActor.run {
-                    self.image = loadedImage
-                    self.isLoading = false
-                }
-            } else {
-                await MainActor.run {
-                    self.isLoading = false
-                }
-            }
+        
+        // Use normal priority for grid images (they're visible but not as critical as detail view)
+        GlobalImageLoadManager.shared.loadImageNormalPriority(
+            id: "\(attachment.mid)_\(baseUrl.absoluteString)",
+            url: url,
+            attachment: attachment,
+            baseUrl: baseUrl
+        ) { loadedImage in
+            self.image = loadedImage
+            self.isLoading = false
         }
     }
     
