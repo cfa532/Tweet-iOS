@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AVKit
+import Photos
 
 struct MediaBrowserView: View {
     let tweet: Tweet
@@ -358,6 +359,8 @@ struct ImageViewWithPlaceholder: View {
     @State private var lastScale: CGFloat = 1.0
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
+    @State private var showDownloadToast = false
+    @State private var downloadToastMessage = ""
     
     // Calculate zoom parameters based on actual image dimensions and screen dimensions
     private func getActualAspectRatio() -> CGFloat {
@@ -393,6 +396,57 @@ struct ImageViewWithPlaceholder: View {
     private func calculateMaxScale(for geometry: GeometryProxy) -> CGFloat {
         // Allow up to 2x the double-tap scale for pinch zoom
         return calculateDoubleTapScale(for: geometry) * 2.0
+    }
+    
+    private func downloadImage() {
+        // Get the image to download
+        let imageToDownload: UIImage?
+        
+        switch imageState {
+        case .loaded(let image):
+            imageToDownload = image
+        case .placeholder(let image):
+            imageToDownload = image
+        default:
+            imageToDownload = nil
+        }
+        
+        guard let image = imageToDownload else {
+            showDownloadToast(message: "No image to download")
+            return
+        }
+        
+        // Request photo library permission and save
+        PHPhotoLibrary.requestAuthorization { status in
+            guard status == .authorized else {
+                DispatchQueue.main.async {
+                    self.showDownloadToast(message: "Photo library access denied")
+                }
+                return
+            }
+            
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }) { success, error in
+                DispatchQueue.main.async {
+                    if success {
+                        self.showDownloadToast(message: "Image saved to Photos")
+                    } else {
+                        self.showDownloadToast(message: "Failed to save image")
+                    }
+                }
+            }
+        }
+    }
+    
+    private func showDownloadToast(message: String) {
+        downloadToastMessage = message
+        showDownloadToast = true
+        
+        // Auto-hide toast after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            showDownloadToast = false
+        }
     }
     
     var body: some View {
@@ -504,6 +558,30 @@ struct ImageViewWithPlaceholder: View {
                             }
                         }
                     }
+                }
+                .onLongPressGesture {
+                    // Download image on long press
+                    downloadImage()
+                }
+                
+                // Download toast overlay
+                if showDownloadToast {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Text(downloadToastMessage)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(Color.black.opacity(0.7))
+                                .cornerRadius(8)
+                            Spacer()
+                        }
+                        .padding(.bottom, 100)
+                    }
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.3), value: showDownloadToast)
                 }
             }
         }

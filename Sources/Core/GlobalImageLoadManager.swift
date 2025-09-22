@@ -87,30 +87,24 @@ class GlobalImageLoadManager: ObservableObject {
     
     /// Load an image with priority and concurrency control
     func loadImage(request: ImageLoadRequest) {
-        print("DEBUG: [GlobalImageLoadManager] loadImage called for \(request.id), priority: \(request.priority), active: \(activeLoads.count)/\(maxConcurrentLoads), pending: \(pendingRequests.count)")
-        
         // Check if already completed successfully
         if completedRequests.contains(request.id) {
-            print("DEBUG: [GlobalImageLoadManager] Request \(request.id) already completed successfully, skipping")
             return
         }
         
         // Check if this request previously returned non-image content (don't retry)
         if nonImageResponses.contains(request.id) {
-            print("DEBUG: [GlobalImageLoadManager] Request \(request.id) previously returned non-image content, skipping retry")
             return
         }
         
         // Check if already loading
         if activeLoads[request.id] != nil {
-            print("DEBUG: [GlobalImageLoadManager] Request \(request.id) already loading, skipping")
             return
         }
         
         // If image reappears and we haven't completed it successfully, reset retry count
         // This allows images to be retried when they come back into view
         if let currentRetryCount = retryCounts[request.id], currentRetryCount > 0 {
-            print("DEBUG: [GlobalImageLoadManager] Image \(request.id) reappeared, resetting retry count from \(currentRetryCount) to 0")
             retryCounts[request.id] = 0
         }
         
@@ -118,7 +112,6 @@ class GlobalImageLoadManager: ObservableObject {
         if isMemoryPressureHigh() {
             if request.priority.rawValue < ImageLoadingPriority.high.rawValue {
                 // Defer low priority requests during memory pressure
-                print("DEBUG: [GlobalImageLoadManager] Memory pressure high, deferring \(request.id)")
                 deferRequest(request)
                 return
             }
@@ -126,11 +119,9 @@ class GlobalImageLoadManager: ObservableObject {
         
         // Check if we can start loading immediately
         if activeLoads.count < maxConcurrentLoads {
-            print("DEBUG: [GlobalImageLoadManager] Starting load for \(request.id) immediately")
             startLoading(request)
         } else {
             // Add to pending queue
-            print("DEBUG: [GlobalImageLoadManager] Adding \(request.id) to pending queue")
             addToPendingQueue(request)
         }
     }
@@ -152,8 +143,6 @@ class GlobalImageLoadManager: ObservableObject {
         // Remove from completed/failed tracking to allow retry
         completedRequests.remove(id)
         retryCounts.removeValue(forKey: id)
-        
-        print("DEBUG: [GlobalImageLoadManager] Force retry requested for: \(id)")
     }
     
     /// Cancel all loads for a specific priority or lower
@@ -194,7 +183,6 @@ class GlobalImageLoadManager: ObservableObject {
         completedRequests.removeAll()
         // Keep retry counts so images can still be retried when they reappear
         updateStatistics()
-        print("DEBUG: [GlobalImageLoadManager] Forced cleanup of completed requests")
     }
     
     // MARK: - Private Methods
@@ -204,27 +192,19 @@ class GlobalImageLoadManager: ObservableObject {
         let newRetryCount = currentRetryCount + 1
         retryCounts[request.id] = newRetryCount
         
-        print("DEBUG: [GlobalImageLoadManager] Load failed for \(request.id), retry count: \(newRetryCount)/3")
-        
         if newRetryCount < 3 {
             // Schedule retry with exponential backoff
             let delay = Double(newRetryCount) * 2.0 // 2s, 4s, 6s delays
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                print("DEBUG: [GlobalImageLoadManager] Retrying \(request.id) (attempt \(newRetryCount + 1))")
                 self.loadImage(request: request)
             }
-        } else {
-            print("DEBUG: [GlobalImageLoadManager] Max retries exceeded for \(request.id), giving up")
         }
     }
     
     private func startLoading(_ request: ImageLoadRequest) {
-        print("DEBUG: [GlobalImageLoadManager] startLoading for \(request.id), active count: \(activeLoads.count)")
-        
         let task = Task {
             // Check if image is already cached
             if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment, baseUrl: request.baseUrl) {
-                print("DEBUG: [GlobalImageLoadManager] Found cached image for \(request.id)")
                 await MainActor.run {
                     request.completion(cachedImage)
                     self.completedRequests.insert(request.id)
@@ -236,17 +216,14 @@ class GlobalImageLoadManager: ObservableObject {
             }
             
             // Load from network
-            print("DEBUG: [GlobalImageLoadManager] Loading from network for \(request.id)")
             let image = await loadImageFromNetwork(request)
             
             await MainActor.run {
                 if let image = image {
-                    print("DEBUG: [GlobalImageLoadManager] Successfully loaded \(request.id)")
                     request.completion(image)
                     self.completedRequests.insert(request.id)
                     self.retryCounts.removeValue(forKey: request.id) // Clear retry count on success
                 } else {
-                    print("DEBUG: [GlobalImageLoadManager] Image processing failed for \(request.id)")
                     self.handleLoadFailure(request)
                 }
                 self.activeLoads.removeValue(forKey: request.id)
@@ -266,7 +243,6 @@ class GlobalImageLoadManager: ObservableObject {
             // Check if we got a valid response
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200 else {
-                print("DEBUG: [GlobalImageLoadManager] Invalid HTTP response for \(request.id): \(response)")
                 return nil
             }
             
@@ -275,58 +251,22 @@ class GlobalImageLoadManager: ObservableObject {
                 request.onProgress(1.0)
             }
             
-            // Get content type
-            let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "unknown"
-            print("DEBUG: [GlobalImageLoadManager] Downloaded \(data.count) bytes for \(request.id), content-type: \(contentType)")
-            
             // Check if data is empty
             guard !data.isEmpty else {
-                print("DEBUG: [GlobalImageLoadManager] Empty data received for \(request.id)")
-                return nil
-            }
-            
-            // Check if we received HTML instead of an image (common server error response)
-            if contentType.lowercased().contains("text/html") {
-                print("DEBUG: [GlobalImageLoadManager] Server returned HTML instead of image for \(request.id) - likely 404 or server error")
-                await MainActor.run {
-                    self.nonImageResponses.insert(request.id)
-                }
-                return nil
-            }
-            
-            // Check if content type indicates it's not an image
-            let imageContentTypes = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/bmp", "image/tiff"]
-            let isImageContentType = imageContentTypes.contains { contentType.lowercased().contains($0) }
-            
-            if !isImageContentType && contentType != "unknown" {
-                print("DEBUG: [GlobalImageLoadManager] Non-image content type for \(request.id): \(contentType)")
-                await MainActor.run {
-                    self.nonImageResponses.insert(request.id)
-                }
                 return nil
             }
             
             // Cache the image data
             ImageCacheManager.shared.cacheImageData(data, for: request.attachment, baseUrl: request.baseUrl)
             
-            // Try to get the compressed image first
-            if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment, baseUrl: request.baseUrl) {
-                print("DEBUG: [GlobalImageLoadManager] Successfully loaded compressed image for \(request.id)")
-                return compressedImage
+            // Create UIImage directly from data
+            if let image = UIImage(data: data) {
+                return image
             }
             
-            // If compressed image retrieval failed, try to create UIImage directly from data
-            if let directImage = UIImage(data: data) {
-                print("DEBUG: [GlobalImageLoadManager] Using direct UIImage creation for \(request.id) (compression may have failed)")
-                return directImage
-            }
-            
-            // If both methods fail, this is a real failure - log more details
-            print("DEBUG: [GlobalImageLoadManager] Failed to create UIImage from data for \(request.id) - data size: \(data.count) bytes, first 20 bytes: \(data.prefix(20).map { String(format: "%02x", $0) }.joined(separator: " "))")
             return nil
             
         } catch {
-            print("DEBUG: [GlobalImageLoadManager] Network error for \(request.id): \(error)")
             return nil
         }
     }
@@ -421,7 +361,6 @@ class GlobalImageLoadManager: ObservableObject {
             
             return resizedImage
         } catch {
-            print("Error loading optimized image: \(error)")
             return nil
         }
     }
@@ -518,7 +457,14 @@ class GlobalImageLoadManager: ObservableObject {
             
             // Simple heuristic: if we're using more than 80% of available memory
             let availableMemory = ProcessInfo.processInfo.physicalMemory
-            return Double(currentMemoryUsage) / Double(availableMemory) > memoryWarningThreshold
+            let memoryUsageRatio = Double(currentMemoryUsage) / Double(availableMemory)
+            let isHigh = memoryUsageRatio > memoryWarningThreshold
+            
+            if isHigh {
+                print("DEBUG: [GlobalImageLoadManager] High memory pressure detected: \(String(format: "%.1f", memoryUsageRatio * 100))% of available memory used")
+            }
+            
+            return isHigh
         }
         
         return false
@@ -541,6 +487,7 @@ class GlobalImageLoadManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                print("DEBUG: [GlobalImageLoadManager] System memory warning received")
                 self?.handleMemoryWarning()
             }
         }
@@ -569,15 +516,28 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func handleMemoryWarning() {
-        // Cancel all low priority requests
-        cancelLoads(priority: .low)
+        // Check if memory usage exceeds 1GB before taking action
+        let memoryUsage = getCurrentMemoryUsage()
+        let memoryUsageMB = memoryUsage / (1024 * 1024)
         
-        // Clear completed request history to free memory
-        completedRequests.removeAll()
-        // Keep retry counts so images can still be retried when they reappear
+        print("DEBUG: [GlobalImageLoadManager] Memory warning - current usage: \(memoryUsageMB)MB")
         
-        // Force garbage collection
-        updateStatistics()
+        // Only take action if memory usage exceeds 1GB
+        if memoryUsageMB > 1024 {
+            print("DEBUG: [GlobalImageLoadManager] Memory usage exceeds 1GB, performing cleanup")
+            
+            // Cancel all low priority requests
+            cancelLoads(priority: .low)
+            
+            // Clear completed request history to free memory
+            completedRequests.removeAll()
+            // Keep retry counts so images can still be retried when they reappear
+            
+            // Force garbage collection
+            updateStatistics()
+        } else {
+            print("DEBUG: [GlobalImageLoadManager] Memory usage under 1GB, no action needed")
+        }
     }
     
     private func handleAppBackgrounded() {
@@ -655,5 +615,26 @@ extension GlobalImageLoadManager {
             completion: completion
         )
         loadImage(request: request)
+    }
+    
+    /// Get current memory usage in bytes
+    private func getCurrentMemoryUsage() -> UInt64 {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+        
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_,
+                         task_flavor_t(MACH_TASK_BASIC_INFO),
+                         $0,
+                         &count)
+            }
+        }
+        
+        if kerr == KERN_SUCCESS {
+            return info.resident_size
+        } else {
+            return 0
+        }
     }
 }

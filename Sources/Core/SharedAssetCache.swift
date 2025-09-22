@@ -20,6 +20,12 @@ class SharedAssetCache: ObservableObject {
         
         // Set up app lifecycle notifications
         setupAppLifecycleNotifications()
+        
+        // Set up memory warning notifications
+        setupMemoryWarningNotifications()
+        
+        // Start proactive memory monitoring
+        startMemoryMonitoring()
     }
     
     // MARK: - Cache Storage
@@ -31,16 +37,28 @@ class SharedAssetCache: ObservableObject {
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of URLs
     
     // MARK: - Configuration
-    private let maxCacheSize = 50 // Maximum number of cached assets and players
-    private let cacheExpirationInterval: TimeInterval = 300 // 5 minutes
+    private let maxCacheSize = 30 // Maximum number of cached assets and players (reduced for memory)
+    private let maxPlayerCacheSize = 10 // Maximum cached players (separate limit)
+    private let cacheExpirationInterval: TimeInterval = 120 // 2 minutes (reduced for memory)
+    private let maxVideoFileSize: Int64 = 50 * 1024 * 1024 // 50MB max per video file
     
     // MARK: - Background Cleanup
     private var cleanupTimer: Timer?
+    private var memoryMonitorTimer: Timer?
     
     private func startBackgroundCleanup() {
-        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
             Task { @MainActor in
                 self.performCleanup()
+            }
+        }
+    }
+    
+    private func startMemoryMonitoring() {
+        // Monitor memory every 10 seconds to catch rapid memory growth
+        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+            Task { @MainActor in
+                self.checkMemoryPressure()
             }
         }
     }
@@ -457,13 +475,13 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func managePlayerCacheSize() {
-        if playerCache.count > maxCacheSize {
+        if playerCache.count > maxPlayerCacheSize {
             // Remove least recently used players - do sorting on background thread
             Task.detached {
                 let sortedKeys = await MainActor.run {
                     self.cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
                 }
-                let keysToRemove = sortedKeys.prefix(await MainActor.run { self.playerCache.count - self.maxCacheSize })
+                let keysToRemove = sortedKeys.prefix(await MainActor.run { self.playerCache.count - self.maxPlayerCacheSize })
                 
                 await MainActor.run {
                     for key in keysToRemove {
@@ -484,6 +502,79 @@ class SharedAssetCache: ObservableObject {
     /// Get cache statistics
     @MainActor func getCacheStats() -> (assetCount: Int, playerCount: Int) {
         return (assetCache.count, playerCache.count)
+    }
+    
+    /// Get current memory usage in bytes
+    private func getCurrentMemoryUsage() -> UInt64 {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
+        
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_,
+                         task_flavor_t(MACH_TASK_BASIC_INFO),
+                         $0,
+                         &count)
+            }
+        }
+        
+        if kerr == KERN_SUCCESS {
+            return info.resident_size
+        } else {
+            return 0
+        }
+    }
+    
+    /// Proactive memory pressure check - runs every 10 seconds
+    private func checkMemoryPressure() {
+        let memoryUsage = getCurrentMemoryUsage()
+        let memoryUsageMB = memoryUsage / (1024 * 1024)
+        
+        // Log memory usage for monitoring
+        if memoryUsageMB > 500 { // Log when memory exceeds 500MB
+            print("DEBUG: [SharedAssetCache] Proactive memory check - current usage: \(memoryUsageMB)MB")
+        }
+        
+        // Take action if memory exceeds 800MB (more aggressive than 1GB)
+        if memoryUsageMB > 800 {
+            print("DEBUG: [SharedAssetCache] Proactive memory cleanup triggered at \(memoryUsageMB)MB")
+            handleMemoryWarning()
+        }
+    }
+    
+    // MARK: - Memory Warning Handling
+    
+    private func setupMemoryWarningNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                print("DEBUG: [SharedAssetCache] System memory warning received - performing aggressive cleanup")
+                self?.handleMemoryWarning()
+            }
+        }
+    }
+    
+    private func handleMemoryWarning() {
+        // Check if memory usage exceeds 1GB before taking action
+        let memoryUsage = getCurrentMemoryUsage()
+        let memoryUsageMB = memoryUsage / (1024 * 1024)
+        
+        print("DEBUG: [SharedAssetCache] Memory warning - current usage: \(memoryUsageMB)MB")
+        
+        // Only release cache if memory usage exceeds 1GB
+        if memoryUsageMB > 1024 {
+            print("DEBUG: [SharedAssetCache] Memory usage exceeds 1GB, releasing 30% of cache")
+            // Release 30% of cache (less aggressive)
+            releasePartialCache(percentage: 30)
+        } else {
+            print("DEBUG: [SharedAssetCache] Memory usage under 1GB, no action needed")
+        }
+        
+        // Don't cancel ongoing loadings - let them complete for better UX
+        // Don't clear URL mapping - preserve user's browsing context
     }
     
     // MARK: - App Lifecycle Handling
@@ -511,9 +602,11 @@ class SharedAssetCache: ObservableObject {
     }
     
     deinit {
-        // Invalidate timer
+        // Invalidate timers
         cleanupTimer?.invalidate()
         cleanupTimer = nil
+        memoryMonitorTimer?.invalidate()
+        memoryMonitorTimer = nil
         
         // Cancel all loading tasks
         for (_, task) in loadingTasks {
