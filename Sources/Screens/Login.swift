@@ -178,7 +178,8 @@ struct LoginView: View {
                 // retrieve user object from the net.
                 if let user = try await hproseInstance.fetchUser(userId) {
                     if (user.username == nil) {
-                        errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), userId)
+                        print("DEBUG: [Login] Cannot find user - username: \(username), userid: \(userId)")
+                        errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), username)
                     } else {
                         user.password = password
                         let result = try await hproseInstance.login(user)
@@ -187,16 +188,20 @@ struct LoginView: View {
                             NotificationCenter.default.post(name: .userDidLogin, object: nil)
                             dismiss()
                         } else {
+                            print("DEBUG: [Login] Login failed - username: \(username), userid: \(userId), reason: \(result["reason"] as? String ?? "unknown")")
                             errorMessage = result["reason"] as? String
                         }
                     }
                 } else {
-                    errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), userId)
+                    print("DEBUG: [Login] Cannot find user - username: \(username), userid: \(userId)")
+                    errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), username)
                 }
             } else {
+                print("DEBUG: [Login] Cannot find userId - username: \(username)")
                 errorMessage = String(format: NSLocalizedString("Cannot find userId by %@", comment: "UserId not found error"), username)
             }
         } catch {
+            print("DEBUG: [Login] Login error - username: \(username), error: \(error.localizedDescription)")
             errorMessage = error.localizedDescription
         }
         
