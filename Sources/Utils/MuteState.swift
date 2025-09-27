@@ -14,14 +14,7 @@ class MuteState: ObservableObject {
             Task { @MainActor in
                 // Save to preferences whenever the mute state changes
                 if oldValue != isMuted {
-                    // Use PreferenceHelper if available, otherwise save to UserDefaults directly
-                    if let preferenceHelper = HproseInstance.shared.preferenceHelper {
-                        preferenceHelper.setSpeakerMute(isMuted)
-                    } else {
-                        // Fallback to UserDefaults directly during app startup before PreferenceHelper is ready
-                        UserDefaults.standard.set(isMuted, forKey: "speakerMuted")
-                        print("DEBUG: [MUTE STATE] Saved to UserDefaults fallback during startup: \(isMuted)")
-                    }
+                    HproseInstance.shared.preferenceHelper?.setSpeakerMute(isMuted)
                     print("DEBUG: [MUTE STATE] Mute state changed to: \(isMuted)")
                 }
             }
@@ -29,7 +22,7 @@ class MuteState: ObservableObject {
     }
     
     private init() {
-        // Initialize from saved preference with fallback to UserDefaults
+        // Initialize from saved preference
         refreshFromPreferences()
         
         // Listen for UserDefaults changes to sync with database preference
@@ -47,20 +40,8 @@ class MuteState: ObservableObject {
     
     @objc private func userDefaultsDidChange() {
         // Check for changes to the speakerMuted key
-        // Use PreferenceHelper if available, otherwise fallback to UserDefaults directly
-        let newMuteState: Bool
-        if let preferenceHelper = HproseInstance.shared.preferenceHelper {
-            newMuteState = preferenceHelper.getSpeakerMute()
-        } else {
-            // Fallback to UserDefaults directly during app startup before PreferenceHelper is ready
-            let userDefaults = UserDefaults.standard
-            if userDefaults.object(forKey: "speakerMuted") == nil {
-                newMuteState = true // Default to muted if not set (same as PreferenceHelper default)
-            } else {
-                newMuteState = userDefaults.bool(forKey: "speakerMuted")
-            }
-        }
-        
+        // If the key was removed (reset to default), default to unmuted
+        let newMuteState = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
         if self.isMuted != newMuteState {
             DispatchQueue.main.async {
                 self.isMuted = newMuteState
@@ -71,24 +52,9 @@ class MuteState: ObservableObject {
     
     func refreshFromPreferences() {
         // Read the current preference and update the published property
-        // Use PreferenceHelper if available, otherwise fallback to UserDefaults directly
-        let savedMuteState: Bool
-        if let preferenceHelper = HproseInstance.shared.preferenceHelper {
-            savedMuteState = preferenceHelper.getSpeakerMute()
-        } else {
-            // Fallback to UserDefaults directly during app startup before PreferenceHelper is ready
-            let userDefaults = UserDefaults.standard
-            if userDefaults.object(forKey: "speakerMuted") == nil {
-                savedMuteState = true // Default to muted if not set (same as PreferenceHelper default)
-            } else {
-                savedMuteState = userDefaults.bool(forKey: "speakerMuted")
-            }
-            print("DEBUG: [MUTE STATE] Using UserDefaults fallback during startup: \(savedMuteState)")
-        }
-        
+        let savedMuteState = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
         if self.isMuted != savedMuteState {
             self.isMuted = savedMuteState
-            print("DEBUG: [MUTE STATE] Refreshed from preferences: \(savedMuteState)")
         }
     }
     
@@ -101,21 +67,6 @@ class MuteState: ObservableObject {
         if self.isMuted != muted {
             self.isMuted = muted
             // Note: The didSet observer will handle saving to preferences
-        }
-    }
-    
-    /// Re-sync with PreferenceHelper once it becomes available
-    /// This should be called after HproseInstance.preferenceHelper is initialized
-    func syncWithPreferenceHelper() {
-        guard HproseInstance.shared.preferenceHelper != nil else {
-            print("DEBUG: [MUTE STATE] PreferenceHelper not available yet, skipping sync")
-            return
-        }
-        
-        let preferenceMuteState = HproseInstance.shared.preferenceHelper!.getSpeakerMute()
-        if self.isMuted != preferenceMuteState {
-            self.isMuted = preferenceMuteState
-            print("DEBUG: [MUTE STATE] Synced with PreferenceHelper: \(preferenceMuteState)")
         }
     }
 }
