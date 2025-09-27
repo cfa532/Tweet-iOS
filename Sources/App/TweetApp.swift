@@ -15,6 +15,10 @@ class AppState: ObservableObject {
         // Initialize basic components first (no network calls)
         // Initialize preference helper and basic app user (no network calls)
         HproseInstance.shared.preferenceHelper = PreferenceHelper()
+        
+        // Sync MuteState with PreferenceHelper now that it's available
+        MuteState.shared.syncWithPreferenceHelper()
+        
         await HproseInstance.shared.initializeAppUser()
         
         // Allow showing cached content immediately

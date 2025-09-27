@@ -149,6 +149,9 @@ final class HproseInstance: ObservableObject {
         // Step 1: Initialize preference helper first
         self.preferenceHelper = PreferenceHelper()
         
+        // Sync MuteState with PreferenceHelper now that it's available
+        MuteState.shared.syncWithPreferenceHelper()
+        
         // Step 2: Initialize app user with default values
         await initializeAppUser()
         
