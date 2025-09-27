@@ -618,7 +618,22 @@ final class HproseInstance: ObservableObject {
             return cachedUser
         }
         
-        // Step 2: Fetch from server with retry logic. No instance available in memory or cache.
+        // Step 2: Check if appUser's baseUrl host is an IP address
+        let appUserBaseUrl = appUser.baseUrl?.absoluteString ?? ""
+        if !appUserBaseUrl.isEmpty {
+            if let appUserUrl = URL(string: appUserBaseUrl),
+               let host = appUserUrl.host {
+                // Check if the host is an IP address using existing Gadget utility
+                if host.getIP() == nil {
+                    // Host is not an IP address, return cached user even if expired
+                    let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+                    print("DEBUG: [fetchUser] appUser baseUrl host is not an IP (\(host)), returning cached user for userId: \(userId), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
+                    return cachedUser
+                }
+            }
+        }
+        
+        // Step 3: Fetch from server with retry logic. No instance available in memory or cache.
         return try await retryOperation(maxRetries: 3) {
             if baseUrl.isEmpty {
                 print("DEBUG: [fetchUser] baseUrl is empty, getting provider IP for userId: \(userId)")
