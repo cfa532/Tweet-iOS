@@ -2,7 +2,7 @@ import CoreData
 import Foundation
 import UIKit
 
-class TweetCacheManager {
+final class TweetCacheManager: @unchecked Sendable {
     static let shared = TweetCacheManager()
     private let coreDataManager = CoreDataManager.shared
     private let maxCacheAge: TimeInterval = 30 * 24 * 60 * 60 // 30 days
@@ -279,11 +279,6 @@ extension Tweet {
                      userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])
     }
     
-    static func from(cdTweet: CDTweet) async throws -> Tweet {
-        return try await MainActor.run {
-            try from(cdTweet: cdTweet)
-        }
-    }
 }
 
 // MARK: - User Caching

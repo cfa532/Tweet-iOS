@@ -607,25 +607,32 @@ final class HproseInstance: ObservableObject {
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
+        print("DEBUG: [fetchUser] Starting fetch for userId: \(userId), baseUrl: \(baseUrl)")
+        
         // Step 1: Check user cache in Core Data.
         let user = User.getInstance(mid: userId)
         if !user.hasExpired {
             // get cached user instance if it is not expired.
-            return TweetCacheManager.shared.fetchUser(mid: userId)
+            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+            print("DEBUG: [fetchUser] Returning cached user for userId: \(userId), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
+            return cachedUser
         }
         
         // Step 2: Fetch from server with retry logic. No instance available in memory or cache.
         return try await retryOperation(maxRetries: 3) {
             if baseUrl.isEmpty {
+                print("DEBUG: [fetchUser] baseUrl is empty, getting provider IP for userId: \(userId)")
                 guard let providerIP = try await self.getProviderIP(userId) else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provider not found"])
                 }
+                print("DEBUG: [fetchUser] Setting baseUrl to provider IP: \(providerIP) for userId: \(userId)")
                 await MainActor.run {
                     user.baseUrl = URL(string: "http://\(providerIP)")!
                 }
                 try await self.updateUserFromServer(user)
                 return user
             } else {
+                print("DEBUG: [fetchUser] Setting baseUrl to provided URL: \(baseUrl) for userId: \(userId)")
                 await MainActor.run {
                     user.baseUrl = URL(string: baseUrl)!
                 }
@@ -643,9 +650,17 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
         ]
         
+        print("DEBUG: [updateUserFromServer] Attempting to update user: \(user.mid), baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
+        
         // Call runMApp following the sample code pattern
-        guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
+        guard let hproseClient = user.hproseClient else {
+            print("DEBUG: [updateUserFromServer] No hprose client available for user: \(user.mid), baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No hprose client available for user: \(user.mid)"])
+        }
+        
+        guard let response = hproseClient.invoke("runMApp", withArgs: [entry, params]) else {
+            print("DEBUG: [updateUserFromServer] No response from server for user: \(user.mid)")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for user: \(user.mid)"])
         }
         
         // Check for IP address response first (user not found on this node)

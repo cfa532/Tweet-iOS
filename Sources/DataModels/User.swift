@@ -104,11 +104,15 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     private var _hproseClient: HproseClient?
     public var hproseClient: HproseClient? {
         get {
-            guard let baseUrl = baseUrl else { return nil }
+            guard let baseUrl = baseUrl else { 
+                print("DEBUG: [User] hproseClient - baseUrl is nil for user: \(mid)")
+                return nil 
+            }
 
             if let cached = _hproseClient {
                 return cached
             } else {
+                print("DEBUG: [User] hproseClient - Creating new client for user: \(mid), baseUrl: \(baseUrl)")
                 if baseUrl == HproseInstance.shared.appUser.baseUrl {
                     // Create a new client since the shared one is private
                     let client = HproseHttpClient()
