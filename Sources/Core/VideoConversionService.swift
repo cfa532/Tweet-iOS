@@ -350,7 +350,7 @@ class VideoConversionService {
             -vf "\(scaleFilter)" \
             -b:v \(bitrate) \
             -b:a 128k \
-            -preset superfast \
+            -preset veryfast \
             -tune zerolatency \
             -threads 2 \
             -max_muxing_queue_size 512 \
