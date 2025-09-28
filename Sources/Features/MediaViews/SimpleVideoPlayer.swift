@@ -138,7 +138,7 @@ struct SimpleVideoPlayer: View {
                                 .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2)
                                 .rotationEffect(.degrees(-90))
                                 .scaleEffect(screenHeight / screenWidth)
-                                .background(Color.gray)
+                                .background(Color.black)
                         }
                     } else {
                         // Square video: fit on full screen
@@ -904,6 +904,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
         controller.player = player
         controller.showsPlaybackControls = true
         controller.videoGravity = .resizeAspect
+        controller.view.backgroundColor = .black
         return controller
     }
     
