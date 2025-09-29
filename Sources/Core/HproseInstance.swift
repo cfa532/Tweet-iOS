@@ -31,7 +31,27 @@ final class HproseInstance: ObservableObject {
     
     @Published private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
     var appUser: User {
-        get { _appUser }
+        get { 
+            // Refresh appUser from server if expired (every 30 minutes) - but not for guest users
+            if !_appUser.isGuest && _appUser.hasExpired {
+                Task {
+                    do {
+                        if let refreshedUser = try await fetchUser(_appUser.mid, baseUrl: _appUser.baseUrl?.absoluteString ?? "") {
+                            // Update appUser's baseUrl to match the refreshed user's baseUrl
+                            await MainActor.run {
+                                if refreshedUser.baseUrl != _appUser.baseUrl {
+                                    _appUser.baseUrl = refreshedUser.baseUrl
+                                    print("DEBUG: [appUser getter] Updated appUser baseUrl from \(_appUser.baseUrl?.absoluteString ?? "nil") to \(refreshedUser.baseUrl?.absoluteString ?? "nil")")
+                                }
+                            }
+                        }
+                    } catch {
+                        print("DEBUG: [appUser getter] Failed to refresh appUser: \(error)")
+                    }
+                }
+            }
+            return _appUser 
+        }
         set {
             // Get the singleton instance for the new user
             let instance = User.getInstance(mid: newValue.mid)
@@ -614,6 +634,32 @@ final class HproseInstance: ObservableObject {
         if !user.hasExpired {
             // get cached user instance if it is not expired.
             let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+            
+            // Only update baseUrl if cached user doesn't have one or if provided baseUrl is an IP and cached user's is not
+            if cachedUser.baseUrl == nil {
+                // Cached user has no baseUrl, use the provided one
+                if let providedBaseUrl = URL(string: baseUrl) {
+                    await MainActor.run {
+                        cachedUser.baseUrl = providedBaseUrl
+                    }
+                    // Save the updated user back to cache
+                    TweetCacheManager.shared.saveUser(cachedUser)
+                    print("DEBUG: [fetchUser] Set cached user baseUrl to provided: \(baseUrl)")
+                }
+            } else if let providedBaseUrl = URL(string: baseUrl),
+                      let providedHost = providedBaseUrl.host,
+                      providedHost.getIP() != nil,
+                      let cachedHost = cachedUser.baseUrl?.host,
+                      cachedHost.getIP() == nil {
+                // Provided baseUrl is an IP and cached user's is a domain, use the IP
+                await MainActor.run {
+                    cachedUser.baseUrl = providedBaseUrl
+                }
+                // Save the updated user back to cache
+                TweetCacheManager.shared.saveUser(cachedUser)
+                print("DEBUG: [fetchUser] Updated cached user baseUrl from domain to IP: \(baseUrl)")
+            }
+            
             print("DEBUG: [fetchUser] Returning cached user for userId: \(userId), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
             return cachedUser
         }
