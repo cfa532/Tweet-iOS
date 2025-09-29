@@ -266,6 +266,12 @@ final class HproseInstance: ObservableObject {
                     HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     
+                    // Update appUser's baseUrl to IP address as well
+                    await MainActor.run {
+                        _appUser.baseUrl = HproseInstance.baseUrl
+                    }
+                    print("DEBUG: [initAppEntry] Updated appUser baseUrl to IP: \(firstIp)")
+                    
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
                         print("provider ip:  \(providerIp)")
                         // Try to fetch user (retry logic is now built into fetchUser method)
