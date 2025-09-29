@@ -739,19 +739,8 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
             }
             
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "resyncUser: No response"])
-            }
-            
-            // Check if the operation was successful
-            guard let success = response["success"] as? Bool, success else {
-                let errorMessage = response["error"] as? String ?? "resyncUser: Operation failed"
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
-            }
-            
-            // Extract the resynced user data
-            guard let userData = response["resyncedUser"] as? [String: Any] else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "resyncUser: No user data in response"])
+            guard let userData = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "resyncUser: No response or invalid response format"])
             }
             
             // Get or create the user instance directly
