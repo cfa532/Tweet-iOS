@@ -3141,7 +3141,6 @@ final class HproseInstance: ObservableObject {
         var retryCount = 0
         while retryCount < 2 {
             do {
-                TweetCacheManager.shared.clearAllUsers()
                 return try await block()
             } catch {
                 retryCount += 1
