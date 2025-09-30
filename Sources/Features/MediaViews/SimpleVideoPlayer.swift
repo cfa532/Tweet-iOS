@@ -76,6 +76,7 @@ struct SimpleVideoPlayer: View {
     @State private var isLongPressing = false
     @State private var nativeControlsTimer: Timer?
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
+    @State private var isPlayerDetached = false // Track if player is detached for background prevention
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -297,18 +298,29 @@ struct SimpleVideoPlayer: View {
         }
         
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-            // App going to background - pause all videos
+            // App going to background - detach player to prevent black screens
             print("DEBUG: [VIDEO BACKGROUND] App entering background for \(mid)")
-            player?.pause()
+            detachPlayerForBackground()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            // App will enter foreground - reattach player to prevent black screens
+            print("DEBUG: [VIDEO FOREGROUND] App will enter foreground for \(mid)")
+            reattachPlayerForForeground()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // App became active - restore video state without marking as invalid
+            // App became active - ensure player is properly reattached and configured
             print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
             
             // Always try to restore cached state first when app becomes active
             if player == nil && shouldLoadVideo {
                 print("DEBUG: [VIDEO APP ACTIVE] No player found, attempting to restore cached state for \(mid)")
                 restoreCachedVideoState()
+            }
+            
+            // Ensure player is reattached if it was detached
+            if isPlayerDetached {
+                print("DEBUG: [VIDEO APP ACTIVE] Player was detached, reattaching for \(mid)")
+                reattachPlayerForForeground()
             }
             
             // Ensure mute state is properly applied when app becomes active
@@ -357,23 +369,39 @@ struct SimpleVideoPlayer: View {
     private func videoPlayerView() -> some View {
         if let player = player {
             ZStack {
-                // Main video player
-                if mode == .mediaBrowser {
-                    // Use AVPlayerViewController for fullscreen modes to get native controls
-                    AVPlayerViewControllerRepresentable(player: player)
-                        .onTapGesture {
-                            if let onVideoTap = onVideoTap {
-                                onVideoTap()
+                // Main video player - only show if not detached
+                if !isPlayerDetached {
+                    if mode == .mediaBrowser {
+                        // Use AVPlayerViewController for fullscreen modes to get native controls
+                        AVPlayerViewControllerRepresentable(player: player)
+                            .onTapGesture {
+                                if let onVideoTap = onVideoTap {
+                                    onVideoTap()
+                                }
                             }
-                        }
+                    } else {
+                        // Use SwiftUI VideoPlayer for normal modes
+                        VideoPlayer(player: player)
+                            .onTapGesture {
+                                if let onVideoTap = onVideoTap {
+                                    onVideoTap()
+                                }
+                            }
+                    }
                 } else {
-                    // Use SwiftUI VideoPlayer for normal modes
-                    VideoPlayer(player: player)
-                        .onTapGesture {
-                            if let onVideoTap = onVideoTap {
-                                onVideoTap()
+                    // Show placeholder when player is detached (background state)
+                    Rectangle()
+                        .fill(Color.black.opacity(0.8))
+                        .overlay(
+                            VStack(spacing: 8) {
+                                Image(systemName: "pause.circle")
+                                    .font(.title)
+                                    .foregroundColor(.white.opacity(0.7))
+                                Text("Video paused")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.7))
                             }
-                        }
+                        )
                 }
                 
                 // Loading indicator
@@ -858,6 +886,79 @@ struct SimpleVideoPlayer: View {
         if shouldLoadVideo {
             setupPlayer()
         }
+    }
+    
+    private func detachPlayerForBackground() {
+        guard let player = player else { 
+            print("DEBUG: [VIDEO DETACH] No player available for \(mid)")
+            return 
+        }
+        
+        print("DEBUG: [VIDEO DETACH] Detaching player for background for \(mid)")
+        
+        // Store current state before detaching
+        let wasPlaying = player.rate > 0
+        let currentTime = player.currentTime()
+        
+        // Cache the state for restoration
+        VideoStateCache.shared.cacheVideoState(
+            for: mid,
+            player: player,
+            time: currentTime,
+            wasPlaying: wasPlaying,
+            originalMuteState: mode == .mediaCell ? isMuted : MuteState.shared.isMuted
+        )
+        
+        // Pause the player first
+        player.pause()
+        
+        // Mark as detached - this prevents the video layer from becoming invalid
+        isPlayerDetached = true
+        
+        print("DEBUG: [VIDEO DETACH] Player detached for \(mid), wasPlaying: \(wasPlaying)")
+    }
+    
+    private func reattachPlayerForForeground() {
+        guard let player = player else { 
+            print("DEBUG: [VIDEO REATTACH] No player available for \(mid)")
+            return 
+        }
+        
+        print("DEBUG: [VIDEO REATTACH] Reattaching player for foreground for \(mid)")
+        
+        // Mark as reattached
+        isPlayerDetached = false
+        
+        // Get cached state if available
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            print("DEBUG: [VIDEO REATTACH] Restoring cached state for \(mid)")
+            
+            // Restore mute state
+            if mode == .mediaCell {
+                player.isMuted = MuteState.shared.isMuted
+            } else if mode == .mediaBrowser {
+                player.isMuted = false
+            }
+            
+            // Seek to cached position
+            player.seek(to: cachedState.time) { finished in
+                if finished {
+                    print("DEBUG: [VIDEO REATTACH] Seek completed for \(self.mid)")
+                    
+                    // Resume playback if it was playing and conditions are met
+                    if cachedState.wasPlaying && self.isVisible && self.currentAutoPlay && self.shouldLoadVideo {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            print("DEBUG: [VIDEO REATTACH] Resuming playback for \(self.mid)")
+                            player.play()
+                        }
+                    }
+                }
+            }
+        } else {
+            print("DEBUG: [VIDEO REATTACH] No cached state found for \(mid)")
+        }
+        
+        print("DEBUG: [VIDEO REATTACH] Player reattached for \(mid)")
     }
 }
 
