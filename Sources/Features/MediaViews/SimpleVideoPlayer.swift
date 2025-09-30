@@ -555,6 +555,9 @@ struct SimpleVideoPlayer: View {
         // Restore the cached player
         self.player = cachedState.player
         
+        // Ensure the player is also cached in SharedAssetCache for consistency
+        SharedAssetCache.shared.cachePlayer(cachedState.player, for: url)
+        
         // For MediaCell mode, always use the current global mute state instead of the cached one
         // This ensures videos respect the current global mute setting when returning from full screen
         if mode == .mediaCell {
@@ -616,6 +619,9 @@ struct SimpleVideoPlayer: View {
         self.loadFailed = false
         self.retryCount = 0
         self.hasFinishedPlaying = false // Reset finished state
+        
+        // Cache the player in SharedAssetCache for reuse
+        SharedAssetCache.shared.cachePlayer(player, for: url)
         
         // Start playback if needed
         checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
