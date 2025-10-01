@@ -162,6 +162,14 @@ final class HproseInstance: ObservableObject {
     // Flag to track if app is still initializing to prevent error dialogs during startup
     private var isAppInitializing = true
     
+    // Global flag to track if app initialization is complete
+    @Published private var isInitializationComplete = false
+    
+    /// Check if app initialization is complete
+    var isAppInitialized: Bool {
+        return isInitializationComplete
+    }
+    
     // MARK: - Public Methods
     func initialize() async throws {
         print("DEBUG: [HproseInstance] Starting initialization")
@@ -272,6 +280,11 @@ final class HproseInstance: ObservableObject {
                     }
                     print("DEBUG: [initAppEntry] Updated appUser baseUrl to IP: \(firstIp)")
                     
+                    // App is now initialized since appUser has IP address
+                    await MainActor.run {
+                        isInitializationComplete = true
+                    }
+                    
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
                         print("provider ip:  \(providerIp)")
                         // Try to fetch user (retry logic is now built into fetchUser method)
@@ -288,6 +301,11 @@ final class HproseInstance: ObservableObject {
                                 user.baseUrl = HproseInstance.baseUrl
                                 user.followingList = followings
                                 user.userBlackList = blackList
+                                
+                                // CRITICAL: Update _appUser.baseUrl immediately and synchronously
+                                // so that fetchUser calls with default parameter use the IP-based URL
+                                _appUser.baseUrl = HproseInstance.baseUrl
+                                
                                 self.appUser = user
                                 
                                 // Print detailed app user content after successful login
@@ -388,6 +406,13 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweet_feed"
     ) async throws -> [Tweet?] {
+        // If app is not initialized, only return cached tweets
+        if !isInitializationComplete {
+            print("DEBUG: [fetchTweetFeed] App not initialized, returning cached tweets only for user: \(user.mid)")
+            let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: pageNumber, pageSize: pageSize, currentUserId: appUser.mid)
+            return cachedTweets
+        }
+        
         guard let client = appUser.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
@@ -484,6 +509,13 @@ final class HproseInstance: ObservableObject {
         pageSize: UInt = 20,
         entry: String = "get_tweets_by_user"
     ) async throws -> [Tweet?] {
+        // If app is not initialized, only return cached tweets
+        if !isInitializationComplete {
+            print("DEBUG: [fetchUserTweets] App not initialized, returning cached tweets only for user: \(user.mid)")
+            let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: pageNumber, pageSize: pageSize, currentUserId: appUser.mid)
+            return cachedTweets
+        }
+        
         guard let client = user.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Client not initialized"])
         }
@@ -645,6 +677,13 @@ final class HproseInstance: ObservableObject {
             return cachedUser
         }
         
+        // If app is not initialized, only return cached users
+        if !isInitializationComplete {
+            print("DEBUG: [fetchUser] App not initialized, returning cached user only for userId: \(userId)")
+            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+            return cachedUser
+        }
+        
         // Step 2: Fetch from server with retry logic. No instance available in memory or cache.
         return try await retryOperation(maxRetries: 3) {
             if baseUrl.isEmpty {
@@ -699,18 +738,27 @@ final class HproseInstance: ObservableObject {
                 user.baseUrl = URL(string: "http://\(ipAddress)")!
             }
             
-            // Create a new client for the new IP
-            let newClient = HproseHttpClient()
-            newClient.timeout = 300
-            newClient.uri = "\(user.baseUrl?.absoluteString ?? "")/webapi/"
+            // Use the user's computed hproseClient property which automatically creates client based on baseUrl
+            guard let redirectedClient = user.hproseClient else {
+                print("DEBUG: [updateUserFromServer] Failed to create client for redirected IP: \(ipAddress)")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create client for redirected IP"])
+            }
             
-            // Call runMApp with the new client following the sample code pattern
-            let newResponse = newClient.invoke("runMApp", withArgs: [entry, params])
+            // Call runMApp with the redirected client
+            let newResponse = redirectedClient.invoke("runMApp", withArgs: [entry, params])
             
             if let newUserDict = newResponse as? [String: Any] {
                 await MainActor.run {
                     do {
-                        _ = try User.from(dict: newUserDict)
+                        // Capture the redirected IP before User.from() potentially overwrites it
+                        let redirectedBaseUrl = user.baseUrl
+                        
+                        let updatedUser = try User.from(dict: newUserDict)
+                        // Restore the redirected baseUrl after User.from() potentially overwrote it
+                        updatedUser.baseUrl = redirectedBaseUrl
+                        // Save the user with the correct redirected IP to cache
+                        TweetCacheManager.shared.saveUser(updatedUser)
+                        print("DEBUG: [updateUserFromServer] Successfully updated user with redirected IP: \(updatedUser.baseUrl?.absoluteString ?? "nil")")
                     } catch {
                         print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
                     }
@@ -718,9 +766,6 @@ final class HproseInstance: ObservableObject {
             } else if let newIpAddress = newResponse as? String {
                 print("DEBUG: [updateUserFromServer] User still not found on redirected IP: \(newIpAddress)")
             }
-            
-            // Close the new client
-            newClient.close()
         } else if let userDict = response as? [String: Any] {
             // User found on current node
             await MainActor.run {
