@@ -210,15 +210,17 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.hostIds = hostIds
         self.publicKey = publicKey
         self.hasAcceptedTerms = hasAcceptedTerms
-        // Observe baseUrl changes to clear cached clients
+        // Observe baseUrl changes to clear cached clients (only when value actually changes)
         baseUrlCancellable = $baseUrl
+            .removeDuplicates()
             .sink { [weak self] _ in
                 self?._hproseClient = nil
                 self?._uploadClient = nil
             }
         
-        // Observe writableUrl changes to clear upload client cache
+        // Observe writableUrl changes to clear upload client cache (only when value actually changes)
         writableUrlCancellable = $writableUrl
+            .removeDuplicates()
             .sink { [weak self] _ in
                 self?._uploadClient = nil
             }
