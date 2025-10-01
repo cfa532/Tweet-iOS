@@ -570,6 +570,7 @@ final class HproseInstance: ObservableObject {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                     tweet.author = user
+                    print("DEBUG: [fetchUserTweets] Set tweet.author: userId=\(user.mid), name=\(user.name ?? "nil"), username=\(user.username ?? "nil"), tweetId=\(tweet.mid)")
                     
                     // Only show private tweets if the current user is the author
                     if tweet.isPrivate == true && tweet.authorId != appUser.mid {
@@ -753,9 +754,14 @@ final class HproseInstance: ObservableObject {
                         // Capture the redirected IP before User.from() potentially overwrites it
                         let redirectedBaseUrl = user.baseUrl
                         
+                        print("DEBUG: [updateUserFromServer] User data from server: name=\(newUserDict["name"] as? String ?? "nil"), username=\(newUserDict["username"] as? String ?? "nil"), mid=\(newUserDict["mid"] as? String ?? "nil")")
+                        
                         let updatedUser = try User.from(dict: newUserDict)
                         // Restore the redirected baseUrl after User.from() potentially overwrote it
                         updatedUser.baseUrl = redirectedBaseUrl
+                        
+                        print("DEBUG: [updateUserFromServer] After User.from: name=\(updatedUser.name ?? "nil"), username=\(updatedUser.username ?? "nil"), mid=\(updatedUser.mid)")
+                        
                         // Save the user with the correct redirected IP to cache
                         TweetCacheManager.shared.saveUser(updatedUser)
                         print("DEBUG: [updateUserFromServer] Successfully updated user with redirected IP: \(updatedUser.baseUrl?.absoluteString ?? "nil")")

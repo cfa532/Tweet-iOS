@@ -71,6 +71,9 @@ extension TweetCacheManager {
                         do {
                             let tweet = try Tweet.from(cdTweet: cdTweet)
                             
+                            // Populate author from cached User singleton (will be updated when user data arrives from server)
+                            tweet.author = User.getInstance(mid: tweet.authorId)
+                            
                             // Filter out tweets with invalid timestamps
                             if tweet.timestamp.timeIntervalSince1970 <= 0 {
                                 print("ERROR: [TweetCacheManager] Found cached tweet with invalid timestamp: \(tweet.timestamp), skipping")
@@ -108,6 +111,8 @@ extension TweetCacheManager {
                 if let cdTweet = try? self.context.fetch(request).first {
                     do {
                         let tweet = try Tweet.from(cdTweet: cdTweet)
+                        // Populate author from cached User singleton (will be updated when user data arrives from server)
+                        tweet.author = User.getInstance(mid: tweet.authorId)
                         // Then update the cache time in a separate operation
                         cdTweet.timeCached = Date()
                         try? self.context.save()

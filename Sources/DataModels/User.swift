@@ -210,17 +210,15 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.hostIds = hostIds
         self.publicKey = publicKey
         self.hasAcceptedTerms = hasAcceptedTerms
-        // Observe baseUrl changes to clear cached clients (only when value actually changes)
+        // Observe baseUrl changes to clear cached clients
         baseUrlCancellable = $baseUrl
-            .removeDuplicates()
             .sink { [weak self] _ in
                 self?._hproseClient = nil
                 self?._uploadClient = nil
             }
         
-        // Observe writableUrl changes to clear upload client cache (only when value actually changes)
+        // Observe writableUrl changes to clear upload client cache
         writableUrlCancellable = $writableUrl
-            .removeDuplicates()
             .sink { [weak self] _ in
                 self?._uploadClient = nil
             }
@@ -300,7 +298,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     static func updateUserInstance(with user: User) {
         let instance = getInstance(mid: user.mid)
-        Task { @MainActor in
+        
+        // Update synchronously if already on MainActor, otherwise dispatch to MainActor
+        if Thread.isMainThread {
             instance.name = user.name
             instance.username = user.username
             instance.password = user.password
@@ -319,6 +319,27 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.bookmarksCount = user.bookmarksCount
             instance.favoritesCount = user.favoritesCount
             instance.commentsCount = user.commentsCount
+        } else {
+            DispatchQueue.main.async {
+                instance.name = user.name
+                instance.username = user.username
+                instance.password = user.password
+                instance.avatar = user.avatar
+                instance.email = user.email
+                instance.profile = user.profile
+                instance.lastLogin = user.lastLogin
+                instance.cloudDrivePort = user.cloudDrivePort
+                instance.hostIds = user.hostIds
+                instance.baseUrl = user.baseUrl
+                instance.writableUrl = user.writableUrl
+                
+                instance.tweetCount = user.tweetCount
+                instance.followingCount = user.followingCount
+                instance.followersCount = user.followersCount
+                instance.bookmarksCount = user.bookmarksCount
+                instance.favoritesCount = user.favoritesCount
+                instance.commentsCount = user.commentsCount
+            }
         }
     }
     
