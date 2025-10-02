@@ -67,18 +67,33 @@ NSPhotoLibraryUsageDescription = "dTweet需要访问您的照片库以保存拍�
 NSUserNotificationUsageDescription = "dTweet使用通知来让您了解新的聊天消息、提及和来自您网络的重要更新。";
 ```
 
-## Step 3: Add Files to Xcode Project
+## Step 3: Manual Configuration in Xcode
 
-**Critical**: You must manually add the `InfoPlist.strings` files to your Xcode project:
+**Critical**: You must manually configure the localization through Xcode's interface:
 
-1. In Xcode, right-click on your project
-2. Select "Add Files to [ProjectName]"
-3. Navigate to each `.lproj` directory
-4. Select the `InfoPlist.strings` file
-5. Ensure "Add to target" is checked for your main app target
-6. Click "Add"
+### Step 3a: Add Localization Languages
+1. In Xcode, select your project in the Project Navigator
+2. Go to the "Info" tab
+3. Under "Localizations," click the "+" button
+4. Add the desired languages (e.g., English, Chinese Simplified, Japanese)
+5. Xcode will automatically create the corresponding `.lproj` folders
 
-**Note**: Simply creating the files in the file system is not enough - they must be explicitly added to the Xcode project to be included in the build.
+### Step 3b: Create InfoPlist.strings Files
+1. In the Project Navigator, right-click on your project
+2. Select "New File..."
+3. Choose "iOS" → "Resource" → "Strings File"
+4. Name the file `InfoPlist.strings`
+5. Click "Create"
+6. In the dialog that appears, select all the languages you want to support
+7. Click "Finish"
+
+### Step 3c: Verify File Localization
+1. Select each `InfoPlist.strings` file in the Project Navigator
+2. Open the "File Inspector" (right panel)
+3. Under "Localization," ensure the correct language is checked
+4. Each language should have its own `InfoPlist.strings` file in the corresponding `.lproj` folder
+
+**Note**: This method ensures Xcode properly manages the localization files and includes them in the build process.
 
 ## Step 4: Verify Localization Settings
 
