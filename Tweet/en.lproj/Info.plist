@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>dTweet needs camera access to let you capture photos and videos for your tweets and replies. You can create rich media content to share with your followers.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>dTweet needs microphone access to record audio when you create video tweets and replies. This allows you to add voice narration to your video content.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>dTweet needs photo library access to save your captured photos and videos, and to let you select existing media for your tweets and replies.</string>
+	<key>NSUserNotificationUsageDescription</key>
+	<string>dTweet uses notifications to keep you updated about new chat messages, mentions, and important updates from your network.</string>
+</dict>
+</plist>
