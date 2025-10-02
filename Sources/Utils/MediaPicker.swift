@@ -207,7 +207,13 @@ struct MediaPreviewGrid: View {
                 ForEach(indexedItems) { indexedItem in
                     MediaPreviewItem(
                         item: indexedItem.item,
-                        onRemove: { onRemoveItem(indexedItem.originalIndex) }
+                        onRemove: { 
+                            // Clear cache for the removed item
+                            if let itemId = indexedItem.item.itemIdentifier {
+                                ThumbnailView.clearCacheForItem(itemId)
+                            }
+                            onRemoveItem(indexedItem.originalIndex) 
+                        }
                     )
                 }
             }
@@ -430,6 +436,9 @@ struct VideoThumbnailView: View {
     @State private var thumbnail: UIImage?
     @State private var isLoading = true
     @State private var hasError = false
+
+    // Static cache to avoid regenerating thumbnails for the same video
+    private static var thumbnailCache: [String: UIImage] = [:]
     
     var body: some View {
         Group {
@@ -471,13 +480,22 @@ struct VideoThumbnailView: View {
                     )
             }
         }
-        .onAppear {
+        .task(id: videoURL.path) {
             generateThumbnail()
         }
     }
     
     private func generateThumbnail() {
+        let videoPath = videoURL.path
         print("DEBUG: [VideoThumbnailView] Starting thumbnail generation for: \(videoURL.lastPathComponent)")
+        
+        // Check cache first
+        if let cachedThumbnail = Self.thumbnailCache[videoPath] {
+            print("DEBUG: [VideoThumbnailView] Using cached thumbnail for: \(videoURL.lastPathComponent)")
+            self.thumbnail = cachedThumbnail
+            self.isLoading = false
+            return
+        }
         
         Task {
             do {
@@ -534,6 +552,10 @@ struct VideoThumbnailView: View {
                             self.thumbnail = uiImage
                             self.isLoading = false
                             self.hasError = false
+                            
+                            // Cache the generated thumbnail
+                            Self.thumbnailCache[videoPath] = uiImage
+                            print("DEBUG: [VideoThumbnailView] Thumbnail cached for: \(videoURL.lastPathComponent)")
                         }
                         thumbnailGenerated = true
                         break

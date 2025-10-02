@@ -317,6 +317,40 @@ class VideoConversionService {
     }
     
     // MARK: - Convert to HLS with specific resolution
+    /// Determines if COPY preset should be used based on video resolution
+    private func shouldUseCopyPreset(inputURL: URL, aspectRatio: Float?) async -> Bool {
+        // Get video info using FFmpeg to get accurate dimensions with rotation handling
+        if let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: inputURL.path) {
+            let displayWidth = videoInfo.displayWidth
+            let displayHeight = videoInfo.displayHeight
+
+            print("DEBUG: [VIDEO CONVERSION] Original video dimensions: \(displayWidth)x\(displayHeight)")
+
+            // Determine the larger dimension based on orientation
+            let maxDimension: Int
+            if let aspectRatio = aspectRatio {
+                if aspectRatio < 1.0 {
+                    // Portrait: check height (y-dimension)
+                    maxDimension = displayHeight
+                } else {
+                    // Landscape: check width (x-dimension)
+                    maxDimension = displayWidth
+                }
+            } else {
+                // Fallback: use the larger dimension
+                maxDimension = max(displayWidth, displayHeight)
+            }
+
+            let shouldUseCopy = maxDimension <= 720
+            print("DEBUG: [VIDEO CONVERSION] Max dimension: \(maxDimension), should use COPY preset: \(shouldUseCopy)")
+            return shouldUseCopy
+        }
+
+        // Fallback: if we can't get video info, use veryfast preset
+        print("DEBUG: [VIDEO CONVERSION] Could not get video info, using veryfast preset")
+        return false
+    }
+
     private func convertToHLS(
         inputURL: URL,
         outputURL: URL,
@@ -325,50 +359,69 @@ class VideoConversionService {
         aspectRatio: Float?,
         completion: @escaping (Bool) -> Void
     ) {
-        // Use the same logic as the server: determine scaling based on orientation
-        let scaleFilter: String
-        if let aspectRatio = aspectRatio {
-            // If aspect ratio < 1.0, it's portrait (height > width)
-            if aspectRatio < 1.0 {
-                // Portrait: scale to target width, calculate height
-                // This will maintain portrait orientation: 720x1280 instead of 394x720
-                scaleFilter = "scale=\(resolution):-2"
+        // Get original video resolution to determine if COPY preset should be used
+        Task {
+            let shouldUseCopyPreset = await shouldUseCopyPreset(inputURL: inputURL, aspectRatio: aspectRatio)
+
+            // Use the same logic as the server: determine scaling based on orientation
+            let scaleFilter: String
+            if let aspectRatio = aspectRatio {
+                // If aspect ratio < 1.0, it's portrait (height > width)
+                if aspectRatio < 1.0 {
+                    // Portrait: scale to target width, calculate height
+                    // This will maintain portrait orientation: 720x1280 instead of 394x720
+                    scaleFilter = "scale=\(resolution):-2"
+                } else {
+                    // Landscape: scale to target height, calculate width
+                    // This will maintain landscape orientation: 1280x720 instead of 720x405
+                    scaleFilter = "scale=-2:\(resolution)"
+                }
             } else {
-                // Landscape: scale to target height, calculate width
-                // This will maintain landscape orientation: 1280x720 instead of 720x405
+                // Fallback to height-based scaling
                 scaleFilter = "scale=-2:\(resolution)"
             }
-        } else {
-            // Fallback to height-based scaling
-            scaleFilter = "scale=-2:\(resolution)"
+
+            // Choose preset based on original video resolution
+            let preset = shouldUseCopyPreset ? "copy" : "veryfast"
+            print("DEBUG: [VIDEO CONVERSION] Using preset: \(preset) for resolution: \(resolution)")
+
+            let command = """
+                -i "\(inputURL.path)" \
+                -c:v libx264 \
+                -c:a aac \
+                -vf "\(scaleFilter)" \
+                -b:v \(bitrate) \
+                -b:a 128k \
+                -preset \(preset) \
+                -tune zerolatency \
+                -threads 2 \
+                -max_muxing_queue_size 512 \
+                -fflags +genpts+igndts \
+                -avoid_negative_ts make_zero \
+                -max_interleave_delta 0 \
+                -bufsize \(bitrate) \
+                -maxrate \(bitrate) \
+                -metadata:s:v:0 rotate=0 \
+                -f hls \
+                -hls_time 10 \
+                -hls_list_size 0 \
+                -hls_segment_filename "\(outputURL.deletingPathExtension().path)_%03d.ts" \
+                -hls_flags delete_segments+independent_segments \
+                "\(outputURL.path)"
+                """
+
+            await MainActor.run {
+                self.executeFFmpegCommand(command: command, outputURL: outputURL, resolution: resolution, completion: completion)
+            }
         }
-        
-        let command = """
-            -i "\(inputURL.path)" \
-            -c:v libx264 \
-            -c:a aac \
-            -vf "\(scaleFilter)" \
-            -b:v \(bitrate) \
-            -b:a 128k \
-            -preset veryfast \
-            -tune zerolatency \
-            -threads 2 \
-            -max_muxing_queue_size 512 \
-            -fflags +genpts+igndts \
-            -avoid_negative_ts make_zero \
-            -max_interleave_delta 0 \
-            -bufsize \(bitrate) \
-            -maxrate \(bitrate) \
-            -metadata:s:v:0 rotate=0 \
-            -f hls \
-            -hls_time 10 \
-            -hls_list_size 0 \
-            -hls_segment_filename "\(outputURL.deletingPathExtension().path)_%03d.ts" \
-            -hls_flags delete_segments+independent_segments \
-            "\(outputURL.path)"
-            """
-        
-        
+    }
+    
+    private func executeFFmpegCommand(
+        command: String,
+        outputURL: URL,
+        resolution: String,
+        completion: @escaping (Bool) -> Void
+    ) {
         FFmpegKit.executeAsync(command) { session in
             guard let session = session else {
                 print("DEBUG: [VIDEO CONVERSION] Failed to create FFmpeg session")

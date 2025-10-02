@@ -10,7 +10,19 @@ struct ThumbnailView: View {
     @State private var mediaType: MediaType = .unknown
     @State private var isLoading = true
     @State private var error: Error?
-    @State private var taskId = UUID() // Unique ID for each view instance
+
+    // Static cache to avoid regenerating thumbnails for the same item
+    // Using a more robust cache key that includes both item ID and media type
+    private static var thumbnailCache: [String: UIImage] = [:]
+    
+    // Method to clean up cache entries for removed items
+    static func clearCacheForItem(_ itemId: String) {
+        let keysToRemove = thumbnailCache.keys.filter { $0.hasPrefix(itemId) }
+        for key in keysToRemove {
+            thumbnailCache.removeValue(forKey: key)
+            print("DEBUG: [ThumbnailView] Removed cache entry for key: \(key)")
+        }
+    }
     
     var body: some View {
         Group {
@@ -54,7 +66,7 @@ struct ThumbnailView: View {
                     )
             }
         }
-        .task(id: "\(item.itemIdentifier ?? "nil")-\(taskId)") {
+        .task(id: item.itemIdentifier) {
             print("DEBUG: Starting thumbnail generation for item: \(item.itemIdentifier ?? "nil")")
             // Reset state when item changes
             thumbnail = nil
@@ -63,10 +75,6 @@ struct ThumbnailView: View {
             error = nil
             
             await generateThumbnail()
-        }
-        .onAppear {
-            // Generate a new task ID when the view appears to ensure fresh processing
-            taskId = UUID()
         }
     }
     
@@ -100,41 +108,65 @@ struct ThumbnailView: View {
         isLoading = true
         error = nil
         
-        print("DEBUG: [\(item.itemIdentifier ?? "nil")] Starting thumbnail generation")
+        let itemId = item.itemIdentifier ?? "nil"
+        print("DEBUG: [\(itemId)] Starting thumbnail generation")
+        
+        // First, detect the media type to create a proper cache key
+        mediaType = detectMediaType()
+        print("DEBUG: [\(itemId)] Detected media type: \(mediaType.rawValue)")
+        print("DEBUG: [\(itemId)] Item supported content types: \(item.supportedContentTypes.map { $0.identifier })")
+        
+        // Create a cache key that includes both item ID and media type
+        let cacheKey = "\(itemId)_\(mediaType.rawValue)"
+        
+        // Check cache first
+        if let cachedThumbnail = Self.thumbnailCache[cacheKey] {
+            print("DEBUG: [\(itemId)] Using cached thumbnail for key: \(cacheKey)")
+            await MainActor.run {
+                self.thumbnail = cachedThumbnail
+                self.isLoading = false
+            }
+            return
+        }
+        
+        print("DEBUG: [\(itemId)] No cached thumbnail found for key: \(cacheKey), generating new one")
         
         do {
-            // First, detect the media type
-            mediaType = detectMediaType()
-            print("DEBUG: [\(item.itemIdentifier ?? "nil")] Detected media type: \(mediaType.rawValue)")
             
             // If media type is unknown, try to detect from file data
             if mediaType == .unknown {
-                print("DEBUG: [\(item.itemIdentifier ?? "nil")] Trying to detect media type from file data...")
+                print("DEBUG: [\(itemId)] Trying to detect media type from file data...")
                 if let data = try? await item.loadTransferable(type: Data.self) {
                     mediaType = detectMediaTypeFromData(data)
-                    print("DEBUG: [\(item.itemIdentifier ?? "nil")] Re-detected media type from data: \(mediaType.rawValue)")
+                    print("DEBUG: [\(itemId)] Re-detected media type from data: \(mediaType.rawValue)")
                 }
             }
             
             switch mediaType {
             case .video:
-                print("DEBUG: [\(item.itemIdentifier ?? "nil")] Generating video thumbnail")
+                print("DEBUG: [\(itemId)] Generating video thumbnail")
                 thumbnail = try await generateVideoThumbnail()
             case .audio:
-                print("DEBUG: [\(item.itemIdentifier ?? "nil")] Generating audio thumbnail")
+                print("DEBUG: [\(itemId)] Generating audio thumbnail")
                 thumbnail = generateAudioThumbnail()
             case .image:
-                print("DEBUG: [\(item.itemIdentifier ?? "nil")] Generating image thumbnail")
+                print("DEBUG: [\(itemId)] Generating image thumbnail")
                 thumbnail = try await generateImageThumbnail()
             default:
-                print("DEBUG: [\(item.itemIdentifier ?? "nil")] Generating default thumbnail")
+                print("DEBUG: [\(itemId)] Generating default thumbnail")
                 thumbnail = generateDefaultThumbnail()
             }
             
-            print("DEBUG: [\(item.itemIdentifier ?? "nil")] Thumbnail generation completed successfully")
+            // Cache the generated thumbnail
+            if let generatedThumbnail = thumbnail {
+                Self.thumbnailCache[cacheKey] = generatedThumbnail
+                print("DEBUG: [\(itemId)] Thumbnail cached with key: \(cacheKey)")
+            }
+            
+            print("DEBUG: [\(itemId)] Thumbnail generation completed successfully")
         } catch {
             self.error = error
-            print("DEBUG: [\(item.itemIdentifier ?? "nil")] Thumbnail generation failed: \(error)")
+            print("DEBUG: [\(itemId)] Thumbnail generation failed: \(error)")
         }
         
         isLoading = false
