@@ -162,7 +162,7 @@ struct TweetActionButtonsView: View {
                             // Show error toast
                             await MainActor.run {
                                 showToast = true
-                                toastMessage = "Failed to \(wasFavorite ? "remove favorite" : "add favorite"). Please try again."
+                                toastMessage = wasFavorite ? NSLocalizedString("Failed to remove favorite. Please try again.", comment: "Remove favorite error") : NSLocalizedString("Failed to add favorite. Please try again.", comment: "Add favorite error")
                                 toastType = .error
                                 
                                 // Auto-hide toast after 3 seconds
@@ -250,7 +250,7 @@ struct TweetActionButtonsView: View {
                             // Show error toast
                             await MainActor.run {
                                 showToast = true
-                                toastMessage = "Failed to \(wasBookmarked ? "remove bookmark" : "add bookmark"). Please try again."
+                                toastMessage = wasBookmarked ? NSLocalizedString("Failed to remove bookmark. Please try again.", comment: "Remove bookmark error") : NSLocalizedString("Failed to add bookmark. Please try again.", comment: "Add bookmark error")
                                 toastType = .error
                                 
                                 // Auto-hide toast after 3 seconds

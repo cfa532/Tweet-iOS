@@ -265,7 +265,7 @@ struct ProfileView: View {
                     isUploadingAvatar = isUploading
                 },
                 onAvatarUploadSuccess: {
-                    showToastMessage("Avatar updated successfully!", type: .success)
+                    showToastMessage(NSLocalizedString("Avatar updated successfully!", comment: "Avatar update success"), type: .success)
                     // Clear all avatar cache to ensure fresh images are loaded everywhere
                     ImageCacheManager.shared.clearAllAvatarCache()
                     // Force refresh all avatar images by triggering a UI update

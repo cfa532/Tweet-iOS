@@ -412,7 +412,7 @@ struct ImageViewWithPlaceholder: View {
         }
         
         guard let image = imageToDownload else {
-            showDownloadToast(message: "No image to download")
+            showDownloadToast(message: NSLocalizedString("No image to download", comment: "No image download error"))
             return
         }
         
@@ -420,7 +420,7 @@ struct ImageViewWithPlaceholder: View {
         PHPhotoLibrary.requestAuthorization { status in
             guard status == .authorized else {
                 DispatchQueue.main.async {
-                    self.showDownloadToast(message: "Photo library access denied")
+                    self.showDownloadToast(message: NSLocalizedString("Photo library access denied", comment: "Photo library permission error"))
                 }
                 return
             }
@@ -430,9 +430,9 @@ struct ImageViewWithPlaceholder: View {
             }) { success, error in
                 DispatchQueue.main.async {
                     if success {
-                        self.showDownloadToast(message: "Image saved to Photos")
+                        self.showDownloadToast(message: NSLocalizedString("Image saved to Photos", comment: "Image save success"))
                     } else {
-                        self.showDownloadToast(message: "Failed to save image")
+                        self.showDownloadToast(message: NSLocalizedString("Failed to save image", comment: "Image save error"))
                     }
                 }
             }

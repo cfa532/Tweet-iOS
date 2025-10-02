@@ -161,6 +161,19 @@
 // MARK: - Toast Messages
 "Tweet submitted" = "推文已提交";
 "Comment submitted" = "评论已提交";
+"Tweet posted successfully" = "推文发布成功";
+"Comment posted successfully" = "评论发布成功";
+"Failed to remove favorite. Please try again." = "取消收藏失败，请重试。";
+"Failed to add favorite. Please try again." = "添加收藏失败，请重试。";
+"Failed to remove bookmark. Please try again." = "删除书签失败，请重试。";
+"Failed to add bookmark. Please try again." = "添加书签失败，请重试。";
+"Failed to load comments." = "加载评论失败。";
+"Failed to load more comments." = "加载更多评论失败。";
+"Avatar updated successfully!" = "头像更新成功！";
+"No image to download" = "没有可下载的图片";
+"Photo library access denied" = "相册访问被拒绝";
+"Image saved to Photos" = "图片已保存到相册";
+"Failed to save image" = "图片保存失败";
 "Loading chat..." = "正在加载聊天...";
 "Receipt ID: %@" = "收件人ID: %@";
 "Loading..." = "加载中...";
@@ -391,10 +404,10 @@
 "Failed to load video" = "视频加载失败";
 
 // MARK: - Photo Library Access
-"This app needs access to your photo library to save captured photos and videos." = "此应用需要访问您的照片库以保存拍摄的照片和视频。";
-"This app uses the camera to allow you to take photos and record videos for your replies and tweets." = "此应用使用摄像头让您为回复和推文拍摄照片和录制视频。";
-"This app uses the microphone to record audio for videos you create with the camera." = "此应用使用麦克风为您用摄像头创建的视频录制音频。";
-"This app uses notifications to alert you about new chat messages." = "此应用使用通知来提醒您新的聊天消息。";
+"dTweet needs photo library access to save your captured photos and videos, and to let you select existing media for your tweets and replies." = "dTweet需要访问您的照片库以保存拍摄的照片和视频，并让您为推文和回复选择现有媒体。";
+"dTweet needs camera access to let you capture photos and videos for your tweets and replies. You can create rich media content to share with your followers." = "dTweet需要摄像头访问权限，让您为推文和回复拍摄照片和视频。您可以创建丰富的媒体内容与关注者分享。";
+"dTweet needs microphone access to record audio when you create video tweets and replies. This allows you to add voice narration to your video content." = "dTweet需要麦克风访问权限，在您创建视频推文和回复时录制音频。这允许您为视频内容添加语音旁白。";
+"dTweet uses notifications to keep you updated about new chat messages, mentions, and important updates from your network." = "dTweet使用通知来让您了解新的聊天消息、提及和来自您网络的重要更新。";
 "Loading HLS stream..." = "正在加载 HLS 流...";
 
 // MARK: - Media Grid

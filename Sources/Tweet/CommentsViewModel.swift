@@ -42,7 +42,7 @@ class CommentsViewModel: ObservableObject {
             await MainActor.run {
                 isLoading = false
                 showToast = true
-                toastMessage = "Failed to load comments."
+                toastMessage = NSLocalizedString("Failed to load comments.", comment: "Load comments error")
             }
         }
     }
@@ -69,7 +69,7 @@ class CommentsViewModel: ObservableObject {
             await MainActor.run {
                 isLoading = false
                 showToast = true
-                toastMessage = "Failed to load more comments."
+                toastMessage = NSLocalizedString("Failed to load more comments.", comment: "Load more comments error")
             }
         }
     }

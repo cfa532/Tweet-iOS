@@ -158,6 +158,19 @@
 // MARK: - Toast Messages
 "Tweet submitted" = "ツイートを送信しました";
 "Comment submitted" = "コメントを送信しました";
+"Tweet posted successfully" = "ツイートが正常に投稿されました";
+"Comment posted successfully" = "コメントが正常に投稿されました";
+"Failed to remove favorite. Please try again." = "お気に入りの削除に失敗しました。もう一度お試しください。";
+"Failed to add favorite. Please try again." = "お気に入りの追加に失敗しました。もう一度お試しください。";
+"Failed to remove bookmark. Please try again." = "ブックマークの削除に失敗しました。もう一度お試しください。";
+"Failed to add bookmark. Please try again." = "ブックマークの追加に失敗しました。もう一度お試しください。";
+"Failed to load comments." = "コメントの読み込みに失敗しました。";
+"Failed to load more comments." = "追加のコメントの読み込みに失敗しました。";
+"Avatar updated successfully!" = "アバターが正常に更新されました！";
+"No image to download" = "ダウンロードする画像がありません";
+"Photo library access denied" = "フォトライブラリへのアクセスが拒否されました";
+"Image saved to Photos" = "画像がフォトに保存されました";
+"Failed to save image" = "画像の保存に失敗しました";
 "Loading chat..." = "チャットを読み込み中...";
 "Receipt ID: %@" = "受信者ID: %@";
 "Loading..." = "読み込み中...";
@@ -333,10 +346,10 @@
 "Failed to load video" = "動画の読み込みに失敗しました";
 
 // MARK: - Photo Library Access
-"This app needs access to your photo library to save captured photos and videos." = "このアプリは撮影した写真と動画を保存するために、フォトライブラリへのアクセスが必要です。";
-"This app uses the camera to allow you to take photos and record videos for your replies and tweets." = "このアプリは返信やツイート用の写真撮影と動画録画のためにカメラを使用します。";
-"This app uses the microphone to record audio for videos you create with the camera." = "このアプリはカメラで作成した動画の音声録音のためにマイクを使用します。";
-"This app uses notifications to alert you about new chat messages." = "このアプリは新しいチャットメッセージをお知らせするために通知を使用します。";
+"dTweet needs photo library access to save your captured photos and videos, and to let you select existing media for your tweets and replies." = "dTweetは撮影した写真や動画を保存し、ツイートや返信用に既存のメディアを選択するためにフォトライブラリへのアクセスが必要です。";
+"dTweet needs camera access to let you capture photos and videos for your tweets and replies. You can create rich media content to share with your followers." = "dTweetはツイートや返信用の写真や動画を撮影するためにカメラへのアクセスが必要です。フォロワーと共有するリッチメディアコンテンツを作成できます。";
+"dTweet needs microphone access to record audio when you create video tweets and replies. This allows you to add voice narration to your video content." = "dTweetは動画ツイートや返信を作成する際に音声を録音するためにマイクへのアクセスが必要です。これにより動画コンテンツに音声ナレーションを追加できます。";
+"dTweet uses notifications to keep you updated about new chat messages, mentions, and important updates from your network." = "dTweetは新しいチャットメッセージ、メンション、ネットワークからの重要な更新について最新情報を提供するために通知を使用します。";
 "Loading HLS stream..." = "HLSストリームを読み込み中...";
 
 // MARK: - Media Grid

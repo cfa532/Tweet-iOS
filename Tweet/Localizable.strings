@@ -173,6 +173,19 @@
 // MARK: - Toast Messages
 "Tweet submitted" = "Tweet submitted";
 "Comment submitted" = "Comment submitted";
+"Tweet posted successfully" = "Tweet posted successfully";
+"Comment posted successfully" = "Comment posted successfully";
+"Failed to remove favorite. Please try again." = "Failed to remove favorite. Please try again.";
+"Failed to add favorite. Please try again." = "Failed to add favorite. Please try again.";
+"Failed to remove bookmark. Please try again." = "Failed to remove bookmark. Please try again.";
+"Failed to add bookmark. Please try again." = "Failed to add bookmark. Please try again.";
+"Failed to load comments." = "Failed to load comments.";
+"Failed to load more comments." = "Failed to load more comments.";
+"Avatar updated successfully!" = "Avatar updated successfully!";
+"No image to download" = "No image to download";
+"Photo library access denied" = "Photo library access denied";
+"Image saved to Photos" = "Image saved to Photos";
+"Failed to save image" = "Failed to save image";
 "Loading chat..." = "Loading chat...";
 "Receipt ID: %@" = "Receipt ID: %@";
 "Loading..." = "Loading...";
@@ -401,10 +414,10 @@
 "Failed to load video" = "Failed to load video";
 
 // MARK: - Photo Library Access
-"This app needs access to your photo library to save captured photos and videos." = "This app needs access to your photo library to save captured photos and videos.";
-"This app uses the camera to allow you to take photos and record videos for your replies and tweets." = "This app uses the camera to allow you to take photos and record videos for your replies and tweets.";
-"This app uses the microphone to record audio for videos you create with the camera." = "This app uses the microphone to record audio for videos you create with the camera.";
-"This app uses notifications to alert you about new chat messages." = "This app uses notifications to alert you about new chat messages.";
+"dTweet needs photo library access to save your captured photos and videos, and to let you select existing media for your tweets and replies." = "dTweet needs photo library access to save your captured photos and videos, and to let you select existing media for your tweets and replies.";
+"dTweet needs camera access to let you capture photos and videos for your tweets and replies. You can create rich media content to share with your followers." = "dTweet needs camera access to let you capture photos and videos for your tweets and replies. You can create rich media content to share with your followers.";
+"dTweet needs microphone access to record audio when you create video tweets and replies. This allows you to add voice narration to your video content." = "dTweet needs microphone access to record audio when you create video tweets and replies. This allows you to add voice narration to your video content.";
+"dTweet uses notifications to keep you updated about new chat messages, mentions, and important updates from your network." = "dTweet uses notifications to keep you updated about new chat messages, mentions, and important updates from your network.";
 "Loading HLS stream..." = "Loading HLS stream...";
 
 // MARK: - Media Grid
