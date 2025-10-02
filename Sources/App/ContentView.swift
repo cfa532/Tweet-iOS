@@ -150,6 +150,42 @@ struct ContentView: View {
                 isNavigationVisible = isVisible
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .newTweetCreated)) { notification in
+            if notification.userInfo?["tweet"] is Tweet {
+                toastMessage = NSLocalizedString("Tweet posted successfully", comment: "Tweet upload success")
+                toastType = .success
+                showToast = true
+                
+                // Auto-hide toast after 2 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    withAnimation { showToast = false }
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notification in
+            if notification.userInfo?["comment"] is Tweet {
+                toastMessage = NSLocalizedString("Comment posted successfully", comment: "Comment upload success")
+                toastType = .success
+                showToast = true
+                
+                // Auto-hide toast after 2 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    withAnimation { showToast = false }
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .backgroundUploadFailed)) { notification in
+            if let error = notification.userInfo?["error"] as? Error {
+                toastMessage = error.localizedDescription
+                toastType = .error
+                showToast = true
+                
+                // Auto-hide toast after 5 seconds for errors
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                    withAnimation { showToast = false }
+                }
+            }
+        }
         .overlay(
             // Toast message overlay
             VStack {

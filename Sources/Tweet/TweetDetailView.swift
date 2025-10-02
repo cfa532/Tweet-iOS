@@ -379,13 +379,11 @@ struct TweetDetailView: View {
                 DragGesture()
                     .onChanged { value in
                         let offset = value.translation.height
-                        print("[TweetDetailView] Drag gesture offset: \(offset)")
                         handleScroll(offset: offset)
                     }
                     .onEnded { _ in
                         // When gesture ends, maintain current state for a brief period
                         // to allow scroll inertia to settle naturally
-                        print("[TweetDetailView] Drag gesture ended")
                         // Don't immediately change navigation state
                         // Let the scroll view settle naturally
                     }

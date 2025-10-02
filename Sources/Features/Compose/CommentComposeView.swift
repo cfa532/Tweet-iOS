@@ -173,7 +173,12 @@ struct CommentComposeView: View {
                         let selectedImages = selectedImages
                         let selectedVideos = selectedVideos
                         
-                        // Dismiss immediately
+                        // Send notification for toast on presenting screen and dismiss immediately
+                        NotificationCenter.default.post(
+                            name: .tweetSubmitted,
+                            object: nil,
+                            userInfo: ["message": NSLocalizedString("Comment submitted", comment: "Comment submitted message")]
+                        )
                         dismiss()
                         
                         // Submit comment in background after dismissing using captured data
@@ -332,14 +337,12 @@ struct CommentComposeView: View {
             return
         }
         
-        // Create comment object
-        let comment = ChatMessage(
-            id: UUID().uuidString,
+        // Create comment object (Tweet, not ChatMessage)
+        let comment = Tweet(
+            mid: UUID().uuidString,
             authorId: hproseInstance.appUser.mid,
-            receiptId: tweet.authorId,
-            chatSessionId: ChatMessage.generateSessionId(userId: hproseInstance.appUser.mid, receiptId: tweet.authorId),
             content: trimmedText,
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: Date(),
             attachments: nil
         )
         
@@ -358,7 +361,7 @@ struct CommentComposeView: View {
         }
         
         print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")
-        hproseInstance.scheduleChatMessageUpload(message: comment, itemData: itemData)
+        hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
     }
     
 } 

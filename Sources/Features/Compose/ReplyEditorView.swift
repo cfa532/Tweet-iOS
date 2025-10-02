@@ -272,7 +272,12 @@ struct ReplyEditorView: View {
                     let selectedImages = selectedImages
                     let selectedVideos = selectedVideos
                     
-                    // Clear and close immediately
+                    // Send notification for toast on presenting screen and clear immediately
+                    NotificationCenter.default.post(
+                        name: .tweetSubmitted,
+                        object: nil,
+                        userInfo: ["message": NSLocalizedString("Reply submitted", comment: "Reply submitted message")]
+                    )
                     clearAndClose()
                     
                     // Submit reply in background after dismissing using captured data
