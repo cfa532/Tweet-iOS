@@ -16,8 +16,8 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4092"
             endingLineNumber = "4092"
-            landmarkName = "registerUser(username:password:alias:profile:hostId:cloudDrivePort:)"
-            landmarkType = "7">
+            landmarkName = "HproseInstance"
+            landmarkType = "3">
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>

@@ -33,7 +33,8 @@ final class HproseInstance: ObservableObject {
     var appUser: User {
         get { 
             // Refresh appUser from server if expired (every 30 minutes) - but not for guest users
-            if !_appUser.isGuest && _appUser.hasExpired {
+            // fetchUser will handle invalid users (nil username) automatically
+            if !_appUser.isGuest && (_appUser.hasExpired || _appUser.username == nil) {
                 Task {
                     do {
                         if let refreshedUser = try await fetchUser(_appUser.mid, baseUrl: _appUser.baseUrl?.absoluteString ?? "") {
@@ -246,7 +247,7 @@ final class HproseInstance: ObservableObject {
             }
             
             // Fetch user data from server
-            try await updateUserFromServer(alphaUser)
+            _ = try await updateUserFromServer(alphaUser.mid)
             
             print("DEBUG: [HproseInstance] Successfully fetched alphaId user for guest")
             
@@ -670,6 +671,28 @@ final class HproseInstance: ObservableObject {
         
         // Step 1: Check user cache in Core Data.
         let user = User.getInstance(mid: userId)
+        
+        // If current object is invalid (nil username), return cached value and update in background
+        if user.username == nil {
+            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+            if cachedUser.username != nil {
+                print("DEBUG: [fetchUser] Returning cached user for invalid user (nil username) for userId: \(userId), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
+                
+                // Update in background coroutine
+                Task {
+                    do {
+                        if let refreshedUser = try await self.updateUserFromServer(userId, baseUrl: baseUrl) {
+                            print("DEBUG: [fetchUser] Background update completed for userId: \(userId)")
+                        }
+                    } catch {
+                        print("DEBUG: [fetchUser] Background update failed for userId: \(userId): \(error)")
+                    }
+                }
+                
+                return cachedUser
+            }
+        }
+        
         if !user.hasExpired {
             // get cached user instance if it is not expired.
             let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
@@ -686,30 +709,42 @@ final class HproseInstance: ObservableObject {
         }
         
         // Step 2: Fetch from server with retry logic. No instance available in memory or cache.
+        return try await updateUserFromServer(userId, baseUrl: baseUrl)
+    }
+    
+    /// Updates user from server with baseUrl resolution and retry logic
+    func updateUserFromServer(
+        _ userId: String,
+        baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
+    ) async throws -> User? {
+        let user = User.getInstance(mid: userId)
+        
         return try await retryOperation(maxRetries: 3) {
+            // Handle baseUrl resolution
             if baseUrl.isEmpty {
-                print("DEBUG: [fetchUser] baseUrl is empty, getting provider IP for userId: \(userId)")
+                print("DEBUG: [updateUserFromServer] baseUrl is empty, getting provider IP for userId: \(userId)")
                 guard let providerIP = try await self.getProviderIP(userId) else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Provider not found"])
                 }
-                print("DEBUG: [fetchUser] Setting baseUrl to provider IP: \(providerIP) for userId: \(userId)")
+                print("DEBUG: [updateUserFromServer] Setting baseUrl to provider IP: \(providerIP) for userId: \(userId)")
                 await MainActor.run {
                     user.baseUrl = URL(string: "http://\(providerIP)")!
                 }
-                try await self.updateUserFromServer(user)
-                return user
             } else {
-                print("DEBUG: [fetchUser] Setting baseUrl to provided URL: \(baseUrl) for userId: \(userId)")
+                print("DEBUG: [updateUserFromServer] Setting baseUrl to provided URL: \(baseUrl) for userId: \(userId)")
                 await MainActor.run {
                     user.baseUrl = URL(string: baseUrl)!
                 }
-                try await self.updateUserFromServer(user)
-                return user
             }
+            
+            // Perform the actual server communication
+            try await self.updateUserFromServerInternal(user)
+            return user
         }
     }
     
-    func updateUserFromServer(_ user: User) async throws {
+    /// Internal method that performs the actual server communication
+    private func updateUserFromServerInternal(_ user: User) async throws {
         let entry = "get_user"
         let params = [
             "aid": appId,
