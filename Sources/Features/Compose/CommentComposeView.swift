@@ -12,7 +12,6 @@ struct CommentComposeView: View {
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImages: [UIImage] = []
     @State private var selectedVideos: [URL] = []
-    // Note: isSubmitting state is now managed by DebounceButton
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
@@ -270,7 +269,6 @@ struct CommentComposeView: View {
             return
         }
         
-        // Note: isSubmitting state is now managed by DebounceButton
         
         // Create comment object with a temporary UUID
         let comment = Tweet(

@@ -35,7 +35,6 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var selectedImages: [UIImage] = []
     @Published var selectedVideos: [URL] = []
     @Published var selectedMedia: [MimeiFileType] = []
-    // Note: isUploading state is now managed by DebounceButton
     @Published var uploadProgress = 0.0
     @Published var showToast = false
     @Published var toastMessage = ""

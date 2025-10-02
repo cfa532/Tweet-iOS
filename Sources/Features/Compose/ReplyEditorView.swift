@@ -19,7 +19,6 @@ struct ReplyEditorView: View {
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImages: [UIImage] = []
     @State private var selectedVideos: [URL] = []
-    // Note: isSubmitting state is now managed by DebounceButton
     @State private var showCamera = false
     @State private var showImagePicker = false
     @State private var error: Error?
@@ -266,24 +265,35 @@ struct ReplyEditorView: View {
                 }
                 
                 // Reply button
-                DebounceButton(
-                    cooldownDuration: 1.0,
-                    enableAnimation: true,
-                    enableVibration: false
-                ) {
-                    submitReply()
-                } label: {
-                    Text(NSLocalizedString("Reply", comment: "Reply button text"))
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(canSubmit ? Color.blue : Color.gray)
+                Button(NSLocalizedString("Reply", comment: "Reply button text")) {
+                    // Capture the data before dismissing
+                    let replyText = replyText
+                    let selectedItems = selectedItems
+                    let selectedImages = selectedImages
+                    let selectedVideos = selectedVideos
+                    
+                    // Clear and close immediately
+                    clearAndClose()
+                    
+                    // Submit reply in background after dismissing using captured data
+                    Task {
+                        await submitReplyInBackground(
+                            text: replyText,
+                            selectedItems: selectedItems,
+                            selectedImages: selectedImages,
+                            selectedVideos: selectedVideos
                         )
+                    }
                 }
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(canSubmit ? Color.blue : Color.gray)
+                )
                 .disabled(!canSubmit)
             }
             
@@ -351,59 +361,49 @@ struct ReplyEditorView: View {
         // Don't call onClose() here - we want to keep the collapsed view visible
     }
     
-    private func submitReply() {
-        let trimmedContent = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func submitReplyInBackground(
+        text: String,
+        selectedItems: [PhotosPickerItem],
+        selectedImages: [UIImage],
+        selectedVideos: [URL]
+    ) async {
+        let trimmedContent = text.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Allow empty content if there are attachments
         guard MediaUploadHelper.validateContent(
-            content: replyText,
+            content: text,
             selectedItems: selectedItems,
             selectedImages: selectedImages,
             selectedVideos: selectedVideos
         ) else {
             print("DEBUG: Reply validation failed - empty content and no attachments")
-            showToastMessage(NSLocalizedString("Comment cannot be empty.", comment: "Empty comment error"), type: .error)
             return
         }
         
-        // Note: isSubmitting state is now managed by DebounceButton
+        // Create comment tweet
+        let comment = Tweet(
+            mid: UUID().uuidString, // Temporary ID, will be replaced by server
+            authorId: hproseInstance.appUser.mid,
+            content: trimmedContent,
+            timestamp: Date(),
+            originalTweetId: isQuoting ? parentTweet.mid : nil,
+            originalAuthorId: isQuoting ? parentTweet.authorId : nil
+        )
         
-        Task {
-            // Create comment tweet
-            let comment = Tweet(
-                mid: UUID().uuidString, // Temporary ID, will be replaced by server
-                authorId: hproseInstance.appUser.mid,
-                content: trimmedContent,
-                timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-                originalTweetId: isQuoting ? parentTweet.mid : nil,
-                originalAuthorId: isQuoting ? parentTweet.authorId : nil
+        do {
+            // Prepare item data for background upload using helper
+            let itemData = try await MediaUploadHelper.prepareItemData(
+                selectedItems: selectedItems,
+                selectedImages: selectedImages,
+                selectedVideos: selectedVideos
             )
             
-            do {
-                // Prepare item data for background upload using helper
-                let itemData = try await MediaUploadHelper.prepareItemData(
-                    selectedItems: selectedItems,
-                    selectedImages: selectedImages,
-                    selectedVideos: selectedVideos
-                )
-                
-                // Schedule comment upload in background (same as CommentComposeView)
-                hproseInstance.scheduleCommentUpload(comment: comment, to: parentTweet, itemData: itemData)
-                
-                // Show success toast immediately and reset form
-                await MainActor.run {
-                    clearAndClose()
-                    
-                    // Show success toast immediately
-                    showToastMessage(NSLocalizedString("Comment submitted", comment: "Comment submitted message"), type: .success)
-                    
-                    // Don't call onClose() - keep the collapsed view visible
-                }
-            } catch {
-                await MainActor.run {
-                    showToastMessage(NSLocalizedString("Failed to upload comment. Please try again.", comment: "Comment upload failed error"), type: .error)
-                }
-            }
+            // Schedule comment upload in background (same as CommentComposeView)
+            hproseInstance.scheduleCommentUpload(comment: comment, to: parentTweet, itemData: itemData)
+            
+            print("DEBUG: Reply scheduled for upload with \(itemData.count) attachments")
+        } catch {
+            print("DEBUG: Error preparing reply item data: \(error)")
         }
     }
     
