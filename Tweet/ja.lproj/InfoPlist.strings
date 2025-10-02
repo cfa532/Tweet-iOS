@@ -5,4 +5,8 @@
   Created for app name localization.
 */
 
-CFBundleDisplayName = "ツイート";
+CFBundleDisplayName = "dTweet";
+NSCameraUsageDescription = "dTweetはツイートや返信用の写真や動画を撮影するためにカメラへのアクセスが必要です。フォロワーと共有するリッチメディアコンテンツを作成できます。";
+NSMicrophoneUsageDescription = "dTweetは動画ツイートや返信を作成する際に音声を録音するためにマイクへのアクセスが必要です。これにより動画コンテンツに音声ナレーションを追加できます。";
+NSPhotoLibraryUsageDescription = "dTweetは撮影した写真や動画を保存し、ツイートや返信用に既存のメディアを選択するためにフォトライブラリへのアクセスが必要です。";
+NSUserNotificationUsageDescription = "dTweetは新しいチャットメッセージ、メンション、ネットワークからの重要な更新について最新情報を提供するために通知を使用します。";
