@@ -14,10 +14,10 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "4093"
-            endingLineNumber = "4093"
-            landmarkName = "HproseInstance"
-            landmarkType = "3">
+            startingLineNumber = "4088"
+            endingLineNumber = "4088"
+            landmarkName = "togglePinnedTweet(tweetId:)"
+            landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>

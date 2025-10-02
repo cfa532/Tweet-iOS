@@ -207,14 +207,12 @@ final class HproseInstance: ObservableObject {
             _appUser = cachedUser
             
             // Set base URL from preferences or use default
-            let baseUrlString = preferenceHelper?.getAppUrls().first ?? AppConfig.baseUrl
-//            _appUser.baseUrl = URL(string: baseUrlString)!
-            _appUser.baseUrl = nil
+//            _appUser.baseUrl = nil
             
             // Set following list
             _appUser.followingList = Gadget.getAlphaIds()
             
-            print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(baseUrlString)")
+            print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
         }
     }
     
