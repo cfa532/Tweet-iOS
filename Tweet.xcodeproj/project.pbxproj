@@ -66,7 +66,6 @@
 		469A99622DEF318C00954049 /* TweetModel.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 469A99602DEF318C00954049 /* TweetModel.xcdatamodeld */; };
 		469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469CF0EF2E27FEC000FBCDB8 /* AppDelegate.swift */; };
 		469CF0F22E27FED700FBCDB8 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469CF0F12E27FED700FBCDB8 /* OrientationManager.swift */; };
-		46A34AD32E8E8A0100C83177 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 46A34ACD2E8E8A0100C83177 /* Localizable.strings */; };
 		46A34AD42E8E8A0100C83177 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 46A34ACF2E8E8A0100C83177 /* InfoPlist.strings */; };
 		46A34AD52E8E8A0100C83177 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 46A34ACB2E8E8A0100C83177 /* Localizable.strings */; };
 		46A34AD62E8E8A0100C83177 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 46A34AC92E8E8A0100C83177 /* InfoPlist.strings */; };
@@ -182,7 +181,6 @@
 		46A34AC52E8E8A0100C83177 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = InfoPlist.strings; sourceTree = "<group>"; };
 		46A34AC82E8E8A0100C83177 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = InfoPlist.strings; sourceTree = "<group>"; };
 		46A34ACA2E8E8A0100C83177 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = Localizable.strings; sourceTree = "<group>"; };
-		46A34ACD2E8E8A0100C83177 /* Localizable.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = Localizable.strings; sourceTree = "<group>"; };
 		46A34ACE2E8E8A0100C83177 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = InfoPlist.strings; sourceTree = "<group>"; };
 		46A34AD02E8E8A0100C83177 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = Localizable.strings; sourceTree = "<group>"; };
 		46A8F6832E52BDDC0050F4A0 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
@@ -410,7 +408,6 @@
 			children = (
 				46A34AC72E8E8A0100C83177 /* en.lproj */,
 				46A34ACC2E8E8A0100C83177 /* ja.lproj */,
-				46A34ACD2E8E8A0100C83177 /* Localizable.strings */,
 				46A34AD22E8E8A0100C83177 /* zh-Hans.lproj */,
 				460680EE2E1660C700D9D15A /* Preview Content */,
 				460680EF2E1660C700D9D15A /* Assets.xcassets */,
@@ -620,7 +617,6 @@
 			files = (
 				460680F62E1660C700D9D15A /* Localizable.strings in Resources */,
 				460680F72E1660C700D9D15A /* Assets.xcassets in Resources */,
-				46A34AD32E8E8A0100C83177 /* Localizable.strings in Resources */,
 				46A34AD42E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				46A34AD52E8E8A0100C83177 /* Localizable.strings in Resources */,
 				46A34AD62E8E8A0100C83177 /* InfoPlist.strings in Resources */,
