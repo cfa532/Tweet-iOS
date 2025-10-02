@@ -123,12 +123,13 @@ struct ReplyEditorView: View {
                             message: toastMessage,
                             type: toastType
                         )
-                        .padding(.bottom, 40)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .padding(.horizontal, 20)
+                        Spacer()
                     }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-                .animation(.easeInOut(duration: 0.3), value: showToast)
+            .animation(.easeInOut(duration: 0.3), value: showToast)
         )
         .onReceive(NotificationCenter.default.publisher(for: .errorOccurred)) { notification in
             if let error = notification.object as? Error {

@@ -163,6 +163,13 @@
 "Comment submitted" = "评论已提交";
 "Tweet posted successfully" = "推文发布成功";
 "Comment posted successfully" = "评论发布成功";
+"Please log in to post tweets" = "请登录以发布推文";
+"Please log in to post comments" = "请登录以发布评论";
+"Login Required" = "需要登录";
+"To post tweets, you need to log in to your account." = "要发布推文，您需要登录到您的账户。";
+"To post comments, you need to log in to your account." = "要发布评论，您需要登录到您的账户。";
+"Login" = "登录";
+"Cancel" = "取消";
 "Failed to remove favorite. Please try again." = "取消收藏失败，请重试。";
 "Failed to add favorite. Please try again." = "添加收藏失败，请重试。";
 "Failed to remove bookmark. Please try again." = "删除书签失败，请重试。";

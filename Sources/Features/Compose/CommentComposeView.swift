@@ -17,6 +17,8 @@ struct CommentComposeView: View {
     @State private var toastType: ToastView.ToastType = .error
     @State private var showCancelConfirmation = false
     @State private var showCamera = false
+    @State private var showLoginAlert = false
+    @State private var showLoginView = false
     @FocusState private var isEditorFocused: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
     
@@ -167,6 +169,13 @@ struct CommentComposeView: View {
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(NSLocalizedString("Publish", comment: "Publish comment button")) {
+                        // Check if user is guest
+                        if hproseInstance.appUser.isGuest {
+                            // Show login alert
+                            showLoginAlert = true
+                            return
+                        }
+                        
                         // Capture the data before dismissing
                         let commentText = commentText
                         let selectedItems = selectedItems
@@ -199,16 +208,19 @@ struct CommentComposeView: View {
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(commentText.count > 0)
         .overlay(
-            // Toast message overlay
-            VStack {
-                Spacer()
+            // Toast message overlay - positioned in center to avoid keyboard
+            Group {
                 if showToast {
-                    ToastView(message: toastMessage, type: toastType)
-                        .padding(.bottom, 40)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    VStack {
+                        Spacer()
+                        ToastView(message: toastMessage, type: toastType)
+                            .padding(.horizontal, 20)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        Spacer()
+                    }
+                    .animation(.easeInOut(duration: 0.3), value: showToast)
                 }
             }
-            .animation(.easeInOut(duration: 0.3), value: showToast)
         )
         .onAppear {
             // Try to focus immediately
@@ -233,6 +245,19 @@ struct CommentComposeView: View {
             }
         } message: {
             Text(NSLocalizedString("Your comment will be discarded and cannot be recovered.", comment: "Cancel confirmation message"))
+        }
+        .alert(NSLocalizedString("Login Required", comment: "Login required alert title"), isPresented: $showLoginAlert) {
+            Button(NSLocalizedString("Login", comment: "Login button")) {
+                showLoginView = true
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) {
+                // Do nothing, just dismiss the alert
+            }
+        } message: {
+            Text(NSLocalizedString("To post comments, you need to log in to your account.", comment: "Login required for comments message"))
+        }
+        .sheet(isPresented: $showLoginView) {
+            LoginView()
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraView { image, videoURL in

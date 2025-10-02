@@ -10,6 +10,8 @@ struct ComposeTweetView: View {
     @State private var showMediaPicker = false
     @State private var showCancelConfirmation = false
     @State private var showCamera = false
+    @State private var showLoginAlert = false
+    @State private var showLoginView = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
@@ -49,6 +51,13 @@ struct ComposeTweetView: View {
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(NSLocalizedString("Publish", comment: "Publish tweet button")) {
+                        // Check if user is guest
+                        if hproseInstance.appUser.isGuest {
+                            // Show login alert
+                            showLoginAlert = true
+                            return
+                        }
+                        
                         // Capture the data before dismissing
                         let tweetContent = viewModel.tweetContent
                         let selectedItems = viewModel.selectedItems
@@ -114,6 +123,19 @@ struct ComposeTweetView: View {
             }
         } message: {
             Text(NSLocalizedString("Your tweet will be discarded and cannot be recovered.", comment: "Cancel confirmation message"))
+        }
+        .alert(NSLocalizedString("Login Required", comment: "Login required alert title"), isPresented: $showLoginAlert) {
+            Button(NSLocalizedString("Login", comment: "Login button")) {
+                showLoginView = true
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) {
+                // Do nothing, just dismiss the alert
+            }
+        } message: {
+            Text(NSLocalizedString("To post tweets, you need to log in to your account.", comment: "Login required for tweets message"))
+        }
+        .sheet(isPresented: $showLoginView) {
+            LoginView()
         }
         .fullScreenCover(isPresented: $showCamera) {
             CameraView { image, videoURL in
@@ -281,7 +303,8 @@ struct ComposeTweetView: View {
                 VStack {
                     Spacer()
                     ToastView(message: viewModel.toastMessage, type: viewModel.toastType)
-                        .padding(.bottom, 40)
+                        .padding(.horizontal, 20)
+                    Spacer()
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .animation(.easeInOut(duration: 0.3), value: viewModel.showToast)

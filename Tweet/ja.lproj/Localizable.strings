@@ -160,6 +160,13 @@
 "Comment submitted" = "コメントを送信しました";
 "Tweet posted successfully" = "ツイートが正常に投稿されました";
 "Comment posted successfully" = "コメントが正常に投稿されました";
+"Please log in to post tweets" = "ツイートを投稿するにはログインしてください";
+"Please log in to post comments" = "コメントを投稿するにはログインしてください";
+"Login Required" = "ログインが必要";
+"To post tweets, you need to log in to your account." = "ツイートを投稿するには、アカウントにログインする必要があります。";
+"To post comments, you need to log in to your account." = "コメントを投稿するには、アカウントにログインする必要があります。";
+"Login" = "ログイン";
+"Cancel" = "キャンセル";
 "Failed to remove favorite. Please try again." = "お気に入りの削除に失敗しました。もう一度お試しください。";
 "Failed to add favorite. Please try again." = "お気に入りの追加に失敗しました。もう一度お試しください。";
 "Failed to remove bookmark. Please try again." = "ブックマークの削除に失敗しました。もう一度お試しください。";

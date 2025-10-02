@@ -175,6 +175,13 @@
 "Comment submitted" = "Comment submitted";
 "Tweet posted successfully" = "Tweet posted successfully";
 "Comment posted successfully" = "Comment posted successfully";
+"Please log in to post tweets" = "Please log in to post tweets";
+"Please log in to post comments" = "Please log in to post comments";
+"Login Required" = "Login Required";
+"To post tweets, you need to log in to your account." = "To post tweets, you need to log in to your account.";
+"To post comments, you need to log in to your account." = "To post comments, you need to log in to your account.";
+"Login" = "Login";
+"Cancel" = "Cancel";
 "Failed to remove favorite. Please try again." = "Failed to remove favorite. Please try again.";
 "Failed to add favorite. Please try again." = "Failed to add favorite. Please try again.";
 "Failed to remove bookmark. Please try again." = "Failed to remove bookmark. Please try again.";
