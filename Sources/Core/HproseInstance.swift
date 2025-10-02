@@ -208,7 +208,8 @@ final class HproseInstance: ObservableObject {
             
             // Set base URL from preferences or use default
             let baseUrlString = preferenceHelper?.getAppUrls().first ?? AppConfig.baseUrl
-            _appUser.baseUrl = URL(string: baseUrlString)!
+//            _appUser.baseUrl = URL(string: baseUrlString)!
+            _appUser.baseUrl = nil
             
             // Set following list
             _appUser.followingList = Gadget.getAlphaIds()
