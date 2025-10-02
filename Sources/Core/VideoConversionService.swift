@@ -381,18 +381,18 @@ class VideoConversionService {
                 scaleFilter = "scale=-2:\(resolution)"
             }
 
-            // Choose preset based on original video resolution
-            let preset = shouldUseCopyPreset ? "copy" : "veryfast"
-            print("DEBUG: [VIDEO CONVERSION] Using preset: \(preset) for resolution: \(resolution)")
+            // Choose codec and preset based on original video resolution
+            let (videoCodec, preset) = shouldUseCopyPreset ? ("copy", "") : ("libx264", "fast")
+            print("DEBUG: [VIDEO CONVERSION] Using codec: \(videoCodec), preset: \(preset.isEmpty ? "none" : preset) for resolution: \(resolution)")
 
             let command = """
                 -i "\(inputURL.path)" \
-                -c:v libx264 \
+                -c:v \(videoCodec) \
                 -c:a aac \
                 -vf "\(scaleFilter)" \
                 -b:v \(bitrate) \
                 -b:a 128k \
-                -preset \(preset) \
+                \(preset.isEmpty ? "" : "-preset \(preset)") \
                 -tune zerolatency \
                 -threads 2 \
                 -max_muxing_queue_size 512 \
