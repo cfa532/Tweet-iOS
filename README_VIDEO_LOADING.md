@@ -54,6 +54,18 @@ The video player component that benefits from preloaded assets.
 - ReadyForDisplay monitoring
 - Player layer refresh mechanisms
 
+#### 5. **VideoConversionService** (`Sources/Core/VideoConversionService.swift`)
+Advanced video conversion service for HLS streaming with background processing.
+
+**Key Features:**
+- **HLS Conversion**: Converts videos to HLS format with multiple quality levels (720p, 480p)
+- **Background Processing**: Uses background tasks and async/await for non-blocking conversion
+- **Memory Management**: Comprehensive memory monitoring and cleanup
+- **Aspect Ratio Support**: Intelligent scaling based on video orientation
+- **Progress Tracking**: Real-time conversion progress with stage updates
+- **FFmpeg Integration**: Uses FFmpegKit for high-quality video processing
+- **Master Playlist Generation**: Creates adaptive bitrate streaming playlists
+
 ## Implementation Details
 
 ### Background Preloading Strategy

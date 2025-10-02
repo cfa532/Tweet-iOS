@@ -66,6 +66,13 @@ SharedAssetCache.shared.preloadAsset(for: url)
 - Use **SharedAssetCache** for preloading
 - Coordinate background loading for better UX
 
+### VideoConversionService
+- **Converts videos to HLS format** for optimal streaming
+- **Creates adaptive bitrate playlists** (720p/480p)
+- **Background processing** with memory management
+- **FFmpeg integration** for high-quality conversion
+- **Progress tracking** with real-time updates
+
 ## Benefits of This Architecture
 
 1. **URL-based Caching**: Simple and efficient caching by URL

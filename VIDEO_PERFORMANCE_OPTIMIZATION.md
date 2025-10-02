@@ -78,6 +78,36 @@ if retryCount == 0 {
 }
 ```
 
+### 5. **Video Conversion Service Performance** (`Sources/Core/VideoConversionService.swift`)
+
+Advanced video conversion with performance optimizations:
+- **Background Task Management** - Uses UIApplication background tasks for long-running conversions
+- **Memory Monitoring** - Comprehensive memory usage tracking and cleanup
+- **Async Processing** - Non-blocking conversion using Swift concurrency
+- **Intelligent Preset Selection** - Uses "copy" preset for videos ≤720p, "veryfast" for larger videos
+- **Memory Cleanup** - Force garbage collection between conversion stages
+- **Progress Tracking** - Real-time conversion progress without blocking UI
+
+**Key Performance Features:**
+```swift
+// Memory monitoring and cleanup
+private func logMemoryUsage(_ context: String) {
+    let memory = getMemoryUsage()
+    print("DEBUG: [VIDEO CONVERSION] Memory usage \(context): \(String(format: "%.1f", memory)) MB")
+}
+
+// Background task management
+private func startBackgroundTask() {
+    backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "VideoConversion") { [weak self] in
+        self?.endBackgroundTask()
+    }
+}
+
+// Intelligent preset selection
+let shouldUseCopy = maxDimension <= 720
+let preset = shouldUseCopy ? "copy" : "veryfast"
+```
+
 ## Performance Monitoring Features
 
 ### Freeze Detection
