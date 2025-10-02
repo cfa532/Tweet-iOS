@@ -91,6 +91,10 @@ class FollowingsTweetViewModel: ObservableObject {
             if !(tweet.isPrivate ?? false) {
                 // Use mergeTweets to maintain proper chronological ordering
                 tweets.mergeTweets([tweet])
+                
+                // Cache the new tweet so it persists across app restarts
+                TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
+                print("DEBUG: [FollowingsTweetViewModel] Cached new tweet: \(tweet.mid)")
             }
         }
     }

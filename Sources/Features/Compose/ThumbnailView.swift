@@ -108,7 +108,8 @@ struct ThumbnailView: View {
         isLoading = true
         error = nil
         
-        let itemId = item.itemIdentifier ?? "nil"
+        // Generate a unique identifier for this item
+        let itemId = item.itemIdentifier ?? UUID().uuidString
         print("DEBUG: [\(itemId)] Starting thumbnail generation")
         
         // First, detect the media type to create a proper cache key

@@ -85,6 +85,12 @@ class ProfileTweetsViewModel: ObservableObject {
                 print("DEBUG: [ProfileTweetsViewModel] Adding new tweet to list: \(tweet.mid)")
                 // Use mergeTweets to maintain proper chronological ordering
                 tweets.mergeTweets([tweet])
+                
+                // Cache the new tweet if it's the appUser's profile
+                if user.mid == hproseInstance.appUser.mid {
+                    TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
+                    print("DEBUG: [ProfileTweetsViewModel] Cached new tweet: \(tweet.mid)")
+                }
             } else {
                 print("DEBUG: [ProfileTweetsViewModel] Skipping pinned tweet: \(tweet.mid)")
             }

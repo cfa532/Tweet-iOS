@@ -167,18 +167,27 @@ struct CommentComposeView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    DebounceButton(
-                        NSLocalizedString("Publish", comment: "Publish comment button"),
-                        cooldownDuration: 1.0,
-                        enableAnimation: true,
-                        enableVibration: false
-                    ) {
+                    Button(NSLocalizedString("Publish", comment: "Publish comment button")) {
+                        // Capture the data before dismissing
+                        let commentText = commentText
+                        let selectedItems = selectedItems
+                        let selectedImages = selectedImages
+                        let selectedVideos = selectedVideos
+                        
+                        // Dismiss immediately
+                        dismiss()
+                        
+                        // Submit comment in background after dismissing using captured data
                         Task {
-                            await submitComment()
+                            await submitCommentInBackground(
+                                text: commentText,
+                                selectedItems: selectedItems,
+                                selectedImages: selectedImages,
+                                selectedVideos: selectedVideos
+                            )
                         }
                     }
                     .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedItems.isEmpty && selectedImages.isEmpty && selectedVideos.isEmpty)
-                    // Note: Progress indicator is now managed by DebounceButton
                 }
             }
         }
@@ -309,6 +318,49 @@ struct CommentComposeView: View {
                 dismiss()
             }
         }
+    }
+    
+    private func submitCommentInBackground(
+        text: String,
+        selectedItems: [PhotosPickerItem],
+        selectedImages: [UIImage],
+        selectedVideos: [URL]
+    ) async {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Validate content
+        guard !trimmedText.isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty else {
+            print("DEBUG: Comment validation failed - empty content and no attachments")
+            return
+        }
+        
+        // Create comment object
+        let comment = ChatMessage(
+            id: UUID().uuidString,
+            authorId: hproseInstance.appUser.mid,
+            receiptId: tweet.authorId,
+            chatSessionId: ChatMessage.generateSessionId(userId: hproseInstance.appUser.mid, receiptId: tweet.authorId),
+            content: trimmedText,
+            timestamp: Date().timeIntervalSince1970,
+            attachments: nil
+        )
+        
+        // Prepare item data using helper
+        let itemData: [HproseInstance.PendingTweetUpload.ItemData]
+        
+        do {
+            itemData = try await MediaUploadHelper.prepareItemData(
+                selectedItems: selectedItems,
+                selectedImages: selectedImages,
+                selectedVideos: selectedVideos
+            )
+        } catch {
+            print("DEBUG: Error preparing comment item data: \(error)")
+            return
+        }
+        
+        print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")
+        hproseInstance.scheduleChatMessageUpload(message: comment, itemData: itemData)
     }
     
 } 

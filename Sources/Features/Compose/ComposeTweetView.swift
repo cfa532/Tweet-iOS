@@ -48,26 +48,32 @@ struct ComposeTweetView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    DebounceButton(
-                        NSLocalizedString("Publish", comment: "Publish tweet button"),
-                        cooldownDuration: 1.0,
-                        enableAnimation: true,
-                        enableVibration: false
-                    ) {
-                        // Post tweet in background
+                    Button(NSLocalizedString("Publish", comment: "Publish tweet button")) {
+                        // Capture the data before dismissing
+                        let tweetContent = viewModel.tweetContent
+                        let selectedItems = viewModel.selectedItems
+                        let selectedImages = viewModel.selectedImages
+                        let selectedVideos = viewModel.selectedVideos
+                        let isPrivate = viewModel.isPrivate
+                        
+                        // Send notification for toast on presenting screen and dismiss immediately
+                        NotificationCenter.default.post(
+                            name: .tweetSubmitted,
+                            object: nil,
+                            userInfo: ["message": NSLocalizedString("Tweet submitted", comment: "Tweet submitted message")]
+                        )
+                        viewModel.clearForm()
+                        dismiss()
+                        
+                        // Post tweet in background after dismissing using captured data
                         Task {
-                            await viewModel.postTweet()
-                            
-                            // Send notification for toast on presenting screen and dismiss immediately
-                            await MainActor.run {
-                                NotificationCenter.default.post(
-                                    name: .tweetSubmitted,
-                                    object: nil,
-                                    userInfo: ["message": NSLocalizedString("Tweet submitted", comment: "Tweet submitted message")]
-                                )
-                                viewModel.clearForm()
-                                dismiss()
-                            }
+                            await postTweetInBackground(
+                                content: tweetContent,
+                                selectedItems: selectedItems,
+                                selectedImages: selectedImages,
+                                selectedVideos: selectedVideos,
+                                isPrivate: isPrivate
+                            )
                         }
                     }
                     .disabled(!viewModel.canPostTweet)
@@ -161,6 +167,60 @@ struct ComposeTweetView: View {
         .background(Color(.systemBackground))
     }
     
+    private func postTweetInBackground(
+        content: String,
+        selectedItems: [PhotosPickerItem],
+        selectedImages: [UIImage],
+        selectedVideos: [URL],
+        isPrivate: Bool
+    ) async {
+        let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Allow empty content if there are attachments
+        guard MediaUploadHelper.validateContent(
+            content: content,
+            selectedItems: selectedItems,
+            selectedImages: selectedImages,
+            selectedVideos: selectedVideos
+        ) else {
+            print("DEBUG: Tweet validation failed - empty content and no attachments")
+            return
+        }
+        
+        // Create tweet object
+        #if DEBUG
+        let isPrivateValue = isPrivate
+        #else
+        let isPrivateValue = false
+        #endif
+        
+        let tweet = Tweet(
+            mid: Constants.GUEST_ID,        // placeholder Mimei Id
+            authorId: hproseInstance.appUser.mid,
+            content: trimmedContent,
+            timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
+            attachments: nil,
+            isPrivate: isPrivateValue
+        )
+        
+        // Prepare item data using helper
+        let itemData: [HproseInstance.PendingTweetUpload.ItemData]
+        
+        do {
+            itemData = try await MediaUploadHelper.prepareItemData(
+                selectedItems: selectedItems,
+                selectedImages: selectedImages,
+                selectedVideos: selectedVideos
+            )
+        } catch {
+            print("DEBUG: Error preparing item data: \(error)")
+            return
+        }
+        
+        print("DEBUG: Scheduling tweet upload with \(itemData.count) attachments")
+        hproseInstance.scheduleTweetUpload(tweet: tweet, itemData: itemData)
+    }
+
     private var attachmentToolbar: some View {
         HStack(spacing: 20) {
             MediaPicker(

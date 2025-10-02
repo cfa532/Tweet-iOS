@@ -680,7 +680,7 @@ final class HproseInstance: ObservableObject {
                 // Update in background coroutine
                 Task {
                     do {
-                        if let refreshedUser = try await self.updateUserFromServer(userId, baseUrl: baseUrl) {
+                        if (try await self.updateUserFromServer(userId, baseUrl: baseUrl)) != nil {
                             print("DEBUG: [fetchUser] Background update completed for userId: \(userId)")
                         }
                     } catch {
