@@ -204,6 +204,15 @@ struct SimpleVideoPlayer: View {
             else if mode == .mediaBrowser {
                 player?.isMuted = false
                 print("DEBUG: [VIDEO GLOBAL MUTE] Ignored global mute state for full screen mode")
+                
+                // Add a delayed enforcement to ensure the unmuted state persists
+                // This helps prevent race conditions with cache restoration and other state changes
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    if let player = self.player, self.mode == .mediaBrowser {
+                        player.isMuted = false
+                        print("DEBUG: [VIDEO GLOBAL MUTE] Re-enforced unmuted state after delay")
+                    }
+                }
             }
         }
         .onChange(of: currentAutoPlay) { _, shouldAutoPlay in
@@ -551,6 +560,15 @@ struct SimpleVideoPlayer: View {
             // This ensures full screen videos are never muted
             cachedState.player.isMuted = false
             print("DEBUG: [VIDEO CACHE] Forced unmuted for full screen mode")
+            
+            // Add a delayed enforcement to ensure the unmuted state persists
+            // This helps prevent race conditions with global mute state changes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                if let player = self.player, self.mode == .mediaBrowser {
+                    player.isMuted = false
+                    print("DEBUG: [VIDEO CACHE] Re-enforced unmuted state after cache restoration")
+                }
+            }
         }
         
         // Seek to the cached position
