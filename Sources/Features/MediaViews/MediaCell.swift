@@ -257,6 +257,7 @@ struct MediaCell: View, Equatable {
             }
         }
         
+        .fullScreenVideoPlayer()
         .fullScreenCover(isPresented: $showFullScreen) {
             MediaBrowserView(
                 tweet: parentTweet,
@@ -296,8 +297,11 @@ struct MediaCell: View, Equatable {
         // Use internal full screen logic
         switch attachment.type {
         case .video, .hls_video:
-            // Open full screen for videos
-            showFullScreen = true
+            // Open full screen for videos using the new video player
+            let baseUrl = parentTweet.author?.baseUrl ?? HproseInstance.baseUrl
+            if let videoURL = attachment.getUrl(baseUrl) {
+                FullScreenVideoManager.shared.presentVideo(url: videoURL, tweetId: parentTweet.mid)
+            }
         case .audio:
             // Toggle audio playback - handled by SimpleAudioPlayer
             break
@@ -362,7 +366,10 @@ struct MediaCell: View, Equatable {
                 showNativeControls: false,
                 isMuted: muteState.isMuted,
                 onVideoTap: {
-                    showFullScreen = true
+                    let baseUrl = parentTweet.author?.baseUrl ?? HproseInstance.baseUrl
+                    if let videoURL = attachment.getUrl(baseUrl) {
+                        FullScreenVideoManager.shared.presentVideo(url: videoURL, tweetId: parentTweet.mid)
+                    }
                 },
                 disableAutoRestart: true,
                 forceRefreshTrigger: localForceRefreshTrigger,
@@ -374,9 +381,12 @@ struct MediaCell: View, Equatable {
             // Invisible overlay to prevent tap propagation to parent views and add long press
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    showFullScreen = true
+            .onTapGesture {
+                let baseUrl = parentTweet.author?.baseUrl ?? HproseInstance.baseUrl
+                if let videoURL = attachment.getUrl(baseUrl) {
+                    FullScreenVideoManager.shared.presentVideo(url: videoURL, tweetId: parentTweet.mid)
                 }
+            }
                 .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
                     handleVideoReload()
                 }
