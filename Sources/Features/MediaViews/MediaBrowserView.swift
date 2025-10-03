@@ -210,24 +210,32 @@ struct MediaBrowserView: View {
         }
         
         private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
-            SimpleVideoPlayer(
+            let shouldAutoPlay = index == currentIndex
+            
+            return DetailVideoPlayerView(
                 url: url,
                 mid: attachment.mid,
                 isVisible: true,
-                autoPlay: index == currentIndex,
                 videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-                isMuted: false,
-                onVideoTap: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showControls = true
-                    }
-                    resetControlsTimer()
-                },
-                disableAutoRestart: false,
-                mode: .mediaBrowser
+                showMuteButton: false
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
+            .onAppear {
+                if shouldAutoPlay {
+                    // Set up the video to autoplay when it becomes current
+                    DetailVideoManager.shared.setCurrentVideo(url: url, mid: attachment.mid, autoPlay: true)
+                }
+            }
+            .onChange(of: currentIndex) { _, newIndex in
+                if newIndex == index {
+                    // This video became current, start playing
+                    DetailVideoManager.shared.setCurrentVideo(url: url, mid: attachment.mid, autoPlay: true)
+                } else {
+                    // This video is no longer current, pause it
+                    DetailVideoManager.shared.currentPlayer?.pause()
+                }
+            }
         }
         
         private func audioView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {

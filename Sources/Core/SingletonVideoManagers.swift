@@ -12,9 +12,10 @@ import UIKit
 
 /// Singleton video manager for detail view context
 @MainActor
-class DetailVideoManager: ObservableObject {
+class DetailVideoManager: NSObject, ObservableObject {
     static let shared = DetailVideoManager()
-    private init() {
+    private override init() {
+        super.init()
         setupAppLifecycleNotifications()
         setupAudioInterruptionNotifications()
     }
@@ -36,7 +37,11 @@ class DetailVideoManager: ObservableObject {
         if currentVideoMid != mid {
             print("DEBUG: [DETAIL VIDEO MANAGER] Switching from \(currentVideoMid ?? "none") to \(mid)")
             currentPlayer?.pause()
-            currentPlayer = nil
+            
+            // Remove KVO observer from previous player item
+            if let player = currentPlayer, let playerItem = player.currentItem {
+                playerItem.removeObserver(self, forKeyPath: "status")
+            }
         }
         
         currentVideoMid = mid
@@ -46,30 +51,48 @@ class DetailVideoManager: ObservableObject {
         
         Task.detached(priority: .userInitiated) {
             do {
-                print("DEBUG: [DETAIL VIDEO MANAGER] Creating completely independent player for: \(mid)")
+                print("DEBUG: [DETAIL VIDEO MANAGER] Loading new video for shared player: \(mid)")
                 
                 // Use the exact same approach as SimpleVideoPlayer but create independent player
                 // This ensures proper asset loading while maintaining independence
                 let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: mid)
-                let playerItem = AVPlayerItem(asset: asset)
-                let independentPlayer = AVPlayer(playerItem: playerItem)
+                let playerItem = await AVPlayerItem(asset: asset)
                 
                 await MainActor.run {
-                    // Configure the independent player
-                    independentPlayer.isMuted = false // Always unmuted in detail
-                    self.currentPlayer = independentPlayer
-                    
-                    if autoPlay {
-                        independentPlayer.play()
-                        self.isPlaying = true
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Started independent player for: \(mid)")
+                    // Create player only if it doesn't exist, otherwise just replace the player item
+                    if self.currentPlayer == nil {
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Creating shared independent player")
+                        self.currentPlayer = AVPlayer()
                     }
                     
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Successfully created independent player for: \(mid)")
+                    // Replace the player item with the new video
+                    self.currentPlayer?.replaceCurrentItem(with: playerItem)
+                    
+                    // Configure the player
+                    self.currentPlayer?.isMuted = false // Always unmuted in detail
+                    
+                    // Set up player item status monitoring
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Player item status for \(mid): \(playerItem.status.rawValue)")
+                    
+                    // Add KVO observer for player item status
+                    playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
+                    
+                    // Check if player item is ready immediately
+                    if playerItem.status == .readyToPlay {
+                        if autoPlay {
+                            self.currentPlayer?.play()
+                            self.isPlaying = true
+                            print("DEBUG: [DETAIL VIDEO MANAGER] Started shared player for: \(mid) - player item ready immediately")
+                        }
+                    } else {
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Player item not ready yet for: \(mid), waiting for ready status")
+                    }
+                    
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Successfully loaded video for shared player: \(mid)")
                 }
             } catch {
                 await MainActor.run {
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Failed to create independent player: \(error)")
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Failed to load video: \(error)")
                 }
             }
         }
@@ -77,6 +100,11 @@ class DetailVideoManager: ObservableObject {
     
     /// Clear current video
     func clearCurrentVideo() {
+        // Remove KVO observer before clearing
+        if let player = currentPlayer, let playerItem = player.currentItem {
+            playerItem.removeObserver(self, forKeyPath: "status")
+        }
+        
         currentPlayer?.pause()
         currentPlayer = nil
         currentVideoMid = nil
@@ -98,6 +126,25 @@ class DetailVideoManager: ObservableObject {
         } else {
             player.play()
             isPlaying = true
+        }
+    }
+    
+    // MARK: - KVO Observer
+    
+    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+        if keyPath == "status" {
+            if let playerItem = object as? AVPlayerItem {
+                if playerItem.status == .readyToPlay {
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Player item became ready to play")
+                    if let player = currentPlayer, player.currentItem == playerItem {
+                        player.play()
+                        isPlaying = true
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Started playback after player item became ready")
+                    }
+                } else if playerItem.status == .failed {
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Player item failed to load")
+                }
+            }
         }
     }
     
