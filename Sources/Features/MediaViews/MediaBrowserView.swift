@@ -25,6 +25,7 @@ struct MediaBrowserView: View {
     @State private var isDragging = false
     @State private var previousIndex: Int = -1 // Track previous index for video management
     @State private var isImageZoomed = false // Track if current image is zoomed
+    @State private var wasOrientationLocked = false // Track if orientation was locked before entering fullscreen
 
 
     private var attachments: [MimeiFileType] {
@@ -52,6 +53,7 @@ struct MediaBrowserView: View {
             dragOffset: $dragOffset,
             isDragging: $isDragging,
             isVisible: $isVisible,
+            wasOrientationLocked: $wasOrientationLocked,
             baseUrl: baseUrl,
             imageStates: $imageStates,
             isImageZoomed: $isImageZoomed,
@@ -73,6 +75,7 @@ struct MediaBrowserView: View {
         @Binding var dragOffset: CGSize
         @Binding var isDragging: Bool
         @Binding var isVisible: Bool
+        @Binding var wasOrientationLocked: Bool
         let baseUrl: URL
         @Binding var imageStates: [Int: ImageState]
         @Binding var isImageZoomed: Bool
@@ -167,6 +170,13 @@ struct MediaBrowserView: View {
                 UIApplication.shared.isIdleTimerDisabled = true
                 startControlsTimer()
                 
+                // Remember if orientation was locked before entering fullscreen
+                wasOrientationLocked = OrientationManager.shared.isLocked
+                
+                // Unlock orientation for full screen video playback
+                OrientationManager.shared.unlockOrientation()
+                print("DEBUG: [MediaBrowserView] Unlocked orientation for full screen")
+                
                 // Stop all videos in the tweet list when entering full screen
                 NotificationCenter.default.post(name: .stopAllVideos, object: nil)
                 print("DEBUG: [MediaBrowserView] Posted stopAllVideos notification")
@@ -176,6 +186,12 @@ struct MediaBrowserView: View {
             .onDisappear {
                 isVisible = false
                 UIApplication.shared.isIdleTimerDisabled = false
+                
+                // Restore orientation lock if it was locked before entering fullscreen
+                if wasOrientationLocked {
+                    OrientationManager.shared.lockToPortrait()
+                    print("DEBUG: [MediaBrowserView] Restored orientation lock to portrait")
+                }
                 
                 // Clean up all image states to free memory
                 cleanupImageStates(attachments: attachments, imageStates: $imageStates, baseUrl: baseUrl)

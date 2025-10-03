@@ -126,27 +126,10 @@ struct SimpleVideoPlayer: View {
                     
                 case .mediaBrowser:
                     // MediaBrowser mode: fullscreen browser with native controls only
-                    if isVideoPortrait {
-                        // Portrait video: fit on full screen
-                        videoPlayerView()
-                            .aspectRatio(videoAR, contentMode: .fit)
-                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
-                    } else if isVideoLandscape {
-                        // Landscape video: rotate 90 degrees clockwise to fit on portrait device
-                        ZStack {
-                            videoPlayerView()
-                                .aspectRatio(videoAR, contentMode: .fit)
-                                .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2)
-                                .rotationEffect(.degrees(-90))
-                                .scaleEffect(screenHeight / screenWidth)
-                                .background(Color.black)
-                        }
-                    } else {
-                        // Square video: fit on full screen
-                        videoPlayerView()
-                            .aspectRatio(videoAR, contentMode: .fit)
-                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
-                    }
+                    // All videos display naturally without artificial rotation
+                    videoPlayerView()
+                        .aspectRatio(videoAR, contentMode: .fit)
+                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                     
                     
                 }
