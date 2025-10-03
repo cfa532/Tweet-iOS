@@ -131,7 +131,7 @@ struct SimpleVideoPlayer: View {
                         videoPlayerView()
                             .aspectRatio(videoAR, contentMode: .fit)
                             .frame(maxWidth: screenWidth, maxHeight: screenHeight)
-                    } else if isVideoLandscape {
+                    } else {
                         // Landscape video: rotate 90 degrees clockwise to fit on portrait device
                         ZStack {
                             videoPlayerView()
@@ -141,11 +141,6 @@ struct SimpleVideoPlayer: View {
                                 .scaleEffect(screenHeight / screenWidth)
                                 .background(Color.black)
                         }
-                    } else {
-                        // Square video: fit on full screen
-                        videoPlayerView()
-                            .aspectRatio(videoAR, contentMode: .fit)
-                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                     }
                     
                     
