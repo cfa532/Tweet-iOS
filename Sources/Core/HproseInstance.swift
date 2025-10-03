@@ -668,8 +668,11 @@ final class HproseInstance: ObservableObject {
         
         // If we have a valid cached user that hasn't expired, return it
         if cachedUser.username != nil && !cachedUser.hasExpired {
+            print("DEBUG: [fetchUser] Using cached user for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(cachedUser.hasExpired)")
             return cachedUser
         }
+        
+        print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(cachedUser.hasExpired)")
         
         // If current object is invalid (nil username), return cached value and update in background
         if cachedUser.username == nil {
@@ -697,11 +700,36 @@ final class HproseInstance: ObservableObject {
         return try await updateUserFromServer(userId, baseUrl: baseUrl)
     }
     
+    // Track ongoing user updates to prevent concurrent calls for the same user
+    private var ongoingUserUpdates: Set<String> = []
+    private let userUpdateQueue = DispatchQueue(label: "user.update.queue")
+    
     /// Updates user from server with baseUrl resolution and retry logic
     func updateUserFromServer(
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
+        // Check if we're already updating this user
+        let shouldProceed = userUpdateQueue.sync {
+            if ongoingUserUpdates.contains(userId) {
+                return false
+            }
+            ongoingUserUpdates.insert(userId)
+            return true
+        }
+        
+        // If another update is in progress, wait for it and return cached result
+        if !shouldProceed {
+            print("DEBUG: [updateUserFromServer] Update already in progress for userId: \(userId), returning cached user")
+            return TweetCacheManager.shared.fetchUser(mid: userId)
+        }
+        
+        defer {
+            userUpdateQueue.sync {
+                ongoingUserUpdates.remove(userId)
+            }
+        }
+        
         let user = User.getInstance(mid: userId)
         
         return try await retryOperation(maxRetries: 3) {
