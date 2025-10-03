@@ -79,8 +79,6 @@ class VideoManager: ObservableObject {
             print("DEBUG: [VideoManager] Single video playback - video \(mid) should play: \(shouldPlay)")
             return shouldPlay
         }
-        
-        print("DEBUG: [VideoManager] Video \(mid) should not play - no matching conditions")
         return false
     }
     
