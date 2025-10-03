@@ -663,32 +663,26 @@ final class HproseInstance: ObservableObject {
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
-        // Step 1: Check user cache in Core Data.
-        let user = User.getInstance(mid: userId)
+        // Step 1: Check user cache in Core Data first
+        let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
         
-        // If current object is invalid (nil username), return cached value and update in background
-        if user.username == nil {
-            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
-            if cachedUser.username != nil {
-                print("DEBUG: [fetchUser] Returning cached user for invalid user (nil username) for userId: \(userId), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
-                
-                // Update in background coroutine
-                Task {
-                    do {
-                        if (try await self.updateUserFromServer(userId, baseUrl: baseUrl)) != nil {
-                            print("DEBUG: [fetchUser] Background update completed for userId: \(userId)")
-                        }
-                    } catch {
-                        print("DEBUG: [fetchUser] Background update failed for userId: \(userId): \(error)")
-                    }
-                }
-                return cachedUser
-            }
+        // If we have a valid cached user that hasn't expired, return it
+        if cachedUser.username != nil && !cachedUser.hasExpired {
+            return cachedUser
         }
         
-        if !user.hasExpired {
-            // get cached user instance if it is not expired.
-            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+        // If current object is invalid (nil username), return cached value and update in background
+        if cachedUser.username == nil {
+            // Update in background coroutine
+            Task {
+                do {
+                    if (try await self.updateUserFromServer(userId, baseUrl: baseUrl)) != nil {
+                        print("DEBUG: [fetchUser] Background update completed for userId: \(userId)")
+                    }
+                } catch {
+                    print("DEBUG: [fetchUser] Background update failed for userId: \(userId): \(error)")
+                }
+            }
             return cachedUser
         }
         

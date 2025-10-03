@@ -212,7 +212,6 @@ class VideoLoadingManager: ObservableObject {
                     object: nil,
                     userInfo: ["tweetId": tweetId]
                 )
-                print("DEBUG: [VideoLoadingManager] Background cancellation completed for tweet \(tweetId)")
             }
             
             // Small delay to prevent overwhelming the system
