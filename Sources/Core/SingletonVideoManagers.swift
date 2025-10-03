@@ -44,54 +44,33 @@ class DetailVideoManager: ObservableObject {
         // Activate audio session for video playback
         AudioSessionManager.shared.activateForVideoPlayback()
         
-        Task {
+        Task.detached(priority: .userInitiated) {
             do {
-                print("DEBUG: [DETAIL VIDEO MANAGER] Loading player for: \(mid)")
+                print("DEBUG: [DETAIL VIDEO MANAGER] Creating completely independent player for: \(mid)")
                 
-                // Try to get cached player first (same as SimpleVideoPlayer)
-                if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: url) {
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Using cached player for: \(mid)")
-                    
-                    // Validate cached player
-                    guard let playerItem = cachedPlayer.currentItem else {
-                        SharedAssetCache.shared.removeInvalidPlayer(for: url)
-                        throw NSError(domain: "DetailVideoManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
-                    }
-                    
-                    if playerItem.status == .failed {
-                        SharedAssetCache.shared.removeInvalidPlayer(for: url)
-                        throw NSError(domain: "DetailVideoManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid cached player"])
-                    }
-                    
-                    // Use cached player
-                    cachedPlayer.isMuted = false // Always unmuted in detail
-                    self.currentPlayer = cachedPlayer
+                // Use the exact same approach as SimpleVideoPlayer but create independent player
+                // This ensures proper asset loading while maintaining independence
+                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: mid)
+                let playerItem = AVPlayerItem(asset: asset)
+                let independentPlayer = AVPlayer(playerItem: playerItem)
+                
+                await MainActor.run {
+                    // Configure the independent player
+                    independentPlayer.isMuted = false // Always unmuted in detail
+                    self.currentPlayer = independentPlayer
                     
                     if autoPlay {
-                        cachedPlayer.play()
+                        independentPlayer.play()
                         self.isPlaying = true
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Started independent player for: \(mid)")
                     }
                     
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Successfully used cached player for: \(mid)")
-                    return
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Successfully created independent player for: \(mid)")
                 }
-                
-                // Create new player if not cached
-                print("DEBUG: [DETAIL VIDEO MANAGER] Creating new player for: \(mid)")
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url)
-                
-                // Since DetailVideoManager is @MainActor, we can directly update properties
-                newPlayer.isMuted = false // Always unmuted in detail
-                self.currentPlayer = newPlayer
-                
-                if autoPlay {
-                    newPlayer.play()
-                    self.isPlaying = true
-                }
-                
-                print("DEBUG: [DETAIL VIDEO MANAGER] Successfully created new player for: \(mid)")
             } catch {
-                print("DEBUG: [DETAIL VIDEO MANAGER] Failed to load video: \(error)")
+                await MainActor.run {
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Failed to create independent player: \(error)")
+                }
             }
         }
     }
