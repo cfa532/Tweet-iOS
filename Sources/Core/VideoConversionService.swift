@@ -381,38 +381,206 @@ class VideoConversionService {
                 scaleFilter = "scale=-2:\(resolution)"
             }
 
-            // Choose codec and preset based on original video resolution
-            let (videoCodec, preset) = shouldUseCopyPreset ? ("copy", "") : ("libx264", "fast")
-            print("DEBUG: [VIDEO CONVERSION] Using codec: \(videoCodec), preset: \(preset.isEmpty ? "none" : preset) for resolution: \(resolution)")
-
-            let command = """
-                -i "\(inputURL.path)" \
-                -c:v \(videoCodec) \
-                -c:a aac \
-                -vf "\(scaleFilter)" \
-                -b:v \(bitrate) \
-                -b:a 128k \
-                \(preset.isEmpty ? "" : "-preset \(preset)") \
-                -tune zerolatency \
-                -threads 2 \
-                -max_muxing_queue_size 512 \
-                -fflags +genpts+igndts \
-                -avoid_negative_ts make_zero \
-                -max_interleave_delta 0 \
-                -bufsize \(bitrate) \
-                -maxrate \(bitrate) \
-                -metadata:s:v:0 rotate=0 \
-                -f hls \
-                -hls_time 10 \
-                -hls_list_size 0 \
-                -hls_segment_filename "\(outputURL.deletingPathExtension().path)_%03d.ts" \
-                -hls_flags delete_segments+independent_segments \
-                "\(outputURL.path)"
-                """
-
-            await MainActor.run {
-                self.executeFFmpegCommand(command: command, outputURL: outputURL, resolution: resolution, completion: completion)
+            // Try COPY codec first if conditions are met, then fallback to libx264
+            if shouldUseCopyPreset {
+                print("DEBUG: [VIDEO CONVERSION] Attempting conversion with COPY codec for resolution: \(resolution)")
+                
+                let copyCommand = """
+                    -i "\(inputURL.path)" \
+                    -c:v copy \
+                    -c:a aac \
+                    -vf "\(scaleFilter)" \
+                    -b:v \(bitrate) \
+                    -b:a 128k \
+                    -tune zerolatency \
+                    -threads 2 \
+                    -max_muxing_queue_size 512 \
+                    -fflags +genpts+igndts \
+                    -avoid_negative_ts make_zero \
+                    -max_interleave_delta 0 \
+                    -bufsize \(bitrate) \
+                    -maxrate \(bitrate) \
+                    -metadata:s:v:0 rotate=0 \
+                    -f hls \
+                    -hls_time 10 \
+                    -hls_list_size 0 \
+                    -hls_segment_filename "\(outputURL.deletingPathExtension().path)_%03d.ts" \
+                    -hls_flags delete_segments+independent_segments \
+                    "\(outputURL.path)"
+                    """
+                
+                await MainActor.run {
+                    self.executeFFmpegCommandWithFallback(
+                        primaryCommand: copyCommand,
+                        fallbackCommand: self.buildLibx264Command(
+                            inputURL: inputURL,
+                            outputURL: outputURL,
+                            resolution: resolution,
+                            bitrate: bitrate,
+                            scaleFilter: scaleFilter
+                        ),
+                        outputURL: outputURL,
+                        resolution: resolution,
+                        primaryCodec: "COPY",
+                        fallbackCodec: "libx264",
+                        completion: completion
+                    )
+                }
+            } else {
+                // Use libx264 directly
+                let libx264Command = buildLibx264Command(
+                    inputURL: inputURL,
+                    outputURL: outputURL,
+                    resolution: resolution,
+                    bitrate: bitrate,
+                    scaleFilter: scaleFilter
+                )
+                
+                print("DEBUG: [VIDEO CONVERSION] Using libx264 codec directly for resolution: \(resolution)")
+                
+                await MainActor.run {
+                    self.executeFFmpegCommand(command: libx264Command, outputURL: outputURL, resolution: resolution, completion: completion)
+                }
             }
+        }
+    }
+    
+    /// Builds FFmpeg command for libx264 codec
+    private func buildLibx264Command(
+        inputURL: URL,
+        outputURL: URL,
+        resolution: String,
+        bitrate: String,
+        scaleFilter: String
+    ) -> String {
+        return """
+            -i "\(inputURL.path)" \
+            -c:v libx264 \
+            -c:a aac \
+            -vf "\(scaleFilter)" \
+            -b:v \(bitrate) \
+            -b:a 128k \
+            -preset fast \
+            -tune zerolatency \
+            -threads 2 \
+            -max_muxing_queue_size 512 \
+            -fflags +genpts+igndts \
+            -avoid_negative_ts make_zero \
+            -max_interleave_delta 0 \
+            -bufsize \(bitrate) \
+            -maxrate \(bitrate) \
+            -metadata:s:v:0 rotate=0 \
+            -f hls \
+            -hls_time 10 \
+            -hls_list_size 0 \
+            -hls_segment_filename "\(outputURL.deletingPathExtension().path)_%03d.ts" \
+            -hls_flags delete_segments+independent_segments \
+            "\(outputURL.path)"
+            """
+    }
+    
+    /// Executes FFmpeg command with fallback support
+    private func executeFFmpegCommandWithFallback(
+        primaryCommand: String,
+        fallbackCommand: String,
+        outputURL: URL,
+        resolution: String,
+        primaryCodec: String,
+        fallbackCodec: String,
+        completion: @escaping (Bool) -> Void
+    ) {
+        print("DEBUG: [VIDEO CONVERSION] Attempting \(primaryCodec) codec conversion for \(resolution)")
+        
+        FFmpegKit.executeAsync(primaryCommand) { session in
+            guard let session = session else {
+                print("DEBUG: [VIDEO CONVERSION] Failed to create FFmpeg session for \(primaryCodec)")
+                self.tryFallbackConversion(
+                    fallbackCommand: fallbackCommand,
+                    outputURL: outputURL,
+                    resolution: resolution,
+                    fallbackCodec: fallbackCodec,
+                    completion: completion
+                )
+                return
+            }
+            
+            let returnCode = session.getReturnCode()
+            let logs = session.getLogs()
+            
+            print("DEBUG: [VIDEO CONVERSION] \(primaryCodec) conversion completed with return code: \(String(describing: returnCode))")
+            
+            // Log FFmpeg output for debugging
+            if let logs = logs {
+                for log in logs {
+                    if let logObj = log as? Log, let message = logObj.getMessage() {
+                        print("DEBUG: [FFMPEG LOG] \(message)")
+                    }
+                }
+            }
+            
+            let success = ReturnCode.isSuccess(returnCode)
+            
+            if success {
+                // Verify output file exists
+                if FileManager.default.fileExists(atPath: outputURL.path) {
+                    let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
+                    print("DEBUG: [VIDEO CONVERSION] Successfully converted to \(resolution) using \(primaryCodec)")
+                    print("DEBUG: [VIDEO CONVERSION] Output file exists: \(outputURL.lastPathComponent), size: \(fileSize) bytes")
+                    completion(true)
+                } else {
+                    print("DEBUG: [VIDEO CONVERSION] Output file does not exist after \(primaryCodec) conversion: \(outputURL.path)")
+                    self.tryFallbackConversion(
+                        fallbackCommand: fallbackCommand,
+                        outputURL: outputURL,
+                        resolution: resolution,
+                        fallbackCodec: fallbackCodec,
+                        completion: completion
+                    )
+                }
+            } else {
+                print("DEBUG: [VIDEO CONVERSION] \(primaryCodec) conversion failed for \(resolution), trying \(fallbackCodec) fallback")
+                self.tryFallbackConversion(
+                    fallbackCommand: fallbackCommand,
+                    outputURL: outputURL,
+                    resolution: resolution,
+                    fallbackCodec: fallbackCodec,
+                    completion: completion
+                )
+            }
+        }
+    }
+    
+    /// Attempts fallback conversion with different codec
+    private func tryFallbackConversion(
+        fallbackCommand: String,
+        outputURL: URL,
+        resolution: String,
+        fallbackCodec: String,
+        completion: @escaping (Bool) -> Void
+    ) {
+        print("DEBUG: [VIDEO CONVERSION] Attempting \(fallbackCodec) fallback conversion for \(resolution)")
+        
+        // Clean up any partial output from the failed attempt
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try? FileManager.default.removeItem(at: outputURL)
+        }
+        
+        // Also clean up any segment files
+        let segmentFiles = (try? FileManager.default.contentsOfDirectory(at: outputURL.deletingLastPathComponent(), includingPropertiesForKeys: nil))?
+            .filter { $0.path.hasPrefix(outputURL.deletingPathExtension().path + "_") && $0.pathExtension == "ts" } ?? []
+        
+        for segmentFile in segmentFiles {
+            try? FileManager.default.removeItem(at: segmentFile)
+        }
+        
+        // Execute fallback command
+        self.executeFFmpegCommand(command: fallbackCommand, outputURL: outputURL, resolution: resolution) { success in
+            if success {
+                print("DEBUG: [VIDEO CONVERSION] Fallback \(fallbackCodec) conversion succeeded for \(resolution)")
+            } else {
+                print("DEBUG: [VIDEO CONVERSION] Fallback \(fallbackCodec) conversion also failed for \(resolution)")
+            }
+            completion(success)
         }
     }
     

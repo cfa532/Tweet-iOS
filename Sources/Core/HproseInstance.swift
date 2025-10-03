@@ -3857,7 +3857,7 @@ final class HproseInstance: ObservableObject {
             // Check if the pending upload is too old (older than 7 days) or has too many retries
             let maxAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days
             let isTooOld = Date().timeIntervalSince(pendingUpload.timestamp) > maxAge
-            let hasTooManyRetries = pendingUpload.retryCount >= 3
+            let hasTooManyRetries = pendingUpload.retryCount >= 2
             
             if isTooOld || hasTooManyRetries {
                 print("DEBUG: Cleaning up problematic pending upload (age: \(Date().timeIntervalSince(pendingUpload.timestamp))s, retries: \(pendingUpload.retryCount))")
@@ -3931,8 +3931,8 @@ final class HproseInstance: ObservableObject {
                     }
                 }
                 
-                // Check if we've exceeded the maximum retry limit
-                let maxBackgroundRetries = 3
+                // Check if we've exceeded the maximum retry limit (2 retries = 3 total attempts)
+                let maxBackgroundRetries = 2
                 if pendingUpload.retryCount >= maxBackgroundRetries {
                     print("DEBUG: Background retry limit reached (\(pendingUpload.retryCount)/\(maxBackgroundRetries)), removing pending upload")
                     
@@ -3953,8 +3953,18 @@ final class HproseInstance: ObservableObject {
                 let newRetryCount = pendingUpload.retryCount + 1
                 print("DEBUG: Background retry attempt \(newRetryCount)/\(maxBackgroundRetries)")
                 
+                // Show toast message for retry attempt
+                await MainActor.run {
+                    let retryMessage = String(format: NSLocalizedString("Upload failed, retrying... (attempt %d of %d)", comment: "Background upload retry message"), newRetryCount, maxBackgroundRetries)
+                    NotificationCenter.default.post(
+                        name: .backgroundUploadRetrying,
+                        object: nil,
+                        userInfo: ["message": retryMessage]
+                    )
+                }
+                
                 // Add delay before background retry (exponential backoff)
-                let delay = UInt64(newRetryCount) * 2_000_000_000 // 2, 4, 6 seconds
+                let delay = UInt64(newRetryCount) * 2_000_000_000 // 2, 4 seconds
                 print("DEBUG: Background retry delay: \(delay / 1_000_000_000) seconds")
                 try? await Task.sleep(nanoseconds: delay)
                 
