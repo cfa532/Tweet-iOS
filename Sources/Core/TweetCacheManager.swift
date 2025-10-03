@@ -83,7 +83,6 @@ extension TweetCacheManager {
                             
                             // Filter out ALL private tweets in main feed (regardless of author)
                             if tweet.isPrivate == true {
-                                print("DEBUG: [TweetCacheManager] Filtering out private tweet from cache: \(tweet.mid) by user: \(tweet.authorId)")
                                 tweets.append(nil)
                                 continue
                             }
@@ -237,7 +236,6 @@ extension TweetCacheManager {
     /// Release a percentage of tweet cache to free memory
     func releasePartialCache(percentage: Int) {
         let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range
-        print("DEBUG: [TweetCacheManager] Releasing \(percentageToRemove)% of tweet cache")
         
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
@@ -254,7 +252,6 @@ extension TweetCacheManager {
                 }
                 
                 try? context.save()
-                print("DEBUG: [TweetCacheManager] Released \(tweetsToRemove.count) tweets from cache")
             }
         }
     }

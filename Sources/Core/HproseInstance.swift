@@ -42,12 +42,11 @@ final class HproseInstance: ObservableObject {
                             await MainActor.run {
                                 if refreshedUser.baseUrl != _appUser.baseUrl {
                                     _appUser.baseUrl = refreshedUser.baseUrl
-                                    print("DEBUG: [appUser getter] Updated appUser baseUrl from \(_appUser.baseUrl?.absoluteString ?? "nil") to \(refreshedUser.baseUrl?.absoluteString ?? "nil")")
                                 }
                             }
                         }
                     } catch {
-                        print("DEBUG: [appUser getter] Failed to refresh appUser: \(error)")
+                        print("ERROR: [appUser getter] Failed to refresh appUser: \(error)")
                     }
                 }
             }
@@ -111,11 +110,9 @@ final class HproseInstance: ObservableObject {
                 return try await operation()
             } catch {
                 lastError = error
-                print("DEBUG: [retryOperation] Attempt \(attempt)/\(maxRetries) failed: \(error)")
                 
                 if attempt < maxRetries {
                     let delay = baseDelay * UInt64(attempt) // Exponential backoff
-                    print("DEBUG: [retryOperation] Retrying in \(delay / 1_000_000_000) seconds...")
                     try await Task.sleep(nanoseconds: delay)
                 }
             }
@@ -408,7 +405,6 @@ final class HproseInstance: ObservableObject {
     ) async throws -> [Tweet?] {
         // If app is not initialized, only return cached tweets
         if !isInitializationComplete {
-            print("DEBUG: [fetchTweetFeed] App not initialized, returning cached tweets only for user: \(user.mid)")
             let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: pageNumber, pageSize: pageSize, currentUserId: appUser.mid)
             return cachedTweets
         }
@@ -445,15 +441,6 @@ final class HproseInstance: ObservableObject {
         let tweetsData = response["tweets"] as? [[String: Any]?] ?? []
         let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
         
-        // Debug: Log the raw server response for tweets
-        print("DEBUG: [fetchTweetFeed] Server returned \(tweetsData.count) tweets")
-        for (index, tweetDict) in tweetsData.enumerated() {
-            if let dict = tweetDict {
-                let isPrivate = dict["isPrivate"] as? Bool
-                let mid = dict["mid"] as? String ?? "unknown"
-                print("DEBUG: [fetchTweetFeed] Raw tweet \(index): mid=\(mid), isPrivate=\(isPrivate ?? false)")
-            }
-        }
         
         if entry == "update_following_tweets" {
             print("[fetchTweetFeed] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
@@ -481,12 +468,8 @@ final class HproseInstance: ObservableObject {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                     tweet.author = try await fetchUser(tweet.authorId)
                     
-                    // Debug: Log all tweets and their privacy status
-                    print("DEBUG: [fetchTweetFeed] Processing tweet: \(tweet.mid), isPrivate: \(tweet.isPrivate ?? false), authorId: \(tweet.authorId)")
-                    
                     // Skip private tweets in feed
                     if tweet.isPrivate == true {
-                        print("DEBUG: [fetchTweetFeed] Filtering out private tweet: \(tweet.mid) by user: \(tweet.authorId)")
                         tweets.append(nil)
                         continue
                     }
@@ -680,8 +663,6 @@ final class HproseInstance: ObservableObject {
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
-        print("DEBUG: [fetchUser] Starting fetch for userId: \(userId), baseUrl: \(baseUrl)")
-        
         // Step 1: Check user cache in Core Data.
         let user = User.getInstance(mid: userId)
         
@@ -701,7 +682,6 @@ final class HproseInstance: ObservableObject {
                         print("DEBUG: [fetchUser] Background update failed for userId: \(userId): \(error)")
                     }
                 }
-                
                 return cachedUser
             }
         }
@@ -709,8 +689,6 @@ final class HproseInstance: ObservableObject {
         if !user.hasExpired {
             // get cached user instance if it is not expired.
             let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
-            
-            print("DEBUG: [fetchUser] Returning cached user for userId: \(userId), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
             return cachedUser
         }
         
@@ -765,8 +743,6 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
         ]
         
-        print("DEBUG: [updateUserFromServer] Attempting to update user: \(user.mid), baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
-        
         // Call runMApp following the sample code pattern
         guard let hproseClient = user.hproseClient else {
             print("DEBUG: [updateUserFromServer] No hprose client available for user: \(user.mid), baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
@@ -801,9 +777,6 @@ final class HproseInstance: ObservableObject {
                     do {
                         // Capture the redirected IP before User.from() potentially overwrites it
                         let redirectedBaseUrl = user.baseUrl
-                        
-                        print("DEBUG: [updateUserFromServer] User data from server: name=\(newUserDict["name"] as? String ?? "nil"), username=\(newUserDict["username"] as? String ?? "nil"), mid=\(newUserDict["mid"] as? String ?? "nil")")
-                        
                         let updatedUser = try User.from(dict: newUserDict)
                         // Restore the redirected baseUrl after User.from() potentially overwrote it
                         updatedUser.baseUrl = redirectedBaseUrl
@@ -812,7 +785,6 @@ final class HproseInstance: ObservableObject {
                         
                         // Save the user with the correct redirected IP to cache
                         TweetCacheManager.shared.saveUser(updatedUser)
-                        print("DEBUG: [updateUserFromServer] Successfully updated user with redirected IP: \(updatedUser.baseUrl?.absoluteString ?? "nil")")
                     } catch {
                         print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
                     }

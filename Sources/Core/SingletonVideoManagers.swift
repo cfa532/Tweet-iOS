@@ -31,11 +31,8 @@ class DetailVideoManager: NSObject, ObservableObject {
     
     /// Set current video for detail view
     func setCurrentVideo(url: URL, mid: String, autoPlay: Bool = true) {
-        print("DEBUG: [DETAIL VIDEO MANAGER] Setting current video: \(mid), autoPlay: \(autoPlay)")
-        
         // If switching to a different video, stop the current one
         if currentVideoMid != mid {
-            print("DEBUG: [DETAIL VIDEO MANAGER] Switching from \(currentVideoMid ?? "none") to \(mid)")
             currentPlayer?.pause()
             
             // Remove KVO observer from previous player item
@@ -51,7 +48,6 @@ class DetailVideoManager: NSObject, ObservableObject {
         
         Task.detached(priority: .userInitiated) {
             do {
-                print("DEBUG: [DETAIL VIDEO MANAGER] Loading new video for shared player: \(mid)")
                 
                 // Use the exact same approach as SimpleVideoPlayer but create independent player
                 // This ensures proper asset loading while maintaining independence
@@ -61,7 +57,6 @@ class DetailVideoManager: NSObject, ObservableObject {
                 await MainActor.run {
                     // Create player only if it doesn't exist, otherwise just replace the player item
                     if self.currentPlayer == nil {
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Creating shared independent player")
                         self.currentPlayer = AVPlayer()
                     }
                     
@@ -71,8 +66,6 @@ class DetailVideoManager: NSObject, ObservableObject {
                     // Configure the player
                     self.currentPlayer?.isMuted = false // Always unmuted in detail
                     
-                    // Set up player item status monitoring
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Player item status for \(mid): \(playerItem.status.rawValue)")
                     
                     // Add KVO observer for player item status
                     playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
@@ -82,17 +75,14 @@ class DetailVideoManager: NSObject, ObservableObject {
                         if autoPlay {
                             self.currentPlayer?.play()
                             self.isPlaying = true
-                            print("DEBUG: [DETAIL VIDEO MANAGER] Started shared player for: \(mid) - player item ready immediately")
                         }
                     } else {
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Player item not ready yet for: \(mid), waiting for ready status")
                     }
                     
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Successfully loaded video for shared player: \(mid)")
                 }
             } catch {
                 await MainActor.run {
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Failed to load video: \(error)")
+                    print("ERROR: [DETAIL VIDEO MANAGER] Failed to load video: \(error)")
                 }
             }
         }
@@ -113,7 +103,6 @@ class DetailVideoManager: NSObject, ObservableObject {
         // Deactivate audio session when video is cleared
         AudioSessionManager.shared.deactivateForVideoPlayback()
         
-        print("DEBUG: [DETAIL VIDEO MANAGER] Cleared current video")
     }
     
     /// Toggle play/pause
@@ -135,14 +124,12 @@ class DetailVideoManager: NSObject, ObservableObject {
         if keyPath == "status" {
             if let playerItem = object as? AVPlayerItem {
                 if playerItem.status == .readyToPlay {
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Player item became ready to play")
                     if let player = currentPlayer, player.currentItem == playerItem {
                         player.play()
                         isPlaying = true
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Started playback after player item became ready")
                     }
                 } else if playerItem.status == .failed {
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Player item failed to load")
+                    print("ERROR: [DETAIL VIDEO MANAGER] Player item failed to load")
                 }
             }
         }
@@ -173,12 +160,10 @@ class DetailVideoManager: NSObject, ObservableObject {
     }
     
     private func handleAppWillEnterForeground() {
-        print("DEBUG: [DETAIL VIDEO MANAGER] App will enter foreground - refreshing video layer")
         refreshVideoLayer()
     }
     
     private func handleAppDidBecomeActive() {
-        print("DEBUG: [DETAIL VIDEO MANAGER] App did become active - ensuring video layer visibility")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             self.refreshVideoLayer()
         }
@@ -187,7 +172,6 @@ class DetailVideoManager: NSObject, ObservableObject {
     private func refreshVideoLayer() {
         guard let player = currentPlayer else { return }
         
-        print("DEBUG: [DETAIL VIDEO MANAGER] Refreshing video layer")
         
         // Store current state
         let wasPlaying = isPlaying
@@ -197,7 +181,6 @@ class DetailVideoManager: NSObject, ObservableObject {
         player.seek(to: currentTime) { finished in
             if finished && wasPlaying {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Resuming playback after refresh")
                     player.play()
                     self.isPlaying = true
                 }

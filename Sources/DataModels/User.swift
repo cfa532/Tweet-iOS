@@ -105,14 +105,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     public var hproseClient: HproseClient? {
         get {
             guard let baseUrl = baseUrl else { 
-                print("DEBUG: [User] hproseClient - baseUrl is nil for user: \(mid)")
                 return nil 
             }
 
             if let cached = _hproseClient {
                 return cached
             } else {
-                print("DEBUG: [User] hproseClient - Creating new client for user: \(mid), baseUrl: \(baseUrl)")
                 if baseUrl == HproseInstance.shared.appUser.baseUrl {
                     // Create a new client since the shared one is private
                     let client = HproseHttpClient()
@@ -134,7 +132,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     public var uploadClient: HproseClient? {
         get {
             guard let writableUrl = writableUrl else { 
-                print("DEBUG: uploadClient - writableUrl is nil")
                 return nil 
             }
 
@@ -150,7 +147,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     _uploadClient = client
                     return client
                 } else {
-                    print("DEBUG: uploadClient - creating client for different baseUrl")
                     let client = HproseHttpClient()
                     client.timeout = 180000
                     client.uri = "\(writableUrl)/webapi/"
@@ -246,9 +242,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     // Convert NSArray to Swift Array
                     let swiftArray = nsArray.compactMap { $0 as? String }
                     sanitizedDict[key] = swiftArray
-                    print("DEBUG: [User.from] Converted NSArray to Swift Array for key '\(key)': \(swiftArray)")
                 } else if !JSONSerialization.isValidJSONObject([key: value]) {
-                    print("DEBUG: [User.from] Non-JSON-serializable value for key '\(key)': \(value) (type: \(type(of: value)))")
                 }
             }
             
@@ -267,20 +261,18 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 User.userInstances[decodedUser.mid]!
             }
         } catch {
-            print("DEBUG: [User.from] Error decoding user dict: \(dict)")
-            print("DEBUG: [User.from] Error details: \(error)")
             if let decodingError = error as? DecodingError {
                 switch decodingError {
                 case .keyNotFound(let key, let context):
-                    print("DEBUG: [User.from] Missing key '\(key)' at path: \(context.codingPath)")
+                    print("ERROR: [User.from] Missing key '\(key)' at path: \(context.codingPath)")
                 case .typeMismatch(let type, let context):
-                    print("DEBUG: [User.from] Type mismatch for type '\(type)' at path: \(context.codingPath)")
+                    print("ERROR: [User.from] Type mismatch for type '\(type)' at path: \(context.codingPath)")
                 case .valueNotFound(let type, let context):
-                    print("DEBUG: [User.from] Value not found for type '\(type)' at path: \(context.codingPath)")
+                    print("ERROR: [User.from] Value not found for type '\(type)' at path: \(context.codingPath)")
                 case .dataCorrupted(let context):
-                    print("DEBUG: [User.from] Data corrupted at path: \(context.codingPath)")
+                    print("ERROR: [User.from] Data corrupted at path: \(context.codingPath)")
                 @unknown default:
-                    print("DEBUG: [User.from] Unknown decoding error")
+                    print("ERROR: [User.from] Unknown decoding error")
                 }
             }
             throw NSError(domain: "User", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot decode dict to user: \(error.localizedDescription)"])

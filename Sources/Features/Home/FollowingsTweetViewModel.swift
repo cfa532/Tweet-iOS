@@ -54,12 +54,10 @@ class FollowingsTweetViewModel: ObservableObject {
             )
             let filteredTweets = serverTweets.compactMap{ $0 }
             
-            // Debug: Log all tweets and their privacy status
-            print("DEBUG: [FollowingsTweetViewModel] Processing \(filteredTweets.count) tweets from server")
+            // Check for any private tweets that might have slipped through
             for tweet in filteredTweets {
-                print("DEBUG: [FollowingsTweetViewModel] Tweet: \(tweet.mid), isPrivate: \(tweet.isPrivate ?? false), authorId: \(tweet.authorId)")
                 if tweet.isPrivate == true {
-                    print("DEBUG: [FollowingsTweetViewModel] WARNING: Private tweet found in feed: \(tweet.mid) by user: \(tweet.authorId)")
+                    print("WARNING: [FollowingsTweetViewModel] Private tweet found in feed: \(tweet.mid) by user: \(tweet.authorId)")
                 }
             }
             
@@ -104,7 +102,6 @@ class FollowingsTweetViewModel: ObservableObject {
                 
                 // Cache the new tweet so it persists across app restarts
                 TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
-                print("DEBUG: [FollowingsTweetViewModel] Cached new tweet: \(tweet.mid)")
             }
         }
     }
