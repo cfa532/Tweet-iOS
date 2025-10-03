@@ -142,8 +142,6 @@ struct SimpleVideoPlayer: View {
                                 .background(Color.black)
                         }
                     }
-                    
-                    
                 }
             } else {
                 // Fallback when no aspect ratio is available
@@ -170,12 +168,23 @@ struct SimpleVideoPlayer: View {
             // Only set up player if both conditions are met
             if player == nil && shouldLoadVideo && isVisible {
                 setupPlayer()
+            } else if player != nil && mode == .mediaCell {
+                // For MediaCell mode, if player already exists, restore cached state and check playback conditions
+                restoreCachedVideoState()
+                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             }
         }
         .onDisappear {
             // Handle idle timer for fullscreen modes
             if mode == .mediaBrowser {
                 UIApplication.shared.isIdleTimerDisabled = false
+                
+                // Before exiting full screen, restore the mute state to global mute state
+                // This ensures the player instance is properly muted when returning to MediaCell
+                if let player = player {
+                    player.isMuted = MuteState.shared.isMuted
+                    print("DEBUG: [VIDEO DISAPPEAR] Restored mute state to global state (\(MuteState.shared.isMuted)) before exiting full screen")
+                }
             }
             
             // Remove observers to prevent memory leaks
@@ -194,8 +203,12 @@ struct SimpleVideoPlayer: View {
                     originalMuteState: originalMuteState
                 )
             }
-            // Always pause when view disappears
-            player?.pause()
+            
+            // Only pause when view disappears if it's not a full screen mode
+            // For full screen mode, we want the video to continue playing when returning to MediaCell
+            if mode != .mediaBrowser {
+                player?.pause()
+            }
         }
         .onChange(of: isMuted) { _, newMuteState in
             // For full screen modes, always keep unmuted regardless of the isMuted parameter
@@ -723,19 +736,50 @@ struct SimpleVideoPlayer: View {
             // Activate audio session for video playback
             AudioSessionManager.shared.activateForVideoPlayback()
             
-            if hasFinishedPlaying {
-                if !disableAutoRestart {
-                    // Reset to beginning and play
-                    player?.seek(to: .zero)
-                    hasFinishedPlaying = false
-                    player?.play()
+            // For full screen mode, always restart from beginning if video is at end
+            if mode == .mediaBrowser {
+                if hasFinishedPlaying || isVideoAtEnd(player!) {
+                    print("DEBUG: [VIDEO FULLSCREEN] Video is at end, restarting from beginning for \(mid)")
+                    player?.seek(to: .zero) { finished in
+                        if finished {
+                            self.hasFinishedPlaying = false
+                            player?.play()
+                        }
+                    }
                 } else {
-                    // Don't restart, keep the finished state
+                    player?.play()
                 }
             } else {
-                player?.play()
+                // Normal mode logic
+                if hasFinishedPlaying {
+                    if !disableAutoRestart {
+                        // Reset to beginning and play
+                        player?.seek(to: .zero)
+                        hasFinishedPlaying = false
+                        player?.play()
+                    } else {
+                        // Don't restart, keep the finished state
+                    }
+                } else {
+                    player?.play()
+                }
             }
         }
+    }
+    
+    private func isVideoAtEnd(_ player: AVPlayer) -> Bool {
+        guard let playerItem = player.currentItem else { return false }
+        
+        let currentTime = player.currentTime()
+        let duration = playerItem.duration
+        
+        // Check if current time is very close to the end (within 0.1 seconds)
+        if duration.isValid && !duration.isIndefinite {
+            let timeDifference = CMTimeSubtract(duration, currentTime)
+            return CMTimeCompare(timeDifference, CMTime(seconds: 0.1, preferredTimescale: duration.timescale)) <= 0
+        }
+        
+        return false
     }
     
     private func retryLoad() {
