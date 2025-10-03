@@ -81,9 +81,9 @@ extension TweetCacheManager {
                                 continue
                             }
                             
-                            // Filter out private tweets if they don't belong to the current user
-                            if let currentUserId = currentUserId,
-                               tweet.isPrivate == true && tweet.authorId != currentUserId {
+                            // Filter out ALL private tweets in main feed (regardless of author)
+                            if tweet.isPrivate == true {
+                                print("DEBUG: [TweetCacheManager] Filtering out private tweet from cache: \(tweet.mid) by user: \(tweet.authorId)")
                                 tweets.append(nil)
                                 continue
                             }

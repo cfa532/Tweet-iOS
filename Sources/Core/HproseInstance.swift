@@ -445,6 +445,16 @@ final class HproseInstance: ObservableObject {
         let tweetsData = response["tweets"] as? [[String: Any]?] ?? []
         let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
         
+        // Debug: Log the raw server response for tweets
+        print("DEBUG: [fetchTweetFeed] Server returned \(tweetsData.count) tweets")
+        for (index, tweetDict) in tweetsData.enumerated() {
+            if let dict = tweetDict {
+                let isPrivate = dict["isPrivate"] as? Bool
+                let mid = dict["mid"] as? String ?? "unknown"
+                print("DEBUG: [fetchTweetFeed] Raw tweet \(index): mid=\(mid), isPrivate=\(isPrivate ?? false)")
+            }
+        }
+        
         if entry == "update_following_tweets" {
             print("[fetchTweetFeed] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
         }
@@ -471,8 +481,12 @@ final class HproseInstance: ObservableObject {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                     tweet.author = try await fetchUser(tweet.authorId)
                     
+                    // Debug: Log all tweets and their privacy status
+                    print("DEBUG: [fetchTweetFeed] Processing tweet: \(tweet.mid), isPrivate: \(tweet.isPrivate ?? false), authorId: \(tweet.authorId)")
+                    
                     // Skip private tweets in feed
                     if tweet.isPrivate == true {
+                        print("DEBUG: [fetchTweetFeed] Filtering out private tweet: \(tweet.mid) by user: \(tweet.authorId)")
                         tweets.append(nil)
                         continue
                     }

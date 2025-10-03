@@ -53,6 +53,16 @@ class FollowingsTweetViewModel: ObservableObject {
                 pageSize: pageSize
             )
             let filteredTweets = serverTweets.compactMap{ $0 }
+            
+            // Debug: Log all tweets and their privacy status
+            print("DEBUG: [FollowingsTweetViewModel] Processing \(filteredTweets.count) tweets from server")
+            for tweet in filteredTweets {
+                print("DEBUG: [FollowingsTweetViewModel] Tweet: \(tweet.mid), isPrivate: \(tweet.isPrivate ?? false), authorId: \(tweet.authorId)")
+                if tweet.isPrivate == true {
+                    print("DEBUG: [FollowingsTweetViewModel] WARNING: Private tweet found in feed: \(tweet.mid) by user: \(tweet.authorId)")
+                }
+            }
+            
             await MainActor.run {
                 tweets.mergeTweets(filteredTweets)
             }
