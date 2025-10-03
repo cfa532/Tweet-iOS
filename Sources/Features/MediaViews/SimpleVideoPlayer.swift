@@ -340,6 +340,37 @@ struct SimpleVideoPlayer: View {
                 loadFailed = false
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            // Handle orientation changes - ensure videos stay unmuted and playing in full screen mode
+            if let player = player {
+                if mode == .mediaBrowser {
+                    // Always keep unmuted in full screen mode during orientation changes
+                    player.isMuted = false
+                    print("DEBUG: [VIDEO ORIENTATION] Forced unmuted for full screen mode during orientation change")
+                    
+                    // Maintain current play status during orientation change
+                    let currentRate = player.rate
+                    if currentRate > 0 {
+                        // Video was playing, ensure it continues playing after rotation
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            player.play()
+                            print("DEBUG: [VIDEO ORIENTATION] Resumed playback after orientation change")
+                        }
+                    }
+                    
+                    // Add additional delayed checks to ensure state persists
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        if let player = self.player, self.mode == .mediaBrowser {
+                            player.isMuted = false
+                            if player.rate == 0 && self.isVisible && self.currentAutoPlay {
+                                player.play()
+                                print("DEBUG: [VIDEO ORIENTATION] Re-enforced playback after 0.3s delay")
+                            }
+                        }
+                    }
+                }
+            }
+        }
         .onTapGesture {
             if let onVideoTap = onVideoTap {
                 onVideoTap()

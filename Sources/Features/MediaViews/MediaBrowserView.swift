@@ -183,6 +183,18 @@ struct MediaBrowserView: View {
                 
                 previousIndex = currentIndex
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+                // Handle orientation changes in full screen mode
+                print("DEBUG: [MediaBrowserView] Orientation changed in full screen mode")
+                
+                // Ensure the current video continues playing after orientation change
+                // This helps prevent videos from getting paused during rotation
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    // Post a notification to ensure videos stay playing
+                    NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
+                    print("DEBUG: [MediaBrowserView] Posted appDidBecomeActive notification after orientation change")
+                }
+            }
             .onDisappear {
                 isVisible = false
                 UIApplication.shared.isIdleTimerDisabled = false
