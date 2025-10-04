@@ -1,4 +1,5 @@
 ${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks.sh
+${BUILT_PRODUCTS_DIR}/CachingPlayerItem/CachingPlayerItem.framework
 ${BUILT_PRODUCTS_DIR}/SDWebImage/SDWebImage.framework
 ${BUILT_PRODUCTS_DIR}/SDWebImageSwiftUI/SDWebImageSwiftUI.framework
 ${BUILT_PRODUCTS_DIR}/hprose/hprose.framework

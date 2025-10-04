@@ -272,27 +272,52 @@ class SharedAssetCache: ObservableObject {
         return player
     }
     
-    /// Resolve HLS URL if needed
+    /// Resolve HLS URL with specific fallback strategy
     private func resolveHLSURL(_ url: URL) async -> URL {
         let urlString = url.absoluteString
         
         // If already an m3u8 file, return as-is
-        if urlString.hasSuffix(".m3u8") || urlString.hasSuffix(".mp4") {
+        if urlString.hasSuffix(".m3u8") {
             return url
         }
         
-        // Try to find HLS playlist with shorter timeout
+        // If it's a progressive video (mp4), return as-is - no HLS resolution needed
+        if urlString.hasSuffix(".mp4") {
+            return url
+        }
+        
+        // HLS fallback strategy: master.m3u8 -> playlist.m3u8 -> retry once -> fail
         let masterURL = url.appendingPathComponent("master.m3u8")
         let playlistURL = url.appendingPathComponent("playlist.m3u8")
         
-        // Use shorter timeout to prevent blocking
+        print("DEBUG: [SharedAssetCache] Resolving HLS URL: \(url.absoluteString)")
+        
+        // First attempt: try master.m3u8, then playlist.m3u8
         if await urlExists(masterURL, timeout: 3.0) {
+            print("DEBUG: [SharedAssetCache] Found master.m3u8 at: \(masterURL.absoluteString)")
             return masterURL
         }
         
         if await urlExists(playlistURL, timeout: 3.0) {
+            print("DEBUG: [SharedAssetCache] Found playlist.m3u8 at: \(playlistURL.absoluteString)")
             return playlistURL
         }
+        
+        // Second attempt: retry the combo once more
+        print("DEBUG: [SharedAssetCache] First attempt failed, retrying HLS URLs...")
+        
+        if await urlExists(masterURL, timeout: 3.0) {
+            print("DEBUG: [SharedAssetCache] Retry successful - found master.m3u8 at: \(masterURL.absoluteString)")
+            return masterURL
+        }
+        
+        if await urlExists(playlistURL, timeout: 3.0) {
+            print("DEBUG: [SharedAssetCache] Retry successful - found playlist.m3u8 at: \(playlistURL.absoluteString)")
+            return playlistURL
+        }
+        
+        // If both attempts fail, return original URL and let it fail
+        print("DEBUG: [SharedAssetCache] HLS resolution failed for: \(url.absoluteString)")
         return url
     }
     

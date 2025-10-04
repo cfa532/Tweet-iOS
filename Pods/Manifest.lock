@@ -1,4 +1,5 @@
 PODS:
+  - CachingPlayerItem (2.1.0)
   - ffmpeg-kit-ios (6.0.1)
   - hprose (2.0.3)
   - SDWebImage (5.21.1):
@@ -8,6 +9,7 @@ PODS:
     - SDWebImage (~> 5.10)
 
 DEPENDENCIES:
+  - CachingPlayerItem (from `/Users/cfa532/Documents/GitHub/CachingPlayerItem`)
   - ffmpeg-kit-ios (~> 6.0)
   - hprose (= 2.0.3)
   - SDWebImageSwiftUI (~> 3.1.3)
@@ -19,12 +21,17 @@ SPEC REPOS:
     - SDWebImage
     - SDWebImageSwiftUI
 
+EXTERNAL SOURCES:
+  CachingPlayerItem:
+    :path: "/Users/cfa532/Documents/GitHub/CachingPlayerItem"
+
 SPEC CHECKSUMS:
+  CachingPlayerItem: 6bde08e430aaea51b65cf6b460f0e1497644113a
   ffmpeg-kit-ios: d231b780229993a1c4cc58b709634db6fa87c50a
   hprose: 8b021625ba6ce9e4e2ae8eeb7170be89bf5ffc1a
   SDWebImage: f29024626962457f3470184232766516dee8dfea
   SDWebImageSwiftUI: a6d7129fb68fc18c8b930b869ddcfce314e49ded
 
-PODFILE CHECKSUM: 94bae43b5bdff5b399584f563c5cdaa22192b8d7
+PODFILE CHECKSUM: 829b6fa813a2fdd0437921f7e93faa3edbde9120
 
 COCOAPODS: 1.16.2

@@ -5,6 +5,9 @@ target 'Tweet' do
   pod 'hprose', '2.0.3'
   pod 'SDWebImageSwiftUI', '~> 3.1.3'
   pod 'ffmpeg-kit-ios', '~> 6.0'
+  
+  # Local CachingPlayerItem with HLS support
+  pod 'CachingPlayerItem', :path => '/Users/cfa532/Documents/GitHub/CachingPlayerItem'
 end
 
 post_install do |installer|
