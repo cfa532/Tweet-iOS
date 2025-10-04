@@ -285,8 +285,8 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Get cached player or create new one with asset
-    @MainActor func getOrCreatePlayer(for url: URL, tweetId: String? = nil) async throws -> AVPlayer {
-        print("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString)")
+    @MainActor func getOrCreatePlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
+        print("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaType: \(mediaType?.rawValue ?? "nil")")
         
         // Try to get cached player first
         if let cachedPlayer = getCachedPlayer(for: url) {
@@ -294,11 +294,19 @@ class SharedAssetCache: ObservableObject {
             return cachedPlayer
         }
         
-        // Check if this is an HLS video
-        let urlString = url.absoluteString
-        print("DEBUG: [SHARED ASSET CACHE] Checking URL type - hasSuffix(.m3u8): \(urlString.hasSuffix(".m3u8")), contains(/ipfs/): \(urlString.contains("/ipfs/"))")
+        // Use MediaType to determine video type if available, otherwise fall back to URL-based detection
+        let isHLSVideo: Bool
+        if let mediaType = mediaType {
+            isHLSVideo = (mediaType == .hls_video)
+            print("DEBUG: [SHARED ASSET CACHE] Using MediaType to determine video type - isHLSVideo: \(isHLSVideo)")
+        } else {
+            // Fallback to URL-based detection for backward compatibility
+            let urlString = url.absoluteString
+            isHLSVideo = urlString.hasSuffix(".m3u8")
+            print("DEBUG: [SHARED ASSET CACHE] Using URL-based detection - hasSuffix(.m3u8): \(isHLSVideo)")
+        }
         
-        if urlString.hasSuffix(".m3u8") || urlString.contains("/ipfs/") {
+        if isHLSVideo {
             // Use CachingPlayerItem for HLS videos
             print("DEBUG: [SHARED ASSET CACHE] Using CachingPlayerItem for HLS video: \(url.absoluteString)")
             return try await createCachingPlayer(for: url, tweetId: tweetId)

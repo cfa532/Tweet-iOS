@@ -354,6 +354,7 @@ struct MediaCell: View, Equatable {
                 url: url,
                 mid: attachment.mid,
                 isVisible: isVisible,
+                mediaType: attachment.type,
                 autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
                 videoManager: videoManager,
                 onVideoFinished: onVideoFinished,

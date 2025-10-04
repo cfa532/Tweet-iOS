@@ -48,6 +48,7 @@ struct SimpleVideoPlayer: View {
     let url: URL
     let mid: String
     let isVisible: Bool
+    let mediaType: MediaType // Add MediaType parameter
     
     // MARK: Optional Parameters
     var autoPlay: Bool = true
@@ -511,7 +512,7 @@ struct SimpleVideoPlayer: View {
                     try await Task.sleep(nanoseconds: UInt64(currentRetryCount * 50_000_000)) // 0.05s delay per retry
                 }
                 
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid)
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
                 await MainActor.run {
                     configurePlayer(newPlayer)
                 }
