@@ -286,7 +286,8 @@ class SharedAssetCache: ObservableObject {
     
     /// Get cached player or create new one with asset
     @MainActor func getOrCreatePlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
-        print("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaType: \(mediaType?.rawValue ?? "nil")")
+        NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaType: \(mediaType?.rawValue ?? "nil")")
+        NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for tweetId: \(tweetId ?? "nil")")
         
         // Try to get cached player first
         if let cachedPlayer = getCachedPlayer(for: url) {
@@ -308,11 +309,11 @@ class SharedAssetCache: ObservableObject {
         
         if isHLSVideo {
             // Use CachingPlayerItem for HLS videos
-            print("DEBUG: [SHARED ASSET CACHE] Using CachingPlayerItem for HLS video: \(url.absoluteString)")
+            NSLog("DEBUG: [SHARED ASSET CACHE] Using CachingPlayerItem for HLS video: \(url.absoluteString)")
             return try await createCachingPlayer(for: url, tweetId: tweetId)
         } else {
             // Use regular AVPlayerItem for progressive videos
-            print("DEBUG: [SHARED ASSET CACHE] Using regular AVPlayerItem for progressive video: \(url.absoluteString)")
+            NSLog("DEBUG: [SHARED ASSET CACHE] Using regular AVPlayerItem for progressive video: \(url.absoluteString)")
             let asset = try await getAsset(for: url, tweetId: tweetId)
             let playerItem = AVPlayerItem(asset: asset)
             let player = AVPlayer(playerItem: playerItem)
@@ -326,7 +327,7 @@ class SharedAssetCache: ObservableObject {
     
     /// Create CachingPlayerItem for HLS videos
     private func createCachingPlayer(for url: URL, tweetId: String?) async throws -> AVPlayer {
-        print("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for HLS video: \(url.absoluteString)")
+        NSLog("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for HLS video: \(url.absoluteString)")
         
         // Extract media ID from URL for caching
         let mediaID = extractMediaID(from: url) ?? UUID().uuidString

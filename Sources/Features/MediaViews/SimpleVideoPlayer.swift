@@ -512,7 +512,9 @@ struct SimpleVideoPlayer: View {
                     try await Task.sleep(nanoseconds: UInt64(currentRetryCount * 50_000_000)) // 0.05s delay per retry
                 }
                 
+                NSLog("DEBUG: [SimpleVideoPlayer] About to call SharedAssetCache.getOrCreatePlayer for \(mid) with mediaType: \(mediaType.rawValue)")
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
+                NSLog("DEBUG: [SimpleVideoPlayer] SharedAssetCache.getOrCreatePlayer completed for \(mid)")
                 await MainActor.run {
                     configurePlayer(newPlayer)
                 }
