@@ -8,11 +8,40 @@
 import Foundation
 import AVFoundation
 import UIKit
+import CachingPlayerItem
 
 /// Shared asset cache for video players with background loading and priority management
 @MainActor
 class SharedAssetCache: ObservableObject {
     static let shared = SharedAssetCache()
+    
+    // MARK: - CachingPlayerItem Delegate
+    private class CachingPlayerItemDelegateImpl: NSObject, CachingPlayerItemDelegate {
+        func playerItem(_ playerItem: CachingPlayerItem, didFinishDownloadingFileAt filePath: String) {
+            print("DEBUG: [CachingPlayerItem] Finished downloading file at: \(filePath)")
+        }
+        
+        func playerItem(_ playerItem: CachingPlayerItem, didDownloadBytesSoFar bytesDownloaded: Int, outOf bytesExpected: Int) {
+            let progress = bytesExpected > 0 ? Double(bytesDownloaded) / Double(bytesExpected) * 100 : 0
+            print("DEBUG: [CachingPlayerItem] Download progress: \(String(format: "%.1f", progress))% (\(bytesDownloaded)/\(bytesExpected) bytes)")
+        }
+        
+        func playerItem(_ playerItem: CachingPlayerItem, downloadingFailedWith error: Error) {
+            print("DEBUG: [CachingPlayerItem] Download failed: \(error)")
+        }
+        
+        func playerItemReadyToPlay(_ playerItem: CachingPlayerItem) {
+            print("DEBUG: [CachingPlayerItem] Player item ready to play")
+        }
+        
+        func playerItemDidFailToPlay(_ playerItem: CachingPlayerItem, withError error: Error?) {
+            print("DEBUG: [CachingPlayerItem] Player item failed to play: \(error?.localizedDescription ?? "Unknown error")")
+        }
+        
+        func playerItemPlaybackStalled(_ playerItem: CachingPlayerItem) {
+            print("DEBUG: [CachingPlayerItem] Player item playback stalled")
+        }
+    }
     
     private init() {
         // Start background cleanup timer
@@ -32,6 +61,7 @@ class SharedAssetCache: ObservableObject {
     private var assetCache: [String: AVAsset] = [:]
     private var playerCache: [String: AVPlayer] = [:]
     private var cacheTimestamps: [String: Date] = [:]
+    private var cachingPlayerDelegates: [String: CachingPlayerItemDelegateImpl] = [:] // URL -> Delegate
     private var loadingTasks: [String: Task<AVAsset, Error>] = [:]
     private var preloadTasks: [String: Task<Void, Never>] = [:]
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of URLs
@@ -256,20 +286,101 @@ class SharedAssetCache: ObservableObject {
     
     /// Get cached player or create new one with asset
     @MainActor func getOrCreatePlayer(for url: URL, tweetId: String? = nil) async throws -> AVPlayer {
+        print("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString)")
+        
         // Try to get cached player first
         if let cachedPlayer = getCachedPlayer(for: url) {
+            print("DEBUG: [SHARED ASSET CACHE] Returning cached player for URL: \(url.absoluteString)")
             return cachedPlayer
         }
         
-        // Create new player with asset
-        let asset = try await getAsset(for: url, tweetId: tweetId)
-        let playerItem = AVPlayerItem(asset: asset)
-        let player = AVPlayer(playerItem: playerItem)
+        // Check if this is an HLS video
+        let urlString = url.absoluteString
+        print("DEBUG: [SHARED ASSET CACHE] Checking URL type - hasSuffix(.m3u8): \(urlString.hasSuffix(".m3u8")), contains(/ipfs/): \(urlString.contains("/ipfs/"))")
+        
+        if urlString.hasSuffix(".m3u8") || urlString.contains("/ipfs/") {
+            // Use CachingPlayerItem for HLS videos
+            print("DEBUG: [SHARED ASSET CACHE] Using CachingPlayerItem for HLS video: \(url.absoluteString)")
+            return try await createCachingPlayer(for: url, tweetId: tweetId)
+        } else {
+            // Use regular AVPlayerItem for progressive videos
+            print("DEBUG: [SHARED ASSET CACHE] Using regular AVPlayerItem for progressive video: \(url.absoluteString)")
+            let asset = try await getAsset(for: url, tweetId: tweetId)
+            let playerItem = AVPlayerItem(asset: asset)
+            let player = AVPlayer(playerItem: playerItem)
+            
+            // Cache the player for future use
+            cachePlayer(player, for: url)
+            
+            return player
+        }
+    }
+    
+    /// Create CachingPlayerItem for HLS videos
+    private func createCachingPlayer(for url: URL, tweetId: String?) async throws -> AVPlayer {
+        print("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for HLS video: \(url.absoluteString)")
+        
+        // Extract media ID from URL for caching
+        let mediaID = extractMediaID(from: url) ?? UUID().uuidString
+        
+        // Resolve the HLS URL to get the actual playlist URL (master.m3u8 or playlist.m3u8)
+        let resolvedURL = await resolveHLSURL(url)
+        print("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL for CachingPlayerItem: \(resolvedURL.absoluteString)")
+        
+        // Start the local HTTP server if not already running
+        LocalHTTPServerWrapper.shared.start()
+        
+        // Create a unique save path for the HLS playlist
+        let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
+        
+        // Register this media with the HTTP server
+        LocalHTTPServerWrapper.shared.registerMedia(mediaID: mediaID, cachePath: savePath)
+        
+        // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
+        let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
+        
+        // Create and store delegate for caching events
+        let delegate = CachingPlayerItemDelegateImpl()
+        cachingPlayerItem.delegate = delegate
+        
+        // Store the delegate to prevent deallocation
+        let cacheKey = url.absoluteString
+        cachingPlayerDelegates[cacheKey] = delegate
+        
+        // Create player with CachingPlayerItem
+        let player = AVPlayer(playerItem: cachingPlayerItem)
         
         // Cache the player for future use
         cachePlayer(player, for: url)
         
         return player
+    }
+    
+    /// Extract media ID from URL
+    private func extractMediaID(from url: URL) -> String? {
+        let urlString = url.absoluteString
+        
+        // Extract IPFS hash from URL
+        if let ipfsRange = urlString.range(of: "/ipfs/") {
+            let afterIpfs = String(urlString[ipfsRange.upperBound...])
+            if let slashRange = afterIpfs.range(of: "/") {
+                return String(afterIpfs[..<slashRange.lowerBound])
+            } else {
+                return afterIpfs
+            }
+        }
+        
+        // Extract from m3u8 URLs
+        if urlString.contains(".m3u8") {
+            let components = urlString.components(separatedBy: "/")
+            for component in components {
+                if component.hasPrefix("Qm") && component.count > 20 {
+                    return component
+                }
+            }
+        }
+        
+        return nil
     }
     
     /// Resolve HLS URL with specific fallback strategy
@@ -339,6 +450,7 @@ class SharedAssetCache: ObservableObject {
         assetCache.removeAll()
         playerCache.removeAll()
         cacheTimestamps.removeAll()
+        cachingPlayerDelegates.removeAll()
         loadingTasks.values.forEach { $0.cancel() }
         loadingTasks.removeAll()
         preloadTasks.values.forEach { $0.cancel() }
@@ -354,6 +466,7 @@ class SharedAssetCache: ObservableObject {
             player.pause()
         }
         playerCache.removeAll()
+        cachingPlayerDelegates.removeAll()
         
         // Clear asset cache
         assetCache.removeAll()

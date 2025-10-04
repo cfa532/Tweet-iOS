@@ -76,6 +76,7 @@
 		46B03D892E488EC0000E08DF /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D882E488EC0000E08DF /* CameraView.swift */; };
 		46B03D8B2E48D760000E08DF /* MediaPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D8A2E48D760000E08DF /* MediaPicker.swift */; };
 		46B03D912E49E35E000E08DF /* SharedAssetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D902E49E35B000E08DF /* SharedAssetCache.swift */; };
+		F35E8374EAF14B479961EADF /* LocalHTTPServerWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D8D1E68AE324B8CAF06915F /* LocalHTTPServerWrapper.swift */; };
 		46B03D972E4C44E2000E08DF /* DebounceButtonWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D962E4C44E2000E08DF /* DebounceButtonWrapper.swift */; };
 		46B03D992E4C56C2000E08DF /* HapticButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */; };
 		46B03D9B2E4D7336000E08DF /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D9A2E4D7336000E08DF /* NotificationManager.swift */; };
@@ -186,6 +187,7 @@
 		46B03D882E488EC0000E08DF /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		46B03D8A2E48D760000E08DF /* MediaPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPicker.swift; sourceTree = "<group>"; };
 		46B03D902E49E35B000E08DF /* SharedAssetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedAssetCache.swift; sourceTree = "<group>"; };
+		5D8D1E68AE324B8CAF06915F /* LocalHTTPServerWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServerWrapper.swift; sourceTree = "<group>"; };
 		46B03D962E4C44E2000E08DF /* DebounceButtonWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceButtonWrapper.swift; sourceTree = "<group>"; };
 		46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticButtonStyle.swift; sourceTree = "<group>"; };
 		46B03D9A2E4D7336000E08DF /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
@@ -317,6 +319,7 @@
 				46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */,
 				68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */,
 				46B03D902E49E35B000E08DF /* SharedAssetCache.swift */,
+				5D8D1E68AE324B8CAF06915F /* LocalHTTPServerWrapper.swift */,
 				4614381C2E3F69AD002D1B22 /* CoreDataManager.swift */,
 				4614381A2E3F5E97002D1B22 /* BlackList.swift */,
 				461438162E3E426A002D1B22 /* ChatCacheManager.swift */,
@@ -717,6 +720,7 @@
 				46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */,
 				468CF20E2E39AF3A00D49038 /* ChatRepository.swift in Sources */,
 				46B03D912E49E35E000E08DF /* SharedAssetCache.swift in Sources */,
+				F35E8374EAF14B479961EADF /* LocalHTTPServerWrapper.swift in Sources */,
 				46E5B34B2DDC155600AEF31F /* MediaCell.swift in Sources */,
 				46A8F6842E52BDDC0050F4A0 /* ProfileEditView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */,
