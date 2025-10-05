@@ -116,14 +116,18 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             do {
                 let cachedData = try Data(contentsOf: URL(fileURLWithPath: cachePath))
                 
-                // Create minimal response that AVPlayer expects for HLS playlists
-                let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
-                    "Content-Type": "application/vnd.apple.mpegurl",
-                    "Content-Length": "\(cachedData.count)"
-                ])
-                loadingRequest.response = response
-                loadingRequest.dataRequest?.respond(with: cachedData)
-                loadingRequest.finishLoading()
+                // TODO: Redirect to LocalHTTPServer instead of serving data directly
+                // let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
+                // if let localURL = localURL {
+                //     let redirectResponse = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                //         "Location": localURL.absoluteString
+                //     ])
+                //     loadingRequest.response = redirectResponse
+                //     loadingRequest.finishLoading()
+                //     
+                //     NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Redirecting to LocalHTTPServer: \(localURL.absoluteString)")
+                //     return true
+                // }
                 
                 return true
             } catch {
@@ -173,14 +177,17 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 self.downloadHLSSegments(segments, baseURL: baseURL)
             }
             
-            // Create minimal response that AVPlayer expects for HLS playlists
-            let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
-                "Content-Type": "application/vnd.apple.mpegurl",
-                "Content-Length": "\(modifiedPlaylistData.count)"
-            ])
-            loadingRequest.response = response
-            loadingRequest.dataRequest?.respond(with: modifiedPlaylistData)
-            loadingRequest.finishLoading()
+            // TODO: Redirect to LocalHTTPServer instead of serving data directly
+            // let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
+            // if let localURL = localURL {
+            //     let redirectResponse = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+            //         "Location": localURL.absoluteString
+            //     ])
+            //     loadingRequest.response = redirectResponse
+            //     loadingRequest.finishLoading()
+            //     
+            //     NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Redirecting to LocalHTTPServer: \(localURL.absoluteString)")
+            // }
         }
         
         task.resume()
@@ -209,11 +216,21 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 } else {
                     NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Serving cached segment from \(cachePath) (size: \(cachedData.count) bytes)")
                     
-                    // Try using NSURLResponse instead of HTTPURLResponse
-                    let response = URLResponse(url: requestURL, mimeType: "video/mp2t", expectedContentLength: cachedData.count, textEncodingName: nil)
-                    loadingRequest.response = response
-                    loadingRequest.dataRequest?.respond(with: cachedData)
-                    loadingRequest.finishLoading()
+                    // TODO: Redirect to LocalHTTPServer instead of serving data directly
+                    // let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
+                    // if let localURL = localURL {
+                    //     let segmentName = url.lastPathComponent
+                    //     let redirectURL = localURL.appendingPathComponent(segmentName)
+                    //     
+                    //     let redirectResponse = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                    //         "Location": redirectURL.absoluteString
+                    //     ])
+                    //     loadingRequest.response = redirectResponse
+                    //     loadingRequest.finishLoading()
+                    //     
+                    //     NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirecting to LocalHTTPServer: \(redirectURL.absoluteString)")
+                    //     return true
+                    // }
                     
                     return true
                 }
@@ -250,11 +267,20 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Failed to cache segment: \(error.localizedDescription)")
             }
             
-            // Try using NSURLResponse instead of HTTPURLResponse
-            let response = URLResponse(url: requestURL, mimeType: "video/mp2t", expectedContentLength: data.count, textEncodingName: nil)
-            loadingRequest.response = response
-            loadingRequest.dataRequest?.respond(with: data)
-            loadingRequest.finishLoading()
+            // TODO: Redirect to LocalHTTPServer instead of serving data directly
+            // let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
+            // if let localURL = localURL {
+            //     let segmentName = url.lastPathComponent
+            //     let redirectURL = localURL.appendingPathComponent(segmentName)
+            //     
+            //     let redirectResponse = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+            //         "Location": redirectURL.absoluteString
+            //     ])
+            //     loadingRequest.response = redirectResponse
+            //     loadingRequest.finishLoading()
+            //     
+            //     NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirecting to LocalHTTPServer: \(redirectURL.absoluteString)")
+            // }
         }
         
         task.resume()

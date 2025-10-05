@@ -30,6 +30,8 @@
 		4612ED212E924A18005D5B8B /* ResourceLoaderDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED182E924A18005D5B8B /* ResourceLoaderDelegate.swift */; };
 		4612ED222E924A18005D5B8B /* MediaFileHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED162E924A18005D5B8B /* MediaFileHandle.swift */; };
 		4612ED232E924A18005D5B8B /* PendingRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED172E924A18005D5B8B /* PendingRequest.swift */; };
+		4612ED242E924A18005D5B8B /* CachingPlayerItem in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED1B2E924A18005D5B8B /* CachingPlayerItem */; };
+		4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED242E925803005D5B8B /* LocalHTTPServer.swift */; };
 		461438172E3E426A002D1B22 /* ChatCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438162E3E426A002D1B22 /* ChatCacheManager.swift */; };
 		461438192E3EEE2D002D1B22 /* MimeiId.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438182E3EEE2D002D1B22 /* MimeiId.swift */; };
 		4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4614381A2E3F5E97002D1B22 /* BlackList.swift */; };
@@ -147,6 +149,7 @@
 		4612ED182E924A18005D5B8B /* ResourceLoaderDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceLoaderDelegate.swift; sourceTree = "<group>"; };
 		4612ED192E924A18005D5B8B /* URLExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLExtension.swift; sourceTree = "<group>"; };
 		4612ED1A2E924A18005D5B8B /* URLResponseExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLResponseExtension.swift; sourceTree = "<group>"; };
+		4612ED242E925803005D5B8B /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
 		461438162E3E426A002D1B22 /* ChatCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCacheManager.swift; sourceTree = "<group>"; };
 		461438182E3EEE2D002D1B22 /* MimeiId.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiId.swift; sourceTree = "<group>"; };
 		4614381A2E3F5E97002D1B22 /* BlackList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackList.swift; sourceTree = "<group>"; };
@@ -430,6 +433,7 @@
 		4612ED1B2E924A18005D5B8B /* CachingPlayerItem */ = {
 			isa = PBXGroup;
 			children = (
+				4612ED242E925803005D5B8B /* LocalHTTPServer.swift */,
 				4612ED132E924A18005D5B8B /* AppLogger.swift */,
 				4612ED142E924A18005D5B8B /* CachingPlayerItem.swift */,
 				4612ED152E924A18005D5B8B /* CachingPlayerItemConfiguration.swift */,
@@ -697,6 +701,7 @@
 				7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */,
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
+				4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */,
 				46B03D892E488EC0000E08DF /* CameraView.swift in Sources */,
 				468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */,
 				4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */,
@@ -780,6 +785,7 @@
 				4612ED1F2E924A18005D5B8B /* URLResponseExtension.swift in Sources */,
 				4612ED202E924A18005D5B8B /* CachingPlayerItemConfiguration.swift in Sources */,
 				4612ED212E924A18005D5B8B /* ResourceLoaderDelegate.swift in Sources */,
+				4612ED242E924A18005D5B8B /* CachingPlayerItem in Sources */,
 				4612ED222E924A18005D5B8B /* MediaFileHandle.swift in Sources */,
 				4612ED232E924A18005D5B8B /* PendingRequest.swift in Sources */,
 				468CF2202E39C99200D49038 /* SearchScreen.swift in Sources */,
