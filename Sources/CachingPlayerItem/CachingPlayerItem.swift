@@ -428,8 +428,30 @@ public final class CachingPlayerItem: AVPlayerItem {
     
     /// Check if HLS video is cached by mediaID
     public static func isHLSCached(for mediaID: String) -> Bool {
-        let playlistPath = hlsPlaylistPath(for: mediaID)
-        return FileManager.default.fileExists(atPath: playlistPath)
+        // Check for new dynamic cache structure first
+        guard let cachesDirectory = try? FileManager.default.url(for: .cachesDirectory,
+                                                                 in: .userDomainMask,
+                                                                 appropriateFor: nil,
+                                                                 create: true)
+        else {
+            return false
+        }
+        
+        let mediaCacheDir = cachesDirectory.appendingPathComponent(mediaID)
+        
+        // Check if any playlist files exist in the media-specific directory
+        let possiblePlaylistNames = ["master.m3u8", "_master.m3u8", "720p_playlist.m3u8", "_720p_playlist.m3u8", "480p_playlist.m3u8", "_480p_playlist.m3u8"]
+        
+        for playlistName in possiblePlaylistNames {
+            let playlistPath = mediaCacheDir.appendingPathComponent(playlistName).path
+            if FileManager.default.fileExists(atPath: playlistPath) {
+                return true
+            }
+        }
+        
+        // Fallback to old cache structure
+        let oldPlaylistPath = hlsPlaylistPath(for: mediaID)
+        return FileManager.default.fileExists(atPath: oldPlaylistPath)
     }
     
     /// Get cached HLS playlist path by mediaID

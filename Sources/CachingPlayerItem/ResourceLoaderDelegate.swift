@@ -338,6 +338,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                     let playlistString = String(data: cachedData, encoding: .utf8) ?? ""
                     
                     // Validate that the cached playlist contains segment references
+                    // Check for both standard segment naming (segment000.ts) and custom naming (playlist_000.ts)
                     let hasValidSegments = playlistString.contains(".ts") && playlistString.split(separator: "\n").contains { line in
                         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                         return trimmed.hasSuffix(".ts") && !trimmed.hasPrefix("#")
