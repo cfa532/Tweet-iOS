@@ -404,7 +404,7 @@ class VideoConversionService {
                     -f hls \
                     -hls_time 10 \
                     -hls_list_size 0 \
-                    -hls_segment_filename "\(outputURL.deletingPathExtension().path)_%03d.ts" \
+                    -hls_segment_filename "\(outputURL.deletingLastPathComponent().path)/segment%03d.ts" \
                     -hls_flags delete_segments+independent_segments \
                     "\(outputURL.path)"
                     """
@@ -473,7 +473,7 @@ class VideoConversionService {
             -f hls \
             -hls_time 10 \
             -hls_list_size 0 \
-            -hls_segment_filename "\(outputURL.deletingPathExtension().path)_%03d.ts" \
+            -hls_segment_filename "\(outputURL.deletingLastPathComponent().path)/segment%03d.ts" \
             -hls_flags delete_segments+independent_segments \
             "\(outputURL.path)"
             """
@@ -567,7 +567,7 @@ class VideoConversionService {
         
         // Also clean up any segment files
         let segmentFiles = (try? FileManager.default.contentsOfDirectory(at: outputURL.deletingLastPathComponent(), includingPropertiesForKeys: nil))?
-            .filter { $0.path.hasPrefix(outputURL.deletingPathExtension().path + "_") && $0.pathExtension == "ts" } ?? []
+            .filter { $0.lastPathComponent.hasPrefix("segment") && $0.pathExtension == "ts" } ?? []
         
         for segmentFile in segmentFiles {
             try? FileManager.default.removeItem(at: segmentFile)
