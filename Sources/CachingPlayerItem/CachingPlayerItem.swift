@@ -149,16 +149,12 @@ public final class CachingPlayerItem: AVPlayerItem {
         // For HLS videos, use custom scheme that ResourceLoaderDelegate will handle
         let finalURL: URL
         if isHLS, let mediaID = mediaID {
-            // Start LocalHTTPServer and register this media
-            LocalHTTPServer.shared.start()
-            LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: saveFilePath)
-            
-            // Use custom scheme for HLS - ResourceLoaderDelegate will handle download and redirect to LocalHTTPServer
+            // Use custom scheme for HLS - ResourceLoaderDelegate will handle download and serve directly
             guard var urlWithCustomScheme = url.withScheme(cachingPlayerItemScheme) else {
                 fatalError("CachingPlayerItem error: Failed to create custom scheme URL")
             }
             finalURL = urlWithCustomScheme
-            print("DEBUG: [CachingPlayerItem] Using custom scheme URL for HLS (will redirect to LocalHTTPServer): \(finalURL.absoluteString)")
+            NSLog("DEBUG: [CachingPlayerItem] Using custom scheme URL for HLS (ResourceLoaderDelegate will serve directly): \(finalURL.absoluteString)")
         } else {
             // For progressive videos, use custom scheme
             guard var urlWithCustomScheme = url.withScheme(cachingPlayerItemScheme) else {
@@ -198,14 +194,8 @@ public final class CachingPlayerItem: AVPlayerItem {
      - parameter avUrlAssetOptions: A dictionary that contains options used to customize the initialization of the asset.
      */
     public convenience init(hlsURL: URL, mediaID: String, avUrlAssetOptions: [String: Any]? = nil) {
-        // Start the local HTTP server if not already running
-        LocalHTTPServer.shared.start()
-        
         // Create a unique save path for the HLS playlist
         let savePath = Self.hlsPlaylistPath(for: mediaID)
-        
-        // Register this media with the HTTP server
-        LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: savePath)
         
         self.init(url: hlsURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: avUrlAssetOptions, isHLS: true, mediaID: mediaID)
     }
