@@ -36,7 +36,10 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         
         // Handle different types of requests
         if originalURL.pathExtension == "m3u8" {
-            return handleHLSRequest(loadingRequest, url: originalURL)
+            // Use dynamic cache path instead of fixed saveFilePath
+            let dynamicCachePath = getCachePath(for: originalURL)
+            NSLog("DEBUG: [CachingPlayerItem] resourceLoader: dynamic cache path = \(dynamicCachePath)")
+            return handleHLSRequest(loadingRequest, url: originalURL, cachePath: dynamicCachePath)
         } else if originalURL.pathExtension == "ts" {
             return handleSegmentRequest(loadingRequest, url: originalURL)
         } else {
@@ -55,7 +58,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         return components?.url
     }
     
-    private func handleHLSRequest(_ loadingRequest: AVAssetResourceLoadingRequest, url: URL) -> Bool {
+    private func handleHLSRequest(_ loadingRequest: AVAssetResourceLoadingRequest, url: URL, cachePath: String? = nil) -> Bool {
         guard let requestURL = loadingRequest.request.url else { 
             NSLog("DEBUG: [CachingPlayerItem] handleHLSRequest: No request URL")
             return false 
@@ -77,8 +80,9 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             // The URL is already resolved (it's the resolved HLS URL passed to CachingPlayerItem)
             NSLog("DEBUG: [CachingPlayerItem] handleHLSRequest: Using resolved HLS URL: \(url.absoluteString)")
             
-            // Download and cache the master playlist
-            startHLSPlaylistDownload(loadingRequest, playlistURL: url, cachePath: saveFilePath)
+            // Download and cache the master playlist using dynamic cache path if provided
+            let finalCachePath = cachePath ?? saveFilePath
+            startHLSPlaylistDownload(loadingRequest, playlistURL: url, cachePath: finalCachePath)
             return true
         } else {
             NSLog("DEBUG: [CachingPlayerItem] handleHLSRequest: Unexpected sub-request")
