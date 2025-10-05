@@ -292,7 +292,9 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             let playlistString = String(data: data, encoding: .utf8) ?? ""
             let segments = self.parsePlaylistSegments(playlistString)
             if !segments.isEmpty {
-                self.downloadHLSSegments(segments, originalPlaylist: playlistString)
+                // For master playlists, segments should be downloaded from the same directory as the playlist
+                let baseURL = playlistURL.deletingLastPathComponent()
+                self.downloadHLSSegments(segments, baseURL: baseURL)
             }
             
             // Serve the modified playlist directly
@@ -358,13 +360,15 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         task.resume()
     }
     
-    private func downloadHLSSegments(_ segments: [String], originalPlaylist: String) {
-        NSLog("DEBUG: [CachingPlayerItem] downloadHLSSegments: Starting download of \(segments.count) segments")
+    private func downloadHLSSegments(_ segments: [String], baseURL: URL) {
+        NSLog("DEBUG: [CachingPlayerItem] downloadHLSSegments: Starting download of \(segments.count) segments from baseURL: \(baseURL.absoluteString)")
         
         for segment in segments {
-            // Create full URL for segment
-            let segmentURL = url.appendingPathComponent(segment)
+            // Create full URL for segment using the baseURL (original HTTP URL)
+            let segmentURL = baseURL.appendingPathComponent(segment)
             let localPath = getCachePath(for: segmentURL)
+            
+            NSLog("DEBUG: [CachingPlayerItem] downloadHLSSegments: Downloading segment from: \(segmentURL.absoluteString)")
             
             // Download segment in background
             DispatchQueue.global(qos: .background).async {
@@ -429,22 +433,8 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         // Check if the URL path contains a resolution folder before the filename
         let urlPath = baseURL.path
         let isSubPlaylist = urlPath.contains("/480p/") || urlPath.contains("/720p/")
-        let resolutionFolder: String
-        if isSubPlaylist {
-            // Extract the resolution folder from the path
-            let pathComponents = urlPath.components(separatedBy: "/")
-            if let resolutionIndex = pathComponents.firstIndex(where: { $0 == "480p" || $0 == "720p" }) {
-                resolutionFolder = pathComponents[resolutionIndex]
-            } else {
-                resolutionFolder = ""
-            }
-        } else {
-            // For master playlists, segments should be treated as if they're in the default resolution folder (480p)
-            // This is because the working URL structure shows segments should be in resolution folders
-            resolutionFolder = "480p"
-        }
         
-        NSLog("DEBUG: [CachingPlayerItem] modifyPlaylistForCustomScheme: urlPath = \(urlPath), isSubPlaylist = \(isSubPlaylist), resolutionFolder = \(resolutionFolder)")
+        NSLog("DEBUG: [CachingPlayerItem] modifyPlaylistForCustomScheme: urlPath = \(urlPath), isSubPlaylist = \(isSubPlaylist)")
         
         // Replace relative segment URLs with custom scheme URLs
         // For sub-playlists: segment000.ts -> cachingPlayerItemScheme://originalHost:port/ipfs/{mediaID}/480p/segment000.ts
@@ -461,8 +451,9 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 let hostWithPort = baseURL.host ?? "localhost"
                 let port = baseURL.port != nil ? ":\(baseURL.port!)" : ""
                 
-                // Include the resolution folder in the path when it's not empty
-                let segmentPath = resolutionFolder.isEmpty ? "\(baseURLWithoutFilename.path)/\(segmentName)" : "\(baseURLWithoutFilename.path)/\(resolutionFolder)/\(segmentName)"
+                // For segments, always use the baseURLWithoutFilename path directly
+                // The segments are in the same directory as the playlist
+                let segmentPath = "\(baseURLWithoutFilename.path)/\(segmentName)"
                 let customSchemeURL = "cachingPlayerItemScheme://\(hostWithPort)\(port)\(segmentPath)"
                 
                 modifiedPlaylist.replaceSubrange(range, with: customSchemeURL)
