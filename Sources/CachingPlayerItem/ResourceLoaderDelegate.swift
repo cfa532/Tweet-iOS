@@ -434,7 +434,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         print("DEBUG: [CachingPlayerItem] downloadHLSSegment: Saving to \(localPath)")
         
         let session = URLSession.shared
-        let task = session.dataTask(with: url) { [self] data, response, error in
+        let task = session.dataTask(with: url) { data, response, error in
             if let error = error {
                 print("DEBUG: [CachingPlayerItem] downloadHLSSegment: Download error: \(error.localizedDescription)")
                 loadingRequest.finishLoading(with: error)
@@ -487,7 +487,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     
     private func downloadSegmentInBackground(from url: URL, to localPath: String) {
         let session = URLSession.shared
-        let task = session.dataTask(with: url) { [self] data, response, error in
+        let task = session.dataTask(with: url) { data, response, error in
             if let error = error {
                 NSLog("DEBUG: [CachingPlayerItem] downloadSegmentInBackground: Download error: \(error.localizedDescription)")
                     return

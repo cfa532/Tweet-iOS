@@ -79,7 +79,7 @@ struct SettingsView: View {
             ChatCacheManager.shared.clearAllCache()
             
             // Clear all video cache files from disk
-            CachingPlayerItem.clearAllCache()
+            await CachingPlayerItem.clearAllCache()
             
             // Clear all memory caches on main actor
             await MainActor.run {

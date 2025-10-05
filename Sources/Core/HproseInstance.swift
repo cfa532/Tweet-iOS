@@ -725,7 +725,7 @@ final class HproseInstance: ObservableObject {
         }
         
         defer {
-            userUpdateQueue.sync {
+            _ = userUpdateQueue.sync {
                 ongoingUserUpdates.remove(userId)
             }
         }

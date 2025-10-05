@@ -148,9 +148,9 @@ public final class CachingPlayerItem: AVPlayerItem {
 
         // For HLS videos, use custom scheme that ResourceLoaderDelegate will handle
         let finalURL: URL
-        if isHLS, let mediaID = mediaID {
+        if isHLS, let _ = mediaID {
             // Use custom scheme for HLS - ResourceLoaderDelegate will handle download and serve directly
-            guard var urlWithCustomScheme = url.withScheme(cachingPlayerItemScheme) else {
+            guard let urlWithCustomScheme = url.withScheme(cachingPlayerItemScheme) else {
                 fatalError("CachingPlayerItem error: Failed to create custom scheme URL")
             }
             finalURL = urlWithCustomScheme

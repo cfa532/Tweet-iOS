@@ -212,29 +212,23 @@ struct MediaBrowserView: View {
         private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
             let shouldAutoPlay = index == currentIndex
             
-            return DetailVideoPlayerView(
+            return CachingVideoPlayer(
                 url: url,
                 mid: attachment.mid,
                 isVisible: true,
+                mediaType: attachment.type,
+                autoPlay: shouldAutoPlay,
                 videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-                showMuteButton: false
+                showNativeControls: true,
+                isMuted: false, // Unmuted in fullscreen
+                onVideoTap: {
+                    // Handle video tap if needed
+                }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
-            .onAppear {
-                if shouldAutoPlay {
-                    // Set up the video to autoplay when it becomes current
-                    DetailVideoManager.shared.setCurrentVideo(url: url, mid: attachment.mid, autoPlay: true)
-                }
-            }
             .onChange(of: currentIndex) { _, newIndex in
-                if newIndex == index {
-                    // This video became current, start playing
-                    DetailVideoManager.shared.setCurrentVideo(url: url, mid: attachment.mid, autoPlay: true)
-                } else {
-                    // This video is no longer current, pause it
-                    DetailVideoManager.shared.currentPlayer?.pause()
-                }
+                // The CachingVideoPlayer will handle play/pause based on isVisible and autoPlay
             }
         }
         

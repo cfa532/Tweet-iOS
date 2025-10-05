@@ -464,19 +464,18 @@ struct ChatVideoPlayer: View {
             // Compact layout to minimize spacing
             if let url = attachment.getUrl(baseUrl) {
                 ZStack {
-                    SimpleVideoPlayer(
+                    CachingVideoPlayer(
                         url: url,
                         mid: attachment.mid,
                         isVisible: true,
                         mediaType: attachment.type,
-                        cellAspectRatio: CGFloat(1.0),
+                        autoPlay: false, // Don't autoplay in chat
                         videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
                         showNativeControls: false,
                         isMuted: MuteState.shared.isMuted,
                         onVideoTap: {
                             // This is handled by the overlay below
-                        },
-                        disableAutoRestart: true
+                        }
                     )
                     .aspectRatio(max(CGFloat(attachment.aspectRatio ?? 16.0/9.0), 0.9), contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
