@@ -234,7 +234,6 @@
 		68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalImageLoadManager.swift; sourceTree = "<group>"; };
 		8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadManagerDebugView.swift; sourceTree = "<group>"; };
 		98729E031BD14CADF7E78810 /* Pods-Tweet.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.debug.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.debug.xcconfig"; sourceTree = "<group>"; };
-/* End PBXFileReference section */
 		71BA8FD9C9EE4D2AB859C730 /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/AppLogger.swift; sourceTree = SOURCE_ROOT; };
 		D682CDDDA3FE42E7AE4398DC /* CachingPlayerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/CachingPlayerItem.swift; sourceTree = SOURCE_ROOT; };
 		A30DDC87BF72410D99DDD56E /* CachingPlayerItemConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/CachingPlayerItemConfiguration.swift; sourceTree = SOURCE_ROOT; };
@@ -244,6 +243,7 @@
 		CC930F8E3A84491CB0D33F4C /* ResourceLoaderDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/ResourceLoaderDelegate.swift; sourceTree = SOURCE_ROOT; };
 		78802FBDB97143BFBCAF5E0A /* URLExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/URLExtension.swift; sourceTree = SOURCE_ROOT; };
 		102B1E11C9DC4F97827E6D53 /* URLResponseExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/URLResponseExtension.swift; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		1A1A1A1A1A1A1A1A1A1A1A02 /* Frameworks */ = {
@@ -782,6 +782,15 @@
 				46E5B3532DDD6A7A00AEF31F /* TweetDetailView.swift in Sources */,
 				46B03D852E486D3B000E08DF /* MuteState.swift in Sources */,
 				4674940D2DF08B7E0082FAC6 /* FollowingsTweetViewModel.swift in Sources */,
+				EA6A602E643C4D9F8E7FC784 /* AppLogger.swift in Sources */,
+				6514EBE8D9D5463E9BB47505 /* CachingPlayerItem.swift in Sources */,
+				97C3F120198740259C172B54 /* CachingPlayerItemConfiguration.swift in Sources */,
+				029BE31FC7A24236B7BC5F03 /* LocalHTTPServer.swift in Sources */,
+				EA8C46ACCDF5406DBF6BF842 /* MediaFileHandle.swift in Sources */,
+				F15C8473DBCC4737882328C4 /* PendingRequest.swift in Sources */,
+				09D004DA281D48F094AD3BF0 /* ResourceLoaderDelegate.swift in Sources */,
+				29D9A705E1A84CBE95355D05 /* URLExtension.swift in Sources */,
+				7CAA60F4B92F4DDEBC95A214 /* URLResponseExtension.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
