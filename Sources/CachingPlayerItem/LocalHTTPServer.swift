@@ -109,9 +109,21 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // If no filename specified, serve the main playlist
         if filename.isEmpty {
-            // cachePath is now the media-specific directory, so we need to find the playlist file
-            let playlistPath = URL(fileURLWithPath: cachePath).appendingPathComponent("\(mediaID).m3u8").path
-            serveFile(path: playlistPath, connection: connection, method: method)
+            // cachePath is now the media-specific directory, so we need to find the main playlist file
+            // Try different possible playlist names in order of preference
+            let possiblePlaylistNames = ["master.m3u8", "\(mediaID).m3u8", "playlist.m3u8"]
+            
+            for playlistName in possiblePlaylistNames {
+                let playlistPath = URL(fileURLWithPath: cachePath).appendingPathComponent(playlistName).path
+                if FileManager.default.fileExists(atPath: playlistPath) {
+                    serveFile(path: playlistPath, connection: connection, method: method)
+                    return
+                }
+            }
+            
+            // If no playlist found, return 404
+            NSLog("DEBUG: [LocalHTTPServer] No playlist file found in: \(cachePath)")
+            sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             return
         }
         
