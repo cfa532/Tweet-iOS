@@ -145,14 +145,20 @@ struct DetailMediaCell: View {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
-                    // Show video with native controls using DetailVideoManager singleton
+                    // Show video with native controls using CachingVideoPlayer
                     if shouldLoadVideo {
-                        DetailVideoPlayerView(
+                        CachingVideoPlayer(
                             url: url,
                             mid: attachment.mid,
                             isVisible: true, // Always visible in detail view
+                            mediaType: attachment.type,
+                            autoPlay: false, // Don't autoplay in detail view
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showMuteButton: showMuteButton
+                            showNativeControls: true,
+                            isMuted: MuteState.shared.isMuted,
+                            onVideoTap: {
+                                // Handle video tap if needed
+                            }
                         )
                     } else {
                         // Show placeholder for videos that haven't been loaded yet
