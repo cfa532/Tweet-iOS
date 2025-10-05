@@ -24,6 +24,8 @@ class DetailVideoManager: NSObject, ObservableObject {
     @Published var currentVideoMid: String?
     @Published var isPlaying = false
     
+    private var videoCompletionObserver: NSObjectProtocol?
+    
     /// Setup audio interruption notifications to handle incoming calls
     private func setupAudioInterruptionNotifications() {
         AudioSessionManager.shared.setupInterruptionNotifications()
@@ -49,34 +51,35 @@ class DetailVideoManager: NSObject, ObservableObject {
         Task.detached(priority: .userInitiated) {
             do {
                 
-                // Use the exact same approach as SimpleVideoPlayer but create independent player
-                // This ensures proper asset loading while maintaining independence
+                // Create independent player with disk caching support
+                // Get the asset from SharedAssetCache (which uses CachingPlayerItem for HLS)
+                // but create our own independent player instance
                 let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: mid)
                 let playerItem = await AVPlayerItem(asset: asset)
+                let newPlayer = AVPlayer(playerItem: playerItem)
                 
                 await MainActor.run {
-                    // Create player only if it doesn't exist, otherwise just replace the player item
-                    if self.currentPlayer == nil {
-                        self.currentPlayer = AVPlayer()
-                    }
-                    
-                    // Replace the player item with the new video
-                    self.currentPlayer?.replaceCurrentItem(with: playerItem)
+                    // Store the new player (independent from MediaCell)
+                    self.currentPlayer = newPlayer
                     
                     // Configure the player
                     self.currentPlayer?.isMuted = false // Always unmuted in detail
                     
-                    
-                    // Add KVO observer for player item status
-                    playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
-                    
-                    // Check if player item is ready immediately
-                    if playerItem.status == .readyToPlay {
-                        if autoPlay {
-                            self.currentPlayer?.play()
-                            self.isPlaying = true
+                    // Add observers for the player item
+                    if let playerItem = self.currentPlayer?.currentItem {
+                        // Add KVO observer for player item status
+                        playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
+                        
+                        // Add video completion observer
+                        self.setupVideoCompletionObserver(playerItem)
+                        
+                        // Check if player item is ready immediately
+                        if playerItem.status == .readyToPlay {
+                            if autoPlay {
+                                self.currentPlayer?.play()
+                                self.isPlaying = true
+                            }
                         }
-                    } else {
                     }
                     
                 }
@@ -95,6 +98,12 @@ class DetailVideoManager: NSObject, ObservableObject {
             playerItem.removeObserver(self, forKeyPath: "status")
         }
         
+        // Remove video completion observer
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
+        }
+        
         currentPlayer?.pause()
         currentPlayer = nil
         currentVideoMid = nil
@@ -103,6 +112,36 @@ class DetailVideoManager: NSObject, ObservableObject {
         // Deactivate audio session when video is cleared
         AudioSessionManager.shared.deactivateForVideoPlayback()
         
+    }
+    
+    /// Setup video completion observer
+    private func setupVideoCompletionObserver(_ playerItem: AVPlayerItem) {
+        // Remove existing observer if any
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        
+        // Add new observer for video completion
+        videoCompletionObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                guard let player = self.currentPlayer else { return }
+                print("DEBUG: [DETAIL VIDEO MANAGER] Video finished playing for \(self.currentVideoMid ?? "unknown")")
+                
+                // Reset video to beginning and restart
+                player.seek(to: .zero) { finished in
+                    guard finished else { return }
+                    Task { @MainActor in
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Auto-restarting video for \(self.currentVideoMid ?? "unknown")")
+                        player.play()
+                        self.isPlaying = true
+                    }
+                }
+            }
+        }
     }
     
     /// Toggle play/pause

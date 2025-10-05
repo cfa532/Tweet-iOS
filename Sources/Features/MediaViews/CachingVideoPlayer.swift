@@ -175,9 +175,18 @@ struct CachingVideoPlayer: View {
                     // Set up video completion observer
                     self.setupVideoCompletionObserver(newPlayer)
                     
-                    // Start playback if needed
+                    // Check if video is at the end and restart if needed
                     if self.autoPlay && self.isVisible {
-                        newPlayer.play()
+                        if self.isVideoAtEnd(newPlayer) {
+                            print("DEBUG: [CachingVideoPlayer] Video is at end, restarting from beginning for \(self.mid)")
+                            newPlayer.seek(to: .zero) { finished in
+                                if finished {
+                                    newPlayer.play()
+                                }
+                            }
+                        } else {
+                            newPlayer.play()
+                        }
                     }
                 }
             } catch {
@@ -193,6 +202,20 @@ struct CachingVideoPlayer: View {
     private func handleLoadFailure() {
         isLoading = false
         loadFailed = true
+    }
+    
+    private func isVideoAtEnd(_ player: AVPlayer) -> Bool {
+        guard let playerItem = player.currentItem else { return false }
+        let currentTime = player.currentTime()
+        let duration = playerItem.duration
+        
+        // Check if current time is very close to the end (within 0.1 seconds)
+        if duration.isValid && !duration.isIndefinite {
+            let timeRemaining = CMTimeSubtract(duration, currentTime)
+            return timeRemaining.seconds <= 0.1
+        }
+        
+        return false
     }
     
     private func setupVideoCompletionObserver(_ player: AVPlayer) {
