@@ -231,8 +231,18 @@ struct CachingVideoPlayer: View {
             videoCompletionObserver = nil
         }
         
-        player?.pause()
-        player = nil
+        // Restore mute state to global state before exiting fullscreen
+        // This ensures the player instance is properly muted when returning to MediaCell
+        if let player = player {
+            player.isMuted = MuteState.shared.isMuted
+            print("DEBUG: [CachingVideoPlayer] Restored mute state to global state (\(MuteState.shared.isMuted)) before exiting fullscreen for \(mid)")
+        }
+        
+        // Don't pause or nullify the player - let it continue for MediaCell
+        // The player is managed by SharedAssetCache and should persist
+        print("DEBUG: [CachingVideoPlayer] Cleaning up observers but preserving player for \(mid)")
+        
+        // Clear local references but keep the player alive
         cachingPlayerItem = nil
         playerDelegate = nil
     }
