@@ -337,13 +337,13 @@ class SharedAssetCache: ObservableObject {
         print("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL for CachingPlayerItem: \(resolvedURL.absoluteString)")
         
         // Start the local HTTP server if not already running
-        LocalHTTPServerWrapper.shared.start()
+        LocalHTTPServer.shared.start()
         
         // Create a unique save path for the HLS playlist
         let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
         
         // Register this media with the HTTP server
-        LocalHTTPServerWrapper.shared.registerMedia(mediaID: mediaID, cachePath: savePath)
+        LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: savePath)
         
         // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
         let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)

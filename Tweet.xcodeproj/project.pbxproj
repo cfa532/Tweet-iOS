@@ -76,7 +76,6 @@
 		46B03D892E488EC0000E08DF /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D882E488EC0000E08DF /* CameraView.swift */; };
 		46B03D8B2E48D760000E08DF /* MediaPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D8A2E48D760000E08DF /* MediaPicker.swift */; };
 		46B03D912E49E35E000E08DF /* SharedAssetCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D902E49E35B000E08DF /* SharedAssetCache.swift */; };
-		F35E8374EAF14B479961EADF /* LocalHTTPServerWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D8D1E68AE324B8CAF06915F /* LocalHTTPServerWrapper.swift */; };
 		46B03D972E4C44E2000E08DF /* DebounceButtonWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D962E4C44E2000E08DF /* DebounceButtonWrapper.swift */; };
 		46B03D992E4C56C2000E08DF /* HapticButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */; };
 		46B03D9B2E4D7336000E08DF /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D9A2E4D7336000E08DF /* NotificationManager.swift */; };
@@ -112,7 +111,6 @@
 		46F3BFCE2DFB3F1100059F18 /* SimpleAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */; };
 		7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */; };
 		CA8FCEEC89259B8FD761147C /* Pods_Tweet.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 16C65942A958AA33DC9832F5 /* Pods_Tweet.framework */; };
-/* End PBXBuildFile section */
 		EA6A602E643C4D9F8E7FC784 /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BA8FD9C9EE4D2AB859C730 /* AppLogger.swift */; };
 		6514EBE8D9D5463E9BB47505 /* CachingPlayerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = D682CDDDA3FE42E7AE4398DC /* CachingPlayerItem.swift */; };
 		97C3F120198740259C172B54 /* CachingPlayerItemConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30DDC87BF72410D99DDD56E /* CachingPlayerItemConfiguration.swift */; };
@@ -122,6 +120,7 @@
 		09D004DA281D48F094AD3BF0 /* ResourceLoaderDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC930F8E3A84491CB0D33F4C /* ResourceLoaderDelegate.swift */; };
 		29D9A705E1A84CBE95355D05 /* URLExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78802FBDB97143BFBCAF5E0A /* URLExtension.swift */; };
 		7CAA60F4B92F4DDEBC95A214 /* URLResponseExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102B1E11C9DC4F97827E6D53 /* URLResponseExtension.swift */; };
+/* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		16C65942A958AA33DC9832F5 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -196,7 +195,6 @@
 		46B03D882E488EC0000E08DF /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		46B03D8A2E48D760000E08DF /* MediaPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPicker.swift; sourceTree = "<group>"; };
 		46B03D902E49E35B000E08DF /* SharedAssetCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedAssetCache.swift; sourceTree = "<group>"; };
-		5D8D1E68AE324B8CAF06915F /* LocalHTTPServerWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServerWrapper.swift; sourceTree = "<group>"; };
 		46B03D962E4C44E2000E08DF /* DebounceButtonWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceButtonWrapper.swift; sourceTree = "<group>"; };
 		46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticButtonStyle.swift; sourceTree = "<group>"; };
 		46B03D9A2E4D7336000E08DF /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
@@ -237,15 +235,15 @@
 		8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadManagerDebugView.swift; sourceTree = "<group>"; };
 		98729E031BD14CADF7E78810 /* Pods-Tweet.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.debug.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
-		71BA8FD9C9EE4D2AB859C730 /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
-		D682CDDDA3FE42E7AE4398DC /* CachingPlayerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachingPlayerItem.swift; sourceTree = "<group>"; };
-		A30DDC87BF72410D99DDD56E /* CachingPlayerItemConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachingPlayerItemConfiguration.swift; sourceTree = "<group>"; };
-		4BF4A25687A1449BA6A2EED3 /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
-		CB4C9D2C1A8944C58D19850F /* MediaFileHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaFileHandle.swift; sourceTree = "<group>"; };
-		33D3CDFA0E98482CB31A02DA /* PendingRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingRequest.swift; sourceTree = "<group>"; };
-		CC930F8E3A84491CB0D33F4C /* ResourceLoaderDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceLoaderDelegate.swift; sourceTree = "<group>"; };
-		78802FBDB97143BFBCAF5E0A /* URLExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLExtension.swift; sourceTree = "<group>"; };
-		102B1E11C9DC4F97827E6D53 /* URLResponseExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLResponseExtension.swift; sourceTree = "<group>"; };
+		71BA8FD9C9EE4D2AB859C730 /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/AppLogger.swift; sourceTree = SOURCE_ROOT; };
+		D682CDDDA3FE42E7AE4398DC /* CachingPlayerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/CachingPlayerItem.swift; sourceTree = SOURCE_ROOT; };
+		A30DDC87BF72410D99DDD56E /* CachingPlayerItemConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/CachingPlayerItemConfiguration.swift; sourceTree = SOURCE_ROOT; };
+		4BF4A25687A1449BA6A2EED3 /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/LocalHTTPServer.swift; sourceTree = SOURCE_ROOT; };
+		CB4C9D2C1A8944C58D19850F /* MediaFileHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/MediaFileHandle.swift; sourceTree = SOURCE_ROOT; };
+		33D3CDFA0E98482CB31A02DA /* PendingRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/PendingRequest.swift; sourceTree = SOURCE_ROOT; };
+		CC930F8E3A84491CB0D33F4C /* ResourceLoaderDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/ResourceLoaderDelegate.swift; sourceTree = SOURCE_ROOT; };
+		78802FBDB97143BFBCAF5E0A /* URLExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/URLExtension.swift; sourceTree = SOURCE_ROOT; };
+		102B1E11C9DC4F97827E6D53 /* URLResponseExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CachingPlayerItem/URLResponseExtension.swift; sourceTree = SOURCE_ROOT; };
 
 /* Begin PBXFrameworksBuildPhase section */
 		1A1A1A1A1A1A1A1A1A1A1A02 /* Frameworks */ = {
@@ -337,7 +335,6 @@
 				46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */,
 				68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */,
 				46B03D902E49E35B000E08DF /* SharedAssetCache.swift */,
-				5D8D1E68AE324B8CAF06915F /* LocalHTTPServerWrapper.swift */,
 				4614381C2E3F69AD002D1B22 /* CoreDataManager.swift */,
 				4614381A2E3F5E97002D1B22 /* BlackList.swift */,
 				461438162E3E426A002D1B22 /* ChatCacheManager.swift */,
@@ -738,7 +735,6 @@
 				46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */,
 				468CF20E2E39AF3A00D49038 /* ChatRepository.swift in Sources */,
 				46B03D912E49E35E000E08DF /* SharedAssetCache.swift in Sources */,
-				F35E8374EAF14B479961EADF /* LocalHTTPServerWrapper.swift in Sources */,
 				46E5B34B2DDC155600AEF31F /* MediaCell.swift in Sources */,
 				46A8F6842E52BDDC0050F4A0 /* ProfileEditView.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */,
