@@ -297,8 +297,18 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     
     private func getCachePath(for url: URL) -> String {
         let fileName = url.lastPathComponent
+        
+        // Include mediaID in the cache path to prevent conflicts between different videos
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        return cacheDir.appendingPathComponent(fileName).path
+        
+        if let mediaID = mediaID {
+            // Create a subdirectory for each media ID
+            let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+            return mediaCacheDir.appendingPathComponent(fileName).path
+        } else {
+            // Fallback to original behavior if no mediaID
+            return cacheDir.appendingPathComponent(fileName).path
+        }
     }
     
     private func startHLSPlaylistDownload(_ loadingRequest: AVAssetResourceLoadingRequest, playlistURL: URL, cachePath: String) {
@@ -435,6 +445,10 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             
             // Save to local path
             do {
+                // Create directory if it doesn't exist
+                let directory = URL(fileURLWithPath: localPath).deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
+                
                 try data.write(to: URL(fileURLWithPath: localPath))
                 NSLog("DEBUG: [CachingPlayerItem] downloadSegmentInBackground: Saved segment to \(localPath)")
             } catch {

@@ -65,7 +65,7 @@ struct SettingsView: View {
             .alert(LocalizedStringKey("Cache Cleared"), isPresented: $showCacheCleanedAlert) {
                 Button(LocalizedStringKey("OK")) { }
             } message: {
-                Text(LocalizedStringKey("All caches, users, and tweets have been cleared successfully."))
+                Text(LocalizedStringKey("All caches including videos, images, users, and tweets have been cleared successfully."))
             }
         }
     }
@@ -77,6 +77,9 @@ struct SettingsView: View {
             ImageCacheManager.shared.clearAllCache()
             TweetCacheManager.shared.clearAllCache()
             ChatCacheManager.shared.clearAllCache()
+            
+            // Clear all video cache files from disk
+            CachingPlayerItem.clearAllCache()
             
             // Clear all memory caches on main actor
             await MainActor.run {

@@ -109,13 +109,15 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // If no filename specified, serve the main playlist
         if filename.isEmpty {
-            serveFile(path: cachePath, connection: connection, method: method)
+            // cachePath is now the directory, so we need to find the playlist file
+            let playlistPath = URL(fileURLWithPath: cachePath).appendingPathComponent("\(mediaID).m3u8").path
+            serveFile(path: playlistPath, connection: connection, method: method)
             return
         }
         
-        // For segments, look in the cache directory
-        let cacheDir = URL(fileURLWithPath: cachePath).deletingLastPathComponent()
-        let segmentPath = cacheDir.appendingPathComponent(filename).path
+        // For segments, look in the media-specific cache directory
+        // cachePath is now the directory containing both playlist and segments
+        let segmentPath = URL(fileURLWithPath: cachePath).appendingPathComponent(filename).path
         
         if FileManager.default.fileExists(atPath: segmentPath) {
             serveFile(path: segmentPath, connection: connection, method: method)
