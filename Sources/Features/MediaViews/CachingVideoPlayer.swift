@@ -36,7 +36,7 @@ struct CachingVideoPlayer: View {
         videoAspectRatio: CGFloat = 16.0/9.0,
         showNativeControls: Bool = true,
         isMuted: Bool = false,
-        onVideoTap: (() -> Void)? = nil
+        onVideoTap: (() -> Void)? = nil,
     ) {
         self.url = url
         self.mid = mid
@@ -111,14 +111,11 @@ struct CachingVideoPlayer: View {
             do {
                 print("DEBUG: [CachingVideoPlayer] Setting up player for \(mid)")
                 
-                // Use SharedAssetCache like DetailVideoManager does
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: mid)
-                let playerItem = AVPlayerItem(asset: asset)
+                
+                // Use SharedAssetCache.getOrCreatePlayer to get cached player or create new one
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
                 
                 await MainActor.run {
-                    // Create AVPlayer with the asset-based player item
-                    let newPlayer = AVPlayer(playerItem: playerItem)
-                    
                     // Store references
                     self.player = newPlayer
                     
@@ -126,7 +123,7 @@ struct CachingVideoPlayer: View {
                     newPlayer.isMuted = isMuted
                     
                     // Set up delegate for CachingPlayerItem if it exists
-                    if let cachingPlayerItem = playerItem as? CachingPlayerItem {
+                    if let cachingPlayerItem = newPlayer.currentItem as? CachingPlayerItem {
                         self.cachingPlayerItem = cachingPlayerItem
                         
                         let delegate = CachingVideoPlayerDelegate(
@@ -172,6 +169,11 @@ struct CachingVideoPlayer: View {
                                 newPlayer.play()
                             }
                         }
+                    }
+                    
+                    // Start playback if needed
+                    if self.autoPlay && self.isVisible {
+                        newPlayer.play()
                     }
                 }
             } catch {
