@@ -6,7 +6,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     private let mediaID: String?
     private let saveFilePath: String
     private weak var owner: CachingPlayerItem?
-    
+
     init(url: URL, mediaID: String?, saveFilePath: String, owner: CachingPlayerItem) {
         self.url = url
         self.mediaID = mediaID
@@ -14,7 +14,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         self.owner = owner
         super.init()
     }
-    
+
     func resourceLoader(_ resourceLoader: AVAssetResourceLoader, shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest) -> Bool {
         guard let requestURL = loadingRequest.request.url else {
             NSLog("DEBUG: [CachingPlayerItem] resourceLoader: No request URL")
@@ -44,7 +44,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             return false
         }
     }
-    
+
     private func convertCustomSchemeToOriginalURL(_ customSchemeURL: URL) -> URL? {
         guard customSchemeURL.scheme == "cachingPlayerItemScheme" else {
             return customSchemeURL
@@ -56,9 +56,9 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     }
     
     private func handleHLSRequest(_ loadingRequest: AVAssetResourceLoadingRequest, url: URL) -> Bool {
-        guard let requestURL = loadingRequest.request.url else {
+        guard let requestURL = loadingRequest.request.url else { 
             NSLog("DEBUG: [CachingPlayerItem] handleHLSRequest: No request URL")
-            return false
+            return false 
         }
         
         NSLog("DEBUG: [CachingPlayerItem] handleHLSRequest: requestURL = \(requestURL.absoluteString)")
@@ -116,7 +116,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             do {
                 let cachedData = try Data(contentsOf: URL(fileURLWithPath: cachePath))
                 
-                // Create response
+                // Create minimal response that AVPlayer expects for HLS playlists
                 let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
                     "Content-Type": "application/vnd.apple.mpegurl",
                     "Content-Length": "\(cachedData.count)"
@@ -162,7 +162,18 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Failed to cache playlist: \(error.localizedDescription)")
             }
             
-            // Create response
+            // Parse segments and start downloading them (only for sub-playlists that contain actual segments)
+            let playlistString = String(data: data, encoding: .utf8) ?? ""
+            let segments = self.parsePlaylistSegments(playlistString)
+            NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Found \(segments.count) segments in sub-playlist: \(segments)")
+            if !segments.isEmpty {
+                // For sub-playlists, segments should be downloaded from the same directory as the playlist
+                let baseURL = actualPlaylistURL.deletingLastPathComponent()
+                NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Using baseURL for segment downloads: \(baseURL.absoluteString)")
+                self.downloadHLSSegments(segments, baseURL: baseURL)
+            }
+            
+            // Create minimal response that AVPlayer expects for HLS playlists
             let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
                 "Content-Type": "application/vnd.apple.mpegurl",
                 "Content-Length": "\(modifiedPlaylistData.count)"
@@ -189,21 +200,23 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         let cachePath = getCachePath(for: url)
         
         if FileManager.default.fileExists(atPath: cachePath) {
-            NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Serving cached segment from \(cachePath)")
-            
             do {
                 let cachedData = try Data(contentsOf: URL(fileURLWithPath: cachePath))
                 
-                // Create response
-                let response = HTTPURLResponse(url: requestURL, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
-                    "Content-Type": "video/mp2t",
-                    "Content-Length": "\(cachedData.count)"
-                ])
-                loadingRequest.response = response
-                loadingRequest.dataRequest?.respond(with: cachedData)
-                loadingRequest.finishLoading()
-                
-                return true
+                // Validate that the cached segment is not empty or too small (likely incomplete)
+                if cachedData.count < 1000 { // Less than 1KB is likely an incomplete download
+                    NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Cached segment too small (\(cachedData.count) bytes), likely incomplete - will re-download")
+                } else {
+                    NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Serving cached segment from \(cachePath) (size: \(cachedData.count) bytes)")
+                    
+                    // Try using NSURLResponse instead of HTTPURLResponse
+                    let response = URLResponse(url: requestURL, mimeType: "video/mp2t", expectedContentLength: cachedData.count, textEncodingName: nil)
+                    loadingRequest.response = response
+                    loadingRequest.dataRequest?.respond(with: cachedData)
+                    loadingRequest.finishLoading()
+                    
+                    return true
+                }
             } catch {
                 NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Failed to read cached segment: \(error.localizedDescription)")
             }
@@ -237,11 +250,8 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Failed to cache segment: \(error.localizedDescription)")
             }
             
-            // Create response
-            let response = HTTPURLResponse(url: requestURL, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
-                "Content-Type": "video/mp2t",
-                "Content-Length": "\(data.count)"
-            ])
+            // Try using NSURLResponse instead of HTTPURLResponse
+            let response = URLResponse(url: requestURL, mimeType: "video/mp2t", expectedContentLength: data.count, textEncodingName: nil)
             loadingRequest.response = response
             loadingRequest.dataRequest?.respond(with: data)
             loadingRequest.finishLoading()
@@ -300,14 +310,14 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             // Serve the modified playlist directly
             NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Serving modified playlist directly")
             
-            // Create response with the modified playlist data
+            // Create minimal response that AVPlayer expects for HLS playlists
             let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
                 "Content-Type": "application/vnd.apple.mpegurl",
                 "Content-Length": "\(modifiedPlaylistData.count)"
             ])
             loadingRequest.response = response
             loadingRequest.dataRequest?.respond(with: modifiedPlaylistData)
-            loadingRequest.finishLoading()
+                loadingRequest.finishLoading()
             
             // Notify owner about download completion
             DispatchQueue.main.async {
@@ -347,11 +357,8 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 print("DEBUG: [CachingPlayerItem] downloadHLSSegment: Failed to save segment: \(error.localizedDescription)")
             }
             
-            // Create response
-            let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
-                "Content-Type": "video/mp2t",
-                "Content-Length": "\(data.count)"
-            ])
+            // Try using NSURLResponse instead of HTTPURLResponse
+            let response = URLResponse(url: loadingRequest.request.url!, mimeType: "video/mp2t", expectedContentLength: data.count, textEncodingName: nil)
             loadingRequest.response = response
             loadingRequest.dataRequest?.respond(with: data)
             loadingRequest.finishLoading()
@@ -382,14 +389,14 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         let task = session.dataTask(with: url) { data, response, error in
             if let error = error {
                 NSLog("DEBUG: [CachingPlayerItem] downloadSegmentInBackground: Download error: \(error.localizedDescription)")
-                return
-            }
-            
+                    return
+                }
+                
             guard let data = data else {
                 NSLog("DEBUG: [CachingPlayerItem] downloadSegmentInBackground: No data received")
-                return
-            }
-            
+                    return
+                }
+                
             NSLog("DEBUG: [CachingPlayerItem] downloadSegmentInBackground: Successfully downloaded segment, size: \(data.count) bytes")
             
             // Save to local path
@@ -434,7 +441,17 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         let urlPath = baseURL.path
         let isSubPlaylist = urlPath.contains("/480p/") || urlPath.contains("/720p/")
         
-        NSLog("DEBUG: [CachingPlayerItem] modifyPlaylistForCustomScheme: urlPath = \(urlPath), isSubPlaylist = \(isSubPlaylist)")
+        // Extract resolution folder from URL path
+        let resolutionFolder: String
+        if urlPath.contains("/480p/") {
+            resolutionFolder = "480p"
+        } else if urlPath.contains("/720p/") {
+            resolutionFolder = "720p"
+        } else {
+            resolutionFolder = ""
+        }
+        
+        NSLog("DEBUG: [CachingPlayerItem] modifyPlaylistForCustomScheme: urlPath = \(urlPath), isSubPlaylist = \(isSubPlaylist), resolutionFolder = \(resolutionFolder)")
         
         // Replace relative segment URLs with custom scheme URLs
         // For sub-playlists: segment000.ts -> cachingPlayerItemScheme://originalHost:port/ipfs/{mediaID}/480p/segment000.ts
@@ -451,9 +468,22 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 let hostWithPort = baseURL.host ?? "localhost"
                 let port = baseURL.port != nil ? ":\(baseURL.port!)" : ""
                 
+                NSLog("DEBUG: [CachingPlayerItem] modifyPlaylistForCustomScheme: Processing segment: '\(segmentName)', baseURLWithoutFilename.path: '\(baseURLWithoutFilename.path)'")
+                
+                // Check if the segment name already contains the resolution folder
+                let cleanSegmentName: String
+                if segmentName.hasPrefix("\(resolutionFolder)/") {
+                    // Segment name already contains resolution folder, remove it
+                    cleanSegmentName = String(segmentName.dropFirst(resolutionFolder.count + 1))
+                    NSLog("DEBUG: [CachingPlayerItem] modifyPlaylistForCustomScheme: Removed resolution folder from segment name: '\(segmentName)' -> '\(cleanSegmentName)'")
+                } else {
+                    // Segment name doesn't contain resolution folder, use as is
+                    cleanSegmentName = segmentName
+                }
+                
                 // For segments, always use the baseURLWithoutFilename path directly
                 // The segments are in the same directory as the playlist
-                let segmentPath = "\(baseURLWithoutFilename.path)/\(segmentName)"
+                let segmentPath = "\(baseURLWithoutFilename.path)/\(cleanSegmentName)"
                 let customSchemeURL = "cachingPlayerItemScheme://\(hostWithPort)\(port)\(segmentPath)"
                 
                 modifiedPlaylist.replaceSubrange(range, with: customSchemeURL)
