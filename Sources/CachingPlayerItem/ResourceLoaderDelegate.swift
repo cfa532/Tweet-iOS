@@ -114,20 +114,20 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Serving cached playlist from \(cachePath)")
             
             do {
-                let cachedData = try Data(contentsOf: URL(fileURLWithPath: cachePath))
+                let _ = try Data(contentsOf: URL(fileURLWithPath: cachePath))
                 
-                // TODO: Redirect to LocalHTTPServer instead of serving data directly
-                // let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
-                // if let localURL = localURL {
-                //     let redirectResponse = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-                //         "Location": localURL.absoluteString
-                //     ])
-                //     loadingRequest.response = redirectResponse
-                //     loadingRequest.finishLoading()
-                //     
-                //     NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Redirecting to LocalHTTPServer: \(localURL.absoluteString)")
-                //     return true
-                // }
+                // Redirect to LocalHTTPServer instead of serving data directly
+                let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
+                if let localURL = localURL {
+                    let redirectResponse = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                        "Location": localURL.absoluteString
+                    ])
+                    loadingRequest.response = redirectResponse
+                    loadingRequest.finishLoading()
+                    
+                    NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Redirecting to LocalHTTPServer: \(localURL.absoluteString)")
+                    return true
+                }
                 
                 return true
             } catch {
@@ -177,17 +177,17 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 self.downloadHLSSegments(segments, baseURL: baseURL)
             }
             
-            // TODO: Redirect to LocalHTTPServer instead of serving data directly
-            // let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
-            // if let localURL = localURL {
-            //     let redirectResponse = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-            //         "Location": localURL.absoluteString
-            //     ])
-            //     loadingRequest.response = redirectResponse
-            //     loadingRequest.finishLoading()
-            //     
-            //     NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Redirecting to LocalHTTPServer: \(localURL.absoluteString)")
-            // }
+            // Redirect to LocalHTTPServer instead of serving data directly
+            let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
+            if let localURL = localURL {
+                let redirectResponse = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                    "Location": localURL.absoluteString
+                ])
+                loadingRequest.response = redirectResponse
+            loadingRequest.finishLoading()
+                
+                NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Redirecting to LocalHTTPServer: \(localURL.absoluteString)")
+            }
         }
         
         task.resume()
@@ -216,21 +216,25 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 } else {
                     NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Serving cached segment from \(cachePath) (size: \(cachedData.count) bytes)")
                     
-                    // TODO: Redirect to LocalHTTPServer instead of serving data directly
-                    // let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
-                    // if let localURL = localURL {
-                    //     let segmentName = url.lastPathComponent
-                    //     let redirectURL = localURL.appendingPathComponent(segmentName)
-                    //     
-                    //     let redirectResponse = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-                    //         "Location": redirectURL.absoluteString
-                    //     ])
-                    //     loadingRequest.response = redirectResponse
-                    //     loadingRequest.finishLoading()
-                    //     
-                    //     NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirecting to LocalHTTPServer: \(redirectURL.absoluteString)")
-                    //     return true
-                    // }
+                    // Redirect to LocalHTTPServer instead of serving data directly
+                    guard let mediaID = mediaID else {
+                        NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Missing mediaID - cannot redirect to LocalHTTPServer")
+                        return false
+                    }
+                    let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
+                    if let localURL = localURL {
+                        let segmentName = url.lastPathComponent
+                        let redirectURL = localURL.appendingPathComponent(segmentName)
+                        
+                        let redirectResponse = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                            "Location": redirectURL.absoluteString
+                        ])
+                        loadingRequest.response = redirectResponse
+                        loadingRequest.finishLoading()
+                        
+                        NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirecting to LocalHTTPServer: \(redirectURL.absoluteString)")
+                        return true
+                    }
                     
                     return true
                 }
@@ -243,7 +247,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Downloading segment from \(url.absoluteString)")
         
         let session = URLSession.shared
-        let task = session.dataTask(with: url) { data, response, error in
+        let task = session.dataTask(with: url) { [self] data, response, error in
             if let error = error {
                 NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Download error: \(error.localizedDescription)")
                 loadingRequest.finishLoading(with: error)
@@ -267,20 +271,24 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Failed to cache segment: \(error.localizedDescription)")
             }
             
-            // TODO: Redirect to LocalHTTPServer instead of serving data directly
-            // let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
-            // if let localURL = localURL {
-            //     let segmentName = url.lastPathComponent
-            //     let redirectURL = localURL.appendingPathComponent(segmentName)
-            //     
-            //     let redirectResponse = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-            //         "Location": redirectURL.absoluteString
-            //     ])
-            //     loadingRequest.response = redirectResponse
-            //     loadingRequest.finishLoading()
-            //     
-            //     NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirecting to LocalHTTPServer: \(redirectURL.absoluteString)")
-            // }
+            // Redirect to LocalHTTPServer instead of serving data directly
+            guard let mediaID = mediaID else {
+                NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Missing mediaID - cannot redirect to LocalHTTPServer")
+                return
+            }
+            let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
+            if let localURL = localURL {
+                let segmentName = url.lastPathComponent
+                let redirectURL = localURL.appendingPathComponent(segmentName)
+                
+                let redirectResponse = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                    "Location": redirectURL.absoluteString
+                ])
+                loadingRequest.response = redirectResponse
+                loadingRequest.finishLoading()
+                
+                NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirecting to LocalHTTPServer: \(redirectURL.absoluteString)")
+            }
         }
         
         task.resume()
@@ -359,7 +367,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         print("DEBUG: [CachingPlayerItem] downloadHLSSegment: Saving to \(localPath)")
         
         let session = URLSession.shared
-        let task = session.dataTask(with: url) { data, response, error in
+        let task = session.dataTask(with: url) { [self] data, response, error in
             if let error = error {
                 print("DEBUG: [CachingPlayerItem] downloadHLSSegment: Download error: \(error.localizedDescription)")
                 loadingRequest.finishLoading(with: error)
@@ -412,7 +420,7 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     
     private func downloadSegmentInBackground(from url: URL, to localPath: String) {
         let session = URLSession.shared
-        let task = session.dataTask(with: url) { data, response, error in
+        let task = session.dataTask(with: url) { [self] data, response, error in
             if let error = error {
                 NSLog("DEBUG: [CachingPlayerItem] downloadSegmentInBackground: Download error: \(error.localizedDescription)")
                     return
