@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var toastType: ToastView.ToastType = .success
     
     var body: some View {
+        let _ = NSLog("DEBUG: [ContentView] ContentView body is being rendered")
         ZStack(alignment: .bottom) {
             // Main content area
             VStack(spacing: 0) {

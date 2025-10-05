@@ -8,6 +8,11 @@
 import Foundation
 import AVFoundation
 import UIKit
+
+// MARK: - Cache Metadata Structure
+private struct CacheMetadata: Codable {
+    let cachedMediaIDs: [String: Date] // mediaID -> timestamp
+}
 // CachingPlayerItem is now integrated directly
 
 /// Shared asset cache for video players with background loading and priority management
@@ -44,6 +49,9 @@ class SharedAssetCache: ObservableObject {
     }
     
     private init() {
+        // Restore cache from disk on startup
+        restoreCacheFromDisk()
+        
         // Start background cleanup timer
         startBackgroundCleanup()
         
@@ -58,19 +66,22 @@ class SharedAssetCache: ObservableObject {
     }
     
     // MARK: - Cache Storage
-    private var assetCache: [String: AVAsset] = [:]
-    private var playerCache: [String: AVPlayer] = [:]
-    private var cacheTimestamps: [String: Date] = [:]
-    private var cachingPlayerDelegates: [String: CachingPlayerItemDelegateImpl] = [:] // URL -> Delegate
-    private var loadingTasks: [String: Task<AVAsset, Error>] = [:]
-    private var preloadTasks: [String: Task<Void, Never>] = [:]
-    private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of URLs
+    private var assetCache: [String: AVAsset] = [:] // mediaID -> AVAsset
+    private var playerCache: [String: AVPlayer] = [:] // mediaID -> AVPlayer
+    private var cacheTimestamps: [String: Date] = [:] // mediaID -> timestamp
+    private var cachingPlayerDelegates: [String: CachingPlayerItemDelegateImpl] = [:] // mediaID -> Delegate
+    private var loadingTasks: [String: Task<AVAsset, Error>] = [:] // mediaID -> loading task
+    private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
+    private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
     
     // MARK: - Configuration
     private let maxCacheSize = 30 // Maximum number of cached assets and players (reduced for memory)
     private let maxPlayerCacheSize = 10 // Maximum cached players (separate limit)
     private let cacheExpirationInterval: TimeInterval = 1800 // 30 minutes
     private let maxVideoFileSize: Int64 = 50 * 1024 * 1024 // 50MB max per video file
+    
+    // MARK: - Cache Persistence
+    private let cacheMetadataKey = "SharedAssetCache_Metadata"
     
     // MARK: - Background Cleanup
     private var cleanupTimer: Timer?
@@ -110,66 +121,100 @@ class SharedAssetCache: ObservableObject {
     // MARK: - Asset Management
     
     /// Cancel loading tasks for a specific URL
-    @MainActor func cancelLoading(for url: URL) {
-        let cacheKey = url.absoluteString
-        
+    @MainActor func cancelLoading(for mediaID: String) {
         // Cancel loading task if exists
-        if let loadingTask = loadingTasks[cacheKey] {
+        if let loadingTask = loadingTasks[mediaID] {
             loadingTask.cancel()
-            loadingTasks.removeValue(forKey: cacheKey)
-            print("DEBUG: [SharedAssetCache] Cancelled loading task for \(cacheKey)")
+            loadingTasks.removeValue(forKey: mediaID)
+            print("DEBUG: [SharedAssetCache] Cancelled loading task for mediaID: \(mediaID)")
         }
         
         // Cancel preload task if exists
-        if let preloadTask = preloadTasks[cacheKey] {
+        if let preloadTask = preloadTasks[mediaID] {
             preloadTask.cancel()
-            preloadTasks.removeValue(forKey: cacheKey)
-            print("DEBUG: [SharedAssetCache] Cancelled preload task for \(cacheKey)")
+            preloadTasks.removeValue(forKey: mediaID)
+            print("DEBUG: [SharedAssetCache] Cancelled preload task for mediaID: \(mediaID)")
         }
     }
     
-    /// Get URLs associated with a tweet
-    private func getUrlsForTweet(_ tweetId: String) -> [URL] {
-        guard let urlStrings = tweetUrlMapping[tweetId] else { return [] }
-        return urlStrings.compactMap { URL(string: $0) }
+    /// Get mediaIDs associated with a tweet
+    private func getMediaIDsForTweet(_ tweetId: String) -> [String] {
+        guard let mediaIDs = tweetUrlMapping[tweetId] else { return [] }
+        return Array(mediaIDs)
     }
     
-    /// Track URL for a tweet
-    private func trackUrl(_ url: URL, for tweetId: String) {
-        let urlString = url.absoluteString
+    /// Track mediaID for a tweet
+    private func trackMediaID(_ mediaID: String, for tweetId: String) {
         if tweetUrlMapping[tweetId] == nil {
             tweetUrlMapping[tweetId] = Set<String>()
         }
-        tweetUrlMapping[tweetId]?.insert(urlString)
+        tweetUrlMapping[tweetId]?.insert(mediaID)
     }
     
     /// Cancel all loading tasks for a tweet
     @MainActor func cancelLoadingForTweet(_ tweetId: String) {
-        // Find all URLs associated with this tweet and cancel their loading
-        let tweetUrls = getUrlsForTweet(tweetId)
-        for url in tweetUrls {
-            cancelLoading(for: url)
+        // Find all mediaIDs associated with this tweet and cancel their loading
+        let tweetMediaIDs = getMediaIDsForTweet(tweetId)
+        for mediaID in tweetMediaIDs {
+            cancelLoading(for: mediaID)
         }
         print("DEBUG: [SharedAssetCache] Cancelled all loading tasks for tweet \(tweetId)")
     }
     
     /// Trigger video preloading for a tweet
     @MainActor func triggerVideoPreloadingForTweet(_ tweetId: String) {
-        // Find all URLs associated with this tweet and trigger preloading
-        let tweetUrls = getUrlsForTweet(tweetId)
-        for url in tweetUrls {
-            preloadVideo(for: url, tweetId: tweetId)
+        // Find all mediaIDs associated with this tweet and trigger preloading
+        let tweetMediaIDs = getMediaIDsForTweet(tweetId)
+        for mediaID in tweetMediaIDs {
+            // We need to reconstruct the URL from mediaID for preloading
+            // This is a limitation - we might need to store URLs separately for preloading
+            print("DEBUG: [SharedAssetCache] Cannot preload video for mediaID \(mediaID) without URL")
         }
-        print("DEBUG: [SharedAssetCache] Triggered video preloading for tweet \(tweetId) with \(tweetUrls.count) URLs")
+        print("DEBUG: [SharedAssetCache] Triggered video preloading for tweet \(tweetId) with \(tweetMediaIDs.count) mediaIDs")
+    }
+    
+    /// Extract mediaID from URL
+    private func extractMediaID(from url: URL) -> String? {
+        let urlString = url.absoluteString
+        print("DEBUG: [SHARED ASSET CACHE] extractMediaID called for URL: \(urlString)")
+        
+        // Look for IPFS hash pattern (Qm...)
+        // IPFS hashes typically start with Qm and are 46 characters long
+        if let range = urlString.range(of: "Qm[A-Za-z0-9]{44}") {
+            let mediaID = String(urlString[range])
+            print("DEBUG: [SHARED ASSET CACHE] Extracted mediaID: \(mediaID)")
+            return mediaID
+        }
+        
+        // Also try to extract from /ipfs/ path
+        if urlString.contains("/ipfs/") {
+            let components = urlString.components(separatedBy: "/ipfs/")
+            if components.count > 1 {
+                let afterIpfs = components[1]
+                // Extract the hash part (before any additional path or query parameters)
+                let hashPart = afterIpfs.components(separatedBy: CharacterSet(charactersIn: "/?&")).first ?? afterIpfs
+                if hashPart.hasPrefix("Qm") && hashPart.count >= 46 {
+                    let mediaID = String(hashPart.prefix(46))
+                    print("DEBUG: [SHARED ASSET CACHE] Extracted mediaID from /ipfs/ path: \(mediaID)")
+                    return mediaID
+                }
+            }
+        }
+        
+        print("DEBUG: [SHARED ASSET CACHE] No IPFS hash found in URL: \(urlString)")
+        return nil
     }
     
     /// Get cached asset or create new one
     @MainActor func getAsset(for url: URL, tweetId: String? = nil) async throws -> AVAsset {
-        let cacheKey = url.absoluteString
+        guard let mediaID = extractMediaID(from: url) else {
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL: \(url)"])
+        }
+        let cacheKey = mediaID
         
-        // Track URL for tweet if provided
+        // Track mediaID for tweet if provided
         if let tweetId = tweetId {
-            trackUrl(url, for: tweetId)
+            trackMediaID(mediaID, for: tweetId)
         }
         
         // Check if we have a cached asset
@@ -204,6 +249,9 @@ class SharedAssetCache: ObservableObject {
                 self.cacheTimestamps[cacheKey] = Date()
                 self.loadingTasks.removeValue(forKey: cacheKey)
                 
+                // Save cache metadata to persist across app restarts
+                self.saveCacheMetadata()
+                
                 // Notify VideoLoadingManager that the load completed
                 VideoLoadingManager.shared.videoLoadCompleted()
             }
@@ -226,18 +274,19 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Cache a player instance for immediate reuse
-    func cachePlayer(_ player: AVPlayer, for url: URL) {
-        let cacheKey = url.absoluteString
-        
+    func cachePlayer(_ player: AVPlayer, for mediaID: String) {
         // Remove old player if exists - do this asynchronously to avoid blocking
-        if let oldPlayer = playerCache[cacheKey] {
+        if let oldPlayer = playerCache[mediaID] {
             Task.detached {
                 oldPlayer.pause()
             }
         }
         
-        playerCache[cacheKey] = player
-        cacheTimestamps[cacheKey] = Date()
+        playerCache[mediaID] = player
+        cacheTimestamps[mediaID] = Date()
+        
+        // Save cache metadata to persist across app restarts
+        saveCacheMetadata()
         
         // Manage cache size asynchronously
         Task.detached {
@@ -248,50 +297,51 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Get cached player if available
-    func getCachedPlayer(for url: URL) -> AVPlayer? {
-        let cacheKey = url.absoluteString
-        if let player = playerCache[cacheKey] {
+    func getCachedPlayer(for mediaID: String) -> AVPlayer? {
+        if let player = playerCache[mediaID] {
             // Validate player before returning it
             guard let playerItem = player.currentItem else {
-                print("DEBUG: [SHARED ASSET CACHE] Cached player has no currentItem, removing invalid player for: \(url)")
-                removeInvalidPlayer(for: url)
+                print("DEBUG: [SHARED ASSET CACHE] Cached player has no currentItem, removing invalid player for mediaID: \(mediaID)")
+                removeInvalidPlayer(for: mediaID)
                 return nil
             }
             
             if playerItem.status == .failed {
-                print("DEBUG: [SHARED ASSET CACHE] Cached player item is in failed state, removing invalid player for: \(url)")
-                removeInvalidPlayer(for: url)
+                print("DEBUG: [SHARED ASSET CACHE] Cached player item is in failed state, removing invalid player for mediaID: \(mediaID)")
+                removeInvalidPlayer(for: mediaID)
                 return nil
             }
             
-            cacheTimestamps[cacheKey] = Date() // Update access time
+            cacheTimestamps[mediaID] = Date() // Update access time
             return player
         }
         return nil
     }
     
     /// Remove invalid cached player
-    func removeInvalidPlayer(for url: URL) {
-        let cacheKey = url.absoluteString
-        playerCache.removeValue(forKey: cacheKey)
+    func removeInvalidPlayer(for mediaID: String) {
+        playerCache.removeValue(forKey: mediaID)
     }
     
-    /// Clear asset cache for a specific URL
-    @MainActor func clearAssetCache(for url: URL) {
-        let cacheKey = url.absoluteString
-        assetCache.removeValue(forKey: cacheKey)
-        cacheTimestamps.removeValue(forKey: cacheKey)
-        print("DEBUG: [SHARED ASSET CACHE] Cleared asset cache for URL: \(url)")
+    /// Clear asset cache for a specific mediaID
+    @MainActor func clearAssetCache(for mediaID: String) {
+        assetCache.removeValue(forKey: mediaID)
+        cacheTimestamps.removeValue(forKey: mediaID)
+        print("DEBUG: [SHARED ASSET CACHE] Cleared asset cache for mediaID: \(mediaID)")
     }
     
     /// Get cached player or create new one with asset
-    @MainActor func getOrCreatePlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
-        NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaType: \(mediaType?.rawValue ?? "nil")")
+    func getOrCreatePlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
+        guard let mediaID = extractMediaID(from: url) else {
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL: \(url)"])
+        }
+        
+        NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaID: \(mediaID), mediaType: \(mediaType?.rawValue ?? "nil")")
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for tweetId: \(tweetId ?? "nil")")
         
         // Try to get cached player first
-        if let cachedPlayer = getCachedPlayer(for: url) {
-            print("DEBUG: [SHARED ASSET CACHE] Returning cached player for URL: \(url.absoluteString)")
+        if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: mediaID) }) {
+            print("DEBUG: [SHARED ASSET CACHE] Returning cached player for mediaID: \(mediaID)")
             return cachedPlayer
         }
         
@@ -319,7 +369,7 @@ class SharedAssetCache: ObservableObject {
             let player = AVPlayer(playerItem: playerItem)
             
             // Cache the player for future use
-            cachePlayer(player, for: url)
+            await MainActor.run { cachePlayer(player, for: mediaID) }
             
             return player
         }
@@ -327,10 +377,11 @@ class SharedAssetCache: ObservableObject {
     
     /// Create CachingPlayerItem for HLS videos
     private func createCachingPlayer(for url: URL, tweetId: String?) async throws -> AVPlayer {
-        NSLog("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for HLS video: \(url.absoluteString)")
+        guard let mediaID = extractMediaID(from: url) else {
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL: \(url)"])
+        }
         
-        // Extract media ID from URL for caching
-        let mediaID = extractMediaID(from: url) ?? UUID().uuidString
+        NSLog("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for HLS video: \(url.absoluteString), mediaID: \(mediaID)")
         
         // Check if HLS content is already cached
         if CachingPlayerItem.isHLSCached(for: mediaID) {
@@ -359,13 +410,13 @@ class SharedAssetCache: ObservableObject {
             
             // Store the delegate to prevent deallocation
             let cacheKey = url.absoluteString
-            cachingPlayerDelegates[cacheKey] = delegate
+            await MainActor.run { cachingPlayerDelegates[cacheKey] = delegate }
             
             // Create player with CachingPlayerItem
             let player = AVPlayer(playerItem: cachingPlayerItem)
             
             // Cache the player for future use
-            cachePlayer(player, for: url)
+            await MainActor.run { cachePlayer(player, for: mediaID) }
             
             return player
         } else {
@@ -394,44 +445,18 @@ class SharedAssetCache: ObservableObject {
             
             // Store the delegate to prevent deallocation
             let cacheKey = url.absoluteString
-            cachingPlayerDelegates[cacheKey] = delegate
+            await MainActor.run { cachingPlayerDelegates[cacheKey] = delegate }
             
             // Create player with CachingPlayerItem
             let player = AVPlayer(playerItem: cachingPlayerItem)
             
             // Cache the player for future use
-            cachePlayer(player, for: url)
+            await MainActor.run { cachePlayer(player, for: mediaID) }
             
             return player
         }
     }
     
-    /// Extract media ID from URL
-    private func extractMediaID(from url: URL) -> String? {
-        let urlString = url.absoluteString
-        
-        // Extract IPFS hash from URL
-        if let ipfsRange = urlString.range(of: "/ipfs/") {
-            let afterIpfs = String(urlString[ipfsRange.upperBound...])
-            if let slashRange = afterIpfs.range(of: "/") {
-                return String(afterIpfs[..<slashRange.lowerBound])
-            } else {
-                return afterIpfs
-            }
-        }
-        
-        // Extract from m3u8 URLs
-        if urlString.contains(".m3u8") {
-            let components = urlString.components(separatedBy: "/")
-            for component in components {
-                if component.hasPrefix("Qm") && component.count > 20 {
-                    return component
-                }
-            }
-        }
-        
-        return nil
-    }
     
     /// Resolve HLS URL with specific fallback strategy
     private func resolveHLSURL(_ url: URL) async -> URL {
@@ -505,6 +530,9 @@ class SharedAssetCache: ObservableObject {
         loadingTasks.removeAll()
         preloadTasks.values.forEach { $0.cancel() }
         preloadTasks.removeAll()
+        
+        // Save empty cache metadata
+        saveCacheMetadata()
     }
     
     /// Clear all caches (emergency cleanup)
@@ -833,6 +861,52 @@ class SharedAssetCache: ObservableObject {
             self.refreshCachedPlayers()
         }
     }
+    
+    // MARK: - Cache Persistence Methods
+    
+    /// Restore cache metadata from UserDefaults on app startup
+    private func restoreCacheFromDisk() {
+        guard let data = UserDefaults.standard.data(forKey: cacheMetadataKey),
+              let metadata = try? JSONDecoder().decode(CacheMetadata.self, from: data) else {
+            print("DEBUG: [SHARED ASSET CACHE] No cache metadata found, starting fresh")
+            return
+        }
+        
+        print("DEBUG: [SHARED ASSET CACHE] Restoring cache metadata for \(metadata.cachedMediaIDs.count) mediaIDs")
+        
+        // Check which cached files still exist on disk
+        var validMediaIDs: [String: Date] = [:]
+        for (mediaID, timestamp) in metadata.cachedMediaIDs {
+            // Check if HLS video is still cached
+            if CachingPlayerItem.isHLSCached(for: mediaID) {
+                validMediaIDs[mediaID] = timestamp
+                print("DEBUG: [SHARED ASSET CACHE] HLS video still cached: \(mediaID)")
+            } else {
+                // For progressive videos, check if file exists
+                guard let cachesDirectory = try? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
+                    continue
+                }
+                let cachePath = cachesDirectory.appendingPathComponent("\(mediaID).mp4").path
+                if FileManager.default.fileExists(atPath: cachePath) {
+                    validMediaIDs[mediaID] = timestamp
+                    print("DEBUG: [SHARED ASSET CACHE] Progressive video still cached: \(mediaID)")
+                }
+            }
+        }
+        
+        cacheTimestamps = validMediaIDs
+        print("DEBUG: [SHARED ASSET CACHE] Restored \(validMediaIDs.count) valid cached entries")
+    }
+    
+    /// Save cache metadata to UserDefaults
+    private func saveCacheMetadata() {
+        let metadata = CacheMetadata(cachedMediaIDs: cacheTimestamps)
+        if let data = try? JSONEncoder().encode(metadata) {
+            UserDefaults.standard.set(data, forKey: cacheMetadataKey)
+            print("DEBUG: [SHARED ASSET CACHE] Saved cache metadata for \(cacheTimestamps.count) mediaIDs")
+        }
+    }
+    
     
     private func refreshCachedPlayers() {
         // Refresh all cached players to ensure they show cached content

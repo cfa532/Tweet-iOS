@@ -44,6 +44,15 @@ class VideoStateCache {
 
 // MARK: - Unified Simple Video Player
 struct SimpleVideoPlayer: View {
+    /// Extract mediaID from URL
+    private func extractMediaID(from url: URL) -> String? {
+        let urlString = url.absoluteString
+        // Look for IPFS hash pattern (Qm...)
+        if let range = urlString.range(of: "Qm[A-Za-z0-9]{44}") {
+            return String(urlString[range])
+        }
+        return nil
+    }
     // MARK: Required Parameters
     let url: URL
     let mid: String
@@ -521,6 +530,9 @@ struct SimpleVideoPlayer: View {
             } catch {
                 await MainActor.run {
                     print("DEBUG: [VIDEO SETUP] Failed to setup player for \(mid): \(error)")
+                    NSLog("ERROR: [SimpleVideoPlayer] Failed to setup player for \(mid): \(error)")
+                    NSLog("ERROR: [SimpleVideoPlayer] Error type: \(type(of: error))")
+                    NSLog("ERROR: [SimpleVideoPlayer] Error description: \(error.localizedDescription)")
                     handleLoadFailure()
                 }
             }
@@ -540,7 +552,7 @@ struct SimpleVideoPlayer: View {
         guard let playerItem = cachedState.player.currentItem else {
             print("DEBUG: [VIDEO CACHE] Cached player has no currentItem, clearing cache and creating new player for \(mid)")
             VideoStateCache.shared.clearCache(for: mid)
-            SharedAssetCache.shared.removeInvalidPlayer(for: url)
+            SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
             setupPlayer()
             return
         }
@@ -549,7 +561,7 @@ struct SimpleVideoPlayer: View {
         if playerItem.status == .failed {
             print("DEBUG: [VIDEO CACHE] Cached player item is in failed state, clearing cache and creating new player for \(mid)")
             VideoStateCache.shared.clearCache(for: mid)
-            SharedAssetCache.shared.removeInvalidPlayer(for: url)
+            SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
             setupPlayer()
             return
         }
@@ -558,7 +570,7 @@ struct SimpleVideoPlayer: View {
         if playerItem.status != .readyToPlay {
             print("DEBUG: [VIDEO CACHE] Cached player item not ready (status: \(playerItem.status.rawValue)), clearing cache and creating new player for \(mid)")
             VideoStateCache.shared.clearCache(for: mid)
-            SharedAssetCache.shared.removeInvalidPlayer(for: url)
+            SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
             setupPlayer()
             return
         }
@@ -567,7 +579,7 @@ struct SimpleVideoPlayer: View {
         self.player = cachedState.player
         
         // Ensure the player is also cached in SharedAssetCache for consistency
-        SharedAssetCache.shared.cachePlayer(cachedState.player, for: url)
+        SharedAssetCache.shared.cachePlayer(cachedState.player, for: extractMediaID(from: url) ?? mid)
         
         
         // For MediaCell mode, always use the current global mute state instead of the cached one
@@ -633,7 +645,7 @@ struct SimpleVideoPlayer: View {
         self.hasFinishedPlaying = false // Reset finished state
         
         // Cache the player in SharedAssetCache for reuse
-        SharedAssetCache.shared.cachePlayer(player, for: url)
+        SharedAssetCache.shared.cachePlayer(player, for: extractMediaID(from: url) ?? mid)
         
         
         // Start playback if needed
@@ -690,7 +702,7 @@ struct SimpleVideoPlayer: View {
         
         // Clear all caches to force a fresh load
         VideoStateCache.shared.clearCache(for: mid)
-        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
         
         // For fullscreen modes, try to restore from cache even on failure
         if mode == .mediaBrowser {
@@ -796,13 +808,13 @@ struct SimpleVideoPlayer: View {
         print("DEBUG: [VIDEO RETRY] Attempting retry \(retryCount + 1) for \(mid)")
         
         // FIRST: Clear all caches immediately
-        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
         VideoStateCache.shared.clearCache(for: mid)
         
         // Clear asset cache to force fresh network request - do this asynchronously
         Task.detached {
             await MainActor.run {
-                SharedAssetCache.shared.clearAssetCache(for: url)
+                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? mid)
                 print("DEBUG: [VIDEO RETRY] Cleared all caches for \(mid)")
             }
         }
@@ -823,13 +835,13 @@ struct SimpleVideoPlayer: View {
         print("DEBUG: [VIDEO MANUAL RESET] Manual reset triggered for \(mid)")
         
         // Clear all caches immediately
-        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
         VideoStateCache.shared.clearCache(for: mid)
         
         // Clear asset cache to force fresh network request - do this asynchronously
         Task.detached {
             await MainActor.run {
-                SharedAssetCache.shared.clearAssetCache(for: url)
+                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? mid)
                 print("DEBUG: [VIDEO MANUAL RESET] Cleared all caches for \(mid)")
             }
         }
@@ -855,13 +867,13 @@ struct SimpleVideoPlayer: View {
         isLoading = true
         
         // Clear caches to force fresh network request
-        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
         VideoStateCache.shared.clearCache(for: mid)
         
         // Clear asset cache asynchronously
         Task.detached {
             await MainActor.run {
-                SharedAssetCache.shared.clearAssetCache(for: url)
+                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? mid)
                 print("DEBUG: [VIDEO NETWORK RECOVERY] Cleared all caches for \(mid)")
             }
         }
@@ -922,12 +934,12 @@ struct SimpleVideoPlayer: View {
         player = nil
         
         // Clear caches to force fresh network request
-        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
         VideoStateCache.shared.clearCache(for: mid)
         
         Task {
             await MainActor.run {
-                SharedAssetCache.shared.clearAssetCache(for: url)
+                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? mid)
                 print("DEBUG: [VIDEO BACKGROUND RECOVERY] Cleared all caches for \(mid)")
             }
         }

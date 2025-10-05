@@ -26,6 +26,15 @@ class VideoVisibilityManager: ObservableObject {
 
 // MARK: - MediaCell
 struct MediaCell: View, Equatable {
+    /// Extract mediaID from URL
+    private func extractMediaID(from url: URL) -> String? {
+        let urlString = url.absoluteString
+        // Look for IPFS hash pattern (Qm...)
+        if let range = urlString.range(of: "Qm[A-Za-z0-9]{44}") {
+            return String(urlString[range])
+        }
+        return nil
+    }
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
@@ -125,12 +134,12 @@ struct MediaCell: View, Equatable {
                                     
                                     if let url = attachment.getUrl(baseUrl) {
                                         // Clear player cache
-                                        SharedAssetCache.shared.removeInvalidPlayer(for: url)
+                                        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? attachment.mid)
                                         
                                         // Clear asset cache
                                         Task {
                                             await MainActor.run {
-                                                SharedAssetCache.shared.clearAssetCache(for: url)
+                                                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? attachment.mid)
                                                 print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
                                             }
                                         }
@@ -407,7 +416,7 @@ struct MediaCell: View, Equatable {
         
         if let url = attachment.getUrl(baseUrl) {
             // Clear player cache
-            SharedAssetCache.shared.removeInvalidPlayer(for: url)
+            SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? attachment.mid)
             
             // Clear video state cache
             VideoStateCache.shared.clearCache(for: attachment.mid)
@@ -415,7 +424,7 @@ struct MediaCell: View, Equatable {
             // Clear asset cache
             Task {
                 await MainActor.run {
-                    SharedAssetCache.shared.clearAssetCache(for: url)
+                    SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? attachment.mid)
                     print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
                 }
             }
