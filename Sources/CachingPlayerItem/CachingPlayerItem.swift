@@ -180,7 +180,7 @@ public final class CachingPlayerItem: AVPlayerItem {
         super.init(asset: asset, automaticallyLoadedAssetKeys: nil)
 
         // Initialize resource loader delegate for all caching scenarios
-        resourceLoaderDelegate = ResourceLoaderDelegate(url: url, saveFilePath: saveFilePath, owner: self, isHLS: isHLS, mediaID: mediaID)
+        resourceLoaderDelegate = ResourceLoaderDelegate(url: url, mediaID: mediaID, saveFilePath: saveFilePath, owner: self)
         asset.resourceLoader.setDelegate(resourceLoaderDelegate, queue: DispatchQueue.main)
 
         addObservers()
