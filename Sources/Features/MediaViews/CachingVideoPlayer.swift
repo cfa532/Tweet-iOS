@@ -26,6 +26,7 @@ struct CachingVideoPlayer: View {
     @State private var isLoading = true
     @State private var hasFinishedPlaying = false
     @State private var loadFailed = false
+    @State private var videoCompletionObserver: NSObjectProtocol?
     
     init(
         url: URL,
@@ -171,6 +172,9 @@ struct CachingVideoPlayer: View {
                         }
                     }
                     
+                    // Set up video completion observer
+                    self.setupVideoCompletionObserver(newPlayer)
+                    
                     // Start playback if needed
                     if self.autoPlay && self.isVisible {
                         newPlayer.play()
@@ -191,7 +195,42 @@ struct CachingVideoPlayer: View {
         loadFailed = true
     }
     
+    private func setupVideoCompletionObserver(_ player: AVPlayer) {
+        // Remove existing observer if any
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        
+        // Add new observer for video completion
+        videoCompletionObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: player.currentItem,
+            queue: .main
+        ) { _ in
+            print("DEBUG: [CachingVideoPlayer] Video finished playing for \(mid)")
+            
+            // Reset video to beginning
+            player.seek(to: .zero) { finished in
+                guard finished else { return }
+                
+                // Auto-restart if in fullscreen (autoPlay is true)
+                if autoPlay {
+                    print("DEBUG: [CachingVideoPlayer] Auto-restarting video for \(mid)")
+                    player.play()
+                } else {
+                    print("DEBUG: [CachingVideoPlayer] Video ready to replay for \(mid)")
+                }
+            }
+        }
+    }
+    
     private func cleanupPlayer() {
+        // Remove video completion observer
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
+        }
+        
         player?.pause()
         player = nil
         cachingPlayerItem = nil
