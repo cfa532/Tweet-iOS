@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import CachingPlayerItem
+// CachingPlayerItem is now integrated directly
 
 class LocalHTTPServerWrapper {
     static let shared = LocalHTTPServerWrapper()

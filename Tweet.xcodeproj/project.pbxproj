@@ -113,6 +113,15 @@
 		7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */; };
 		CA8FCEEC89259B8FD761147C /* Pods_Tweet.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 16C65942A958AA33DC9832F5 /* Pods_Tweet.framework */; };
 /* End PBXBuildFile section */
+		EA6A602E643C4D9F8E7FC784 /* AppLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BA8FD9C9EE4D2AB859C730 /* AppLogger.swift */; };
+		6514EBE8D9D5463E9BB47505 /* CachingPlayerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = D682CDDDA3FE42E7AE4398DC /* CachingPlayerItem.swift */; };
+		97C3F120198740259C172B54 /* CachingPlayerItemConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30DDC87BF72410D99DDD56E /* CachingPlayerItemConfiguration.swift */; };
+		029BE31FC7A24236B7BC5F03 /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BF4A25687A1449BA6A2EED3 /* LocalHTTPServer.swift */; };
+		EA8C46ACCDF5406DBF6BF842 /* MediaFileHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB4C9D2C1A8944C58D19850F /* MediaFileHandle.swift */; };
+		F15C8473DBCC4737882328C4 /* PendingRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D3CDFA0E98482CB31A02DA /* PendingRequest.swift */; };
+		09D004DA281D48F094AD3BF0 /* ResourceLoaderDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC930F8E3A84491CB0D33F4C /* ResourceLoaderDelegate.swift */; };
+		29D9A705E1A84CBE95355D05 /* URLExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78802FBDB97143BFBCAF5E0A /* URLExtension.swift */; };
+		7CAA60F4B92F4DDEBC95A214 /* URLResponseExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102B1E11C9DC4F97827E6D53 /* URLResponseExtension.swift */; };
 
 /* Begin PBXFileReference section */
 		16C65942A958AA33DC9832F5 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -228,6 +237,15 @@
 		8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadManagerDebugView.swift; sourceTree = "<group>"; };
 		98729E031BD14CADF7E78810 /* Pods-Tweet.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.debug.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+		71BA8FD9C9EE4D2AB859C730 /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
+		D682CDDDA3FE42E7AE4398DC /* CachingPlayerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachingPlayerItem.swift; sourceTree = "<group>"; };
+		A30DDC87BF72410D99DDD56E /* CachingPlayerItemConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CachingPlayerItemConfiguration.swift; sourceTree = "<group>"; };
+		4BF4A25687A1449BA6A2EED3 /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
+		CB4C9D2C1A8944C58D19850F /* MediaFileHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaFileHandle.swift; sourceTree = "<group>"; };
+		33D3CDFA0E98482CB31A02DA /* PendingRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingRequest.swift; sourceTree = "<group>"; };
+		CC930F8E3A84491CB0D33F4C /* ResourceLoaderDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceLoaderDelegate.swift; sourceTree = "<group>"; };
+		78802FBDB97143BFBCAF5E0A /* URLExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLExtension.swift; sourceTree = "<group>"; };
+		102B1E11C9DC4F97827E6D53 /* URLResponseExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLResponseExtension.swift; sourceTree = "<group>"; };
 
 /* Begin PBXFrameworksBuildPhase section */
 		1A1A1A1A1A1A1A1A1A1A1A02 /* Frameworks */ = {

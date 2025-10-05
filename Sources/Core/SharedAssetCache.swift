@@ -8,7 +8,7 @@
 import Foundation
 import AVFoundation
 import UIKit
-import CachingPlayerItem
+// CachingPlayerItem is now integrated directly
 
 /// Shared asset cache for video players with background loading and priority management
 @MainActor

@@ -6,8 +6,7 @@ target 'Tweet' do
   pod 'SDWebImageSwiftUI', '~> 3.1.3'
   pod 'ffmpeg-kit-ios', '~> 6.0'
   
-  # Local CachingPlayerItem with HLS support
-  pod 'CachingPlayerItem', :path => '/Users/cfa532/Documents/GitHub/CachingPlayerItem'
+  # CachingPlayerItem is now integrated directly into the app
 end
 
 post_install do |installer|
