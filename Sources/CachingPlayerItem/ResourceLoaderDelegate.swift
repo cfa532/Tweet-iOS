@@ -321,6 +321,33 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     private func startHLSPlaylistDownload(_ loadingRequest: AVAssetResourceLoadingRequest, playlistURL: URL, cachePath: String) {
         NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Starting download from \(playlistURL.absoluteString)")
         
+        // Check if playlist is already cached
+        if FileManager.default.fileExists(atPath: cachePath) {
+            NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Playlist already cached at \(cachePath), serving from cache")
+            
+            do {
+                let cachedData = try Data(contentsOf: URL(fileURLWithPath: cachePath))
+                NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Serving cached playlist, size: \(cachedData.count) bytes")
+                
+                // Serve the cached playlist directly
+                let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
+                    "Content-Type": "application/vnd.apple.mpegurl",
+                    "Content-Length": "\(cachedData.count)"
+                ])
+                loadingRequest.response = response
+                loadingRequest.dataRequest?.respond(with: cachedData)
+                loadingRequest.finishLoading()
+                
+                // Notify owner about serving from cache
+                DispatchQueue.main.async {
+                    self.owner?.delegate?.playerItem?(self.owner!, didFinishDownloadingFileAt: cachePath)
+                }
+                return
+            } catch {
+                NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Failed to read cached playlist: \(error.localizedDescription), will re-download")
+            }
+        }
+        
         let session = URLSession.shared
         let task = session.dataTask(with: playlistURL) { [self] data, response, error in
             if let error = error {

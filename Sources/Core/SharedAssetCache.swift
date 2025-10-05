@@ -332,38 +332,78 @@ class SharedAssetCache: ObservableObject {
         // Extract media ID from URL for caching
         let mediaID = extractMediaID(from: url) ?? UUID().uuidString
         
-        // Resolve the HLS URL to get the actual playlist URL (master.m3u8 or playlist.m3u8)
-        let resolvedURL = await resolveHLSURL(url)
-        print("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL for CachingPlayerItem: \(resolvedURL.absoluteString)")
-        
-        // Create a unique save path for the HLS playlist
-        let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
-        
-        // Start LocalHTTPServer and register media
-        LocalHTTPServer.shared.start()
-        // Create media-specific directory path for LocalHTTPServer
-        let cacheDir = URL(fileURLWithPath: savePath).deletingLastPathComponent()
-        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-        LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
-        
-        // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
-        let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
-        
-        // Create and store delegate for caching events
-        let delegate = CachingPlayerItemDelegateImpl()
-        cachingPlayerItem.delegate = delegate
-        
-        // Store the delegate to prevent deallocation
-        let cacheKey = url.absoluteString
-        cachingPlayerDelegates[cacheKey] = delegate
-        
-        // Create player with CachingPlayerItem
-        let player = AVPlayer(playerItem: cachingPlayerItem)
-        
-        // Cache the player for future use
-        cachePlayer(player, for: url)
-        
-        return player
+        // Check if HLS content is already cached
+        if CachingPlayerItem.isHLSCached(for: mediaID) {
+            NSLog("DEBUG: [SHARED ASSET CACHE] HLS content already cached for mediaID: \(mediaID), using cached version")
+            
+            // Resolve the HLS URL to get the actual playlist URL (master.m3u8 or playlist.m3u8)
+            let resolvedURL = await resolveHLSURL(url)
+            print("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL for cached content: \(resolvedURL.absoluteString)")
+            
+            // Create a unique save path for the HLS playlist
+            let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
+            
+            // Start LocalHTTPServer and register media
+            LocalHTTPServer.shared.start()
+            // Create media-specific directory path for LocalHTTPServer
+            let cacheDir = URL(fileURLWithPath: savePath).deletingLastPathComponent()
+            let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+            LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
+            
+            // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
+            let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
+            
+            // Create and store delegate for caching events
+            let delegate = CachingPlayerItemDelegateImpl()
+            cachingPlayerItem.delegate = delegate
+            
+            // Store the delegate to prevent deallocation
+            let cacheKey = url.absoluteString
+            cachingPlayerDelegates[cacheKey] = delegate
+            
+            // Create player with CachingPlayerItem
+            let player = AVPlayer(playerItem: cachingPlayerItem)
+            
+            // Cache the player for future use
+            cachePlayer(player, for: url)
+            
+            return player
+        } else {
+            NSLog("DEBUG: [SHARED ASSET CACHE] HLS content not cached for mediaID: \(mediaID), will download and cache")
+            
+            // Resolve the HLS URL to get the actual playlist URL (master.m3u8 or playlist.m3u8)
+            let resolvedURL = await resolveHLSURL(url)
+            print("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL for CachingPlayerItem: \(resolvedURL.absoluteString)")
+            
+            // Create a unique save path for the HLS playlist
+            let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
+            
+            // Start LocalHTTPServer and register media
+            LocalHTTPServer.shared.start()
+            // Create media-specific directory path for LocalHTTPServer
+            let cacheDir = URL(fileURLWithPath: savePath).deletingLastPathComponent()
+            let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+            LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
+            
+            // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
+            let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
+            
+            // Create and store delegate for caching events
+            let delegate = CachingPlayerItemDelegateImpl()
+            cachingPlayerItem.delegate = delegate
+            
+            // Store the delegate to prevent deallocation
+            let cacheKey = url.absoluteString
+            cachingPlayerDelegates[cacheKey] = delegate
+            
+            // Create player with CachingPlayerItem
+            let player = AVPlayer(playerItem: cachingPlayerItem)
+            
+            // Cache the player for future use
+            cachePlayer(player, for: url)
+            
+            return player
+        }
     }
     
     /// Extract media ID from URL
