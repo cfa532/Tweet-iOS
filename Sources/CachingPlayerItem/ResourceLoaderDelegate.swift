@@ -304,7 +304,14 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         if let mediaID = mediaID {
             // Create a subdirectory for each media ID
             let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-            return mediaCacheDir.appendingPathComponent(fileName).path
+            
+            // For the main playlist, use the mediaID as filename to match LocalHTTPServer expectations
+            if fileName.hasSuffix(".m3u8") && (fileName.contains("master") || fileName.contains("playlist")) {
+                return mediaCacheDir.appendingPathComponent("\(mediaID).m3u8").path
+            } else {
+                // For segments and other files, use the original filename
+                return mediaCacheDir.appendingPathComponent(fileName).path
+            }
         } else {
             // Fallback to original behavior if no mediaID
             return cacheDir.appendingPathComponent(fileName).path

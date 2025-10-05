@@ -341,9 +341,10 @@ class SharedAssetCache: ObservableObject {
         
         // Start LocalHTTPServer and register media
         LocalHTTPServer.shared.start()
-        // Register with the directory path, not the file path, so LocalHTTPServer can find segments
-        let cacheDir = URL(fileURLWithPath: savePath).deletingLastPathComponent().path
-        LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: cacheDir)
+        // Create media-specific directory path for LocalHTTPServer
+        let cacheDir = URL(fileURLWithPath: savePath).deletingLastPathComponent()
+        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+        LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
         
         // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
         let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
