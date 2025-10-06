@@ -250,7 +250,11 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         // If not cached, download and serve
         NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Downloading segment from \(url.absoluteString)")
         
-        let session = URLSession.shared
+        // Create a custom URLSession with longer timeout to prevent cancellations
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 60.0  // 60 seconds
+        config.timeoutIntervalForResource = 300.0  // 5 minutes
+        let session = URLSession(configuration: config)
         let task = session.dataTask(with: url) { [self] data, response, error in
             if let error = error {
                 NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Download error: \(error.localizedDescription)")
@@ -371,7 +375,11 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 }
             }
         
-        let session = URLSession.shared
+        // Create a custom URLSession with longer timeout to prevent cancellations
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 60.0  // 60 seconds
+        config.timeoutIntervalForResource = 300.0  // 5 minutes
+        let session = URLSession(configuration: config)
         let task = session.dataTask(with: playlistURL) { [self] data, response, error in
             if let error = error {
                 NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Download error: \(error.localizedDescription)")
@@ -486,7 +494,11 @@ class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     }
     
     private func downloadSegmentInBackground(from url: URL, to localPath: String) {
-        let session = URLSession.shared
+        // Create a custom URLSession with longer timeout to prevent cancellations
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 60.0  // 60 seconds
+        config.timeoutIntervalForResource = 300.0  // 5 minutes
+        let session = URLSession(configuration: config)
         let task = session.dataTask(with: url) { data, response, error in
             if let error = error {
                 NSLog("DEBUG: [CachingPlayerItem] downloadSegmentInBackground: Download error: \(error.localizedDescription)")
