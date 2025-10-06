@@ -124,8 +124,11 @@ class DetailVideoManager: NSObject, ObservableObject {
     
     /// Setup video completion observer
     private func setupVideoCompletionObserver(_ playerItem: AVPlayerItem) {
+        print("DEBUG: [DETAIL VIDEO MANAGER] Setting up video completion observer for \(currentVideoMid ?? "unknown")")
+        
         // Remove existing observer if any
         if let observer = videoCompletionObserver {
+            print("DEBUG: [DETAIL VIDEO MANAGER] Removing existing video completion observer for \(currentVideoMid ?? "unknown")")
             NotificationCenter.default.removeObserver(observer)
         }
         
@@ -134,22 +137,32 @@ class DetailVideoManager: NSObject, ObservableObject {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
             queue: .main
-        ) { _ in
+        ) { notification in
             Task { @MainActor in
-                guard let player = self.currentPlayer else { return }
-                print("DEBUG: [DETAIL VIDEO MANAGER] Video finished playing for \(self.currentVideoMid ?? "unknown")")
+                guard let player = self.currentPlayer else { 
+                    print("DEBUG: [DETAIL VIDEO MANAGER] No current player when video finished")
+                    return 
+                }
+                print("DEBUG: [DETAIL VIDEO MANAGER] Video completion notification received for \(self.currentVideoMid ?? "unknown")")
+                print("DEBUG: [DETAIL VIDEO MANAGER] Notification object: \(notification.object ?? "nil")")
+                print("DEBUG: [DETAIL VIDEO MANAGER] Player current item: \(player.currentItem?.description ?? "nil")")
                 
-                // Reset video to beginning and restart
+                // Reset video to beginning (but don't auto-restart)
                 player.seek(to: .zero) { finished in
-                    guard finished else { return }
+                    guard finished else { 
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Seek to zero failed for \(self.currentVideoMid ?? "unknown")")
+                        return 
+                    }
                     Task { @MainActor in
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Auto-restarting video for \(self.currentVideoMid ?? "unknown")")
-                        player.play()
-                        self.isPlaying = true
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Successfully seeked to zero for \(self.currentVideoMid ?? "unknown")")
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Video reset to beginning, ready to replay for \(self.currentVideoMid ?? "unknown")")
+                        self.isPlaying = false
                     }
                 }
             }
         }
+        
+        print("DEBUG: [DETAIL VIDEO MANAGER] Video completion observer setup complete for \(currentVideoMid ?? "unknown")")
     }
     
     /// Toggle play/pause

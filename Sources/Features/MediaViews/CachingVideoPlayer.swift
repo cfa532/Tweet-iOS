@@ -219,8 +219,11 @@ struct CachingVideoPlayer: View {
     }
     
     private func setupVideoCompletionObserver(_ player: AVPlayer) {
+        print("DEBUG: [CachingVideoPlayer] Setting up video completion observer for \(mid)")
+        
         // Remove existing observer if any
         if let observer = videoCompletionObserver {
+            print("DEBUG: [CachingVideoPlayer] Removing existing video completion observer for \(mid)")
             NotificationCenter.default.removeObserver(observer)
         }
         
@@ -229,12 +232,19 @@ struct CachingVideoPlayer: View {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem,
             queue: .main
-        ) { _ in
-            print("DEBUG: [CachingVideoPlayer] Video finished playing for \(mid)")
+        ) { notification in
+            print("DEBUG: [CachingVideoPlayer] Video completion notification received for \(mid)")
+            print("DEBUG: [CachingVideoPlayer] Notification object: \(notification.object ?? "nil")")
+            print("DEBUG: [CachingVideoPlayer] Player current item: \(player.currentItem?.description ?? "nil")")
             
             // Reset video to beginning
             player.seek(to: .zero) { finished in
-                guard finished else { return }
+                guard finished else { 
+                    print("DEBUG: [CachingVideoPlayer] Seek to zero failed for \(mid)")
+                    return 
+                }
+                
+                print("DEBUG: [CachingVideoPlayer] Successfully seeked to zero for \(mid)")
                 
                 // Auto-restart if in fullscreen (autoPlay is true)
                 if autoPlay {
@@ -245,6 +255,8 @@ struct CachingVideoPlayer: View {
                 }
             }
         }
+        
+        print("DEBUG: [CachingVideoPlayer] Video completion observer setup complete for \(mid)")
     }
     
     private func cleanupPlayer() {

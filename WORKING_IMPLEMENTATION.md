@@ -2,7 +2,14 @@
 
 ## 🎯 **Current Working State**
 
-The app is successfully playing cached HLS videos using a **completely rewritten ResourceLoaderDelegate** that integrates with LocalHTTPServer. The code you're seeing in your IDE (`/Users/cfa532/Documents/GitHub/CachingPlayerItem/Source/ResourceLoaderDelegate.swift`) is the **original external library version** that doesn't compile, but the app is actually using the **working version** in `/Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/CachingPlayerItem/ResourceLoaderDelegate.swift`.
+The app is successfully playing cached HLS videos using a **completely rewritten ResourceLoaderDelegate** that integrates with LocalHTTPServer. The system uses a **redirect-based approach** where:
+
+1. **ResourceLoaderDelegate** intercepts custom scheme URLs (`cachingPlayerItemScheme://`)
+2. **Downloads and caches** HLS playlists and segments to disk
+3. **Redirects AVPlayer** to `http://localhost:8080/media/{mediaID}/` using 302 redirects
+4. **LocalHTTPServer** serves the cached content from disk
+
+This approach works because `AVPlayer` expects redirects for custom scheme URLs, and the LocalHTTPServer provides a standard HTTP interface for serving cached content.
 
 ## 📁 **File Structure**
 
@@ -28,22 +35,23 @@ The app is successfully playing cached HLS videos using a **completely rewritten
 
 ## 🔧 **Key Implementation Details**
 
-### 1. **ResourceLoaderDelegate (Working Version - 512 lines)**
+### 1. **ResourceLoaderDelegate (Working Version - 722 lines)**
 
 The working version is a **completely rewritten** ResourceLoaderDelegate that:
 
 - **Intercepts custom scheme URLs** (`cachingPlayerItemScheme://`)
-- **Downloads and caches** the master HLS playlist
-- **Modifies playlists** to point to LocalHTTPServer URLs
-- **Redirects AVPlayer** to use `http://localhost:8080/media/{mediaID}/`
-- **Serves content** through LocalHTTPServer
+- **Downloads and caches** HLS playlists and segments to disk
+- **Redirects AVPlayer** to `http://localhost:8080/media/{mediaID}/` using 302 redirects
+- **Serves cached content** through LocalHTTPServer
+- **Handles both playlists and segments** with proper caching
 
 Key methods:
 ```swift
 func resourceLoader(_:shouldWaitForLoadingOfRequestedResource:) -> Bool
 private func handleHLSRequest(_:url:) -> Bool
+private func handlePlaylistRequest(_:resolvedURL:) -> Bool
+private func handleSegmentRequest(_:url:) -> Bool
 private func startHLSPlaylistDownload(_:playlistURL:cachePath:)
-private func modifyPlaylistForLocalServer(_:mediaID:) -> Data
 ```
 
 ### 2. **SharedAssetCache Integration**
@@ -72,21 +80,24 @@ private func createCachingPlayer(for url: URL, tweetId: String?) async throws ->
 
 ### 3. **Working Flow**
 
-1. **CachingPlayerItem** initializes with resolved HLS URL
-2. **ResourceLoaderDelegate** intercepts requests with custom scheme
-3. **Downloads master playlist** from original server
-4. **Modifies playlist** to point segments to LocalHTTPServer
-5. **Redirects AVPlayer** to `http://localhost:8080/media/{mediaID}/`
-6. **LocalHTTPServer serves** cached content
+1. **SharedAssetCache** creates CachingPlayerItem with resolved HLS URL
+2. **LocalHTTPServer** starts and registers media for serving
+3. **ResourceLoaderDelegate** intercepts custom scheme requests
+4. **Downloads and caches** HLS playlists and segments to disk
+5. **Redirects AVPlayer** to `http://localhost:8080/media/{mediaID}/` using 302 redirects
+6. **LocalHTTPServer** serves cached content from disk
+7. **AVPlayer** plays video seamlessly from local HTTP server
 
 ## 📊 **Evidence of Success**
 
 From the logs:
 ```
-DEBUG: [CachingPlayerItem] resourceLoader: isHLS = true, requestURL = cachingPlayerItemScheme://...
-DEBUG: [CachingPlayerItem] handleHLSRequest: Initial HLS request - downloading and redirecting to LocalHTTPServer
-DEBUG: [CachingPlayerItem] modifyPlaylistForLocalServer: Replaced 480p/playlist.m3u8 with http://localhost:8080/media/.../480p/playlist.m3u8
-DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Redirecting to LocalHTTPServer URL: http://localhost:8080/media/...
+DEBUG: [LocalHTTPServer] Started on port 8080
+DEBUG: [LocalHTTPServer] Registered media QmNwRcdHKzcGwFNqi8TvhCuDq1VpeGcPzRE9xbnRi7wLig
+DEBUG: [CachingPlayerItem] handlePlaylistRequest: Redirected to LocalHTTPServer for cached playlist
+DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirected to LocalHTTPServer for cached segment
+DEBUG: [LocalHTTPServer] Served file: _master.m3u8 (size: 370 bytes)
+DEBUG: [LocalHTTPServer] Served file: segment000.ts (size: 2480096 bytes)
 ```
 
 And video playback working:
@@ -97,20 +108,27 @@ kMRMediaRemoteNowPlayingInfoPlaybackRate = 1
 kMRMediaRemoteNowPlayingInfoMediaType = kMRMediaRemoteNowPlayingInfoTypeVideo
 ```
 
-## 🚀 **Branch Information**
+## 🚀 **Current Status**
 
-- **Current Branch**: `working-localhttpserver`
-- **Base Branch**: `CachingPlayerItem`
-- **Status**: ✅ Working - Video playback with local caching
+- **Branch**: `NoLocalHttp` (current working branch)
+- **Status**: ✅ Working - Video playback with LocalHTTPServer integration
+- **Architecture**: Redirect-based approach using 302 redirects to LocalHTTPServer
 
-## 🔍 **Why Your IDE Shows Different Code**
+## 🔍 **Key Technical Details**
 
-The file you're viewing (`/Users/cfa532/Documents/GitHub/CachingPlayerItem/Source/ResourceLoaderDelegate.swift`) is the **original external library version** that was never integrated. The app is using the **completely rewritten version** in the Tweet-iOS project directory.
+The system works by:
+1. **ResourceLoaderDelegate** intercepts custom scheme URLs (`cachingPlayerItemScheme://`)
+2. **Downloads and caches** content to disk in media-specific directories
+3. **Returns 302 redirects** to `http://localhost:8080/media/{mediaID}/filename`
+4. **LocalHTTPServer** serves cached files from disk with proper HTTP headers
+5. **AVPlayer** receives content through standard HTTP requests
 
-## 📝 **Next Steps**
+## 📝 **Why This Approach Works**
 
-1. **Switch to the working branch**: `git checkout working-localhttpserver`
-2. **Open the correct files**: Look in `Sources/CachingPlayerItem/` not the external library
-3. **The app is already working** - video playback with caching is functional
+- **AVPlayer expects redirects** for custom scheme URLs (CoreMediaErrorDomain -12881)
+- **LocalHTTPServer provides standard HTTP interface** for serving cached content
+- **302 redirects are the standard way** to redirect AVPlayer to actual content
+- **Disk caching** provides persistent storage across app restarts
+- **MediaID-based organization** prevents cache conflicts between different videos
 
 The LocalHTTPServer integration is complete and working! 🎉

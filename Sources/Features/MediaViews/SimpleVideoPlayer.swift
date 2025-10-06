@@ -789,11 +789,19 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleVideoFinished() {
-        if !disableAutoRestart {
-            player?.seek(to: .zero)
-            player?.play()
-        } else {
-            hasFinishedPlaying = true
+        print("DEBUG: [SimpleVideoPlayer] Video finished playing for \(mid)")
+        
+        // Always reset video to beginning when it finishes
+        player?.seek(to: .zero) { finished in
+            guard finished else { return }
+            
+            if !self.disableAutoRestart {
+                print("DEBUG: [SimpleVideoPlayer] Auto-restarting video for \(self.mid)")
+                self.player?.play()
+            } else {
+                print("DEBUG: [SimpleVideoPlayer] Video ready to replay for \(self.mid)")
+                self.hasFinishedPlaying = true
+            }
         }
         
         onVideoFinished?()
@@ -822,33 +830,17 @@ struct SimpleVideoPlayer: View {
             // Activate audio session for video playback
             AudioSessionManager.shared.activateForVideoPlayback()
             
-            // For full screen mode, always restart from beginning if video is at end
-            if mode == .mediaBrowser {
-                if hasFinishedPlaying || isVideoAtEnd(player!) {
-                    print("DEBUG: [VIDEO FULLSCREEN] Video is at end, restarting from beginning for \(mid)")
-                    player?.seek(to: .zero) { finished in
-                        if finished {
-                            self.hasFinishedPlaying = false
-                            player?.play()
-                        }
+            // Always ensure video is reset to beginning if it has finished playing
+            if hasFinishedPlaying || isVideoAtEnd(player!) {
+                print("DEBUG: [VIDEO PLAYBACK] Video is at end, restarting from beginning for \(mid)")
+                player?.seek(to: .zero) { finished in
+                    if finished {
+                        self.hasFinishedPlaying = false
+                        player?.play()
                     }
-                } else {
-                    player?.play()
                 }
             } else {
-                // Normal mode logic
-                if hasFinishedPlaying {
-                    if !disableAutoRestart {
-                        // Reset to beginning and play
-                        player?.seek(to: .zero)
-                        hasFinishedPlaying = false
-                        player?.play()
-                    } else {
-                        // Don't restart, keep the finished state
-                    }
-                } else {
-                    player?.play()
-                }
+                player?.play()
             }
         }
     }

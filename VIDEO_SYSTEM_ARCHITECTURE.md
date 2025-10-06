@@ -97,8 +97,10 @@ The Tweet iOS app has implemented a sophisticated video loading, caching, and pl
 
 ```
 User scrolls to video → VideoLoadingManager approves → SimpleVideoPlayer requests player
-→ SharedAssetCache.getOrCreatePlayer() → CachingPlayerItem created → ResourceLoaderDelegate handles requests
-→ HLS playlist downloaded and modified → Segments preloaded (next 3 only) → Video plays immediately
+→ SharedAssetCache.getOrCreatePlayer() → CachingPlayerItem created with custom scheme URL
+→ ResourceLoaderDelegate intercepts custom scheme requests → Downloads master HLS playlist
+→ Modifies playlist to point segments to LocalHTTPServer URLs → Redirects AVPlayer to http://localhost:8080
+→ LocalHTTPServer serves cached content → Video plays immediately
 ```
 
 ### 2. Fullscreen Transition
@@ -113,6 +115,15 @@ User taps video → MediaBrowserView opens → CachingVideoPlayer reuses existin
 ```
 User opens tweet detail → DetailVideoPlayerView creates independent player → SharedAssetCache.getAsset()
 → New AVPlayer instance from cached asset → Immediate playback → Auto-restart on completion
+```
+
+### 4. LocalHTTPServer Integration Flow
+
+```
+ResourceLoaderDelegate receives custom scheme request → Downloads/caches HLS playlist
+→ Modifies playlist URLs to point to LocalHTTPServer → Returns 302 redirect to AVPlayer
+→ AVPlayer requests content from http://localhost:8080/media/{mediaID}/
+→ LocalHTTPServer serves cached files from disk → Video plays seamlessly
 ```
 
 ## Key Improvements Implemented
@@ -184,9 +195,19 @@ downloadHLSSegments(segmentsToPreload, baseURL: baseURL)
 
 ### LocalHTTPServer Integration
 ```swift
+// Start LocalHTTPServer and register media
+LocalHTTPServer.shared.start()
+LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
+
 // Redirect to local server for cached content
 let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
 // 302 redirect to http://localhost:8080/media/{mediaID}/
+
+// ResourceLoaderDelegate redirects AVPlayer to LocalHTTPServer
+let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, 
+    httpVersion: "HTTP/1.1", headerFields: ["Location": fullURL.absoluteString])
+loadingRequest.response = response
+loadingRequest.finishLoading()
 ```
 
 ## Current Status: ✅ PRODUCTION READY & FULLY OPERATIONAL
@@ -243,15 +264,21 @@ DEBUG: [SHARED ASSET CACHE] Restored 16 valid cached entries
 DEBUG: [LocalHTTPServer] Started on port 8080
 DEBUG: [LocalHTTPServer] Registered media QmNwRcdHKzcGwFNqi8TvhCuDq1VpeGcPzRE9xbnRi7wLig
 DEBUG: [CachingPlayerItem] Using custom scheme URL for HLS
+DEBUG: [CachingPlayerItem] handlePlaylistRequest: Redirected to LocalHTTPServer for cached playlist
+DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirected to LocalHTTPServer for cached segment
+DEBUG: [LocalHTTPServer] Served file: _master.m3u8 (size: 370 bytes)
+DEBUG: [LocalHTTPServer] Served file: segment000.ts (size: 2480096 bytes)
 DEBUG: [SHARED ASSET CACHE] Saved cache metadata for 16 mediaIDs
 ```
 
 ### Key Performance Indicators
 - **Cache Restoration**: 16 videos successfully restored from disk cache
 - **Server Status**: LocalHTTPServer running smoothly on port 8080
-- **HLS Processing**: Master playlists being processed correctly
+- **HLS Processing**: Master playlists being processed and redirected correctly
 - **Player Creation**: CachingPlayerItem instances created successfully
 - **Memory Management**: Cache metadata saved and restored properly
+- **Content Serving**: LocalHTTPServer successfully serving cached playlists and segments
+- **Redirect Flow**: ResourceLoaderDelegate properly redirecting AVPlayer to LocalHTTPServer
 
 ---
 
