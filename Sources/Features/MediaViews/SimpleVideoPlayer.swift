@@ -166,14 +166,26 @@ struct SimpleVideoPlayer: View {
         }
         .onAppear {
             print("DEBUG: [VIDEO APPEAR] onAppear called for \(mid)")
-            print("DEBUG: [VIDEO APPEAR] player: \(player != nil), shouldLoadVideo: \(shouldLoadVideo), isVisible: \(isVisible)")
+            print("DEBUG: [VIDEO APPEAR] player: \(player != nil), shouldLoadVideo: \(shouldLoadVideo), isVisible: \(isVisible), mode: \(mode)")
             
             // Handle idle timer for fullscreen modes
             if mode == .mediaBrowser {
                 UIApplication.shared.isIdleTimerDisabled = true
             }
             
-            // Validate existing player state if present - but be less aggressive about failure detection
+            // For fullscreen mode, always try to set up player regardless of shouldLoadVideo
+            if mode == .mediaBrowser {
+                print("DEBUG: [VIDEO APPEAR] Fullscreen mode - forcing player setup for \(mid)")
+                if player == nil {
+                    setupPlayer()
+                } else {
+                    // Player exists, validate and configure it
+                    validateAndConfigureExistingPlayer()
+                }
+                return
+            }
+            
+            // For MediaCell mode, use existing logic but be less aggressive about failure detection
             if let player = player, let playerItem = player.currentItem {
                 if playerItem.status == .failed && loadFailed {
                     // Only trigger recovery if we've already marked this as failed
@@ -262,11 +274,22 @@ struct SimpleVideoPlayer: View {
         }
         .onChange(of: isVisible) { _, visible in
             print("DEBUG: [VIDEO VISIBILITY] isVisible changed to \(visible) for \(mid)")
-            print("DEBUG: [VIDEO VISIBILITY] shouldLoadVideo: \(shouldLoadVideo), player: \(player != nil)")
+            print("DEBUG: [VIDEO VISIBILITY] shouldLoadVideo: \(shouldLoadVideo), player: \(player != nil), mode: \(mode)")
             
             // Handle visibility changes - simplified logic to avoid conflicts
             if visible {
-                // Only proceed if loading is enabled
+                // For fullscreen mode, always allow setup regardless of shouldLoadVideo
+                if mode == .mediaBrowser {
+                    print("DEBUG: [VIDEO VISIBILITY] Fullscreen mode - forcing player setup for \(mid)")
+                    if player == nil {
+                        setupPlayer()
+                    } else {
+                        validateAndConfigureExistingPlayer()
+                    }
+                    return
+                }
+                
+                // For MediaCell mode, respect shouldLoadVideo setting
                 guard shouldLoadVideo else {
                     print("DEBUG: [VIDEO VISIBILITY] Video became visible but loading is disabled for \(mid)")
                     return
@@ -522,9 +545,42 @@ struct SimpleVideoPlayer: View {
     }
     
     // MARK: - Player Setup
+    private func validateAndConfigureExistingPlayer() {
+        guard let player = player else {
+            print("DEBUG: [VIDEO VALIDATE] No player to validate for \(mid)")
+            return
+        }
+        
+        print("DEBUG: [VIDEO VALIDATE] Validating existing player for \(mid)")
+        
+        // Check if player item exists and is valid
+        if let playerItem = player.currentItem {
+            switch playerItem.status {
+            case .readyToPlay:
+                print("DEBUG: [VIDEO VALIDATE] Player item is ready to play for \(mid)")
+                configurePlayer(player)
+            case .failed:
+                print("DEBUG: [VIDEO VALIDATE] Player item failed for \(mid), attempting recovery")
+                handleLoadFailure()
+            case .unknown:
+                print("DEBUG: [VIDEO VALIDATE] Player item status unknown for \(mid), waiting...")
+                // Wait a bit and try again
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.validateAndConfigureExistingPlayer()
+                }
+            @unknown default:
+                print("DEBUG: [VIDEO VALIDATE] Unknown player item status for \(mid)")
+            }
+        } else {
+            print("DEBUG: [VIDEO VALIDATE] No player item for \(mid), setting up new player")
+            setupPlayer()
+        }
+    }
+    
     private func setupPlayer() {
         print("DEBUG: [VIDEO SETUP] Setting up player for \(mid)")
         print("DEBUG: [VIDEO SETUP] isVisible: \(isVisible), shouldLoadVideo: \(shouldLoadVideo), mode: \(mode)")
+        print("DEBUG: [VIDEO SETUP] URL: \(url)")
         
         // Check if we have cached content first, regardless of loading state
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: mid)
@@ -534,6 +590,7 @@ struct SimpleVideoPlayer: View {
         let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? mid
         let hasDirectCachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) != nil
         print("DEBUG: [VIDEO SETUP] hasDirectCachedPlayer: \(hasDirectCachedPlayer)")
+        print("DEBUG: [VIDEO SETUP] mediaID: \(mediaID)")
         
         if hasCachedContent || hasDirectCachedPlayer {
             print("DEBUG: [VIDEO SETUP] Tweet \(mid) has cached content, attempting to load from cache")
@@ -562,10 +619,15 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // Early return if loading is disabled and no cache available
-        guard shouldLoadVideo else {
-            print("DEBUG: [VIDEO SETUP] Loading disabled for \(mid) and no cache available, skipping setup")
-            return
+        // For fullscreen mode, always allow setup regardless of shouldLoadVideo
+        if mode == .mediaBrowser {
+            print("DEBUG: [VIDEO SETUP] Fullscreen mode - forcing player setup regardless of shouldLoadVideo for \(mid)")
+        } else {
+            // For MediaCell mode, respect shouldLoadVideo setting
+            guard shouldLoadVideo else {
+                print("DEBUG: [VIDEO SETUP] Loading disabled for \(mid) and no cache available, skipping setup")
+                return
+            }
         }
         
         // Reset error state when starting setup
@@ -704,6 +766,11 @@ struct SimpleVideoPlayer: View {
     }
     
     private func configurePlayer(_ player: AVPlayer) {
+        print("DEBUG: [VIDEO CONFIGURE] Configuring player for \(mid)")
+        print("DEBUG: [VIDEO CONFIGURE] Mode: \(mode)")
+        print("DEBUG: [VIDEO CONFIGURE] Player item status: \(player.currentItem?.status.rawValue ?? -1)")
+        print("DEBUG: [VIDEO CONFIGURE] Player item error: \(player.currentItem?.error?.localizedDescription ?? "none")")
+        
         // Configure player
         // For full screen modes, always unmute regardless of the isMuted parameter
         if mode == .mediaBrowser {
@@ -1228,19 +1295,51 @@ struct VideoLayerRefreshView: UIViewRepresentable {
 }
 
 // MARK: - AVPlayerViewController Wrapper for Full Screen
-struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
-    let player: AVPlayer?
-    
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.player = player
-        controller.showsPlaybackControls = true
-        controller.videoGravity = .resizeAspect
-        controller.view.backgroundColor = .black
-        return controller
-    }
-    
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        uiViewController.player = player
-    }
-}
+        struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
+            let player: AVPlayer?
+            
+            func makeUIViewController(context: Context) -> AVPlayerViewController {
+                let controller = AVPlayerViewController()
+                controller.player = player
+                controller.showsPlaybackControls = true
+                controller.videoGravity = .resizeAspect
+                controller.view.backgroundColor = .black
+                
+                // Add debugging for player state
+                if let player = player {
+                    print("DEBUG: [AVPlayerViewController] Created with player for \(player.currentItem?.description ?? "unknown")")
+                    print("DEBUG: [AVPlayerViewController] Player item status: \(player.currentItem?.status.rawValue ?? -1)")
+                    print("DEBUG: [AVPlayerViewController] Player rate: \(player.rate)")
+                    print("DEBUG: [AVPlayerViewController] Player time: \(player.currentTime())")
+                    
+                    // Check if player item is ready
+                    if let playerItem = player.currentItem {
+                        print("DEBUG: [AVPlayerViewController] Player item duration: \(playerItem.duration)")
+                        print("DEBUG: [AVPlayerViewController] Player item error: \(playerItem.error?.localizedDescription ?? "none")")
+                    }
+                } else {
+                    print("DEBUG: [AVPlayerViewController] Created with nil player")
+                }
+                
+                return controller
+            }
+            
+            func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+                print("DEBUG: [AVPlayerViewController] Updating with player: \(player != nil)")
+                print("DEBUG: [AVPlayerViewController] Previous player: \(uiViewController.player != nil)")
+                
+                if let player = player {
+                    print("DEBUG: [AVPlayerViewController] New player item status: \(player.currentItem?.status.rawValue ?? -1)")
+                    print("DEBUG: [AVPlayerViewController] New player rate: \(player.rate)")
+                }
+                
+                uiViewController.player = player
+                
+                // Force view update if player changed
+                if uiViewController.player != player {
+                    print("DEBUG: [AVPlayerViewController] Player changed, forcing layout update")
+                    uiViewController.view.setNeedsLayout()
+                    uiViewController.view.layoutIfNeeded()
+                }
+            }
+        }

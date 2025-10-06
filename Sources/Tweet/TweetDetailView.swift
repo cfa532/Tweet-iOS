@@ -68,6 +68,11 @@ struct DetailVideoPlayerView: View {
     @StateObject private var detailVideoManager = DetailVideoManager.shared
     @State private var isLoading = true
     @State private var isMuted: Bool = false
+    @State private var isPlaying = false
+    @State private var currentTime: TimeInterval = 0
+    @State private var duration: TimeInterval = 0
+    @State private var showControls = false
+    @State private var controlsTimer: Timer?
     
     var body: some View {
         Group {
@@ -81,8 +86,6 @@ struct DetailVideoPlayerView: View {
                             VStack {
                                 Spacer()
                                 HStack {
-
-                                    
                                     Spacer()
                                     
                                     // Mute button in bottom right corner
@@ -95,6 +98,82 @@ struct DetailVideoPlayerView: View {
                             }
                         }
                     )
+                    .overlay(
+                        // Custom video controls overlay
+                        Group {
+                            if showControls || !isPlaying {
+                                ZStack {
+                                    // Bottom controls bar
+                                    VStack {
+                                        Spacer()
+                                        
+                                        // Progress bar and time display
+                                        VStack(spacing: 8) {
+                                            // Progress bar
+                                            ProgressView(value: duration > 0 ? currentTime / duration : 0)
+                                                .progressViewStyle(LinearProgressViewStyle(tint: .white))
+                                                .background(Color.white.opacity(0.3))
+                                                .scaleEffect(y: 2)
+                                                .onTapGesture { location in
+                                                    seekToPosition(at: location)
+                                                }
+                                            
+                                            // Time display (without play button)
+                                            HStack {
+                                                // Elapsed time
+                                                Text(formatTime(currentTime))
+                                                    .font(.caption)
+                                                    .foregroundColor(.white)
+                                                    .padding(.horizontal, 8)
+                                                    .padding(.vertical, 4)
+                                                    .background(Color.black.opacity(0.6))
+                                                    .cornerRadius(4)
+                                                
+                                                Spacer()
+                                                
+                                                // Duration
+                                                Text(formatTime(duration))
+                                                    .font(.caption)
+                                                    .foregroundColor(.white)
+                                                    .padding(.horizontal, 8)
+                                                    .padding(.vertical, 4)
+                                                    .background(Color.black.opacity(0.6))
+                                                    .cornerRadius(4)
+                                            }
+                                        }
+                                        .padding(.horizontal, 16)
+                                        .padding(.bottom, 16)
+                                    }
+                                    .background(
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [Color.clear, Color.black.opacity(0.3)]),
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
+                                    )
+                                    
+                                    // Center play button (only show when paused or controls are visible)
+                                    if !isPlaying || showControls {
+                                        Button(action: togglePlayPause) {
+                                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                                .font(.system(size: 60))
+                                                .foregroundColor(.white)
+                                                .background(
+                                                    Circle()
+                                                        .fill(Color.black.opacity(0.4))
+                                                        .frame(width: 80, height: 80)
+                                                )
+                                        }
+                                        .opacity(showControls || !isPlaying ? 1.0 : 0.0)
+                                        .animation(.easeInOut(duration: 0.3), value: showControls)
+                                    }
+                                }
+                            }
+                        }
+                    )
+                    .onTapGesture {
+                        toggleControls()
+                    }
             } else if isLoading {
                 ProgressView(NSLocalizedString("Loading video...", comment: "Video loading message"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -128,6 +207,7 @@ struct DetailVideoPlayerView: View {
         .onChange(of: detailVideoManager.currentPlayer) { _, player in
             if player != nil {
                 isLoading = false
+                setupTimeObserver()
             }
         }
     }
@@ -146,6 +226,96 @@ struct DetailVideoPlayerView: View {
     private func cleanupPlayer() {
         // Pause the video when detail view disappears
         detailVideoManager.currentPlayer?.pause()
+        controlsTimer?.invalidate()
+        controlsTimer = nil
+    }
+    
+    // MARK: - Video Controls
+    
+    private func setupTimeObserver() {
+        guard let player = detailVideoManager.currentPlayer else { return }
+        
+        // Get duration
+        if let duration = player.currentItem?.duration {
+            let newDuration = CMTimeGetSeconds(duration)
+            if newDuration.isFinite && newDuration > 0 {
+                self.duration = newDuration
+            }
+        }
+        
+        // Set up time observer for progress updates
+        let timeScale = CMTimeScale(NSEC_PER_SEC)
+        let time = CMTime(seconds: 1.0, preferredTimescale: timeScale)
+        
+        player.addPeriodicTimeObserver(forInterval: time, queue: .main) { time in
+            let newCurrentTime = CMTimeGetSeconds(time)
+            
+            // Only update if the time is finite and valid
+            if newCurrentTime.isFinite && newCurrentTime >= 0 {
+                self.currentTime = newCurrentTime
+            }
+            
+            // Update playing state
+            if player.rate > 0 {
+                self.isPlaying = true
+            } else {
+                self.isPlaying = false
+            }
+            
+            // Get duration if not already set
+            if let duration = player.currentItem?.duration, self.duration == 0 {
+                let newDuration = CMTimeGetSeconds(duration)
+                if newDuration.isFinite && newDuration > 0 {
+                    self.duration = newDuration
+                }
+            }
+        }
+    }
+    
+    private func togglePlayPause() {
+        guard let player = detailVideoManager.currentPlayer else { return }
+        
+        if isPlaying {
+            player.pause()
+        } else {
+            player.play()
+        }
+    }
+    
+    private func toggleControls() {
+        showControls.toggle()
+        
+        // Auto-hide controls after 3 seconds
+        controlsTimer?.invalidate()
+        if showControls {
+            controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                showControls = false
+            }
+        }
+    }
+    
+    private func seekToPosition(at location: CGPoint) {
+        guard let player = detailVideoManager.currentPlayer,
+              duration > 0 else { return }
+        
+        // This is a simplified seek - in a real implementation you'd calculate
+        // the exact position based on the tap location on the progress bar
+        let seekTime = currentTime + (location.x > 0 ? 10 : -10) // Seek 10 seconds forward/back
+        let clampedTime = max(0, min(seekTime, duration))
+        
+        let time = CMTime(seconds: clampedTime, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        player.seek(to: time)
+    }
+    
+    private func formatTime(_ time: TimeInterval) -> String {
+        // Handle NaN, infinite, or negative values
+        guard time.isFinite && time >= 0 else {
+            return "0:00"
+        }
+        
+        let minutes = Int(time) / 60
+        let seconds = Int(time) % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 

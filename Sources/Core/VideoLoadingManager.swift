@@ -78,7 +78,15 @@ class VideoLoadingManager: ObservableObject {
     
     /// Check if a tweet should load videos (with performance throttling and cache awareness)
     func shouldLoadVideos(for tweetId: String) -> Bool {
-        guard let index = allTweetIds.firstIndex(of: tweetId) else { return false }
+        print("DEBUG: [VideoLoadingManager] shouldLoadVideos called for tweetId: \(tweetId)")
+        print("DEBUG: [VideoLoadingManager] allTweetIds count: \(allTweetIds.count), currentVisibleTweetIndex: \(currentVisibleTweetIndex)")
+        
+        guard let index = allTweetIds.firstIndex(of: tweetId) else { 
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) not found in allTweetIds - denying loading")
+            return false 
+        }
+        
+        print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) found at index \(index)")
         
         // HIGHEST PRIORITY: Current visible tweet should always load regardless of any constraints
         if index == currentVisibleTweetIndex {
