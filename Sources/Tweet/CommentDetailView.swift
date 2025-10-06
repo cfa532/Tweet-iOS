@@ -143,7 +143,8 @@ struct CommentDetailView: View {
                         DetailMediaCell(
                             parentTweet: comment,
                             attachmentIndex: index,
-                            videoManager: DetailVideoManager.shared
+                            showMuteButton: false,
+                            videoManager: DetailVideoManager.shared,
                         )
                         .tag(index)
                     }
