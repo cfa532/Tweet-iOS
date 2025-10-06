@@ -50,6 +50,18 @@ class Tweet: Identifiable, Codable, ObservableObject {
         instances.removeAll()
     }
     
+    static func getInstance(for mid: MimeiId) -> Tweet? {
+        instanceLock.lock()
+        defer { instanceLock.unlock() }
+        return instances[mid]
+    }
+    
+    static func getAllInstances() -> [MimeiId: Tweet] {
+        instanceLock.lock()
+        defer { instanceLock.unlock() }
+        return instances
+    }
+    
     // MARK: - Properties
     var id: String { mid }  // Computed property that returns mid
     var mid: MimeiId

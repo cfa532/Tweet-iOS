@@ -320,4 +320,11 @@ extension ChatCacheManager {
             try? context.save()
         }
     }
+    
+    /// Clear only memory cache (for memory management)
+    func clearMemoryCache() {
+        // Clear in-memory chat message instances
+        // Note: ChatMessage doesn't have singleton instances like Tweet, so this is mainly for future extensibility
+        print("DEBUG: [ChatCacheManager] Cleared memory cache")
+    }
 }

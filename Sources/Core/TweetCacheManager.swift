@@ -233,6 +233,13 @@ extension TweetCacheManager {
         clearAllUsers()
     }
     
+    /// Clear only memory cache (for memory management)
+    func clearMemoryCache() {
+        // Clear in-memory tweet instances
+        Tweet.clearAllInstances()
+        print("DEBUG: [TweetCacheManager] Cleared memory cache")
+    }
+    
     /// Release a percentage of tweet cache to free memory
     func releasePartialCache(percentage: Int) {
         let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range

@@ -87,6 +87,8 @@ struct SimpleVideoPlayer: View {
     @State private var nativeControlsTimer: Timer?
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var isPlayerDetached = false // Track if player is detached for background prevention
+    @State private var timeObserver: Any? // Time observer for memory management
+    @State private var timeObserverPlayer: AVPlayer? // Reference to the player that added the time observer
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -653,6 +655,9 @@ struct SimpleVideoPlayer: View {
             print("DEBUG: [VIDEO CONFIGURE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
         }
         
+        // Setup time observer for memory-efficient segment management
+        setupTimeObserver(for: player)
+        
         // Reset player position to beginning (in case it was cached at the end)
         player.seek(to: .zero)
         
@@ -672,6 +677,33 @@ struct SimpleVideoPlayer: View {
         
         // Start playback if needed
         checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+    }
+    
+    private func setupTimeObserver(for player: AVPlayer) {
+        // Remove existing time observer if any (only from the player that added it)
+        if let existingObserver = timeObserver, let observerPlayer = timeObserverPlayer {
+            observerPlayer.removeTimeObserver(existingObserver)
+            timeObserver = nil
+            timeObserverPlayer = nil
+        }
+        
+        // Create time observer for memory-efficient segment management
+        let timeScale = CMTimeScale(NSEC_PER_SEC)
+        let time = CMTime(seconds: 2.0, preferredTimescale: timeScale) // Update every 2 seconds to reduce UI load
+        
+        timeObserver = player.addPeriodicTimeObserver(forInterval: time, queue: .main) { time in
+            
+            // Update playback position for memory-efficient segment management
+            if let playerItem = player.currentItem as? CachingPlayerItem,
+               let resourceLoaderDelegate = playerItem.getResourceLoaderDelegate() {
+                resourceLoaderDelegate.updatePlaybackPosition(time.seconds)
+            }
+        }
+        
+        // Store reference to the player that added this observer
+        timeObserverPlayer = player
+        
+        print("DEBUG: [VIDEO TIME OBSERVER] Setup time observer for memory management for \(mid)")
     }
     
     private func setupPlayerObservers(_ player: AVPlayer) {
@@ -937,6 +969,13 @@ struct SimpleVideoPlayer: View {
         
         // Pause the player immediately
         player?.pause()
+        
+        // Clean up time observer (only from the player that added it)
+        if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
+            observerPlayer.removeTimeObserver(observer)
+            timeObserver = nil
+            timeObserverPlayer = nil
+        }
         
         // Cancel any ongoing loading tasks in SharedAssetCache (only if no cache)
         SharedAssetCache.shared.cancelLoadingForTweet(mid)

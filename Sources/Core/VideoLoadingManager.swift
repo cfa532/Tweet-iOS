@@ -76,9 +76,22 @@ class VideoLoadingManager: ObservableObject {
         manageVideoLoadingWithPerformance()
     }
     
-    /// Check if a tweet should load videos (with performance throttling)
+    /// Check if a tweet should load videos (with performance throttling and cache awareness)
     func shouldLoadVideos(for tweetId: String) -> Bool {
         guard let index = allTweetIds.firstIndex(of: tweetId) else { return false }
+        
+        // HIGHEST PRIORITY: Current visible tweet should always load regardless of any constraints
+        if index == currentVisibleTweetIndex {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is current visible tweet, highest priority - allowing loading")
+            return true
+        }
+        
+        // SECOND PRIORITY: Check if tweet has cached content - if so, always allow loading regardless of performance constraints
+        let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: tweetId)
+        if hasCachedContent {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content, allowing loading")
+            return true
+        }
         
         // Check if we're already loading too many videos
         if activeLoadingCount >= maxConcurrentLoads {
@@ -103,6 +116,19 @@ class VideoLoadingManager: ObservableObject {
         
         // Only preload if the tweet actually contains videos
         guard tweetsWithVideos.contains(tweetId) else { return false }
+        
+        // HIGHEST PRIORITY: Current visible tweet should always preload regardless of any constraints
+        if index == currentVisibleTweetIndex {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is current visible tweet, highest priority - allowing preloading")
+            return true
+        }
+        
+        // SECOND PRIORITY: Check if tweet has cached content - if so, allow preloading regardless of performance constraints
+        let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: tweetId)
+        if hasCachedContent {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content, allowing preloading")
+            return true
+        }
         
         // Check performance constraints
         if activeLoadingCount >= maxConcurrentLoads {

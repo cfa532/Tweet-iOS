@@ -63,6 +63,12 @@ class SharedAssetCache: ObservableObject {
         
         // Start proactive memory monitoring
         startMemoryMonitoring()
+        
+        // Initialize disk cache cleanup manager
+        _ = DiskCacheCleanupManager.shared
+        
+        // Initialize memory cap manager
+        _ = MemoryCapManager.shared
     }
     
     // MARK: - Cache Storage
@@ -586,6 +592,9 @@ class SharedAssetCache: ObservableObject {
         
         // Clear URL tracking
         tweetUrlMapping.removeAll()
+        
+        // Clear disk cache using the cleanup manager
+        DiskCacheCleanupManager.shared.clearAllCache()
         
         print("DEBUG: [SharedAssetCache] All caches cleared")
     }

@@ -312,6 +312,11 @@ public final class CachingPlayerItem: AVPlayerItem {
         resourceLoaderDelegate?.invalidateAndCancelSession()
     }
     
+    /// Get the resource loader delegate for memory management
+    public func getResourceLoaderDelegate() -> ResourceLoaderDelegate? {
+        return resourceLoaderDelegate
+    }
+    
 
     // MARK: KVO
 
