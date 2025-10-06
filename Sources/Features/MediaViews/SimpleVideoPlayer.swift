@@ -87,6 +87,8 @@ struct SimpleVideoPlayer: View {
     @State private var nativeControlsTimer: Timer?
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var isPlayerDetached = false // Track if player is detached for background prevention
+    @State private var videoCompletionObserver: NSObjectProtocol?
+    @State private var videoErrorObserver: NSObjectProtocol?
     @State private var timeObserver: Any? // Time observer for memory management
     @State private var timeObserverPlayer: AVPlayer? // Reference to the player that added the time observer
     
@@ -171,12 +173,16 @@ struct SimpleVideoPlayer: View {
                 UIApplication.shared.isIdleTimerDisabled = true
             }
             
-            // Validate existing player state if present
+            // Validate existing player state if present - but be less aggressive about failure detection
             if let player = player, let playerItem = player.currentItem {
-                if playerItem.status == .failed {
-                    print("DEBUG: [VIDEO APPEAR] Player item is in failed state for \(mid), triggering recovery")
+                if playerItem.status == .failed && loadFailed {
+                    // Only trigger recovery if we've already marked this as failed
+                    print("DEBUG: [VIDEO APPEAR] Player item is in failed state and already marked as failed for \(mid), triggering recovery")
                     handleLoadFailure()
                     return
+                } else if playerItem.status == .failed {
+                    // Player item is failed but not marked as failed yet - just log and continue
+                    print("DEBUG: [VIDEO APPEAR] Player item is in failed state for \(mid), but not marked as failed yet - continuing")
                 }
             }
             
@@ -266,12 +272,16 @@ struct SimpleVideoPlayer: View {
                     return
                 }
                 
-                // Validate existing player state if present
+                // Validate existing player state if present - but be less aggressive about failure detection
                 if let player = player, let playerItem = player.currentItem {
-                    if playerItem.status == .failed {
-                        print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state for \(mid), triggering recovery")
+                    if playerItem.status == .failed && loadFailed {
+                        // Only trigger recovery if we've already marked this as failed
+                        print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state and already marked as failed for \(mid), triggering recovery")
                         handleLoadFailure()
                         return
+                    } else if playerItem.status == .failed {
+                        // Player item is failed but not marked as failed yet - just log and continue
+                        print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state for \(mid), but not marked as failed yet - continuing")
                     }
                 }
                 
@@ -324,6 +334,20 @@ struct SimpleVideoPlayer: View {
             handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo)
         }
         
+        .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
+            // Direct handler for stopAllVideos notification
+            print("DEBUG: [SimpleVideoPlayer] Received stopAllVideos notification for \(mid)")
+            
+            // Only pause and mute if this video is not going to full screen
+            // The MediaBrowserView will handle its own video state
+            if mode == .mediaCell {
+                player?.pause()
+                // Also mute the player to stop audio
+                player?.isMuted = true
+            } else {
+                print("DEBUG: [SimpleVideoPlayer] Ignoring stopAllVideos for full screen video \(mid)")
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             // App going to background - detach player to prevent black screens
             print("DEBUG: [VIDEO BACKGROUND] App entering background for \(mid)")
@@ -338,13 +362,21 @@ struct SimpleVideoPlayer: View {
             // App became active - ensure player is properly reattached and configured
             print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
             
-            // Always try to restore cached state first when app becomes active
-            if player == nil && shouldLoadVideo {
+            // Only restore cached state if no player exists and we're not already detached
+            if player == nil && shouldLoadVideo && !isPlayerDetached {
                 print("DEBUG: [VIDEO APP ACTIVE] No player found, attempting to restore cached state for \(mid)")
                 restoreCachedVideoState()
             }
             
-            // Ensure player is reattached if it was detached
+            // If still no player after cache restoration, try to get from SharedAssetCache
+            if player == nil && shouldLoadVideo && !isPlayerDetached {
+                if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: extractMediaID(from: url) ?? mid) {
+                    print("DEBUG: [VIDEO APP ACTIVE] Found cached player in SharedAssetCache for \(mid) after app restart")
+                    configurePlayer(cachedPlayer)
+                }
+            }
+            
+            // Ensure player is reattached if it was detached (but don't duplicate reattach calls)
             if isPlayerDetached {
                 print("DEBUG: [VIDEO APP ACTIVE] Player was detached, reattaching for \(mid)")
                 reattachPlayerForForeground()
@@ -498,9 +530,22 @@ struct SimpleVideoPlayer: View {
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: mid)
         print("DEBUG: [VIDEO SETUP] hasCachedContent: \(hasCachedContent)")
         
-        if hasCachedContent {
+        // Also check if we have a cached player directly by mediaID (for first-time loads)
+        let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? mid
+        let hasDirectCachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) != nil
+        print("DEBUG: [VIDEO SETUP] hasDirectCachedPlayer: \(hasDirectCachedPlayer)")
+        
+        if hasCachedContent || hasDirectCachedPlayer {
             print("DEBUG: [VIDEO SETUP] Tweet \(mid) has cached content, attempting to load from cache")
-            // Try to load from cache even if loading is disabled
+            
+            // For cached content, try to get the player synchronously first
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
+                print("DEBUG: [VIDEO SETUP] Found cached player synchronously for \(mid), configuring immediately")
+                configurePlayer(cachedPlayer)
+                return
+            }
+            
+            // If no cached player found synchronously, try async loading
             Task.detached(priority: .userInitiated) {
                 do {
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
@@ -542,6 +587,13 @@ struct SimpleVideoPlayer: View {
         if mode == .mediaBrowser && player == nil && !isLoading {
             print("DEBUG: [VIDEO CACHE] Fullscreen mode with no player, attempting to restore cached state for \(mid)")
             restoreCachedVideoState()
+            return
+        }
+        
+        // Check if we have a cached player in SharedAssetCache (for app restart scenarios)
+        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: extractMediaID(from: url) ?? mid) {
+            print("DEBUG: [VIDEO SETUP] Found cached player in SharedAssetCache for \(mid), reusing it")
+            configurePlayer(cachedPlayer)
             return
         }
         
@@ -727,8 +779,11 @@ struct SimpleVideoPlayer: View {
         // Store reference for cleanup
         self.playerItem = playerItem
         
+        // Remove existing observers if any
+        removePlayerObservers()
+        
         // Video finished observer
-        NotificationCenter.default.addObserver(
+        videoCompletionObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
             queue: .main
@@ -737,7 +792,7 @@ struct SimpleVideoPlayer: View {
         }
         
         // Error observer
-        NotificationCenter.default.addObserver(
+        videoErrorObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemFailedToPlayToEndTime,
             object: playerItem,
             queue: .main
@@ -751,10 +806,16 @@ struct SimpleVideoPlayer: View {
     
     private func removePlayerObservers() {
         // Remove observers to prevent memory leaks
-        if let playerItem = playerItem {
-            NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: playerItem)
-            NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: playerItem)
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
         }
+        
+        if let observer = videoErrorObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoErrorObserver = nil
+        }
+        
         playerItem = nil
     }
     
@@ -766,8 +827,14 @@ struct SimpleVideoPlayer: View {
         // Remove observers to prevent memory leaks
         removePlayerObservers()
         
-        // Clear the current player since it's in an invalid state
-        player = nil
+        // Don't immediately clear the player - let it persist for potential recovery
+        // Only clear if we've exhausted retry attempts
+        if retryCount >= 3 {
+            print("DEBUG: [VIDEO ERROR] Max retries reached, clearing player for \(mid)")
+            player = nil
+        } else {
+            print("DEBUG: [VIDEO ERROR] Keeping player for potential recovery for \(mid)")
+        }
         
         // Clear all caches to force a fresh load
         VideoStateCache.shared.clearCache(for: mid)
@@ -795,7 +862,13 @@ struct SimpleVideoPlayer: View {
         player?.seek(to: .zero) { finished in
             guard finished else { return }
             
-            if !self.disableAutoRestart {
+            // For MediaCell mode, don't auto-restart - just stop and rewind
+            if self.mode == .mediaCell {
+                print("DEBUG: [SimpleVideoPlayer] MediaCell mode - video finished, stopping and rewinding for \(self.mid)")
+                self.player?.pause()
+                self.hasFinishedPlaying = true
+            } else if !self.disableAutoRestart {
+                // For other modes (fullscreen, detail), auto-restart if not disabled
                 print("DEBUG: [SimpleVideoPlayer] Auto-restarting video for \(self.mid)")
                 self.player?.play()
             } else {
@@ -812,6 +885,13 @@ struct SimpleVideoPlayer: View {
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
             print("DEBUG: [VIDEO CACHE] Restoring cached video state for \(mid)")
             restoreFromCache(cachedState)
+        } else {
+            // Fallback: check SharedAssetCache for cached player (app restart scenarios)
+            let mediaID = extractMediaID(from: url) ?? mid
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
+                print("DEBUG: [VIDEO CACHE] No VideoStateCache found, but found cached player in SharedAssetCache for \(mid)")
+                configurePlayer(cachedPlayer)
+            }
         }
     }
     
@@ -830,13 +910,22 @@ struct SimpleVideoPlayer: View {
             // Activate audio session for video playback
             AudioSessionManager.shared.activateForVideoPlayback()
             
+            // For MediaCell mode, don't auto-restart if video has finished
+            if mode == .mediaCell && hasFinishedPlaying {
+                print("DEBUG: [VIDEO PLAYBACK] MediaCell mode - video has finished, not auto-restarting for \(mid)")
+                return
+            }
+            
             // Always ensure video is reset to beginning if it has finished playing
             if hasFinishedPlaying || isVideoAtEnd(player!) {
                 print("DEBUG: [VIDEO PLAYBACK] Video is at end, restarting from beginning for \(mid)")
                 player?.seek(to: .zero) { finished in
                     if finished {
                         self.hasFinishedPlaying = false
-                        player?.play()
+                        // Only auto-play if not in MediaCell mode or if explicitly allowed
+                        if self.mode != .mediaCell {
+                            player?.play()
+                        }
                     }
                 }
             } else {
@@ -969,13 +1058,15 @@ struct SimpleVideoPlayer: View {
         
         if hasCachedContent {
             print("DEBUG: [VIDEO CANCELLATION] Tweet \(mid) has cached content, skipping cancellation")
-            // Still pause the player but don't cancel loading or clear cache
+            // Still pause the player and mute to stop audio, but don't cancel loading or clear cache
             player?.pause()
+            player?.isMuted = true
             return
         }
         
-        // Pause the player immediately
+        // Pause the player immediately and mute to stop audio
         player?.pause()
+        player?.isMuted = true
         
         // Clean up time observer (only from the player that added it)
         if let observer = timeObserver, let observerPlayer = timeObserverPlayer {

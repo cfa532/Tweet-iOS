@@ -41,6 +41,12 @@ class DetailVideoManager: NSObject, ObservableObject {
             if let player = currentPlayer, let playerItem = player.currentItem {
                 playerItem.removeObserver(self, forKeyPath: "status")
             }
+            
+            // Remove video completion observer from previous video
+            if let observer = videoCompletionObserver {
+                NotificationCenter.default.removeObserver(observer)
+                videoCompletionObserver = nil
+            }
         }
         
         currentVideoMid = mid
@@ -130,6 +136,7 @@ class DetailVideoManager: NSObject, ObservableObject {
         if let observer = videoCompletionObserver {
             print("DEBUG: [DETAIL VIDEO MANAGER] Removing existing video completion observer for \(currentVideoMid ?? "unknown")")
             NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
         }
         
         // Add new observer for video completion

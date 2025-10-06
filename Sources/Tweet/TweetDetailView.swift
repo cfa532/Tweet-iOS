@@ -1,6 +1,55 @@
 import SwiftUI
 import AVKit
 
+// MARK: - Video Player Representable
+struct VideoPlayerRepresentable: UIViewRepresentable {
+    let player: AVPlayer
+    
+    func makeUIView(context: Context) -> UIView {
+        let view = VideoPlayerView()
+        let playerLayer = AVPlayerLayer(player: player)
+        playerLayer.videoGravity = .resizeAspect
+        playerLayer.frame = view.bounds
+        view.layer.addSublayer(playerLayer)
+        
+        // Store playerLayer in context for updates
+        context.coordinator.playerLayer = playerLayer
+        context.coordinator.view = view
+        
+        return view
+    }
+    
+    func updateUIView(_ uiView: UIView, context: Context) {
+        guard let videoView = uiView as? VideoPlayerView,
+              let playerLayer = context.coordinator.playerLayer else { return }
+        
+        // Update frame when view bounds change
+        playerLayer.frame = videoView.bounds
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    class Coordinator: NSObject {
+        var playerLayer: AVPlayerLayer?
+        var view: VideoPlayerView?
+    }
+}
+
+// Custom UIView that properly handles layout
+class VideoPlayerView: UIView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // Update player layer frame when view layout changes
+        layer.sublayers?.forEach { sublayer in
+            if let playerLayer = sublayer as? AVPlayerLayer {
+                playerLayer.frame = bounds
+            }
+        }
+    }
+}
+
 // MARK: - Scroll Detection
 private enum ScrollDirection {
     case up
@@ -23,7 +72,7 @@ struct DetailVideoPlayerView: View {
     var body: some View {
         Group {
             if let player = detailVideoManager.currentPlayer {
-                VideoPlayer(player: player)
+                VideoPlayerRepresentable(player: player)
                     .aspectRatio(videoAspectRatio, contentMode: .fit)
                     .clipped()
                     .overlay(
@@ -434,6 +483,10 @@ struct TweetDetailView: View {
             print("DEBUG: [TweetDetailView] ===== VIEW APPEARED =====")
             print("DEBUG: [TweetDetailView] Tweet ID: \(tweet.mid)")
             print("DEBUG: [TweetDetailView] Attachments count: \(tweet.attachments?.count ?? 0)")
+            
+            // Stop all videos in the tweet list when entering detail view
+            NotificationCenter.default.post(name: .stopAllVideos, object: nil)
+            print("DEBUG: [TweetDetailView] Posted stopAllVideos notification")
             
             // Log all attachments
             if let attachments = tweet.attachments {

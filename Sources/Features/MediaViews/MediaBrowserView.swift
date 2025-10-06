@@ -212,7 +212,7 @@ struct MediaBrowserView: View {
         private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
             let shouldAutoPlay = index == currentIndex
             
-            return CachingVideoPlayer(
+            return SimpleVideoPlayer(
                 url: url,
                 mid: attachment.mid,
                 isVisible: true,
@@ -223,12 +223,13 @@ struct MediaBrowserView: View {
                 isMuted: false, // Unmuted in fullscreen
                 onVideoTap: {
                     // Handle video tap if needed
-                }
+                },
+                mode: .mediaBrowser // Use mediaBrowser mode to share state with MediaCell
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .onChange(of: currentIndex) { _, newIndex in
-                // The CachingVideoPlayer will handle play/pause based on isVisible and autoPlay
+                // The SimpleVideoPlayer will handle play/pause based on isVisible and autoPlay
             }
         }
         

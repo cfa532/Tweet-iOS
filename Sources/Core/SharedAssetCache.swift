@@ -242,7 +242,7 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Extract mediaID from URL
-    private func extractMediaID(from url: URL) -> String? {
+    func extractMediaID(from url: URL) -> String? {
         let urlString = url.absoluteString
         print("DEBUG: [SHARED ASSET CACHE] extractMediaID called for URL: \(urlString)")
         
