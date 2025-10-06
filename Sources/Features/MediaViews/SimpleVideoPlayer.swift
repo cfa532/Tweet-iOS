@@ -484,9 +484,31 @@ struct SimpleVideoPlayer: View {
     private func setupPlayer() {
         print("DEBUG: [VIDEO SETUP] Setting up player for \(mid)")
         
-        // Early return if loading is disabled
+        // Check if we have cached content first, regardless of loading state
+        let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: mid)
+        
+        if hasCachedContent {
+            print("DEBUG: [VIDEO SETUP] Tweet \(mid) has cached content, attempting to load from cache")
+            // Try to load from cache even if loading is disabled
+            Task.detached(priority: .userInitiated) {
+                do {
+                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
+                    await MainActor.run {
+                        self.configurePlayer(newPlayer)
+                    }
+                } catch {
+                    await MainActor.run {
+                        print("DEBUG: [VIDEO SETUP] Failed to load from cache for \(mid): \(error)")
+                        self.handleLoadFailure()
+                    }
+                }
+            }
+            return
+        }
+        
+        // Early return if loading is disabled and no cache available
         guard shouldLoadVideo else {
-            print("DEBUG: [VIDEO SETUP] Loading disabled for \(mid), skipping setup")
+            print("DEBUG: [VIDEO SETUP] Loading disabled for \(mid) and no cache available, skipping setup")
             return
         }
         
@@ -903,10 +925,20 @@ struct SimpleVideoPlayer: View {
     private func cancelVideoLoading() {
         print("DEBUG: [VIDEO CANCELLATION] Cancelling video loading for \(mid)")
         
+        // Check if we have cached content before cancelling
+        let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: mid)
+        
+        if hasCachedContent {
+            print("DEBUG: [VIDEO CANCELLATION] Tweet \(mid) has cached content, skipping cancellation")
+            // Still pause the player but don't cancel loading or clear cache
+            player?.pause()
+            return
+        }
+        
         // Pause the player immediately
         player?.pause()
         
-        // Cancel any ongoing loading tasks in SharedAssetCache
+        // Cancel any ongoing loading tasks in SharedAssetCache (only if no cache)
         SharedAssetCache.shared.cancelLoadingForTweet(mid)
         
         // Clear loading state

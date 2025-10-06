@@ -202,8 +202,20 @@ class VideoLoadingManager: ObservableObject {
     /// Process a batch of cancellations in background
     private func processCancellationBatch(_ tweetIds: [String]) async {
         for tweetId in tweetIds {
-            // Cancel loading tasks in SharedAssetCache
-            SharedAssetCache.shared.cancelLoadingForTweet(tweetId)
+            // Check if tweet has cached content before cancelling
+            let hasCachedContent = await MainActor.run {
+                SharedAssetCache.shared.hasCachedContent(for: tweetId)
+            }
+            
+            if hasCachedContent {
+                print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content, skipping cancellation")
+                continue
+            }
+            
+            // Cancel loading tasks in SharedAssetCache (only if no cache)
+            await MainActor.run {
+                SharedAssetCache.shared.cancelLoadingForTweet(tweetId)
+            }
             
             // Post notification for MediaGridView to handle (on main actor)
             await MainActor.run {

@@ -120,20 +120,32 @@ class SharedAssetCache: ObservableObject {
     
     // MARK: - Asset Management
     
-    /// Cancel loading tasks for a specific URL
+    /// Cancel loading tasks for a specific URL only if no cache is available
     @MainActor func cancelLoading(for mediaID: String) {
-        // Cancel loading task if exists
+        // Check if we have cached content before cancelling
+        let hasCachedAsset = assetCache[mediaID] != nil
+        let hasCachedPlayer = playerCache[mediaID] != nil
+        
+        // Cancel loading task if exists and no cache is available
         if let loadingTask = loadingTasks[mediaID] {
-            loadingTask.cancel()
-            loadingTasks.removeValue(forKey: mediaID)
-            print("DEBUG: [SharedAssetCache] Cancelled loading task for mediaID: \(mediaID)")
+            if !hasCachedAsset && !hasCachedPlayer {
+                loadingTask.cancel()
+                loadingTasks.removeValue(forKey: mediaID)
+                print("DEBUG: [SharedAssetCache] Cancelled loading task for mediaID: \(mediaID) (no cache available)")
+            } else {
+                print("DEBUG: [SharedAssetCache] Keeping loading task for mediaID: \(mediaID) (cache available)")
+            }
         }
         
-        // Cancel preload task if exists
+        // Cancel preload task if exists and no cache is available
         if let preloadTask = preloadTasks[mediaID] {
-            preloadTask.cancel()
-            preloadTasks.removeValue(forKey: mediaID)
-            print("DEBUG: [SharedAssetCache] Cancelled preload task for mediaID: \(mediaID)")
+            if !hasCachedAsset && !hasCachedPlayer {
+                preloadTask.cancel()
+                preloadTasks.removeValue(forKey: mediaID)
+                print("DEBUG: [SharedAssetCache] Cancelled preload task for mediaID: \(mediaID) (no cache available)")
+            } else {
+                print("DEBUG: [SharedAssetCache] Keeping preload task for mediaID: \(mediaID) (cache available)")
+            }
         }
     }
     
@@ -151,14 +163,63 @@ class SharedAssetCache: ObservableObject {
         tweetUrlMapping[tweetId]?.insert(mediaID)
     }
     
-    /// Cancel all loading tasks for a tweet
+    /// Check if tweet has cached content available (memory or disk)
+    @MainActor func hasCachedContent(for tweetId: String) -> Bool {
+        let tweetMediaIDs = getMediaIDsForTweet(tweetId)
+        for mediaID in tweetMediaIDs {
+            // Check memory cache
+            if assetCache[mediaID] != nil || playerCache[mediaID] != nil {
+                return true
+            }
+            
+            // Check disk cache
+            if hasDiskCache(for: mediaID) {
+                return true
+            }
+        }
+        return false
+    }
+    
+    /// Check if mediaID has disk cache available
+    private func hasDiskCache(for mediaID: String) -> Bool {
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+        
+        // Check if cache directory exists and has files
+        if FileManager.default.fileExists(atPath: mediaCacheDir.path) {
+            do {
+                let contents = try FileManager.default.contentsOfDirectory(atPath: mediaCacheDir.path)
+                // Check for any video files (playlists or segments)
+                let hasVideoFiles = contents.contains { file in
+                    file.hasSuffix(".m3u8") || file.hasSuffix(".ts") || file.hasSuffix(".mp4")
+                }
+                if hasVideoFiles {
+                    print("DEBUG: [SharedAssetCache] Found disk cache for mediaID: \(mediaID)")
+                    return true
+                }
+            } catch {
+                print("DEBUG: [SharedAssetCache] Error checking disk cache for \(mediaID): \(error)")
+            }
+        }
+        return false
+    }
+    
+    /// Cancel all loading tasks for a tweet only if no cache is available
     @MainActor func cancelLoadingForTweet(_ tweetId: String) {
+        // Check if tweet has cached content
+        let hasCache = hasCachedContent(for: tweetId)
+        
+        if hasCache {
+            print("DEBUG: [SharedAssetCache] Tweet \(tweetId) has cached content, skipping cancellation")
+            return
+        }
+        
         // Find all mediaIDs associated with this tweet and cancel their loading
         let tweetMediaIDs = getMediaIDsForTweet(tweetId)
         for mediaID in tweetMediaIDs {
             cancelLoading(for: mediaID)
         }
-        print("DEBUG: [SharedAssetCache] Cancelled all loading tasks for tweet \(tweetId)")
+        print("DEBUG: [SharedAssetCache] Cancelled all loading tasks for tweet \(tweetId) (no cache available)")
     }
     
     /// Trigger video preloading for a tweet
