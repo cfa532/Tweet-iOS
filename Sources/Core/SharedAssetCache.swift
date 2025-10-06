@@ -76,6 +76,7 @@ class SharedAssetCache: ObservableObject {
     private var playerCache: [String: AVPlayer] = [:] // mediaID -> AVPlayer
     private var cacheTimestamps: [String: Date] = [:] // mediaID -> timestamp
     private var cachingPlayerDelegates: [String: CachingPlayerItemDelegateImpl] = [:] // mediaID -> Delegate
+    private var resourceLoaderDelegates: [String: ResourceLoaderDelegate] = [:] // mediaID -> ResourceLoaderDelegate
     private var loadingTasks: [String: Task<AVAsset, Error>] = [:] // mediaID -> loading task
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
@@ -308,7 +309,29 @@ class SharedAssetCache: ObservableObject {
         // Create new loading task
         let task = Task<AVAsset, Error> {
             let resolvedURL = await resolveHLSURL(url)
-            let asset = AVURLAsset(url: resolvedURL)
+            
+            // For HLS videos, create AVURLAsset with custom scheme that ResourceLoaderDelegate will handle
+            let asset: AVAsset
+            if resolvedURL.pathExtension == "m3u8" {
+                // Create custom scheme URL for HLS videos - ResourceLoaderDelegate will handle it
+                guard let customSchemeURL = resolvedURL.withScheme("cachingPlayerItemScheme") else {
+                    throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create custom scheme URL"])
+                }
+                asset = AVURLAsset(url: customSchemeURL)
+                
+                // Create and store ResourceLoaderDelegate for this asset
+                let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
+                let delegate = ResourceLoaderDelegate(url: resolvedURL, mediaID: mediaID, saveFilePath: savePath, owner: CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID))
+                (asset as? AVURLAsset)?.resourceLoader.setDelegate(delegate, queue: DispatchQueue.global(qos: .userInitiated))
+                
+                print("DEBUG: [SHARED ASSET CACHE] Created ResourceLoaderDelegate for mediaID: \(mediaID), URL: \(resolvedURL.absoluteString)")
+                
+                // Store the delegate to prevent deallocation
+                await MainActor.run { self.resourceLoaderDelegates[mediaID] = delegate }
+            } else {
+                // For non-HLS videos, use regular AVURLAsset
+                asset = AVURLAsset(url: resolvedURL)
+            }
             
             // Cache the asset
             await MainActor.run {
@@ -460,11 +483,9 @@ class SharedAssetCache: ObservableObject {
         // Create a unique save path for the HLS playlist
         let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
         
-        // Start LocalHTTPServer and register media
+        // Start LocalHTTPServer and register media for serving cached content
         LocalHTTPServer.shared.start()
-        // Create media-specific directory path for LocalHTTPServer
-        let cacheDir = URL(fileURLWithPath: savePath).deletingLastPathComponent()
-        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+        let mediaCacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!.appendingPathComponent(mediaID)
         LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
         
         // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
@@ -483,6 +504,12 @@ class SharedAssetCache: ObservableObject {
         
         // Cache the player for future use
         await MainActor.run { cachePlayer(player, for: mediaID) }
+        
+        // Auto-play the player to start requesting segments
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            player.play()
+            print("DEBUG: [SHARED ASSET CACHE] Auto-playing player for mediaID: \(mediaID)")
+        }
         
         return player
     }
@@ -556,6 +583,7 @@ class SharedAssetCache: ObservableObject {
         playerCache.removeAll()
         cacheTimestamps.removeAll()
         cachingPlayerDelegates.removeAll()
+        resourceLoaderDelegates.removeAll()
         loadingTasks.values.forEach { $0.cancel() }
         loadingTasks.removeAll()
         preloadTasks.values.forEach { $0.cancel() }
@@ -575,6 +603,7 @@ class SharedAssetCache: ObservableObject {
         }
         playerCache.removeAll()
         cachingPlayerDelegates.removeAll()
+        resourceLoaderDelegates.removeAll()
         
         // Clear asset cache
         assetCache.removeAll()

@@ -334,7 +334,6 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
-				4612ED262E937091005D5B8B /* DiskCacheCleanupManager.swift */,
 				466E00932E7023460068D968 /* MemoryWarningManager.swift */,
 				468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */,
 				468F19EE2E5FEA850085BFE5 /* VideoLoadingManager.swift */,
@@ -444,6 +443,7 @@
 				4612ED242E925803005D5B8B /* LocalHTTPServer.swift */,
 				4612ED272E925803005D5B8B /* MemoryEfficientSegmentManager.swift */,
 				4612ED2B2E925803005D5B8B /* MemoryCapManager.swift */,
+				4612ED262E937091005D5B8B /* DiskCacheCleanupManager.swift */,
 				4612ED132E924A18005D5B8B /* AppLogger.swift */,
 				4612ED142E924A18005D5B8B /* CachingPlayerItem.swift */,
 				4612ED152E924A18005D5B8B /* CachingPlayerItemConfiguration.swift */,
@@ -688,13 +688,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -715,6 +711,7 @@
 				4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */,
 				4612ED262E925803005D5B8B /* MemoryEfficientSegmentManager.swift in Sources */,
 				4612ED2A2E925803005D5B8B /* MemoryCapManager.swift in Sources */,
+				4612ED272E937091005D5B8B /* DiskCacheCleanupManager.swift in Sources */,
 				46B03D892E488EC0000E08DF /* CameraView.swift in Sources */,
 				468CF22E2E3A69F700D49038 /* StartChatView.swift in Sources */,
 				4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */,
@@ -774,7 +771,6 @@
 				46E5B36A2DE35E0A00AEF31F /* ProfileStatsView.swift in Sources */,
 				467494172DF4A1460082FAC6 /* CommentDetailView.swift in Sources */,
 				46B95F502E1269F500D81590 /* IdentifiablePhotosPickerItem.swift in Sources */,
-				4612ED272E937091005D5B8B /* DiskCacheCleanupManager.swift in Sources */,
 				469A994B2DEB163F00954049 /* ToastView.swift in Sources */,
 				46E5B36B2DE35E0A00AEF31F /* ProfileHeaderView.swift in Sources */,
 				465553C32E55EDA500702AFF /* TermsOfServiceView.swift in Sources */,

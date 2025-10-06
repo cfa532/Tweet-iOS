@@ -163,6 +163,9 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onAppear {
+            print("DEBUG: [VIDEO APPEAR] onAppear called for \(mid)")
+            print("DEBUG: [VIDEO APPEAR] player: \(player != nil), shouldLoadVideo: \(shouldLoadVideo), isVisible: \(isVisible)")
+            
             // Handle idle timer for fullscreen modes
             if mode == .mediaBrowser {
                 UIApplication.shared.isIdleTimerDisabled = true
@@ -179,6 +182,7 @@ struct SimpleVideoPlayer: View {
             
             // Only set up player if both conditions are met
             if player == nil && shouldLoadVideo && isVisible {
+                print("DEBUG: [VIDEO APPEAR] Calling setupPlayer for \(mid)")
                 setupPlayer()
             } else if player != nil && mode == .mediaCell {
                 // For MediaCell mode, if player already exists, restore cached state and check playback conditions
@@ -251,6 +255,9 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onChange(of: isVisible) { _, visible in
+            print("DEBUG: [VIDEO VISIBILITY] isVisible changed to \(visible) for \(mid)")
+            print("DEBUG: [VIDEO VISIBILITY] shouldLoadVideo: \(shouldLoadVideo), player: \(player != nil)")
+            
             // Handle visibility changes - simplified logic to avoid conflicts
             if visible {
                 // Only proceed if loading is enabled
@@ -485,9 +492,11 @@ struct SimpleVideoPlayer: View {
     // MARK: - Player Setup
     private func setupPlayer() {
         print("DEBUG: [VIDEO SETUP] Setting up player for \(mid)")
+        print("DEBUG: [VIDEO SETUP] isVisible: \(isVisible), shouldLoadVideo: \(shouldLoadVideo), mode: \(mode)")
         
         // Check if we have cached content first, regardless of loading state
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: mid)
+        print("DEBUG: [VIDEO SETUP] hasCachedContent: \(hasCachedContent)")
         
         if hasCachedContent {
             print("DEBUG: [VIDEO SETUP] Tweet \(mid) has cached content, attempting to load from cache")
@@ -658,8 +667,14 @@ struct SimpleVideoPlayer: View {
         // Setup time observer for memory-efficient segment management
         setupTimeObserver(for: player)
         
-        // Reset player position to beginning (in case it was cached at the end)
-        player.seek(to: .zero)
+        // Only reset player position to beginning for new players, not cached ones
+        // This prevents cached videos from losing their buffered segments
+        if !SharedAssetCache.shared.hasCachedContent(for: mid) {
+            player.seek(to: .zero)
+            print("DEBUG: [VIDEO CONFIGURE] Reset player position to beginning for new player")
+        } else {
+            print("DEBUG: [VIDEO CONFIGURE] Preserving player position for cached player")
+        }
         
         // Set up observers
         setupPlayerObservers(player)

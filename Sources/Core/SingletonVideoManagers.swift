@@ -82,6 +82,14 @@ class DetailVideoManager: NSObject, ObservableObject {
                         }
                     }
                     
+                    // Auto-play the player to start requesting segments (for HLS videos)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        if autoPlay {
+                            self.currentPlayer?.play()
+                            self.isPlaying = true
+                            print("DEBUG: [DETAIL VIDEO MANAGER] Auto-playing player for mediaID: \(mid)")
+                        }
+                    }
                 }
             } catch {
                 await MainActor.run {

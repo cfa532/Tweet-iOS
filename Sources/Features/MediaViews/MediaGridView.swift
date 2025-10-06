@@ -450,6 +450,7 @@ struct MediaGridView: View {
             .frame(width: gridWidth, height: gridHeight)
             .clipped().contentShape(Rectangle())
             .onAppear {
+                print("DEBUG: [MediaGridView] onAppear called for tweet \(parentTweet.mid)")
                 // Mark the grid as visible
                 isVisible = true
                 

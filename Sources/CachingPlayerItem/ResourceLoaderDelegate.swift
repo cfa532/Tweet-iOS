@@ -129,21 +129,27 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Serving cached playlist from \(cachePath)")
             
             do {
-                let _ = try Data(contentsOf: URL(fileURLWithPath: cachePath))
+                let cachedData = try Data(contentsOf: URL(fileURLWithPath: cachePath))
                 
-                // Redirect to LocalHTTPServer instead of serving data directly
-                let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
-                if let localURL = localURL {
-                    let redirectResponse = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-                        "Location": localURL.absoluteString
-                    ])
-                    loadingRequest.response = redirectResponse
-                    loadingRequest.finishLoading()
-                    
-                    NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Redirecting to LocalHTTPServer: \(localURL.absoluteString)")
-                    return true
-                }
-                
+            // Redirect to LocalHTTPServer to serve the cached playlist
+            guard let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID) else {
+                NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Failed to get local URL")
+                let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get local URL"])
+                loadingRequest.finishLoading(with: error)
+                return false
+            }
+            
+            // Construct the full URL with the filename
+            let filename = actualPlaylistURL.lastPathComponent
+            let fullURL = localURL.appendingPathComponent(filename)
+            
+            let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                "Location": fullURL.absoluteString
+            ])
+            loadingRequest.response = response
+            loadingRequest.finishLoading()
+            
+            NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Redirected to LocalHTTPServer for cached playlist: \(localURL.absoluteString)")
                 return true
             } catch {
                 NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Failed to read cached playlist: \(error.localizedDescription)")
@@ -192,17 +198,26 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 self.downloadHLSSegments(segments, baseURL: baseURL)
             }
             
-            // Redirect to LocalHTTPServer instead of serving data directly
-            let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
-            if let localURL = localURL {
-                let redirectResponse = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-                    "Location": localURL.absoluteString
-                ])
-                loadingRequest.response = redirectResponse
-            loadingRequest.finishLoading()
-                
-                NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Redirecting to LocalHTTPServer: \(localURL.absoluteString)")
+            // Redirect to LocalHTTPServer to serve the modified playlist
+            guard let mediaID = self.mediaID,
+                  let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID) else {
+                NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Failed to get local URL for playlist")
+                let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get local URL"])
+                loadingRequest.finishLoading(with: error)
+                return
             }
+            
+            // Construct the full URL with the filename
+            let filename = actualPlaylistURL.lastPathComponent
+            let fullURL = localURL.appendingPathComponent(filename)
+            
+            let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                "Location": fullURL.absoluteString
+            ])
+            loadingRequest.response = response
+            loadingRequest.finishLoading()
+            
+            NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Redirected to LocalHTTPServer for playlist: \(localURL.absoluteString)")
         }
         
         task.resume()
@@ -231,26 +246,26 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 } else {
                     NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Serving cached segment from \(cachePath) (size: \(cachedData.count) bytes)")
                     
-                    // Redirect to LocalHTTPServer instead of serving data directly
-                    guard let mediaID = mediaID else {
-                        NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Missing mediaID - cannot redirect to LocalHTTPServer")
+                    // Redirect to LocalHTTPServer to serve the cached segment
+                    guard let mediaID = mediaID,
+                          let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID) else {
+                        NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Failed to get local URL for segment")
+                        let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get local URL"])
+                        loadingRequest.finishLoading(with: error)
                         return false
                     }
-                    let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
-                    if let localURL = localURL {
-                        let segmentName = url.lastPathComponent
-                        let redirectURL = localURL.appendingPathComponent(segmentName)
-                        
-                        let redirectResponse = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-                            "Location": redirectURL.absoluteString
-                        ])
-                        loadingRequest.response = redirectResponse
-                        loadingRequest.finishLoading()
-                        
-                        NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirecting to LocalHTTPServer: \(redirectURL.absoluteString)")
-                        return true
-                    }
                     
+                    // Construct the full URL with the filename
+                    let filename = url.lastPathComponent
+                    let fullURL = localURL.appendingPathComponent(filename)
+                    
+                    let response = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                        "Location": fullURL.absoluteString
+                    ])
+                    loadingRequest.response = response
+                    loadingRequest.finishLoading()
+                    
+                    NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirected to LocalHTTPServer for cached segment: \(localURL.absoluteString)")
                     return true
                 }
             } catch {
@@ -304,24 +319,26 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Failed to cache segment: \(error.localizedDescription)")
             }
             
-            // Redirect to LocalHTTPServer instead of serving data directly
-            guard let mediaID = mediaID else {
-                NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Missing mediaID - cannot redirect to LocalHTTPServer")
+            // Redirect to LocalHTTPServer to serve the downloaded segment
+            guard let mediaID = self.mediaID,
+                  let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID) else {
+                NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Failed to get local URL for downloaded segment")
+                let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get local URL"])
+                loadingRequest.finishLoading(with: error)
                 return
             }
-            let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID)
-            if let localURL = localURL {
-                let segmentName = url.lastPathComponent
-                let redirectURL = localURL.appendingPathComponent(segmentName)
-                
-                let redirectResponse = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-                    "Location": redirectURL.absoluteString
-                ])
-                loadingRequest.response = redirectResponse
-                loadingRequest.finishLoading()
-                
-                NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirecting to LocalHTTPServer: \(redirectURL.absoluteString)")
-            }
+            
+            // Construct the full URL with the filename
+            let filename = url.lastPathComponent
+            let fullURL = localURL.appendingPathComponent(filename)
+            
+            let response = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                "Location": fullURL.absoluteString
+            ])
+            loadingRequest.response = response
+            loadingRequest.finishLoading()
+            
+            NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirected to LocalHTTPServer for downloaded segment: \(localURL.absoluteString)")
         }
         
         task.resume()
