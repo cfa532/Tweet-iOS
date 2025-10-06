@@ -1,54 +1,6 @@
 import SwiftUI
 import AVKit
 
-// MARK: - Video Player Representable
-struct VideoPlayerRepresentable: UIViewRepresentable {
-    let player: AVPlayer
-    
-    func makeUIView(context: Context) -> UIView {
-        let view = VideoPlayerView()
-        let playerLayer = AVPlayerLayer(player: player)
-        playerLayer.videoGravity = .resizeAspect
-        playerLayer.frame = view.bounds
-        view.layer.addSublayer(playerLayer)
-        
-        // Store playerLayer in context for updates
-        context.coordinator.playerLayer = playerLayer
-        context.coordinator.view = view
-        
-        return view
-    }
-    
-    func updateUIView(_ uiView: UIView, context: Context) {
-        guard let videoView = uiView as? VideoPlayerView,
-              let playerLayer = context.coordinator.playerLayer else { return }
-        
-        // Update frame when view bounds change
-        playerLayer.frame = videoView.bounds
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-    
-    class Coordinator: NSObject {
-        var playerLayer: AVPlayerLayer?
-        var view: VideoPlayerView?
-    }
-}
-
-// Custom UIView that properly handles layout
-class VideoPlayerView: UIView {
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        // Update player layer frame when view layout changes
-        layer.sublayers?.forEach { sublayer in
-            if let playerLayer = sublayer as? AVPlayerLayer {
-                playerLayer.frame = bounds
-            }
-        }
-    }
-}
 
 // MARK: - Scroll Detection
 private enum ScrollDirection {
@@ -72,29 +24,9 @@ struct DetailVideoPlayerView: View {
     var body: some View {
         Group {
             if let player = detailVideoManager.currentPlayer {
-                VideoPlayerRepresentable(player: player)
+                AVPlayerViewControllerRepresentable(player: player)
                     .aspectRatio(videoAspectRatio, contentMode: .fit)
                     .clipped()
-                    .overlay(
-                        // Video controls overlay
-                        Group {
-                            VStack {
-                                Spacer()
-                                HStack {
-
-                                    
-                                    Spacer()
-                                    
-                                    // Mute button in bottom right corner
-                                    if showMuteButton {
-                                        MuteButton()
-                                            .padding(.trailing, 8)
-                                            .padding(.bottom, 8)
-                                    }
-                                }
-                            }
-                        }
-                    )
             } else if isLoading {
                 ProgressView(NSLocalizedString("Loading video...", comment: "Video loading message"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -160,20 +92,18 @@ struct DetailMediaCell: View {
     @State private var isVisible: Bool = true
     @State private var image: UIImage?
     @State private var loading = false
-    let showMuteButton: Bool
     @ObservedObject var videoManager: DetailVideoManager
     
     // Local mute state management for detail view
     @State private var isMuted: Bool = false // Always unmuted in detail view
     @State private var hasSavedOriginalState: Bool = false
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: DetailVideoManager) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, videoManager: DetailVideoManager) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
         self._play = State(initialValue: play)
         self.shouldLoadVideo = shouldLoadVideo
-        self.showMuteButton = showMuteButton
         self.videoManager = videoManager
     }
     
@@ -201,7 +131,7 @@ struct DetailMediaCell: View {
                             mid: attachment.mid,
                             isVisible: true, // Always visible in detail view
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showMuteButton: showMuteButton
+                            showMuteButton: false // Native controls handle audio
                         )
                     } else {
                         // Show placeholder for videos that haven't been loaded yet
@@ -570,8 +500,7 @@ struct TweetDetailView: View {
                             aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
                             play: index == selectedMediaIndex,
                             shouldLoadVideo:  index == selectedMediaIndex,
-                            showMuteButton: false,
-                            videoManager: DetailVideoManager.shared,
+                            videoManager: DetailVideoManager.shared
                         )
                         .tag(index)
                     }
