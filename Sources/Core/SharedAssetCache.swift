@@ -383,78 +383,41 @@ class SharedAssetCache: ObservableObject {
         
         NSLog("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for HLS video: \(url.absoluteString), mediaID: \(mediaID)")
         
-        // Check if HLS content is already cached
-        if CachingPlayerItem.isHLSCached(for: mediaID) {
-            NSLog("DEBUG: [SHARED ASSET CACHE] HLS content already cached for mediaID: \(mediaID), using cached version")
-            
-            // Resolve the HLS URL to get the actual playlist URL (master.m3u8 or playlist.m3u8)
-            let resolvedURL = await resolveHLSURL(url)
-            print("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL for cached content: \(resolvedURL.absoluteString)")
-            
-            // Create a unique save path for the HLS playlist
-            let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
-            
-            // Start LocalHTTPServer and register media
-            LocalHTTPServer.shared.start()
-            // Create media-specific directory path for LocalHTTPServer
-            let cacheDir = URL(fileURLWithPath: savePath).deletingLastPathComponent()
-            let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-            LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
-            
-            // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
-            let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
-            
-            // Create and store delegate for caching events
-            let delegate = CachingPlayerItemDelegateImpl()
-            cachingPlayerItem.delegate = delegate
-            
-            // Store the delegate to prevent deallocation
-            let cacheKey = url.absoluteString
-            await MainActor.run { cachingPlayerDelegates[cacheKey] = delegate }
-            
-            // Create player with CachingPlayerItem
-            let player = AVPlayer(playerItem: cachingPlayerItem)
-            
-            // Cache the player for future use
-            await MainActor.run { cachePlayer(player, for: mediaID) }
-            
-            return player
-        } else {
-            NSLog("DEBUG: [SHARED ASSET CACHE] HLS content not cached for mediaID: \(mediaID), will download and cache")
-            
-            // Resolve the HLS URL to get the actual playlist URL (master.m3u8 or playlist.m3u8)
-            let resolvedURL = await resolveHLSURL(url)
-            print("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL for CachingPlayerItem: \(resolvedURL.absoluteString)")
-            
-            // Create a unique save path for the HLS playlist
-            let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
-            
-            // Start LocalHTTPServer and register media
-            LocalHTTPServer.shared.start()
-            // Create media-specific directory path for LocalHTTPServer
-            let cacheDir = URL(fileURLWithPath: savePath).deletingLastPathComponent()
-            let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-            LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
-            
-            // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
-            let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
-            
-            // Create and store delegate for caching events
-            let delegate = CachingPlayerItemDelegateImpl()
-            cachingPlayerItem.delegate = delegate
-            
-            // Store the delegate to prevent deallocation
-            let cacheKey = url.absoluteString
-            await MainActor.run { cachingPlayerDelegates[cacheKey] = delegate }
-            
-            // Create player with CachingPlayerItem
-            let player = AVPlayer(playerItem: cachingPlayerItem)
-            
-            // Cache the player for future use
-            await MainActor.run { cachePlayer(player, for: mediaID) }
-            
-            return player
-        }
+        // Always create CachingPlayerItem - no cache checking, will load on demand
+        NSLog("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for on-demand loading: \(mediaID)")
+        
+        // Resolve the HLS URL to get the actual playlist URL (master.m3u8 or playlist.m3u8)
+        let resolvedURL = await resolveHLSURL(url)
+        print("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL for on-demand loading: \(resolvedURL.absoluteString)")
+        
+        // Create a unique save path for the HLS playlist
+        let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
+        
+        // Start LocalHTTPServer and register media
+        LocalHTTPServer.shared.start()
+        // Create media-specific directory path for LocalHTTPServer
+        let cacheDir = URL(fileURLWithPath: savePath).deletingLastPathComponent()
+        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+        LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
+        
+        // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
+        let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
+        
+        // Create and store delegate for caching events
+        let delegate = CachingPlayerItemDelegateImpl()
+        cachingPlayerItem.delegate = delegate
+        
+        // Store the delegate to prevent deallocation
+        let cacheKey = url.absoluteString
+        await MainActor.run { cachingPlayerDelegates[cacheKey] = delegate }
+        
+        // Create player with CachingPlayerItem
+        let player = AVPlayer(playerItem: cachingPlayerItem)
+        
+        // Cache the player for future use
+        await MainActor.run { cachePlayer(player, for: mediaID) }
+        
+        return player
     }
     
     
@@ -874,25 +837,9 @@ class SharedAssetCache: ObservableObject {
         
         print("DEBUG: [SHARED ASSET CACHE] Restoring cache metadata for \(metadata.cachedMediaIDs.count) mediaIDs")
         
-        // Check which cached files still exist on disk
-        var validMediaIDs: [String: Date] = [:]
-        for (mediaID, timestamp) in metadata.cachedMediaIDs {
-            // Check if HLS video is still cached
-            if CachingPlayerItem.isHLSCached(for: mediaID) {
-                validMediaIDs[mediaID] = timestamp
-                print("DEBUG: [SHARED ASSET CACHE] HLS video still cached: \(mediaID)")
-            } else {
-                // For progressive videos, check if file exists
-                guard let cachesDirectory = try? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
-                    continue
-                }
-                let cachePath = cachesDirectory.appendingPathComponent("\(mediaID).mp4").path
-                if FileManager.default.fileExists(atPath: cachePath) {
-                    validMediaIDs[mediaID] = timestamp
-                    print("DEBUG: [SHARED ASSET CACHE] Progressive video still cached: \(mediaID)")
-                }
-            }
-        }
+        // Since we're using on-demand caching, we don't need to validate existing cache files
+        // Just restore the metadata for reference
+        let validMediaIDs = metadata.cachedMediaIDs
         
         cacheTimestamps = validMediaIDs
         print("DEBUG: [SHARED ASSET CACHE] Restored \(validMediaIDs.count) valid cached entries")
