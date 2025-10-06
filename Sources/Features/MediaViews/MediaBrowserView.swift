@@ -228,10 +228,6 @@ struct MediaBrowserView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
-            .onAppear {
-                print("DEBUG: [MediaBrowserView] Video view appeared for attachment \(attachment.mid) at index \(index)")
-                print("DEBUG: [MediaBrowserView] shouldAutoPlay: \(shouldAutoPlay), currentIndex: \(currentIndex)")
-            }
             .onChange(of: currentIndex) { _, newIndex in
                 print("DEBUG: [MediaBrowserView] TabView index changed to \(newIndex)")
                 // The SimpleVideoPlayer will handle play/pause based on isVisible and autoPlay

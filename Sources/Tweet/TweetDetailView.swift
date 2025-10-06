@@ -218,8 +218,8 @@ struct DetailVideoPlayerView: View {
                 isLoading = true
             }
             
-            // Use DetailVideoManager to get or create player
-            detailVideoManager.setCurrentVideo(url: url, mid: mid, autoPlay: isVisible)
+            // Use DetailVideoManager to get or create player - auto-play the selected video
+            detailVideoManager.setCurrentVideo(url: url, mid: mid, autoPlay: true)
         }
     }
     
