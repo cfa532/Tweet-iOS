@@ -626,12 +626,23 @@ struct SimpleVideoPlayer: View {
             NSLog("DEBUG: [VIDEO SETUP] Cached player rate: \(cachedPlayer.rate), isMuted: \(cachedPlayer.isMuted)")
             NSLog("DEBUG: [VIDEO SETUP] Cached player item status: \(cachedPlayer.currentItem?.status.rawValue ?? -1)")
             
-            // CRITICAL: Update state FIRST before configuring
+            // CRITICAL: For MediaCell, pause the player first, then set mute state
+            // The player might still be playing from fullscreen - we need to stop it BEFORE setting mute
+            if mode == .mediaCell {
+                if cachedPlayer.rate > 0 {
+                    cachedPlayer.pause()
+                    NSLog("DEBUG: [VIDEO SETUP] Paused playing cached player before applying mute state")
+                }
+                cachedPlayer.isMuted = MuteState.shared.isMuted
+                NSLog("DEBUG: [VIDEO SETUP] Immediately applied mute state for MediaCell: \(MuteState.shared.isMuted)")
+            }
+            
+            // Update state FIRST before configuring
             self.player = cachedPlayer
             self.loadingState = .loaded
             self.playbackState = .notStarted
             
-            // Then configure (this will unmute for fullscreen and call checkPlaybackConditions)
+            // Then configure (this will set final mute state and call checkPlaybackConditions)
             configurePlayer(cachedPlayer)
             return
         }
@@ -749,24 +760,27 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // Restore the cached player
-        self.player = cachedState.player
-        
-        // Ensure the player is also cached in SharedAssetCache for consistency
-        SharedAssetCache.shared.cachePlayer(cachedState.player, for: extractMediaID(from: url) ?? mid)
-        
-        
-        // For MediaCell mode, always use the current global mute state instead of the cached one
-        // This ensures videos respect the current global mute setting when returning from full screen
+        // CRITICAL: Set mute state BEFORE assigning to self.player
+        // This prevents unmuted audio when SwiftUI re-renders
         if mode == .mediaCell {
+            // Pause if playing to prevent audio bleed
+            if cachedState.player.rate > 0 {
+                cachedState.player.pause()
+                print("DEBUG: [VIDEO CACHE] Paused playing cached player before restoring for MediaCell")
+            }
             cachedState.player.isMuted = MuteState.shared.isMuted
             print("DEBUG: [VIDEO CACHE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
         } else {
             // For full screen modes (mediaBrowser), always unmute regardless of cached state
-            // This ensures full screen videos are never muted
             cachedState.player.isMuted = false
             print("DEBUG: [VIDEO CACHE] Forced unmuted for full screen mode")
         }
+        
+        // Restore the cached player (AFTER setting mute state)
+        self.player = cachedState.player
+        
+        // Ensure the player is also cached in SharedAssetCache for consistency
+        SharedAssetCache.shared.cachePlayer(cachedState.player, for: extractMediaID(from: url) ?? mid)
         
         // Seek to the cached position
         cachedState.player.seek(to: cachedState.time) { finished in
@@ -796,7 +810,13 @@ struct SimpleVideoPlayer: View {
         NSLog("DEBUG: [VIDEO CONFIGURE] Player item status: \(player.currentItem?.status.rawValue ?? -1)")
         NSLog("DEBUG: [VIDEO CONFIGURE] Player rate: \(player.rate), isMuted: \(player.isMuted)")
         
-        // Configure player
+        // CRITICAL: For MediaCell, pause playing shared players FIRST to prevent audio bleed
+        if mode == .mediaCell && player.rate > 0 {
+            player.pause()
+            NSLog("DEBUG: [VIDEO CONFIGURE] Paused playing shared player before configuration for MediaCell")
+        }
+        
+        // Configure player mute state
         // For full screen and detail modes, always unmute
         if mode == .mediaBrowser || mode == .tweetDetail {
             player.isMuted = false
@@ -978,17 +998,23 @@ struct SimpleVideoPlayer: View {
     private func handleVideoFinished() {
         print("DEBUG: [SimpleVideoPlayer] Video finished playing for \(mid)")
         
-        // Always reset video to beginning when it finishes
+        // For MediaCell mode, pause immediately then rewind (don't auto-restart)
+        if mode == .mediaCell {
+            print("DEBUG: [SimpleVideoPlayer] MediaCell mode - pausing and rewinding to beginning for \(mid)")
+            player?.pause()
+            // Ensure mute state is correct (respect global mute state)
+            player?.isMuted = MuteState.shared.isMuted
+            playbackState = .finished
+            player?.seek(to: .zero)
+            onVideoFinished?()
+            return
+        }
+        
+        // For fullscreen/detail modes, rewind and auto-restart
         player?.seek(to: .zero) { finished in
             guard finished else { return }
             
-            // For MediaCell mode, don't auto-restart - just stop and rewind
-            if self.mode == .mediaCell {
-                print("DEBUG: [SimpleVideoPlayer] MediaCell mode - video finished, stopping and rewinding for \(self.mid)")
-                self.player?.pause()
-                self.playbackState = .finished
-            } else if !self.disableAutoRestart {
-                // For other modes (fullscreen, detail), auto-restart if not disabled
+            if !self.disableAutoRestart {
                 print("DEBUG: [SimpleVideoPlayer] Auto-restarting video for \(self.mid)")
                 self.player?.play()
                 self.playbackState = .playing
@@ -1011,6 +1037,21 @@ struct SimpleVideoPlayer: View {
             let mediaID = extractMediaID(from: url) ?? mid
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
                 print("DEBUG: [VIDEO CACHE] No VideoStateCache found, but found cached player in SharedAssetCache for \(mid)")
+                
+                // CRITICAL: Prepare player state before using it
+                if mode == .mediaCell {
+                    // Pause if playing to prevent audio bleed
+                    if cachedPlayer.rate > 0 {
+                        cachedPlayer.pause()
+                        print("DEBUG: [VIDEO CACHE] Paused playing SharedAssetCache player before restoring for MediaCell")
+                    }
+                    cachedPlayer.isMuted = MuteState.shared.isMuted
+                    print("DEBUG: [VIDEO CACHE] Applied mute state for MediaCell from SharedAssetCache: \(MuteState.shared.isMuted)")
+                } else if mode == .mediaBrowser || mode == .tweetDetail {
+                    cachedPlayer.isMuted = false
+                    print("DEBUG: [VIDEO CACHE] Forced unmuted for fullscreen/detail from SharedAssetCache")
+                }
+                
                 configurePlayer(cachedPlayer)
             }
         }
