@@ -387,6 +387,10 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Get cached player if available
+    func getCachedAsset(for mediaID: String) -> AVAsset? {
+        return assetCache[mediaID]
+    }
+    
     func getCachedPlayer(for mediaID: String) -> AVPlayer? {
         if let player = playerCache[mediaID] {
             // Validate player before returning it

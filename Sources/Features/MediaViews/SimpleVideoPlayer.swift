@@ -485,7 +485,8 @@ struct SimpleVideoPlayer: View {
     // MARK: - Unique ID for view identity
     private var uniqueViewId: Int {
         var hasher = Hasher()
-        hasher.combine(mid)  // Only video ID, not tweet ID - share player across tweets
+        hasher.combine(parentTweetId ?? "")  // Include tweet ID for completely independent instances
+        hasher.combine(mid)
         hasher.combine(representableId)
         return hasher.finalize()
     }
@@ -507,9 +508,11 @@ struct SimpleVideoPlayer: View {
                                 }
                             }
                     } else {
-                        // Use native SwiftUI VideoPlayer - let iOS handle everything
+                        // Use native SwiftUI VideoPlayer
+                        // Use mid + representableId so same video across tweets shares identity
+                        // but forces recreation when representableId changes
                         VideoPlayer(player: player)
-                            .id(uniqueViewId) // Hash of tweet+video+state for unique identity
+                            .id("\(mid)_\(representableId)")
                             .onTapGesture {
                                 if let onVideoTap = onVideoTap {
                                     onVideoTap()
@@ -632,10 +635,9 @@ struct SimpleVideoPlayer: View {
         let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? mid
         NSLog("DEBUG: [VIDEO SETUP] mediaID: \(mediaID)")
         
-        // Check for cached player - use for all modes
+        // Use cached player for all modes
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
-            NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING shared player for \(mid)")
-            NSLog("DEBUG: [VIDEO SETUP] Cached player rate: \(cachedPlayer.rate), isMuted: \(cachedPlayer.isMuted)")
+            NSLog("DEBUG: [VIDEO SETUP] ✅ Found cached player for \(mediaID)")
             
             // Apply mute state based on mode
             if mode == .mediaCell {
@@ -644,15 +646,11 @@ struct SimpleVideoPlayer: View {
                 cachedPlayer.isMuted = false
             }
             
-            // Update state FIRST before configuring
             self.player = cachedPlayer
             self.loadingState = .loaded
             self.playbackState = .notStarted
-            NSLog("DEBUG: [VIDEO SETUP] State updated, about to call configurePlayer for \(mid)")
             
-            // Then configure
             configurePlayer(cachedPlayer)
-            NSLog("DEBUG: [VIDEO SETUP] Returned from configurePlayer for \(mid)")
             return
         }
         
@@ -668,7 +666,7 @@ struct SimpleVideoPlayer: View {
                 do {
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
                     await MainActor.run {
-                        // Apply mute state immediately for MediaCell mode
+                        // Apply mute state for MediaCell mode
                         if self.mode == .mediaCell {
                             newPlayer.isMuted = MuteState.shared.isMuted
                         } else {
@@ -721,11 +719,10 @@ struct SimpleVideoPlayer: View {
         // Otherwise, create a new player with performance considerations
         Task.detached(priority: .userInitiated) {
             do {
-                // Use shared cached player for all modes - simpler and more efficient
-                NSLog("DEBUG: [SimpleVideoPlayer] Getting shared player for \(mid)")
+                // Use shared player creation for all modes
+                NSLog("DEBUG: [SimpleVideoPlayer] Creating player for \(mid)")
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
                 
-                NSLog("DEBUG: [SimpleVideoPlayer] Player creation completed for \(mid)")
                 await MainActor.run {
                     // Apply mute state for MediaCell mode
                     if self.mode == .mediaCell {
@@ -875,7 +872,7 @@ struct SimpleVideoPlayer: View {
         self.representableId += 1 // Force VideoPlayerRepresentable to recreate
         NSLog("DEBUG: [VIDEO CONFIGURE] Incremented representableId to \(representableId) for \(mid)")
         
-        // Cache the player in SharedAssetCache for reuse across all instances
+        // Cache the player in SharedAssetCache for reuse
         let mediaID = extractMediaID(from: url) ?? mid
         SharedAssetCache.shared.cachePlayer(player, for: mediaID)
         NSLog("DEBUG: [VIDEO CONFIGURE] Cached player with key: \(mediaID) (mode: \(mode))")
