@@ -203,7 +203,12 @@ struct SimpleVideoPlayer: View {
                 print("DEBUG: [VIDEO APPEAR] Calling setupPlayer for \(mid)")
                 setupPlayer()
             } else if player != nil && mode == .mediaCell {
-                // For MediaCell mode, if player already exists, restore cached state and check playback conditions
+                // For MediaCell mode, if player already exists (e.g., returning from fullscreen)
+                // Ensure mute state follows global MuteState
+                player?.isMuted = MuteState.shared.isMuted
+                print("DEBUG: [VIDEO APPEAR] MediaCell reappearing with existing player, applied global mute state: \(MuteState.shared.isMuted)")
+                
+                // Restore cached state and check playback conditions
                 restoreCachedVideoState()
                 checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             }
@@ -582,27 +587,24 @@ struct SimpleVideoPlayer: View {
         print("DEBUG: [VIDEO SETUP] isVisible: \(isVisible), shouldLoadVideo: \(shouldLoadVideo), mode: \(mode)")
         print("DEBUG: [VIDEO SETUP] URL: \(url)")
         
-        // Check if we have cached content first, regardless of loading state
+        // FIRST: Always check SharedAssetCache for existing player instance (for seamless fullscreen transitions)
+        let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? mid
+        print("DEBUG: [VIDEO SETUP] mediaID: \(mediaID)")
+        
+        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
+            print("DEBUG: [VIDEO SETUP] ✅ Found EXISTING player in SharedAssetCache for \(mid) - reusing same instance!")
+            configurePlayer(cachedPlayer)
+            return
+        }
+        
+        // SECOND: Check if we have cached content for this tweet
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: mid)
         print("DEBUG: [VIDEO SETUP] hasCachedContent: \(hasCachedContent)")
         
-        // Also check if we have a cached player directly by mediaID (for first-time loads)
-        let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? mid
-        let hasDirectCachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) != nil
-        print("DEBUG: [VIDEO SETUP] hasDirectCachedPlayer: \(hasDirectCachedPlayer)")
-        print("DEBUG: [VIDEO SETUP] mediaID: \(mediaID)")
-        
-        if hasCachedContent || hasDirectCachedPlayer {
-            print("DEBUG: [VIDEO SETUP] Tweet \(mid) has cached content, attempting to load from cache")
+        if hasCachedContent {
+            print("DEBUG: [VIDEO SETUP] Tweet \(mid) has cached content, loading from cache")
             
-            // For cached content, try to get the player synchronously first
-            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
-                print("DEBUG: [VIDEO SETUP] Found cached player synchronously for \(mid), configuring immediately")
-                configurePlayer(cachedPlayer)
-                return
-            }
-            
-            // If no cached player found synchronously, try async loading
+            // Try async loading from cache
             Task.detached(priority: .userInitiated) {
                 do {
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
@@ -649,13 +651,6 @@ struct SimpleVideoPlayer: View {
         if mode == .mediaBrowser && player == nil && !isLoading {
             print("DEBUG: [VIDEO CACHE] Fullscreen mode with no player, attempting to restore cached state for \(mid)")
             restoreCachedVideoState()
-            return
-        }
-        
-        // Check if we have a cached player in SharedAssetCache (for app restart scenarios)
-        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: extractMediaID(from: url) ?? mid) {
-            print("DEBUG: [VIDEO SETUP] Found cached player in SharedAssetCache for \(mid), reusing it")
-            configurePlayer(cachedPlayer)
             return
         }
         
