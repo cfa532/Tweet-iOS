@@ -626,15 +626,18 @@ struct SimpleVideoPlayer: View {
             NSLog("DEBUG: [VIDEO SETUP] Cached player rate: \(cachedPlayer.rate), isMuted: \(cachedPlayer.isMuted)")
             NSLog("DEBUG: [VIDEO SETUP] Cached player item status: \(cachedPlayer.currentItem?.status.rawValue ?? -1)")
             
-            // CRITICAL: For MediaCell, pause the player first, then set mute state
-            // The player might still be playing from fullscreen - we need to stop it BEFORE setting mute
+            // CRITICAL: Apply mute state for MediaCell mode
             if mode == .mediaCell {
                 if cachedPlayer.rate > 0 {
                     cachedPlayer.pause()
-                    NSLog("DEBUG: [VIDEO SETUP] Paused playing cached player before applying mute state")
+                    NSLog("DEBUG: [VIDEO SETUP] Paused playing cached player")
                 }
+                // Apply global mute state for MediaCell
                 cachedPlayer.isMuted = MuteState.shared.isMuted
-                NSLog("DEBUG: [VIDEO SETUP] Immediately applied mute state for MediaCell: \(MuteState.shared.isMuted)")
+                NSLog("DEBUG: [VIDEO SETUP] Applied mute state for MediaCell: \(MuteState.shared.isMuted)")
+            } else {
+                // Unmute for fullscreen/detail modes
+                cachedPlayer.isMuted = false
             }
             
             // Update state FIRST before configuring
@@ -659,6 +662,12 @@ struct SimpleVideoPlayer: View {
                 do {
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
                     await MainActor.run {
+                        // Apply mute state immediately for MediaCell mode
+                        if self.mode == .mediaCell {
+                            newPlayer.isMuted = MuteState.shared.isMuted
+                        } else {
+                            newPlayer.isMuted = false
+                        }
                         self.configurePlayer(newPlayer)
                     }
                 } catch {
@@ -710,6 +719,12 @@ struct SimpleVideoPlayer: View {
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
                 NSLog("DEBUG: [SimpleVideoPlayer] SharedAssetCache.getOrCreatePlayer completed for \(mid)")
                 await MainActor.run {
+                    // Apply mute state immediately for MediaCell mode
+                    if self.mode == .mediaCell {
+                        newPlayer.isMuted = MuteState.shared.isMuted
+                    } else {
+                        newPlayer.isMuted = false
+                    }
                     configurePlayer(newPlayer)
                 }
             } catch {
@@ -816,16 +831,15 @@ struct SimpleVideoPlayer: View {
             NSLog("DEBUG: [VIDEO CONFIGURE] Paused playing shared player before configuration for MediaCell")
         }
         
-        // Configure player mute state
-        // For full screen and detail modes, always unmute
-        if mode == .mediaBrowser || mode == .tweetDetail {
-            player.isMuted = false
-            NSLog("DEBUG: [VIDEO CONFIGURE] Forced unmuted for full screen/detail mode")
-        } else {
-            // For MediaCell mode, always use the current global mute state to ensure
-            // videos respect the current mute setting even if MuteState was refreshed after initialization
+        // Configure player mute state based on mode
+        if mode == .mediaCell {
+            // MediaCell: Apply global mute state
             player.isMuted = MuteState.shared.isMuted
-            NSLog("DEBUG: [VIDEO CONFIGURE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
+            NSLog("DEBUG: [VIDEO CONFIGURE] Applied mute state for MediaCell: \(MuteState.shared.isMuted)")
+        } else {
+            // Fullscreen/Detail: Always unmute
+            player.isMuted = false
+            NSLog("DEBUG: [VIDEO CONFIGURE] Unmuted for fullscreen/detail mode")
         }
         
         // Setup time observer only if not already set up for this player
