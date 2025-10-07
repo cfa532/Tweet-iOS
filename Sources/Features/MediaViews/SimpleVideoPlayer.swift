@@ -1061,15 +1061,16 @@ struct SimpleVideoPlayer: View {
                     }
                 }
             } else {
-                // For fullscreen/detail modes, don't call play() here
+                // For mediaBrowser (fullscreen), don't call play() here
                 // Let AVPlayerViewController's updateUIViewController handle it after layer is ready
-                if mode == .mediaCell {
-                    NSLog("DEBUG: [VIDEO PLAYBACK] Calling player.play() for \(mid)")
-                    player?.play()
+                // For mediaCell and tweetDetail, call play() immediately (they use VideoPlayer, not AVPlayerViewController)
+                if mode == .mediaBrowser {
+                    NSLog("DEBUG: [VIDEO PLAYBACK] Fullscreen mode - will play() in AVPlayerViewController update")
+                    // Set playbackState but don't call play() yet
                     playbackState = .playing
                 } else {
-                    NSLog("DEBUG: [VIDEO PLAYBACK] Fullscreen/Detail mode - will play() in AVPlayerViewController update")
-                    // Set playbackState but don't call play() yet
+                    NSLog("DEBUG: [VIDEO PLAYBACK] Calling player.play() for \(mid)")
+                    player?.play()
                     playbackState = .playing
                 }
             }
