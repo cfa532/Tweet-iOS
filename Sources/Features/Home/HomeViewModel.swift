@@ -32,27 +32,46 @@ struct HomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header section
-            VStack(spacing: 0) {
-                AppHeaderView()
-                    .padding(.vertical, 8)
-                // Tab bar
-                HStack(spacing: 0) {
-                    TabButton(title: LocalizedStringKey("Followings"), isSelected: selectedTab == 0) {
-                        withAnimation { selectedTab = 0 }
+            // Header section - always reserves space
+            ZStack(alignment: .top) {
+                // Invisible placeholder to maintain space
+                VStack(spacing: 0) {
+                    AppHeaderView()
+                        .padding(.vertical, 8)
+                    HStack(spacing: 0) {
+                        TabButton(title: LocalizedStringKey("Followings"), isSelected: selectedTab == 0) {
+                            withAnimation { selectedTab = 0 }
+                        }
+                        TabButton(title: LocalizedStringKey("Recommendation"), isSelected: selectedTab == 1) {
+                            withAnimation { selectedTab = 1 }
+                        }
                     }
-                    TabButton(title: LocalizedStringKey("Recommendation"), isSelected: selectedTab == 1) {
-                        withAnimation { selectedTab = 1 }
-                    }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    .padding(.leading, -4)
                 }
-                .padding(.horizontal)
-                .padding(.top, 8)
-                .padding(.leading, -4)
+                .opacity(0)
+                
+                // Actual visible header that can animate
+                VStack(spacing: 0) {
+                    AppHeaderView()
+                        .padding(.vertical, 8)
+                    HStack(spacing: 0) {
+                        TabButton(title: LocalizedStringKey("Followings"), isSelected: selectedTab == 0) {
+                            withAnimation { selectedTab = 0 }
+                        }
+                        TabButton(title: LocalizedStringKey("Recommendation"), isSelected: selectedTab == 1) {
+                            withAnimation { selectedTab = 1 }
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    .padding(.leading, -4)
+                }
+                .opacity(isNavigationVisible ? 1 : 0)
+                .offset(y: isNavigationVisible ? 0 : -100)
+                .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
             }
-            .opacity(isNavigationVisible ? 1 : 0)
-            .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
-            .offset(y: isNavigationVisible ? 0 : -100)
-            .frame(height: isNavigationVisible ? nil : 0)
             .clipped()
 
             // Tab Content

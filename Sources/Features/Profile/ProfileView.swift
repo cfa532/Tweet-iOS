@@ -167,6 +167,8 @@ struct ProfileView: View {
             // Calculate isFollowing by checking if the user's mid is in the app user's followingList
             isFollowing = (hproseInstance.appUser.followingList)?.contains(user.mid) ?? false
         }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 12) {
