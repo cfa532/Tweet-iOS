@@ -485,8 +485,7 @@ struct SimpleVideoPlayer: View {
     // MARK: - Unique ID for view identity
     private var uniqueViewId: Int {
         var hasher = Hasher()
-        hasher.combine(parentTweetId ?? "")
-        hasher.combine(mid)
+        hasher.combine(mid)  // Only video ID, not tweet ID - share player across tweets
         hasher.combine(representableId)
         return hasher.finalize()
     }
@@ -508,8 +507,8 @@ struct SimpleVideoPlayer: View {
                                 }
                             }
                     } else {
-                        // Use VideoPlayerRepresentable for MediaCell to ensure proper layer refresh
-                        VideoPlayerRepresentable(player: player)
+                        // Use native SwiftUI VideoPlayer - let iOS handle everything
+                        VideoPlayer(player: player)
                             .id(uniqueViewId) // Hash of tweet+video+state for unique identity
                             .onTapGesture {
                                 if let onVideoTap = onVideoTap {
@@ -633,30 +632,28 @@ struct SimpleVideoPlayer: View {
         let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? mid
         NSLog("DEBUG: [VIDEO SETUP] mediaID: \(mediaID)")
         
-        // CRITICAL: For MediaCell mode, DON'T use cached players - always create fresh ones
-        // This prevents AVPlayerLayer conflicts when same video appears multiple times
-        // For fullscreen/detail modes, use cached players for seamless transitions
-        if mode != .mediaCell {
-            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
-                NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING player in SharedAssetCache for \(mid) (fullscreen/detail mode)")
-                NSLog("DEBUG: [VIDEO SETUP] Cached player rate: \(cachedPlayer.rate), isMuted: \(cachedPlayer.isMuted)")
-                
-                // Unmute for fullscreen/detail modes
+        // Check for cached player - use for all modes
+        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
+            NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING shared player for \(mid)")
+            NSLog("DEBUG: [VIDEO SETUP] Cached player rate: \(cachedPlayer.rate), isMuted: \(cachedPlayer.isMuted)")
+            
+            // Apply mute state based on mode
+            if mode == .mediaCell {
+                cachedPlayer.isMuted = MuteState.shared.isMuted
+            } else {
                 cachedPlayer.isMuted = false
-                
-                // Update state FIRST before configuring
-                self.player = cachedPlayer
-                self.loadingState = .loaded
-                self.playbackState = .notStarted
-                NSLog("DEBUG: [VIDEO SETUP] State updated, about to call configurePlayer for \(mid)")
-                
-                // Then configure
-                configurePlayer(cachedPlayer)
-                NSLog("DEBUG: [VIDEO SETUP] Returned from configurePlayer for \(mid)")
-                return
             }
-        } else {
-            NSLog("DEBUG: [VIDEO SETUP] MediaCell mode - skipping cached player, will create fresh instance for \(mid)")
+            
+            // Update state FIRST before configuring
+            self.player = cachedPlayer
+            self.loadingState = .loaded
+            self.playbackState = .notStarted
+            NSLog("DEBUG: [VIDEO SETUP] State updated, about to call configurePlayer for \(mid)")
+            
+            // Then configure
+            configurePlayer(cachedPlayer)
+            NSLog("DEBUG: [VIDEO SETUP] Returned from configurePlayer for \(mid)")
+            return
         }
         
         // SECOND: Check if we have cached content for this tweet
@@ -724,25 +721,25 @@ struct SimpleVideoPlayer: View {
         // Otherwise, create a new player with performance considerations
         Task.detached(priority: .userInitiated) {
             do {
-                NSLog("DEBUG: [SimpleVideoPlayer] About to call SharedAssetCache.getOrCreatePlayer for \(mid) with mediaType: \(mediaType.rawValue)")
+                // Use shared cached player for all modes - simpler and more efficient
+                NSLog("DEBUG: [SimpleVideoPlayer] Getting shared player for \(mid)")
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
-                NSLog("DEBUG: [SimpleVideoPlayer] SharedAssetCache.getOrCreatePlayer completed for \(mid)")
+                
+                NSLog("DEBUG: [SimpleVideoPlayer] Player creation completed for \(mid)")
                 await MainActor.run {
-                    // Apply mute state immediately for MediaCell mode
+                    // Apply mute state for MediaCell mode
                     if self.mode == .mediaCell {
                         newPlayer.isMuted = MuteState.shared.isMuted
                     } else {
                         newPlayer.isMuted = false
                     }
-                    configurePlayer(newPlayer)
+                    self.configurePlayer(newPlayer)
                 }
             } catch {
                 await MainActor.run {
                     print("DEBUG: [VIDEO SETUP] Failed to setup player for \(mid): \(error)")
                     NSLog("ERROR: [SimpleVideoPlayer] Failed to setup player for \(mid): \(error)")
-                    NSLog("ERROR: [SimpleVideoPlayer] Error type: \(type(of: error))")
-                    NSLog("ERROR: [SimpleVideoPlayer] Error description: \(error.localizedDescription)")
-                    handleError(strategy: .loadFailure)
+                    self.handleError(strategy: .loadFailure)
                 }
             }
         }
@@ -878,15 +875,10 @@ struct SimpleVideoPlayer: View {
         self.representableId += 1 // Force VideoPlayerRepresentable to recreate
         NSLog("DEBUG: [VIDEO CONFIGURE] Incremented representableId to \(representableId) for \(mid)")
         
-        // Cache the player in SharedAssetCache for reuse
-        // ONLY cache for fullscreen/detail modes, NOT for MediaCell mode
-        if mode != .mediaCell {
-            let mediaID = extractMediaID(from: url) ?? mid
-            SharedAssetCache.shared.cachePlayer(player, for: mediaID)
-            NSLog("DEBUG: [VIDEO CONFIGURE] Cached player with key: \(mediaID) (mode: \(mode))")
-        } else {
-            NSLog("DEBUG: [VIDEO CONFIGURE] MediaCell mode - NOT caching player for \(mid)")
-        }
+        // Cache the player in SharedAssetCache for reuse across all instances
+        let mediaID = extractMediaID(from: url) ?? mid
+        SharedAssetCache.shared.cachePlayer(player, for: mediaID)
+        NSLog("DEBUG: [VIDEO CONFIGURE] Cached player with key: \(mediaID) (mode: \(mode))")
         
         NSLog("DEBUG: [VIDEO CONFIGURE] About to call checkPlaybackConditions - autoPlay: \(currentAutoPlay), isVisible: \(isVisible)")
         
@@ -1169,37 +1161,18 @@ struct SimpleVideoPlayer: View {
     
     private func handleLoadingStateChange(newShouldLoadVideo: Bool) {
         print("DEBUG: [VIDEO LOADING STATE] Loading state changed to \(newShouldLoadVideo) for \(mid)")
-        print("DEBUG: [VIDEO LOADING STATE] Current state - player: \(player != nil), isVisible: \(isVisible), mode: \(mode)")
+        print("DEBUG: [VIDEO LOADING STATE] Current state - player: \(player != nil), isVisible: \(isVisible)")
         
         if newShouldLoadVideo {
-            // Loading enabled
-            if mode == .mediaCell {
-                // CRITICAL: For MediaCell mode, always recreate player to avoid layer conflicts
-                // This ensures fresh AVPlayerLayer connection
-                print("DEBUG: [VIDEO SETUP] MediaCell loading enabled, recreating player for \(mid)")
-                
-                // Properly dispose of old player
-                if let oldPlayer = player {
-                    oldPlayer.pause()
-                    oldPlayer.replaceCurrentItem(with: nil)
-                    print("DEBUG: [VIDEO SETUP] Disposed old player for \(mid)")
-                }
-                
-                removePlayerObservers()
-                player = nil
-                loadingState = .idle
-                
+            // Loading enabled - set up player if needed
+            if player == nil {
+                print("DEBUG: [VIDEO SETUP] Loading enabled, setting up player for \(mid)")
                 setupPlayer()
             } else {
-                // For fullscreen/detail modes, reuse existing player if available
-                if player == nil {
-                    print("DEBUG: [VIDEO SETUP] Loading enabled, setting up player for \(mid)")
-                    setupPlayer()
-                } else {
-                    print("DEBUG: [VIDEO SETUP] Loading enabled, player exists, validating for \(mid)")
-                    validateAndConfigureExistingPlayer()
-                    checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
-                }
+                // Player exists, validate and reconfigure it
+                print("DEBUG: [VIDEO SETUP] Loading enabled, player exists, validating for \(mid)")
+                validateAndConfigureExistingPlayer()
+                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             }
         } else {
             // Loading disabled - pause player
@@ -1365,14 +1338,17 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                     NSLog("DEBUG: [AVPlayerViewController] New player rate: \(player.rate)")
                 }
                 
-                // Always set/update the player to ensure video layer refreshes
-                // Even if it's the same instance, re-setting forces AVPlayerViewController to refresh
+                // CRITICAL: Detach player first, then re-attach
+                // This ensures the player's layer is not attached to any other view
                 let isSameInstance = uiViewController.player === player
                 if !isSameInstance {
                     NSLog("DEBUG: [AVPlayerViewController] Setting NEW player instance")
                 } else {
                     NSLog("DEBUG: [AVPlayerViewController] Re-setting SAME player instance to refresh layer")
                 }
+                
+                // Detach and reattach to force fresh layer connection
+                uiViewController.player = nil
                 uiViewController.player = player
                 
                 // CRITICAL: For fullscreen/detail, always trigger play() here after layer is attached
