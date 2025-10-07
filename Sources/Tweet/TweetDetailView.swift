@@ -56,269 +56,6 @@ private enum ScrollDirection {
     case down
 }
 
-// MARK: - Detail Video Player View
-@available(iOS 16.0, *)
-struct DetailVideoPlayerView: View {
-    let url: URL
-    let mid: String
-    let isVisible: Bool
-    let videoAspectRatio: CGFloat
-    let showMuteButton: Bool
-    
-    @StateObject private var detailVideoManager = DetailVideoManager.shared
-    @State private var isLoading = true
-    @State private var isMuted: Bool = false
-    @State private var isPlaying = false
-    @State private var currentTime: TimeInterval = 0
-    @State private var duration: TimeInterval = 0
-    @State private var showControls = false
-    @State private var controlsTimer: Timer?
-    
-    var body: some View {
-        Group {
-            if let player = detailVideoManager.currentPlayer {
-                VideoPlayerRepresentable(player: player)
-                    .aspectRatio(videoAspectRatio, contentMode: .fit)
-                    .clipped()
-                    .overlay(
-                        // Video controls overlay
-                        Group {
-                            VStack {
-                                Spacer()
-                                HStack {
-                                    Spacer()
-                                    
-                                    // Mute button in bottom right corner
-                                    if showMuteButton {
-                                        MuteButton()
-                                            .padding(.trailing, 8)
-                                            .padding(.bottom, 8)
-                                    }
-                                }
-                            }
-                        }
-                    )
-                    .overlay(
-                        // Custom video controls overlay
-                        Group {
-                            if showControls || !isPlaying {
-                                ZStack {
-                                    // Bottom controls bar
-                                    VStack {
-                                        Spacer()
-                                        
-                                        // Progress bar and time display
-                                        VStack(spacing: 8) {
-                                            // Progress bar
-                                            ProgressView(value: duration > 0 ? currentTime / duration : 0)
-                                                .progressViewStyle(LinearProgressViewStyle(tint: .white))
-                                                .background(Color.white.opacity(0.3))
-                                                .scaleEffect(y: 2)
-                                                .onTapGesture { location in
-                                                    seekToPosition(at: location)
-                                                }
-                                            
-                                            // Time display (without play button)
-                                            HStack {
-                                                // Elapsed time
-                                                Text(formatTime(currentTime))
-                                                    .font(.caption)
-                                                    .foregroundColor(.white)
-                                                    .padding(.horizontal, 8)
-                                                    .padding(.vertical, 4)
-                                                    .background(Color.black.opacity(0.6))
-                                                    .cornerRadius(4)
-                                                
-                                                Spacer()
-                                                
-                                                // Duration
-                                                Text(formatTime(duration))
-                                                    .font(.caption)
-                                                    .foregroundColor(.white)
-                                                    .padding(.horizontal, 8)
-                                                    .padding(.vertical, 4)
-                                                    .background(Color.black.opacity(0.6))
-                                                    .cornerRadius(4)
-                                            }
-                                        }
-                                        .padding(.horizontal, 16)
-                                        .padding(.bottom, 16)
-                                    }
-                                    .background(
-                                        LinearGradient(
-                                            gradient: Gradient(colors: [Color.clear, Color.black.opacity(0.3)]),
-                                            startPoint: .top,
-                                            endPoint: .bottom
-                                        )
-                                    )
-                                    
-                                    // Center play button (only show when paused or controls are visible)
-                                    if !isPlaying || showControls {
-                                        Button(action: togglePlayPause) {
-                                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                                .font(.system(size: 60))
-                                                .foregroundColor(.white)
-                                                .background(
-                                                    Circle()
-                                                        .fill(Color.black.opacity(0.4))
-                                                        .frame(width: 80, height: 80)
-                                                )
-                                        }
-                                        .opacity(showControls || !isPlaying ? 1.0 : 0.0)
-                                        .animation(.easeInOut(duration: 0.3), value: showControls)
-                                    }
-                                }
-                            }
-                        }
-                    )
-                    .onTapGesture {
-                        toggleControls()
-                    }
-            } else if isLoading {
-                ProgressView(NSLocalizedString("Loading video...", comment: "Video loading message"))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black.opacity(0.1))
-            } else {
-                Color.black
-                    .overlay(
-                        Image(systemName: "play.circle")
-                            .font(.system(size: 40))
-                            .foregroundColor(.white)
-                    )
-            }
-        }
-        .onAppear {
-            setupPlayer()
-        }
-        .onDisappear {
-            cleanupPlayer()
-        }
-        .onChange(of: isVisible) { _, visible in
-            if visible {
-                detailVideoManager.currentPlayer?.play()
-            } else {
-                detailVideoManager.currentPlayer?.pause()
-            }
-        }
-        .onChange(of: isMuted) { _, newMuteState in
-            // Detail view videos should always be unmuted
-            detailVideoManager.currentPlayer?.isMuted = false
-        }
-        .onChange(of: detailVideoManager.currentPlayer) { _, player in
-            if player != nil {
-                isLoading = false
-                setupTimeObserver()
-            }
-        }
-    }
-    
-    private func setupPlayer() {
-        Task {
-            await MainActor.run {
-                isLoading = true
-            }
-            
-            // Use DetailVideoManager to get or create player - auto-play the selected video
-            detailVideoManager.setCurrentVideo(url: url, mid: mid, autoPlay: true)
-        }
-    }
-    
-    private func cleanupPlayer() {
-        // Pause the video when detail view disappears
-        detailVideoManager.currentPlayer?.pause()
-        controlsTimer?.invalidate()
-        controlsTimer = nil
-    }
-    
-    // MARK: - Video Controls
-    
-    private func setupTimeObserver() {
-        guard let player = detailVideoManager.currentPlayer else { return }
-        
-        // Get duration
-        if let duration = player.currentItem?.duration {
-            let newDuration = CMTimeGetSeconds(duration)
-            if newDuration.isFinite && newDuration > 0 {
-                self.duration = newDuration
-            }
-        }
-        
-        // Set up time observer for progress updates
-        let timeScale = CMTimeScale(NSEC_PER_SEC)
-        let time = CMTime(seconds: 1.0, preferredTimescale: timeScale)
-        
-        player.addPeriodicTimeObserver(forInterval: time, queue: .main) { time in
-            let newCurrentTime = CMTimeGetSeconds(time)
-            
-            // Only update if the time is finite and valid
-            if newCurrentTime.isFinite && newCurrentTime >= 0 {
-                self.currentTime = newCurrentTime
-            }
-            
-            // Update playing state
-            if player.rate > 0 {
-                self.isPlaying = true
-            } else {
-                self.isPlaying = false
-            }
-            
-            // Get duration if not already set
-            if let duration = player.currentItem?.duration, self.duration == 0 {
-                let newDuration = CMTimeGetSeconds(duration)
-                if newDuration.isFinite && newDuration > 0 {
-                    self.duration = newDuration
-                }
-            }
-        }
-    }
-    
-    private func togglePlayPause() {
-        guard let player = detailVideoManager.currentPlayer else { return }
-        
-        if isPlaying {
-            player.pause()
-        } else {
-            player.play()
-        }
-    }
-    
-    private func toggleControls() {
-        showControls.toggle()
-        
-        // Auto-hide controls after 3 seconds
-        controlsTimer?.invalidate()
-        if showControls {
-            controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-                showControls = false
-            }
-        }
-    }
-    
-    private func seekToPosition(at location: CGPoint) {
-        guard let player = detailVideoManager.currentPlayer,
-              duration > 0 else { return }
-        
-        // This is a simplified seek - in a real implementation you'd calculate
-        // the exact position based on the tap location on the progress bar
-        let seekTime = currentTime + (location.x > 0 ? 10 : -10) // Seek 10 seconds forward/back
-        let clampedTime = max(0, min(seekTime, duration))
-        
-        let time = CMTime(seconds: clampedTime, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        player.seek(to: time)
-    }
-    
-    private func formatTime(_ time: TimeInterval) -> String {
-        // Handle NaN, infinite, or negative values
-        guard time.isFinite && time >= 0 else {
-            return "0:00"
-        }
-        
-        let minutes = Int(time) / 60
-        let seconds = Int(time) % 60
-        return String(format: "%d:%02d", minutes, seconds)
-    }
-}
-
 // Custom MediaCell for TweetDetailView that shows native video controls instead of going full-screen
 @available(iOS 16.0, *)
 struct DetailMediaCell: View {
@@ -331,20 +68,14 @@ struct DetailMediaCell: View {
     @State private var image: UIImage?
     @State private var loading = false
     let showMuteButton: Bool
-    @ObservedObject var videoManager: DetailVideoManager
     
-    // Local mute state management for detail view
-    @State private var isMuted: Bool = false // Always unmuted in detail view
-    @State private var hasSavedOriginalState: Bool = false
-    
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true, videoManager: DetailVideoManager) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
         self._play = State(initialValue: play)
         self.shouldLoadVideo = shouldLoadVideo
         self.showMuteButton = showMuteButton
-        self.videoManager = videoManager
     }
     
     private var attachment: MimeiFileType {
@@ -364,14 +95,18 @@ struct DetailMediaCell: View {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
-                    // Show video with native controls using DetailVideoManager singleton
+                    // Show video with SimpleVideoPlayer in tweetDetail mode (shares player with grid, bypasses VideoManager)
                     if shouldLoadVideo {
-                        DetailVideoPlayerView(
+                        SimpleVideoPlayer(
                             url: url,
                             mid: attachment.mid,
-                            isVisible: true, // Always visible in detail view
+                            isVisible: true,
+                            mediaType: attachment.type,
+                            autoPlay: true,
                             videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showMuteButton: showMuteButton
+                            showNativeControls: true,
+                            isMuted: false,
+                            mode: .tweetDetail
                         )
                     } else {
                         // Show placeholder for videos that haven't been loaded yet
@@ -442,11 +177,6 @@ struct DetailMediaCell: View {
                 print("DEBUG: [DetailMediaCell] Starting image load for attachment \(attachmentIndex)")
                 loadImage()
             }
-            
-            // Handle mute state for videos in detail view - delay 1s before unmuting
-            if (attachment.type == .video || attachment.type == .hls_video) {
-                setupDetailViewMuteState()
-            }
         }
 
     }
@@ -481,12 +211,6 @@ struct DetailMediaCell: View {
         }
     }
     
-    // MARK: - Mute State Management for Detail View
-    
-    private func setupDetailViewMuteState() {
-        // Set local mute state to false (unmuted) immediately
-        isMuted = false
-    }
 }
 
 @MainActor
@@ -710,9 +434,6 @@ struct TweetDetailView: View {
             refreshTimer = nil
             isVisible = false
             
-            // Clear the DetailVideoManager to prevent cached player issues
-            DetailVideoManager.shared.clearCurrentVideo()
-            
             // Cancel any pending image loads to prevent memory leaks
             if let attachments = displayTweet.attachments {
                 for attachment in attachments {
@@ -740,8 +461,7 @@ struct TweetDetailView: View {
                             aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
                             play: index == selectedMediaIndex,
                             shouldLoadVideo:  index == selectedMediaIndex,
-                            showMuteButton: false,
-                            videoManager: DetailVideoManager.shared,
+                            showMuteButton: false
                         )
                         .tag(index)
                     }

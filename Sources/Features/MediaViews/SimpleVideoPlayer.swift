@@ -13,6 +13,7 @@ import AVFoundation
 enum Mode {
     case mediaCell // Normal cell in feed/grid
     case mediaBrowser // In MediaBrowserView (fullscreen browser)
+    case tweetDetail // In TweetDetailView (single tweet view)
 }
 
 // MARK: - Consolidated State Enums
@@ -132,7 +133,11 @@ struct SimpleVideoPlayer: View {
     }
     
     // Reactive autoPlay state - use VideoManager if available, otherwise use static autoPlay
+    // For fullscreen and detail modes, always use static autoPlay (bypass VideoManager)
     private var currentAutoPlay: Bool {
+        if mode == .mediaBrowser || mode == .tweetDetail {
+            return autoPlay
+        }
         if let videoManager = videoManager {
             return videoManager.shouldPlayVideo(for: mid)
         }
@@ -184,6 +189,11 @@ struct SimpleVideoPlayer: View {
                                 .background(Color.black)
                         }
                     }
+                    
+                case .tweetDetail:
+                    // TweetDetail mode: single video view with fit aspect ratio
+                    videoPlayerView()
+                        .aspectRatio(videoAR, contentMode: .fit)
                 }
             } else {
                 // Fallback when no aspect ratio is available
@@ -271,11 +281,8 @@ struct SimpleVideoPlayer: View {
                 )
             }
             
-            // Only pause when view disappears if it's not a full screen mode
-            // For full screen mode, we want the video to continue playing when returning to MediaCell
-            if mode != .mediaBrowser {
-                player?.pause()
-            }
+            // Don't pause on disappear - let VideoManager or explicit controls handle pausing
+            // This prevents pausing shared players that are being used in other views (fullscreen, detail)
         }
         .onChange(of: isMuted) { _, newMuteState in
             // For full screen modes, always keep unmuted regardless of the isMuted parameter
@@ -780,10 +787,10 @@ struct SimpleVideoPlayer: View {
         NSLog("DEBUG: [VIDEO CONFIGURE] Player rate: \(player.rate), isMuted: \(player.isMuted)")
         
         // Configure player
-        // For full screen modes, always unmute regardless of the isMuted parameter
-        if mode == .mediaBrowser {
+        // For full screen and detail modes, always unmute
+        if mode == .mediaBrowser || mode == .tweetDetail {
             player.isMuted = false
-            NSLog("DEBUG: [VIDEO CONFIGURE] Forced unmuted for full screen mode")
+            NSLog("DEBUG: [VIDEO CONFIGURE] Forced unmuted for full screen/detail mode")
         } else {
             // For MediaCell mode, always use the current global mute state to ensure
             // videos respect the current mute setting even if MuteState was refreshed after initialization
@@ -1014,7 +1021,7 @@ struct SimpleVideoPlayer: View {
         }
         
         // Check if all conditions are met for autoplay
-        // For fullscreen mode, bypass shouldLoadVideo check
+        // For fullscreen and detail modes, bypass shouldLoadVideo check
         let shouldCheckLoading = mode == .mediaCell ? shouldLoadVideo : true
         NSLog("DEBUG: [VIDEO PLAYBACK] shouldCheckLoading: \(shouldCheckLoading)")
         
