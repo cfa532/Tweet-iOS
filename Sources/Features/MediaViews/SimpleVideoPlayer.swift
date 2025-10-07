@@ -15,6 +15,40 @@ enum Mode {
     case mediaBrowser // In MediaBrowserView (fullscreen browser)
 }
 
+// MARK: - Consolidated State Enums
+enum LoadingState {
+    case idle
+    case loading
+    case loaded
+    case failed(retryCount: Int)
+    
+    var isLoading: Bool {
+        if case .loading = self { return true }
+        return false
+    }
+    
+    var hasFailed: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+    
+    var retryCount: Int {
+        if case .failed(let count) = self { return count }
+        return 0
+    }
+}
+
+enum PlaybackState {
+    case notStarted
+    case playing
+    case paused
+    case finished
+    
+    var hasFinished: Bool {
+        return self == .finished
+    }
+}
+
 // MARK: - Video Player State Manager
 class VideoStateCache {
     static let shared = VideoStateCache()
@@ -69,8 +103,6 @@ struct SimpleVideoPlayer: View {
     var isMuted: Bool = true // Mute state controlled by caller
     var onVideoTap: (() -> Void)? = nil // Callback when video is tapped
     var disableAutoRestart: Bool = false // Disable auto-restart when video finishes
-    var forceRefreshTrigger: Int = 0 // External trigger to force refresh
-    var cancelVideoTrigger: Int = 0 // External trigger to cancel video loading/playback
     var shouldLoadVideo: Bool = true // Whether grid-level loading is enabled
     
     // MARK: Mode
@@ -78,19 +110,15 @@ struct SimpleVideoPlayer: View {
     
     // MARK: State
     @State private var player: AVPlayer?
-    @State private var isLoading = true
-    @State private var hasFinishedPlaying = false
-    @State private var loadFailed = false
-    @State private var retryCount = 0
-    private var instanceId: String { mid }
+    @State private var loadingState: LoadingState = .idle
+    @State private var playbackState: PlaybackState = .notStarted
     @State private var isLongPressing = false
-    @State private var nativeControlsTimer: Timer?
+    @State private var isPlayerDetached = false  // Track background state
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
-    @State private var isPlayerDetached = false // Track if player is detached for background prevention
     @State private var videoCompletionObserver: NSObjectProtocol?
     @State private var videoErrorObserver: NSObjectProtocol?
-    @State private var timeObserver: Any? // Time observer for memory management
-    @State private var timeObserverPlayer: AVPlayer? // Reference to the player that added the time observer
+    @State private var timeObserver: Any?
+    @State private var timeObserverPlayer: AVPlayer?
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -165,8 +193,8 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onAppear {
-            print("DEBUG: [VIDEO APPEAR] onAppear called for \(mid)")
-            print("DEBUG: [VIDEO APPEAR] player: \(player != nil), shouldLoadVideo: \(shouldLoadVideo), isVisible: \(isVisible), mode: \(mode)")
+            NSLog("DEBUG: [VIDEO APPEAR] onAppear called for \(mid)")
+            NSLog("DEBUG: [VIDEO APPEAR] player: \(player != nil), shouldLoadVideo: \(shouldLoadVideo), isVisible: \(isVisible), mode: \(mode)")
             
             // Handle idle timer for fullscreen modes
             if mode == .mediaBrowser {
@@ -187,10 +215,10 @@ struct SimpleVideoPlayer: View {
             
             // For MediaCell mode, use existing logic but be less aggressive about failure detection
             if let player = player, let playerItem = player.currentItem {
-                if playerItem.status == .failed && loadFailed {
+                if playerItem.status == .failed && loadingState.hasFailed {
                     // Only trigger recovery if we've already marked this as failed
                     print("DEBUG: [VIDEO APPEAR] Player item is in failed state and already marked as failed for \(mid), triggering recovery")
-                    handleLoadFailure()
+                    handleError(strategy: .loadFailure)
                     return
                 } else if playerItem.status == .failed {
                     // Player item is failed but not marked as failed yet - just log and continue
@@ -302,10 +330,10 @@ struct SimpleVideoPlayer: View {
                 
                 // Validate existing player state if present - but be less aggressive about failure detection
                 if let player = player, let playerItem = player.currentItem {
-                    if playerItem.status == .failed && loadFailed {
+                    if playerItem.status == .failed && loadingState.hasFailed {
                         // Only trigger recovery if we've already marked this as failed
                         print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state and already marked as failed for \(mid), triggering recovery")
-                        handleLoadFailure()
+                        handleError(strategy: .loadFailure)
                         return
                     } else if playerItem.status == .failed {
                         // Player item is failed but not marked as failed yet - just log and continue
@@ -344,18 +372,6 @@ struct SimpleVideoPlayer: View {
             if newPlayer != nil {
                 checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             }
-        }
-        .onChange(of: forceRefreshTrigger) { _, _ in
-            // External trigger to force refresh (e.g., from MediaCell long press)
-            if loadFailed {
-                print("DEBUG: [VIDEO FORCE REFRESH] External refresh triggered for \(mid)")
-                handleManualReset()
-            }
-        }
-        .onChange(of: cancelVideoTrigger) { _, _ in
-            // External trigger to cancel video loading/playback
-            print("DEBUG: [VIDEO CANCELLATION] External cancellation triggered for \(mid)")
-            cancelVideoLoading()
         }
         .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in
             // Grid-level loading state changed - consolidate all loading decisions here
@@ -429,10 +445,9 @@ struct SimpleVideoPlayer: View {
             }
             
             // Reset error state for videos that might have been interrupted
-            if loadFailed {
+            if loadingState.hasFailed {
                 print("DEBUG: [VIDEO APP ACTIVE] Resetting error state for \(mid)")
-                retryCount = 0
-                loadFailed = false
+                loadingState = .idle
             }
         }
         .onTapGesture {
@@ -443,7 +458,7 @@ struct SimpleVideoPlayer: View {
         .onLongPressGesture(minimumDuration: 0.5) {
             isLongPressing = true
             // Handle manual video reset on long press
-            handleManualReset()
+            handleError(strategy: .manualReset)
         } onPressingChanged: { pressing in
             if !pressing {
                 isLongPressing = false
@@ -492,7 +507,7 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 // Loading indicator
-                if isLoading {
+                if loadingState.isLoading {
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.5)
@@ -501,17 +516,17 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 // Error state
-                if loadFailed {
+                if loadingState.hasFailed {
                     VStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.title)
                             .foregroundColor(.white)
                         Text("Failed to load video")
                             .foregroundColor(.white)
-                            .font(.caption)
-                        Button(action: {
-                            handleManualReset()
-                        }) {
+                        .font(.caption)
+                    Button(action: {
+                        handleError(strategy: .manualReset)
+                    }) {
                             HStack {
                                 Image(systemName: "arrow.clockwise")
                                 Text("Retry")
@@ -566,7 +581,7 @@ struct SimpleVideoPlayer: View {
                 configurePlayer(player)
             case .failed:
                 print("DEBUG: [VIDEO VALIDATE] Player item failed for \(mid), attempting recovery")
-                handleLoadFailure()
+                handleError(strategy: .loadFailure)
             case .unknown:
                 print("DEBUG: [VIDEO VALIDATE] Player item status unknown for \(mid), waiting...")
                 // Wait a bit and try again
@@ -583,16 +598,16 @@ struct SimpleVideoPlayer: View {
     }
     
     private func setupPlayer() {
-        print("DEBUG: [VIDEO SETUP] Setting up player for \(mid)")
-        print("DEBUG: [VIDEO SETUP] isVisible: \(isVisible), shouldLoadVideo: \(shouldLoadVideo), mode: \(mode)")
-        print("DEBUG: [VIDEO SETUP] URL: \(url)")
+        NSLog("DEBUG: [VIDEO SETUP] Setting up player for \(mid)")
+        NSLog("DEBUG: [VIDEO SETUP] isVisible: \(isVisible), shouldLoadVideo: \(shouldLoadVideo), mode: \(mode)")
+        NSLog("DEBUG: [VIDEO SETUP] URL: \(url)")
         
         // FIRST: Always check SharedAssetCache for existing player instance (for seamless fullscreen transitions)
         let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? mid
-        print("DEBUG: [VIDEO SETUP] mediaID: \(mediaID)")
+        NSLog("DEBUG: [VIDEO SETUP] mediaID: \(mediaID)")
         
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
-            print("DEBUG: [VIDEO SETUP] ✅ Found EXISTING player in SharedAssetCache for \(mid) - reusing same instance!")
+            NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING player in SharedAssetCache for \(mid) - reusing same instance!")
             configurePlayer(cachedPlayer)
             return
         }
@@ -614,7 +629,7 @@ struct SimpleVideoPlayer: View {
                 } catch {
                     await MainActor.run {
                         print("DEBUG: [VIDEO SETUP] Failed to load from cache for \(mid): \(error)")
-                        self.handleLoadFailure()
+                        self.handleError(strategy: .loadFailure)
                     }
                 }
             }
@@ -633,10 +648,9 @@ struct SimpleVideoPlayer: View {
         }
         
         // Reset error state when starting setup
-        if loadFailed {
+        if loadingState.hasFailed {
             print("DEBUG: [VIDEO SETUP] Resetting error state for \(mid)")
-            loadFailed = false
-            retryCount = 0
+            loadingState = .idle
         }
         
         // Check if we have a cached player first - prioritize for fullscreen modes
@@ -648,7 +662,7 @@ struct SimpleVideoPlayer: View {
         
         // For fullscreen modes, if no cached state and no player, try to restore from cache again
         // This handles cases where the cache was cleared but we still need the video
-        if mode == .mediaBrowser && player == nil && !isLoading {
+        if mode == .mediaBrowser && player == nil && !loadingState.isLoading {
             print("DEBUG: [VIDEO CACHE] Fullscreen mode with no player, attempting to restore cached state for \(mid)")
             restoreCachedVideoState()
             return
@@ -658,7 +672,7 @@ struct SimpleVideoPlayer: View {
         Task.detached(priority: .userInitiated) {
             do {
                 // Add a small delay to prevent overwhelming the system when multiple videos load simultaneously
-                let currentRetryCount = await retryCount
+                let currentRetryCount = await loadingState.retryCount
                 if currentRetryCount == 0 {
                     try await Task.sleep(nanoseconds: UInt64(currentRetryCount * 50_000_000)) // 0.05s delay per retry
                 }
@@ -675,7 +689,7 @@ struct SimpleVideoPlayer: View {
                     NSLog("ERROR: [SimpleVideoPlayer] Failed to setup player for \(mid): \(error)")
                     NSLog("ERROR: [SimpleVideoPlayer] Error type: \(type(of: error))")
                     NSLog("ERROR: [SimpleVideoPlayer] Error description: \(error.localizedDescription)")
-                    handleLoadFailure()
+                    handleError(strategy: .loadFailure)
                 }
             }
         }
@@ -754,28 +768,26 @@ struct SimpleVideoPlayer: View {
         // Cache will be cleared by the system cleanup or when explicitly needed
         
         // Update state
-        self.isLoading = false
-        self.loadFailed = false
-        self.retryCount = 0
-        self.hasFinishedPlaying = false
+        self.loadingState = .loaded
+        self.playbackState = .notStarted
     }
     
     private func configurePlayer(_ player: AVPlayer) {
-        print("DEBUG: [VIDEO CONFIGURE] Configuring player for \(mid)")
-        print("DEBUG: [VIDEO CONFIGURE] Mode: \(mode)")
-        print("DEBUG: [VIDEO CONFIGURE] Player item status: \(player.currentItem?.status.rawValue ?? -1)")
-        print("DEBUG: [VIDEO CONFIGURE] Player item error: \(player.currentItem?.error?.localizedDescription ?? "none")")
+        NSLog("DEBUG: [VIDEO CONFIGURE] Configuring player for \(mid)")
+        NSLog("DEBUG: [VIDEO CONFIGURE] Mode: \(mode)")
+        NSLog("DEBUG: [VIDEO CONFIGURE] Player item status: \(player.currentItem?.status.rawValue ?? -1)")
+        NSLog("DEBUG: [VIDEO CONFIGURE] Player item error: \(player.currentItem?.error?.localizedDescription ?? "none")")
         
         // Configure player
         // For full screen modes, always unmute regardless of the isMuted parameter
         if mode == .mediaBrowser {
             player.isMuted = false
-            print("DEBUG: [VIDEO CONFIGURE] Forced unmuted for full screen mode")
+            NSLog("DEBUG: [VIDEO CONFIGURE] Forced unmuted for full screen mode")
         } else {
             // For MediaCell mode, always use the current global mute state to ensure
             // videos respect the current mute setting even if MuteState was refreshed after initialization
             player.isMuted = MuteState.shared.isMuted
-            print("DEBUG: [VIDEO CONFIGURE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
+            NSLog("DEBUG: [VIDEO CONFIGURE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
         }
         
         // Setup time observer for memory-efficient segment management
@@ -795,10 +807,8 @@ struct SimpleVideoPlayer: View {
         
         // Update state
         self.player = player
-        self.isLoading = false
-        self.loadFailed = false
-        self.retryCount = 0
-        self.hasFinishedPlaying = false // Reset finished state
+        self.loadingState = .loaded
+        self.playbackState = .notStarted
         
         // Cache the player in SharedAssetCache for reuse
         SharedAssetCache.shared.cachePlayer(player, for: extractMediaID(from: url) ?? mid)
@@ -854,7 +864,7 @@ struct SimpleVideoPlayer: View {
             object: playerItem,
             queue: .main
         ) { notification in
-            self.handleLoadFailure()
+            self.handleError(strategy: .loadFailure)
         }
         
         // Note: KVO observers are not available in SwiftUI structs
@@ -876,38 +886,69 @@ struct SimpleVideoPlayer: View {
         playerItem = nil
     }
     
-    private func handleLoadFailure() {
-        loadFailed = true
-        isLoading = false
-        print("DEBUG: [VIDEO ERROR] Load failed for \(mid), retry count: \(retryCount)")
+    // MARK: - Unified Error/Recovery Handling
+    
+    enum RecoveryStrategy {
+        case loadFailure    // Initial load failure - retry with backoff
+        case manualReset    // User triggered reset - clear everything and restart
+        case networkRecovery // Network came back - fresh attempt
+        case backgroundRecovery // App backgrounded - clear player
+    }
+    
+    private func handleError(strategy: RecoveryStrategy = .loadFailure) {
+        let currentRetryCount = loadingState.retryCount
+        print("DEBUG: [VIDEO ERROR] Handling error with strategy: \(strategy) for \(mid), retryCount: \(currentRetryCount)")
         
-        // Remove observers to prevent memory leaks
-        removePlayerObservers()
+        // Clear caches
+        let mediaID = extractMediaID(from: url) ?? mid
+        VideoStateCache.shared.clearCache(for: mid)
+        SharedAssetCache.shared.removeInvalidPlayer(for: mediaID)
         
-        // Don't immediately clear the player - let it persist for potential recovery
-        // Only clear if we've exhausted retry attempts
-        if retryCount >= 3 {
-            print("DEBUG: [VIDEO ERROR] Max retries reached, clearing player for \(mid)")
-            player = nil
-        } else {
-            print("DEBUG: [VIDEO ERROR] Keeping player for potential recovery for \(mid)")
+        Task.detached {
+            await MainActor.run {
+                SharedAssetCache.shared.clearAssetCache(for: mediaID)
+            }
         }
         
-        // Clear all caches to force a fresh load
-        VideoStateCache.shared.clearCache(for: mid)
-        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
-        
-        // For fullscreen modes, try to restore from cache even on failure
-        if mode == .mediaBrowser {
-            print("DEBUG: [VIDEO ERROR] Fullscreen mode, attempting to restore from cache for \(mid)")
-            restoreCachedVideoState()
-        } else {
-            // For MediaCell mode, attempt retry if we haven't exceeded max retries
-            if retryCount < 3 {
-                print("DEBUG: [VIDEO ERROR] MediaCell mode, attempting retry for \(mid)")
-                retryLoad()
+        // Apply strategy
+        switch strategy {
+        case .loadFailure:
+            removePlayerObservers()
+            
+            // Clear player if max retries reached
+            if currentRetryCount >= 3 {
+                player = nil
+                loadingState = .failed(retryCount: 3)
             } else {
-                print("DEBUG: [VIDEO ERROR] Max retries exceeded for \(mid), video will remain in failed state")
+                loadingState = .failed(retryCount: currentRetryCount)
+            }
+            
+            // For fullscreen, try to restore from cache
+            if mode == .mediaBrowser {
+                restoreCachedVideoState()
+            } else if currentRetryCount < 3 {
+                // For MediaCell, retry with backoff
+                loadingState = .loading
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.loadingState = .failed(retryCount: currentRetryCount + 1)
+                    self.setupPlayer()
+                }
+            }
+            
+        case .manualReset, .networkRecovery:
+            loadingState = .loading
+            playbackState = .notStarted
+            
+            if shouldLoadVideo {
+                setupPlayer()
+            }
+            
+        case .backgroundRecovery:
+            player = nil
+            loadingState = .loading
+            
+            if shouldLoadVideo {
+                setupPlayer()
             }
         }
     }
@@ -923,14 +964,15 @@ struct SimpleVideoPlayer: View {
             if self.mode == .mediaCell {
                 print("DEBUG: [SimpleVideoPlayer] MediaCell mode - video finished, stopping and rewinding for \(self.mid)")
                 self.player?.pause()
-                self.hasFinishedPlaying = true
+                self.playbackState = .finished
             } else if !self.disableAutoRestart {
                 // For other modes (fullscreen, detail), auto-restart if not disabled
                 print("DEBUG: [SimpleVideoPlayer] Auto-restarting video for \(self.mid)")
                 self.player?.play()
+                self.playbackState = .playing
             } else {
                 print("DEBUG: [SimpleVideoPlayer] Video ready to replay for \(self.mid)")
-                self.hasFinishedPlaying = true
+                self.playbackState = .finished
             }
         }
         
@@ -953,41 +995,56 @@ struct SimpleVideoPlayer: View {
     }
     
     private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
+        NSLog("DEBUG: [VIDEO PLAYBACK] Checking playback conditions for \(mid)")
+        NSLog("DEBUG: [VIDEO PLAYBACK] autoPlay: \(autoPlay), isVisible: \(isVisible), mode: \(mode)")
+        NSLog("DEBUG: [VIDEO PLAYBACK] player: \(player != nil), loadingState: \(loadingState), shouldLoadVideo: \(shouldLoadVideo)")
+        
         // Validate player state before attempting playback
         if let player = player, let playerItem = player.currentItem {
             if playerItem.status == .failed {
-                print("DEBUG: [VIDEO VALIDATION] Player item is in failed state for \(mid), triggering recovery")
-                handleLoadFailure()
+                NSLog("DEBUG: [VIDEO VALIDATION] Player item is in failed state for \(mid), triggering recovery")
+                handleError(strategy: .loadFailure)
                 return
             }
         }
         
         // Check if all conditions are met for autoplay
-        if autoPlay && isVisible && player != nil && !isLoading && shouldLoadVideo {
+        // For fullscreen mode, bypass shouldLoadVideo check
+        let shouldCheckLoading = mode == .mediaCell ? shouldLoadVideo : true
+        NSLog("DEBUG: [VIDEO PLAYBACK] shouldCheckLoading: \(shouldCheckLoading)")
+        
+        if autoPlay && isVisible && player != nil && !loadingState.isLoading && shouldCheckLoading {
+            NSLog("DEBUG: [VIDEO PLAYBACK] ✅ All conditions met, starting playback for \(mid)")
+            
             // Activate audio session for video playback
             AudioSessionManager.shared.activateForVideoPlayback()
             
             // For MediaCell mode, don't auto-restart if video has finished
-            if mode == .mediaCell && hasFinishedPlaying {
-                print("DEBUG: [VIDEO PLAYBACK] MediaCell mode - video has finished, not auto-restarting for \(mid)")
+            if mode == .mediaCell && playbackState.hasFinished {
+                NSLog("DEBUG: [VIDEO PLAYBACK] MediaCell mode - video has finished, not auto-restarting for \(mid)")
                 return
             }
             
             // Always ensure video is reset to beginning if it has finished playing
-            if hasFinishedPlaying || isVideoAtEnd(player!) {
-                print("DEBUG: [VIDEO PLAYBACK] Video is at end, restarting from beginning for \(mid)")
+            if playbackState.hasFinished || isVideoAtEnd(player!) {
+                NSLog("DEBUG: [VIDEO PLAYBACK] Video is at end, restarting from beginning for \(mid)")
                 player?.seek(to: .zero) { finished in
                     if finished {
-                        self.hasFinishedPlaying = false
+                        self.playbackState = .notStarted
                         // Only auto-play if not in MediaCell mode or if explicitly allowed
                         if self.mode != .mediaCell {
                             player?.play()
+                            self.playbackState = .playing
                         }
                     }
                 }
             } else {
+                NSLog("DEBUG: [VIDEO PLAYBACK] Calling player.play() for \(mid)")
                 player?.play()
+                playbackState = .playing
             }
+        } else {
+            NSLog("DEBUG: [VIDEO PLAYBACK] ❌ Conditions NOT met for \(mid) - autoPlay:\(autoPlay), isVisible:\(isVisible), player:\(player != nil), loading:\(loadingState.isLoading), shouldCheck:\(shouldCheckLoading)")
         }
     }
     
@@ -1006,90 +1063,6 @@ struct SimpleVideoPlayer: View {
         return false
     }
     
-    private func retryLoad() {
-        guard retryCount < 3 else {
-            print("DEBUG: [VIDEO RETRY] Max retry count reached for \(mid)")
-            return
-        }
-        
-        print("DEBUG: [VIDEO RETRY] Attempting retry \(retryCount + 1) for \(mid)")
-        
-        // FIRST: Clear all caches immediately
-        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
-        VideoStateCache.shared.clearCache(for: mid)
-        
-        // Clear asset cache to force fresh network request - do this asynchronously
-        Task.detached {
-            await MainActor.run {
-                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? mid)
-                print("DEBUG: [VIDEO RETRY] Cleared all caches for \(mid)")
-            }
-        }
-        
-        // THEN: Reset state and retry
-        retryCount += 1
-        loadFailed = false
-        isLoading = true
-        hasFinishedPlaying = false
-        
-        // Only setup player if loading is enabled
-        if shouldLoadVideo {
-            setupPlayer()
-        }
-    }
-    
-    private func handleManualReset() {
-        print("DEBUG: [VIDEO MANUAL RESET] Manual reset triggered for \(mid)")
-        
-        // Clear all caches immediately
-        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
-        VideoStateCache.shared.clearCache(for: mid)
-        
-        // Clear asset cache to force fresh network request - do this asynchronously
-        Task.detached {
-            await MainActor.run {
-                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? mid)
-                print("DEBUG: [VIDEO MANUAL RESET] Cleared all caches for \(mid)")
-            }
-        }
-        
-        // Reset all state and retry
-        retryCount = 0
-        loadFailed = false
-        isLoading = true
-        hasFinishedPlaying = false
-        
-        // Only setup player if loading is enabled
-        if shouldLoadVideo {
-            setupPlayer()
-        }
-    }
-    
-    private func handleNetworkRecovery() {
-        print("DEBUG: [VIDEO NETWORK RECOVERY] Network recovered, attempting to reload video: \(mid)")
-        
-        // Reset retry count to allow fresh attempts
-        retryCount = 0
-        loadFailed = false
-        isLoading = true
-        
-        // Clear caches to force fresh network request
-        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
-        VideoStateCache.shared.clearCache(for: mid)
-        
-        // Clear asset cache asynchronously
-        Task.detached {
-            await MainActor.run {
-                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? mid)
-                print("DEBUG: [VIDEO NETWORK RECOVERY] Cleared all caches for \(mid)")
-            }
-        }
-        
-        // Attempt to reload the video
-        if shouldLoadVideo {
-            setupPlayer()
-        }
-    }
     
     private func handleLoadingStateChange(newShouldLoadVideo: Bool) {
         print("DEBUG: [VIDEO LOADING STATE] Loading state changed to \(newShouldLoadVideo) for \(mid)")
@@ -1107,74 +1080,6 @@ struct SimpleVideoPlayer: View {
         }
     }
     
-    private func cancelVideoLoading() {
-        print("DEBUG: [VIDEO CANCELLATION] Cancelling video loading for \(mid)")
-        
-        // Check if we have cached content before cancelling
-        let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: mid)
-        
-        if hasCachedContent {
-            print("DEBUG: [VIDEO CANCELLATION] Tweet \(mid) has cached content, skipping cancellation")
-            // Still pause the player and mute to stop audio, but don't cancel loading or clear cache
-            player?.pause()
-            player?.isMuted = true
-            return
-        }
-        
-        // Pause the player immediately and mute to stop audio
-        player?.pause()
-        player?.isMuted = true
-        
-        // Clean up time observer (only from the player that added it)
-        if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
-            observerPlayer.removeTimeObserver(observer)
-            timeObserver = nil
-            timeObserverPlayer = nil
-        }
-        
-        // Cancel any ongoing loading tasks in SharedAssetCache (only if no cache)
-        SharedAssetCache.shared.cancelLoadingForTweet(mid)
-        
-        // Clear loading state
-        isLoading = false
-        loadFailed = false
-        
-        // Reset retry count
-        retryCount = 0
-        
-        // Clear cached state
-        VideoStateCache.shared.clearCache(for: mid)
-        
-        print("DEBUG: [VIDEO CANCELLATION] Video cancellation completed for \(mid)")
-    }
-    
-    private func handleBackgroundRecovery() {
-        print("DEBUG: [VIDEO BACKGROUND RECOVERY] Attempting background recovery for \(mid)")
-        
-        // Reset retry count to allow fresh attempts
-        retryCount = 0
-        loadFailed = false
-        isLoading = true
-        
-        // Clear the current player since it's invalid
-        player = nil
-        
-        // Clear caches to force fresh network request
-        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
-        VideoStateCache.shared.clearCache(for: mid)
-        
-        Task {
-            await MainActor.run {
-                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? mid)
-                print("DEBUG: [VIDEO BACKGROUND RECOVERY] Cleared all caches for \(mid)")
-            }
-        }
-        
-        // Attempt to reload the video
-        if shouldLoadVideo {
-            setupPlayer()
-        }
-    }
     
     private func detachPlayerForBackground() {
         guard let player = player else { 

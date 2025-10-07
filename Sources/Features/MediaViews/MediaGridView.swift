@@ -15,8 +15,6 @@ struct MediaGridView: View {
     @State private var shouldLoadVideo = true
     @State private var videoLoadTimer: Timer?
     @State private var isVisible = false
-    @State private var forceRefreshTrigger = 0
-    @State private var cancelVideoTrigger = 0
     @StateObject private var videoManager = VideoManager()
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     
@@ -86,9 +84,7 @@ struct MediaGridView: View {
                         aspectRatio: Float(gridAspectRatio),
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
-                        forceRefreshTrigger: forceRefreshTrigger,
-                        cancelVideoTrigger: cancelVideoTrigger
+                        videoManager: videoManager
                     )
                     .frame(width: gridWidth, height: gridHeight)
                     .clipped()
@@ -113,8 +109,7 @@ struct MediaGridView: View {
                                     aspectRatio: Float((gridWidth/2 - 1) / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -131,8 +126,7 @@ struct MediaGridView: View {
                                     aspectRatio: Float(gridWidth / (gridHeight/2 - 1)),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -150,8 +144,7 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -163,8 +156,7 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -177,8 +169,7 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -190,8 +181,7 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -223,8 +213,7 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth * 0.618 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -241,7 +230,6 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                                 .frame(width: gridWidth * 0.382 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -260,8 +248,7 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth, height: gridHeight * 0.618 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -278,7 +265,6 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                                 .frame(width: gridWidth/2 - 1, height: gridHeight * 0.382 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -296,8 +282,7 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -312,7 +297,6 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                                 .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -329,8 +313,7 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -344,7 +327,6 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                                 .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -371,8 +353,7 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -387,8 +368,7 @@ struct MediaGridView: View {
                                         
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished,
-                                        videoManager: videoManager,
-                                        forceRefreshTrigger: forceRefreshTrigger
+                                        videoManager: videoManager
                                     )
                                         .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
                                     .clipped().contentShape(Rectangle())
@@ -408,8 +388,7 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    forceRefreshTrigger: forceRefreshTrigger
+                                    videoManager: videoManager
                                 )
                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -427,7 +406,6 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
-                                            forceRefreshTrigger: forceRefreshTrigger
                                         )
                                                 .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -505,14 +483,10 @@ struct MediaGridView: View {
                         shouldLoadVideo = true
                         print("DEBUG: [MediaGridView] VideoLoadingManager approved loading for tweet \(parentTweet.mid)")
                     } else {
-                        shouldLoadVideo = false
-                        print("DEBUG: [MediaGridView] VideoLoadingManager denied loading for tweet \(parentTweet.mid)")
-                    }
-                    
-                    // Force refresh all cells to update their play states
-                    forceRefreshTrigger += 1
-                    print("DEBUG: [MediaGridView] Force refresh trigger incremented to: \(forceRefreshTrigger)")
-                } else {
+                    shouldLoadVideo = false
+                    print("DEBUG: [MediaGridView] VideoLoadingManager denied loading for tweet \(parentTweet.mid)")
+                }
+            } else {
                     print("DEBUG: [MediaGridView] Grid contains no videos")
                 }
             }
@@ -535,13 +509,10 @@ struct MediaGridView: View {
             .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
                 if let tweetId = notification.userInfo?["tweetId"] as? String,
                    tweetId == parentTweet.mid {
-                    print("DEBUG: [MediaGridView] Received cancel video loading notification for tweet \(tweetId)")
-                    shouldLoadVideo = false
-                    videoManager.stopSequentialPlayback()
-                    
-                    // Trigger video cancellation
-                    cancelVideoTrigger += 1
-                }
+                print("DEBUG: [MediaGridView] Received cancel video loading notification for tweet \(tweetId)")
+                shouldLoadVideo = false
+                videoManager.stopSequentialPlayback()
+            }
             }
             .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
                 if let tweetId = notification.userInfo?["tweetId"] as? String,
@@ -552,13 +523,9 @@ struct MediaGridView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
-                print("DEBUG: [MediaGridView] Received stopAllVideos notification for tweet \(parentTweet.mid)")
-                shouldLoadVideo = false
-                videoManager.stopSequentialPlayback()
-                
-                // Trigger video cancellation
-                cancelVideoTrigger += 1
-                print("DEBUG: [MediaGridView] Stop all videos trigger incremented to: \(cancelVideoTrigger)")
+            print("DEBUG: [MediaGridView] Received stopAllVideos notification for tweet \(parentTweet.mid)")
+            shouldLoadVideo = false
+            videoManager.stopSequentialPlayback()
             }
         }
     }

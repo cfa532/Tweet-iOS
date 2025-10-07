@@ -47,14 +47,11 @@ struct MediaCell: View, Equatable {
     @State private var onVideoFinished: (() -> Void)?
     @State private var preloadTask: Task<Void, Never>?
     @State private var isPreloading = false
-    @State private var cancelVideoTrigger = 0
-    @State private var localForceRefreshTrigger: Int = 0
     let showMuteButton: Bool
-    let forceRefreshTrigger: Int
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, forceRefreshTrigger: Int = 0, cancelVideoTrigger: Int = 0) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -63,8 +60,6 @@ struct MediaCell: View, Equatable {
         self.showMuteButton = showMuteButton
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
-        self.forceRefreshTrigger = forceRefreshTrigger
-        self._cancelVideoTrigger = State(initialValue: cancelVideoTrigger)
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -244,20 +239,6 @@ struct MediaCell: View, Equatable {
             // Handle visibility changes - image loading is now handled in onAppear
             // This prevents conflicts with the onAppear block
         }
-        .onChange(of: forceRefreshTrigger) { _, _ in
-            // Force refresh triggered by MediaGridView - update video state
-            if isVideoAttachment {
-                // The SimpleVideoPlayer will automatically update its autoPlay state
-                // based on the videoManager.shouldPlayVideo() call
-            }
-        }
-        .onChange(of: cancelVideoTrigger) { _, _ in
-            // Video cancellation triggered by MediaGridView
-            if isVideoAttachment {
-                print("DEBUG: [MediaCell] Received cancelVideoTrigger for \(attachment.mid)")
-                // The SimpleVideoPlayer will handle the actual cancellation
-            }
-        }
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Restore video state when app becomes active
@@ -377,8 +358,6 @@ struct MediaCell: View, Equatable {
                     showFullScreen = true
                 },
                 disableAutoRestart: true,
-                forceRefreshTrigger: localForceRefreshTrigger,
-                cancelVideoTrigger: cancelVideoTrigger,
                 shouldLoadVideo: shouldLoadVideo,
                 mode: .mediaCell
             )
@@ -413,7 +392,7 @@ struct MediaCell: View, Equatable {
     }
     
     private func handleVideoReload() {
-        // FIRST: Clear all caches immediately
+        // Clear all caches and force reload by toggling shouldLoadVideo
         print("DEBUG: [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
         
         if let url = attachment.getUrl(baseUrl) {
@@ -432,9 +411,8 @@ struct MediaCell: View, Equatable {
             }
         }
         
-        // THEN: Force a complete reload
+        // Force reload by toggling shouldLoadVideo
         shouldLoadVideo = false
-        localForceRefreshTrigger += 1 // Increment local trigger to notify SimpleVideoPlayer
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             shouldLoadVideo = true
         }
