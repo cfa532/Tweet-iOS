@@ -22,6 +22,7 @@ class VideoLoadingManager: ObservableObject {
     @Published private(set) var currentVisibleTweetIndex: Int = 0
     private var allTweetIds: [String] = []
     private var tweetsWithVideos: Set<String> = [] // Track which tweets contain videos
+    private var retweetToOriginalMap: [String: String] = [:] // Map retweet ID to original tweet ID
     
     // MARK: - Performance Management
     private var activeLoadingCount: Int = 0
@@ -57,6 +58,12 @@ class VideoLoadingManager: ObservableObject {
         print("DEBUG: [VideoLoadingManager] Registered tweet \(tweetId) as containing videos")
     }
     
+    /// Register a retweet-to-original relationship
+    func registerRetweetRelationship(retweetId: String, originalTweetId: String) {
+        retweetToOriginalMap[retweetId] = originalTweetId
+        print("DEBUG: [VideoLoadingManager] Registered retweet relationship: \(retweetId) -> \(originalTweetId)")
+    }
+    
     /// Update the currently visible tweet index
     func updateVisibleTweetIndex(_ index: Int) {
         guard index >= 0 && index < allTweetIds.count else { return }
@@ -80,6 +87,14 @@ class VideoLoadingManager: ObservableObject {
     func shouldLoadVideos(for tweetId: String) -> Bool {
         print("DEBUG: [VideoLoadingManager] shouldLoadVideos called for tweetId: \(tweetId)")
         print("DEBUG: [VideoLoadingManager] allTweetIds count: \(allTweetIds.count), currentVisibleTweetIndex: \(currentVisibleTweetIndex)")
+        
+        // CRITICAL: Check if this tweet is the original tweet of a currently visible retweet
+        // This ensures videos in original tweets load immediately when their retweet is visible
+        let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
+        if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing loading")
+            return true
+        }
         
         guard let index = allTweetIds.firstIndex(of: tweetId) else { 
             print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) not found in allTweetIds - denying loading")
@@ -120,6 +135,13 @@ class VideoLoadingManager: ObservableObject {
     
     /// Check if a tweet should preload videos
     func shouldPreloadVideos(for tweetId: String) -> Bool {
+        // CRITICAL: Check if this tweet is the original tweet of a currently visible retweet
+        let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
+        if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing preloading")
+            return true
+        }
+        
         guard let index = allTweetIds.firstIndex(of: tweetId) else { return false }
         
         // Only preload if the tweet actually contains videos

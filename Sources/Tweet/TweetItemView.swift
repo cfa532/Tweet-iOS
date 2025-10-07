@@ -102,6 +102,13 @@ struct TweetItemView: View, Equatable {
                         await MainActor.run {
                             originalTweet = t
                             detailTweet = t
+                            
+                            // Register the retweet-to-original relationship with VideoLoadingManager
+                            // This ensures videos in original tweets are prioritized when their retweet is visible
+                            VideoLoadingManager.shared.registerRetweetRelationship(
+                                retweetId: tweet.mid,
+                                originalTweetId: t.mid
+                            )
                         }
                     } else {
                         // Could not fetch original tweet, remove this tweet from the list
