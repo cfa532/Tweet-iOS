@@ -211,9 +211,9 @@ struct SimpleVideoPlayer: View {
                 UIApplication.shared.isIdleTimerDisabled = true
             }
             
-            // For fullscreen mode, always try to set up player regardless of shouldLoadVideo
-            if mode == .mediaBrowser {
-                print("DEBUG: [VIDEO APPEAR] Fullscreen mode - forcing player setup for \(mid)")
+            // For fullscreen and detail modes, always try to set up player regardless of shouldLoadVideo
+            if mode == .mediaBrowser || mode == .tweetDetail {
+                NSLog("DEBUG: [VIDEO APPEAR] Fullscreen/Detail mode - forcing player setup for \(mid)")
                 if player == nil {
                     setupPlayer()
                 } else {
@@ -260,14 +260,14 @@ struct SimpleVideoPlayer: View {
                 // This ensures the player instance is properly muted when returning to MediaCell
                 if let player = player {
                     player.isMuted = MuteState.shared.isMuted
-                    print("DEBUG: [VIDEO DISAPPEAR] Restored mute state to global state (\(MuteState.shared.isMuted)) before exiting full screen")
+                    NSLog("DEBUG: [VIDEO DISAPPEAR] Restored mute state to global state (\(MuteState.shared.isMuted)) before exiting full screen")
                 }
             }
             
             // Remove observers to prevent memory leaks
             removePlayerObservers()
-            
-            // Cache the current video state before pausing
+
+            // Cache the current video state
             if let player = player {
                 // For MediaCell mode, save the current global mute state
                 // For detail/fullscreen modes, we need to track the original global mute state
@@ -281,8 +281,8 @@ struct SimpleVideoPlayer: View {
                 )
             }
             
-            // Don't pause on disappear - let VideoManager or explicit controls handle pausing
-            // This prevents pausing shared players that are being used in other views (fullscreen, detail)
+            // Don't pause on disappear - VideoManager and stopAllVideos notification handle pausing
+            // This prevents pausing shared players when navigating to fullscreen/detail views
         }
         .onChange(of: isMuted) { _, newMuteState in
             // For full screen modes, always keep unmuted regardless of the isMuted parameter
@@ -306,10 +306,16 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onChange(of: currentAutoPlay) { _, shouldAutoPlay in
-            // Handle autoPlay state changes (reactive to VideoManager)
-            checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
-            if !shouldAutoPlay {
-                player?.pause()
+            // Handle autoPlay state changes (reactive to VideoManager)  
+            // DON'T pause here - shared players might be in use by fullscreen/detail
+            // Let visibility changes and VideoManager's sequential playback handle pausing
+            if mode == .mediaCell {
+                NSLog("DEBUG: [VIDEO AUTOPLAY CHANGE] MediaCell autoPlay changed to \(shouldAutoPlay) for \(mid)")
+                // Only check playback conditions, don't pause
+                // Pausing here interferes with shared players used by fullscreen/detail
+                checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
+            } else {
+                NSLog("DEBUG: [VIDEO AUTOPLAY CHANGE] Ignoring VideoManager state change for \(mode) mode \(mid)")
             }
         }
         .onChange(of: isVisible) { _, visible in
@@ -318,9 +324,9 @@ struct SimpleVideoPlayer: View {
             
             // Handle visibility changes - simplified logic to avoid conflicts
             if visible {
-                // For fullscreen mode, always allow setup regardless of shouldLoadVideo
-                if mode == .mediaBrowser {
-                    print("DEBUG: [VIDEO VISIBILITY] Fullscreen mode - forcing player setup for \(mid)")
+                // For fullscreen and detail modes, always allow setup regardless of shouldLoadVideo
+                if mode == .mediaBrowser || mode == .tweetDetail {
+                    NSLog("DEBUG: [VIDEO VISIBILITY] Fullscreen/Detail mode - forcing player setup for \(mid)")
                     if player == nil {
                         setupPlayer()
                     } else {
@@ -387,16 +393,17 @@ struct SimpleVideoPlayer: View {
         
         .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
             // Direct handler for stopAllVideos notification
-            print("DEBUG: [SimpleVideoPlayer] Received stopAllVideos notification for \(mid)")
+            NSLog("DEBUG: [SimpleVideoPlayer] Received stopAllVideos notification for \(mid), mode: \(mode)")
             
-            // Only pause and mute if this video is not going to full screen
-            // The MediaBrowserView will handle its own video state
+            // Only pause and mute MediaCell videos
+            // Fullscreen and detail modes ignore this notification
             if mode == .mediaCell {
                 player?.pause()
                 // Also mute the player to stop audio
                 player?.isMuted = true
+                NSLog("DEBUG: [SimpleVideoPlayer] Paused MediaCell video \(mid)")
             } else {
-                print("DEBUG: [SimpleVideoPlayer] Ignoring stopAllVideos for full screen video \(mid)")
+                NSLog("DEBUG: [SimpleVideoPlayer] Ignoring stopAllVideos for \(mode) mode video \(mid)")
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
@@ -483,6 +490,7 @@ struct SimpleVideoPlayer: View {
                     if mode == .mediaBrowser {
                         // Use AVPlayerViewController for fullscreen modes to get native controls
                         AVPlayerViewControllerRepresentable(player: player)
+                            .id(mid) // Force recreation when mediaID changes
                             .onTapGesture {
                                 if let onVideoTap = onVideoTap {
                                     onVideoTap()
@@ -574,30 +582,32 @@ struct SimpleVideoPlayer: View {
     // MARK: - Player Setup
     private func validateAndConfigureExistingPlayer() {
         guard let player = player else {
-            print("DEBUG: [VIDEO VALIDATE] No player to validate for \(mid)")
+            NSLog("DEBUG: [VIDEO VALIDATE] No player to validate for \(mid)")
             return
         }
         
-        print("DEBUG: [VIDEO VALIDATE] Validating existing player for \(mid)")
+        NSLog("DEBUG: [VIDEO VALIDATE] Validating existing player for \(mid), mode: \(mode)")
         
         // Check if player item exists and is valid
         if let playerItem = player.currentItem {
+            NSLog("DEBUG: [VIDEO VALIDATE] Player item status: \(playerItem.status.rawValue) for \(mid)")
             switch playerItem.status {
             case .readyToPlay:
-                print("DEBUG: [VIDEO VALIDATE] Player item is ready to play for \(mid)")
+                NSLog("DEBUG: [VIDEO VALIDATE] Player item is ready to play for \(mid)")
                 configurePlayer(player)
             case .failed:
-                print("DEBUG: [VIDEO VALIDATE] Player item failed for \(mid), attempting recovery")
+                NSLog("DEBUG: [VIDEO VALIDATE] Player item failed for \(mid), attempting recovery")
                 handleError(strategy: .loadFailure)
             case .unknown:
-                NSLog("DEBUG: [VIDEO VALIDATE] Player item status unknown for \(mid), will retry on next validation cycle")
-                // Player will be validated again when visibility or other state changes
-                // No arbitrary delay - let natural state flow handle it
+                NSLog("DEBUG: [VIDEO VALIDATE] Player item status unknown for \(mid), configuring anyway (KVO will play when ready)")
+                // Configure the player anyway - KVO in AVPlayerViewControllerRepresentable will trigger play when ready
+                configurePlayer(player)
             @unknown default:
-                print("DEBUG: [VIDEO VALIDATE] Unknown player item status for \(mid)")
+                NSLog("DEBUG: [VIDEO VALIDATE] Unknown player item status for \(mid)")
+                configurePlayer(player)
             }
         } else {
-            print("DEBUG: [VIDEO VALIDATE] No player item for \(mid), setting up new player")
+            NSLog("DEBUG: [VIDEO VALIDATE] No player item for \(mid), setting up new player")
             setupPlayer()
         }
     }
@@ -1051,9 +1061,17 @@ struct SimpleVideoPlayer: View {
                     }
                 }
             } else {
-                NSLog("DEBUG: [VIDEO PLAYBACK] Calling player.play() for \(mid)")
-                player?.play()
-                playbackState = .playing
+                // For fullscreen/detail modes, don't call play() here
+                // Let AVPlayerViewController's updateUIViewController handle it after layer is ready
+                if mode == .mediaCell {
+                    NSLog("DEBUG: [VIDEO PLAYBACK] Calling player.play() for \(mid)")
+                    player?.play()
+                    playbackState = .playing
+                } else {
+                    NSLog("DEBUG: [VIDEO PLAYBACK] Fullscreen/Detail mode - will play() in AVPlayerViewController update")
+                    // Set playbackState but don't call play() yet
+                    playbackState = .playing
+                }
             }
         } else {
             NSLog("DEBUG: [VIDEO PLAYBACK] ❌ Conditions NOT met for \(mid) - autoPlay:\(autoPlay), isVisible:\(isVisible), player:\(player != nil), loading:\(loadingState.isLoading), shouldCheck:\(shouldCheckLoading)")
@@ -1203,27 +1221,37 @@ struct VideoLayerRefreshView: UIViewRepresentable {
         struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             let player: AVPlayer?
             
+            func makeCoordinator() -> Coordinator {
+                Coordinator()
+            }
+            
+            class Coordinator: NSObject {
+                var statusObserver: NSKeyValueObservation?
+                
+                override init() {
+                    super.init()
+                }
+                
+                deinit {
+                    statusObserver?.invalidate()
+                }
+            }
+            
             func makeUIViewController(context: Context) -> AVPlayerViewController {
                 let controller = AVPlayerViewController()
-                controller.player = player
                 controller.showsPlaybackControls = true
                 controller.videoGravity = .resizeAspect
                 controller.view.backgroundColor = .black
                 
-                // Add debugging for player state
+                // Don't set player here - let updateUIViewController handle it
+                // This ensures consistent behavior between first and subsequent loads
+                
                 if let player = player {
-                    print("DEBUG: [AVPlayerViewController] Created with player for \(player.currentItem?.description ?? "unknown")")
-                    print("DEBUG: [AVPlayerViewController] Player item status: \(player.currentItem?.status.rawValue ?? -1)")
-                    print("DEBUG: [AVPlayerViewController] Player rate: \(player.rate)")
-                    print("DEBUG: [AVPlayerViewController] Player time: \(player.currentTime())")
-                    
-                    // Check if player item is ready
-                    if let playerItem = player.currentItem {
-                        print("DEBUG: [AVPlayerViewController] Player item duration: \(playerItem.duration)")
-                        print("DEBUG: [AVPlayerViewController] Player item error: \(playerItem.error?.localizedDescription ?? "none")")
-                    }
+                    NSLog("DEBUG: [AVPlayerViewController] Created controller for player, will attach in update")
+                    NSLog("DEBUG: [AVPlayerViewController] Player item status: \(player.currentItem?.status.rawValue ?? -1)")
+                    NSLog("DEBUG: [AVPlayerViewController] Player rate: \(player.rate)")
                 } else {
-                    print("DEBUG: [AVPlayerViewController] Created with nil player")
+                    NSLog("DEBUG: [AVPlayerViewController] Created with nil player")
                 }
                 
                 return controller
@@ -1239,39 +1267,32 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                     NSLog("DEBUG: [AVPlayerViewController] New player rate: \(player.rate)")
                 }
                 
-                // Always set/update the player to ensure it's attached
-                let needsUpdate = uiViewController.player !== player
-                if needsUpdate {
-                    NSLog("DEBUG: [AVPlayerViewController] Setting player instance")
+                // Always set/update the player to ensure video layer refreshes
+                // Even if it's the same instance, re-setting forces AVPlayerViewController to refresh
+                let isSameInstance = uiViewController.player === player
+                if !isSameInstance {
+                    NSLog("DEBUG: [AVPlayerViewController] Setting NEW player instance")
+                } else {
+                    NSLog("DEBUG: [AVPlayerViewController] Re-setting SAME player instance to refresh layer")
                 }
-                
                 uiViewController.player = player
                 
-                // If player was just attached and should be playing, trigger play
-                if needsUpdate, let player = player, player.rate == 0 {
-                    // Check if player item is ready to play
+                // CRITICAL: For fullscreen/detail, always trigger play() here after layer is attached
+                // This ensures the video layer is ready before playback starts
+                if let player = player {
                     if player.currentItem?.status == .readyToPlay {
-                        NSLog("DEBUG: [AVPlayerViewController] Player attached and ready, triggering play")
+                        NSLog("DEBUG: [AVPlayerViewController] Player ready, triggering play() now that layer is attached")
                         player.play()
                     } else if player.currentItem?.status == .unknown {
                         NSLog("DEBUG: [AVPlayerViewController] Player item not ready yet, observing status")
-                        // Observe when it becomes ready
-                        let observer = player.currentItem?.observe(\.status, options: [.new]) { item, change in
+                        // Observe when it becomes ready - store in coordinator to keep it alive
+                        context.coordinator.statusObserver = player.currentItem?.observe(\.status, options: [.new]) { item, change in
                             if item.status == .readyToPlay {
                                 NSLog("DEBUG: [AVPlayerViewController] Player item NOW ready, triggering play")
                                 player.play()
                             }
                         }
-                        // Store observer (it will auto-cleanup when item deallocates)
-                        _ = observer
                     }
-                }
-                
-                // Force view update if player changed
-                if uiViewController.player != player {
-                    print("DEBUG: [AVPlayerViewController] Player changed, forcing layout update")
-                    uiViewController.view.setNeedsLayout()
-                    uiViewController.view.layoutIfNeeded()
                 }
             }
         }
