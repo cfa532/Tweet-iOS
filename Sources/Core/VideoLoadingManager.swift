@@ -21,7 +21,7 @@ class VideoLoadingManager: ObservableObject {
     @Published private(set) var visibleTweetIds: Set<String> = []
     @Published private(set) var currentVisibleTweetIndex: Int = 0
     private var allTweetIds: [String] = []
-    private var tweetsWithVideos: Set<String> = [] // Track which tweets contain videos
+    private var tweetsWithVideos: Set<String> = [] // Track which tweets contain media (video, audio, etc.)
     private var retweetToOriginalMap: [String: String] = [:] // Map retweet ID to original tweet ID
     
     // MARK: - Performance Management
@@ -52,10 +52,11 @@ class VideoLoadingManager: ObservableObject {
         print("DEBUG: [VideoLoadingManager] Updated tweet list with \(tweetIds.count) tweets")
     }
     
-    /// Register a tweet as containing videos
+    /// Register a tweet as containing videos or audio (or other loadable media)
+    /// Note: Despite the method name, this tracks all media types that need loading priority (video, audio, etc.)
     func registerTweetWithVideos(_ tweetId: String) {
         tweetsWithVideos.insert(tweetId)
-        print("DEBUG: [VideoLoadingManager] Registered tweet \(tweetId) as containing videos")
+        print("DEBUG: [VideoLoadingManager] Registered tweet \(tweetId) as containing media (video/audio)")
     }
     
     /// Register a retweet-to-original relationship
@@ -83,7 +84,8 @@ class VideoLoadingManager: ObservableObject {
         manageVideoLoadingWithPerformance()
     }
     
-    /// Check if a tweet should load videos (with performance throttling and cache awareness)
+    /// Check if a tweet should load videos/audio (with performance throttling and cache awareness)
+    /// Note: Despite the method name, this handles all media types (video, audio, etc.)
     func shouldLoadVideos(for tweetId: String) -> Bool {
         print("DEBUG: [VideoLoadingManager] shouldLoadVideos called for tweetId: \(tweetId)")
         print("DEBUG: [VideoLoadingManager] allTweetIds count: \(allTweetIds.count), currentVisibleTweetIndex: \(currentVisibleTweetIndex)")
@@ -133,7 +135,8 @@ class VideoLoadingManager: ObservableObject {
         return distance >= 0 && distance <= preloadCount
     }
     
-    /// Check if a tweet should preload videos
+    /// Check if a tweet should preload videos/audio
+    /// Note: Despite the method name, this handles all media types (video, audio, etc.)
     func shouldPreloadVideos(for tweetId: String) -> Bool {
         // CRITICAL: Check if this tweet is the original tweet of a currently visible retweet
         let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil

@@ -469,25 +469,28 @@ struct MediaGridView: View {
                     }
                 }
                 
-                // Start video loading timer if this grid contains videos
+                // Start media loading if this grid contains videos or audio
                 let hasVideos = attachments.contains(where: { $0.type == .video || $0.type == .hls_video })
+                let hasAudio = attachments.contains(where: { $0.type == .audio })
+                let hasMedia = hasVideos || hasAudio
                 
-                if hasVideos {
-                    print("DEBUG: [MediaGridView] Grid contains videos - checking VideoLoadingManager")
+                if hasMedia {
+                    print("DEBUG: [MediaGridView] Grid contains media (videos: \(hasVideos), audio: \(hasAudio), attachments: \(attachments.count)) - checking VideoLoadingManager")
                     
-                    // Register this tweet as containing videos
+                    // Register this tweet as containing media (videos or audio)
+                    // This is important for tweets with multiple attachments to be tracked
                     videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
                     
-                    // Check if this tweet should load videos based on VideoLoadingManager
+                    // Check if this tweet should load media based on VideoLoadingManager
                     if videoLoadingManager.shouldLoadVideos(for: parentTweet.mid) {
                         shouldLoadVideo = true
-                        print("DEBUG: [MediaGridView] VideoLoadingManager approved loading for tweet \(parentTweet.mid)")
+                        print("DEBUG: [MediaGridView] VideoLoadingManager approved loading for tweet \(parentTweet.mid) with \(attachments.count) attachments")
                     } else {
                     shouldLoadVideo = false
-                    print("DEBUG: [MediaGridView] VideoLoadingManager denied loading for tweet \(parentTweet.mid)")
+                    print("DEBUG: [MediaGridView] VideoLoadingManager denied loading for tweet \(parentTweet.mid) with \(attachments.count) attachments")
                 }
             } else {
-                    print("DEBUG: [MediaGridView] Grid contains no videos")
+                    print("DEBUG: [MediaGridView] Grid contains no media")
                 }
             }
             .onDisappear {
