@@ -823,15 +823,10 @@ struct SimpleVideoPlayer: View {
         
         // Create time observer for memory-efficient segment management
         let timeScale = CMTimeScale(NSEC_PER_SEC)
-        let time = CMTime(seconds: 2.0, preferredTimescale: timeScale) // Update every 2 seconds to reduce UI load
+        let time = CMTime(seconds: 2.0, preferredTimescale: timeScale)
         
         timeObserver = player.addPeriodicTimeObserver(forInterval: time, queue: .main) { time in
-            
-            // Update playback position for memory-efficient segment management
-            if let playerItem = player.currentItem as? CachingPlayerItem,
-               let resourceLoaderDelegate = playerItem.getResourceLoaderDelegate() {
-                resourceLoaderDelegate.updatePlaybackPosition(time.seconds)
-            }
+            // AVPlayer handles its own memory management
         }
         
         // Store reference to the player that added this observer

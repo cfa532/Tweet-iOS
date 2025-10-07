@@ -161,9 +161,6 @@ class MemoryCapManager {
         // Clean up image caches
         ImageCacheManager.shared.cleanupOldCache()
         
-        // Clean up memory-efficient segments
-        MemoryEfficientSegmentManager.shared.performGlobalCleanup()
-        
         // Force garbage collection
         DispatchQueue.global(qos: .utility).async {
             // This helps trigger ARC cleanup
@@ -179,9 +176,6 @@ class MemoryCapManager {
         
         // Clean up more image caches
         ImageCacheManager.shared.cleanupOldCache()
-        
-        // Clean up all memory-efficient segments
-        MemoryEfficientSegmentManager.shared.performGlobalCleanup()
         
         // Clear tweet cache
         TweetCacheManager.shared.clearMemoryCache()
@@ -204,9 +198,6 @@ class MemoryCapManager {
         
         // Clean up image caches
         ImageCacheManager.shared.cleanupOldCache()
-        
-        // Clean up memory-efficient segments
-        MemoryEfficientSegmentManager.shared.performGlobalCleanup()
         
         // Clear tweet cache
         TweetCacheManager.shared.clearMemoryCache()

@@ -6,10 +6,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     private let mediaID: String?
     private let saveFilePath: String
     private weak var owner: CachingPlayerItem?
-    
-    // Memory-efficient segment management
-    private var segmentManager = MemoryEfficientSegmentManager.shared
-    private var segmentTimes: [String: (start: Double, end: Double)] = [:] // segmentName -> (startTime, endTime)
 
     public init(url: URL, mediaID: String?, saveFilePath: String, owner: CachingPlayerItem) {
         self.url = url
@@ -17,13 +13,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         self.saveFilePath = saveFilePath
         self.owner = owner
         super.init()
-    }
-    
-    deinit {
-        // Clean up memory manager resources when delegate is deallocated
-        if let mediaID = mediaID {
-            segmentManager.cleanupMedia(mediaID)
-        }
     }
 
     public func resourceLoader(_ resourceLoader: AVAssetResourceLoader, shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest) -> Bool {
@@ -301,20 +290,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             do {
                 try data.write(to: URL(fileURLWithPath: cachePath))
                 NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Cached segment to \(cachePath)")
-                
-                // Register segment with memory manager for tracking
-                if let mediaID = self.mediaID {
-                    let segmentName = url.lastPathComponent
-                    if let segmentTime = self.segmentTimes[segmentName] {
-                        self.segmentManager.registerSegment(
-                            segmentName,
-                            startTime: segmentTime.start,
-                            endTime: segmentTime.end,
-                            filePath: cachePath,
-                            for: mediaID
-                        )
-                    }
-                }
             } catch {
                 NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Failed to cache segment: \(error.localizedDescription)")
             }
@@ -573,38 +548,17 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     private func parsePlaylistSegments(_ playlist: String) -> [String] {
         var segments: [String] = []
         let lines = playlist.components(separatedBy: .newlines)
-        var currentTime: Double = 0.0
         
         for line in lines {
             let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
             
-            // Parse segment duration from EXTINF tags
-            if trimmedLine.hasPrefix("#EXTINF:") {
-                let durationString = trimmedLine.replacingOccurrences(of: "#EXTINF:", with: "").split(separator: ",").first ?? "0"
-                if let duration = Double(durationString) {
-                    currentTime += duration
-                }
-            }
             // Parse segment name
-            else if trimmedLine.hasSuffix(".ts") {
+            if trimmedLine.hasSuffix(".ts") {
                 segments.append(trimmedLine)
-                
-                // Calculate segment timing
-                let segmentName = trimmedLine
-                let startTime = currentTime
-                let endTime = currentTime
-                
-                // Store timing information for memory management
-                segmentTimes[segmentName] = (start: startTime, end: endTime)
-                
-                // Update current time for next segment
-                // We'll get the actual duration from the EXTINF tag above
-                // For now, we'll estimate based on typical segment duration
-                currentTime += 6.0 // Typical HLS segment duration
             }
         }
         
-        NSLog("DEBUG: [CachingPlayerItem] parsePlaylistSegments: Parsed \(segments.count) segments with timing info")
+        NSLog("DEBUG: [CachingPlayerItem] parsePlaylistSegments: Parsed \(segments.count) segments")
         return segments
     }
     
@@ -712,11 +666,5 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     func startFileDownload(with url: URL) {
         // This method is expected by CachingPlayerItem but not used in our implementation
         NSLog("DEBUG: [CachingPlayerItem] startFileDownload called with URL: \(url.absoluteString)")
-    }
-    
-    /// Update playback position for memory-efficient segment management
-    public func updatePlaybackPosition(_ currentTime: Double) {
-        guard let mediaID = mediaID else { return }
-        segmentManager.updatePlaybackPosition(currentTime, for: mediaID)
     }
 }
