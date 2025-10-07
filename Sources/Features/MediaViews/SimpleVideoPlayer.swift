@@ -608,6 +608,15 @@ struct SimpleVideoPlayer: View {
         
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
             NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING player in SharedAssetCache for \(mid) - reusing same instance!")
+            NSLog("DEBUG: [VIDEO SETUP] Cached player rate: \(cachedPlayer.rate), isMuted: \(cachedPlayer.isMuted)")
+            NSLog("DEBUG: [VIDEO SETUP] Cached player item status: \(cachedPlayer.currentItem?.status.rawValue ?? -1)")
+            
+            // CRITICAL: Update state FIRST before configuring
+            self.player = cachedPlayer
+            self.loadingState = .loaded
+            self.playbackState = .notStarted
+            
+            // Then configure (this will unmute for fullscreen and call checkPlaybackConditions)
             configurePlayer(cachedPlayer)
             return
         }
@@ -774,9 +783,9 @@ struct SimpleVideoPlayer: View {
     
     private func configurePlayer(_ player: AVPlayer) {
         NSLog("DEBUG: [VIDEO CONFIGURE] Configuring player for \(mid)")
-        NSLog("DEBUG: [VIDEO CONFIGURE] Mode: \(mode)")
+        NSLog("DEBUG: [VIDEO CONFIGURE] Mode: \(mode), isVisible: \(isVisible), currentAutoPlay: \(currentAutoPlay)")
         NSLog("DEBUG: [VIDEO CONFIGURE] Player item status: \(player.currentItem?.status.rawValue ?? -1)")
-        NSLog("DEBUG: [VIDEO CONFIGURE] Player item error: \(player.currentItem?.error?.localizedDescription ?? "none")")
+        NSLog("DEBUG: [VIDEO CONFIGURE] Player rate: \(player.rate), isMuted: \(player.isMuted)")
         
         // Configure player
         // For full screen modes, always unmute regardless of the isMuted parameter
@@ -790,29 +799,36 @@ struct SimpleVideoPlayer: View {
             NSLog("DEBUG: [VIDEO CONFIGURE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
         }
         
-        // Setup time observer for memory-efficient segment management
-        setupTimeObserver(for: player)
+        // Setup time observer only if not already set up for this player
+        if timeObserverPlayer !== player {
+            setupTimeObserver(for: player)
+        }
         
         // Only reset player position to beginning for new players, not cached ones
         // This prevents cached videos from losing their buffered segments
         if !SharedAssetCache.shared.hasCachedContent(for: mid) {
             player.seek(to: .zero)
-            print("DEBUG: [VIDEO CONFIGURE] Reset player position to beginning for new player")
+            NSLog("DEBUG: [VIDEO CONFIGURE] Reset player position to beginning for new player")
         } else {
-            print("DEBUG: [VIDEO CONFIGURE] Preserving player position for cached player")
+            NSLog("DEBUG: [VIDEO CONFIGURE] Preserving player position for cached player")
         }
         
-        // Set up observers
-        setupPlayerObservers(player)
+        // Set up observers only if not already set up
+        if videoCompletionObserver == nil {
+            setupPlayerObservers(player)
+        }
         
-        // Update state
-        self.player = player
-        self.loadingState = .loaded
-        self.playbackState = .notStarted
+        // Update state if not already set
+        if self.player !== player {
+            self.player = player
+            self.loadingState = .loaded
+            self.playbackState = .notStarted
+        }
         
         // Cache the player in SharedAssetCache for reuse
         SharedAssetCache.shared.cachePlayer(player, for: extractMediaID(from: url) ?? mid)
         
+        NSLog("DEBUG: [VIDEO CONFIGURE] About to call checkPlaybackConditions - autoPlay: \(currentAutoPlay), isVisible: \(isVisible)")
         
         // Start playback if needed
         checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
@@ -1220,15 +1236,42 @@ struct VideoLayerRefreshView: UIViewRepresentable {
             }
             
             func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-                print("DEBUG: [AVPlayerViewController] Updating with player: \(player != nil)")
-                print("DEBUG: [AVPlayerViewController] Previous player: \(uiViewController.player != nil)")
+                NSLog("DEBUG: [AVPlayerViewController] Updating with player: \(player != nil)")
+                NSLog("DEBUG: [AVPlayerViewController] Previous player: \(uiViewController.player != nil)")
+                NSLog("DEBUG: [AVPlayerViewController] Same player instance: \(uiViewController.player === player)")
                 
                 if let player = player {
-                    print("DEBUG: [AVPlayerViewController] New player item status: \(player.currentItem?.status.rawValue ?? -1)")
-                    print("DEBUG: [AVPlayerViewController] New player rate: \(player.rate)")
+                    NSLog("DEBUG: [AVPlayerViewController] New player item status: \(player.currentItem?.status.rawValue ?? -1)")
+                    NSLog("DEBUG: [AVPlayerViewController] New player rate: \(player.rate)")
+                }
+                
+                // Always set/update the player to ensure it's attached
+                let needsUpdate = uiViewController.player !== player
+                if needsUpdate {
+                    NSLog("DEBUG: [AVPlayerViewController] Setting player instance")
                 }
                 
                 uiViewController.player = player
+                
+                // If player was just attached and should be playing, trigger play
+                if needsUpdate, let player = player, player.rate == 0 {
+                    // Check if player item is ready to play
+                    if player.currentItem?.status == .readyToPlay {
+                        NSLog("DEBUG: [AVPlayerViewController] Player attached and ready, triggering play")
+                        player.play()
+                    } else if player.currentItem?.status == .unknown {
+                        NSLog("DEBUG: [AVPlayerViewController] Player item not ready yet, observing status")
+                        // Observe when it becomes ready
+                        let observer = player.currentItem?.observe(\.status, options: [.new]) { item, change in
+                            if item.status == .readyToPlay {
+                                NSLog("DEBUG: [AVPlayerViewController] Player item NOW ready, triggering play")
+                                player.play()
+                            }
+                        }
+                        // Store observer (it will auto-cleanup when item deallocates)
+                        _ = observer
+                    }
+                }
                 
                 // Force view update if player changed
                 if uiViewController.player != player {
