@@ -91,6 +91,7 @@ struct SimpleVideoPlayer: View {
     // MARK: Required Parameters
     let url: URL
     let mid: String
+    let parentTweetId: String? // Optional parent tweet ID for unique identification
     let isVisible: Bool
     let mediaType: MediaType // Add MediaType parameter
     
@@ -120,6 +121,7 @@ struct SimpleVideoPlayer: View {
     @State private var videoErrorObserver: NSObjectProtocol?
     @State private var timeObserver: Any?
     @State private var timeObserverPlayer: AVPlayer?
+    @State private var representableId: Int = 0 // Force VideoPlayerRepresentable recreation
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -480,6 +482,15 @@ struct SimpleVideoPlayer: View {
         }
     }
     
+    // MARK: - Unique ID for view identity
+    private var uniqueViewId: Int {
+        var hasher = Hasher()
+        hasher.combine(parentTweetId ?? "")
+        hasher.combine(mid)
+        hasher.combine(representableId)
+        return hasher.finalize()
+    }
+    
     // MARK: - Video Player View
     @ViewBuilder
     private func videoPlayerView() -> some View {
@@ -497,8 +508,9 @@ struct SimpleVideoPlayer: View {
                                 }
                             }
                     } else {
-                        // Use SwiftUI VideoPlayer for normal modes
-                        VideoPlayer(player: player)
+                        // Use VideoPlayerRepresentable for MediaCell to ensure proper layer refresh
+                        VideoPlayerRepresentable(player: player)
+                            .id(uniqueViewId) // Hash of tweet+video+state for unique identity
                             .onTapGesture {
                                 if let onVideoTap = onVideoTap {
                                     onVideoTap()
@@ -617,37 +629,34 @@ struct SimpleVideoPlayer: View {
         NSLog("DEBUG: [VIDEO SETUP] isVisible: \(isVisible), shouldLoadVideo: \(shouldLoadVideo), mode: \(mode)")
         NSLog("DEBUG: [VIDEO SETUP] URL: \(url)")
         
-        // FIRST: Always check SharedAssetCache for existing player instance (for seamless fullscreen transitions)
+        // FIRST: Check SharedAssetCache for existing player instance
         let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? mid
         NSLog("DEBUG: [VIDEO SETUP] mediaID: \(mediaID)")
         
-        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
-            NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING player in SharedAssetCache for \(mid) - reusing same instance!")
-            NSLog("DEBUG: [VIDEO SETUP] Cached player rate: \(cachedPlayer.rate), isMuted: \(cachedPlayer.isMuted)")
-            NSLog("DEBUG: [VIDEO SETUP] Cached player item status: \(cachedPlayer.currentItem?.status.rawValue ?? -1)")
-            
-            // CRITICAL: Apply mute state for MediaCell mode
-            if mode == .mediaCell {
-                if cachedPlayer.rate > 0 {
-                    cachedPlayer.pause()
-                    NSLog("DEBUG: [VIDEO SETUP] Paused playing cached player")
-                }
-                // Apply global mute state for MediaCell
-                cachedPlayer.isMuted = MuteState.shared.isMuted
-                NSLog("DEBUG: [VIDEO SETUP] Applied mute state for MediaCell: \(MuteState.shared.isMuted)")
-            } else {
+        // CRITICAL: For MediaCell mode, DON'T use cached players - always create fresh ones
+        // This prevents AVPlayerLayer conflicts when same video appears multiple times
+        // For fullscreen/detail modes, use cached players for seamless transitions
+        if mode != .mediaCell {
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID) {
+                NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING player in SharedAssetCache for \(mid) (fullscreen/detail mode)")
+                NSLog("DEBUG: [VIDEO SETUP] Cached player rate: \(cachedPlayer.rate), isMuted: \(cachedPlayer.isMuted)")
+                
                 // Unmute for fullscreen/detail modes
                 cachedPlayer.isMuted = false
+                
+                // Update state FIRST before configuring
+                self.player = cachedPlayer
+                self.loadingState = .loaded
+                self.playbackState = .notStarted
+                NSLog("DEBUG: [VIDEO SETUP] State updated, about to call configurePlayer for \(mid)")
+                
+                // Then configure
+                configurePlayer(cachedPlayer)
+                NSLog("DEBUG: [VIDEO SETUP] Returned from configurePlayer for \(mid)")
+                return
             }
-            
-            // Update state FIRST before configuring
-            self.player = cachedPlayer
-            self.loadingState = .loaded
-            self.playbackState = .notStarted
-            
-            // Then configure (this will set final mute state and call checkPlaybackConditions)
-            configurePlayer(cachedPlayer)
-            return
+        } else {
+            NSLog("DEBUG: [VIDEO SETUP] MediaCell mode - skipping cached player, will create fresh instance for \(mid)")
         }
         
         // SECOND: Check if we have cached content for this tweet
@@ -861,15 +870,23 @@ struct SimpleVideoPlayer: View {
             setupPlayerObservers(player)
         }
         
-        // Update state if not already set
-        if self.player !== player {
-            self.player = player
-            self.loadingState = .loaded
-            self.playbackState = .notStarted
-        }
+        // CRITICAL: Always update state, even if same player instance
+        // This ensures the view's player binding is set when reusing cached players
+        self.player = player
+        self.loadingState = .loaded
+        self.playbackState = .notStarted
+        self.representableId += 1 // Force VideoPlayerRepresentable to recreate
+        NSLog("DEBUG: [VIDEO CONFIGURE] Incremented representableId to \(representableId) for \(mid)")
         
         // Cache the player in SharedAssetCache for reuse
-        SharedAssetCache.shared.cachePlayer(player, for: extractMediaID(from: url) ?? mid)
+        // ONLY cache for fullscreen/detail modes, NOT for MediaCell mode
+        if mode != .mediaCell {
+            let mediaID = extractMediaID(from: url) ?? mid
+            SharedAssetCache.shared.cachePlayer(player, for: mediaID)
+            NSLog("DEBUG: [VIDEO CONFIGURE] Cached player with key: \(mediaID) (mode: \(mode))")
+        } else {
+            NSLog("DEBUG: [VIDEO CONFIGURE] MediaCell mode - NOT caching player for \(mid)")
+        }
         
         NSLog("DEBUG: [VIDEO CONFIGURE] About to call checkPlaybackConditions - autoPlay: \(currentAutoPlay), isVisible: \(isVisible)")
         
@@ -1152,16 +1169,41 @@ struct SimpleVideoPlayer: View {
     
     private func handleLoadingStateChange(newShouldLoadVideo: Bool) {
         print("DEBUG: [VIDEO LOADING STATE] Loading state changed to \(newShouldLoadVideo) for \(mid)")
+        print("DEBUG: [VIDEO LOADING STATE] Current state - player: \(player != nil), isVisible: \(isVisible), mode: \(mode)")
         
         if newShouldLoadVideo {
-            // Loading enabled - set up player if conditions are met
-            if player == nil && isVisible {
-                print("DEBUG: [VIDEO SETUP] Loading enabled, setting up player for \(mid)")
+            // Loading enabled
+            if mode == .mediaCell {
+                // CRITICAL: For MediaCell mode, always recreate player to avoid layer conflicts
+                // This ensures fresh AVPlayerLayer connection
+                print("DEBUG: [VIDEO SETUP] MediaCell loading enabled, recreating player for \(mid)")
+                
+                // Properly dispose of old player
+                if let oldPlayer = player {
+                    oldPlayer.pause()
+                    oldPlayer.replaceCurrentItem(with: nil)
+                    print("DEBUG: [VIDEO SETUP] Disposed old player for \(mid)")
+                }
+                
+                removePlayerObservers()
+                player = nil
+                loadingState = .idle
+                
                 setupPlayer()
+            } else {
+                // For fullscreen/detail modes, reuse existing player if available
+                if player == nil {
+                    print("DEBUG: [VIDEO SETUP] Loading enabled, setting up player for \(mid)")
+                    setupPlayer()
+                } else {
+                    print("DEBUG: [VIDEO SETUP] Loading enabled, player exists, validating for \(mid)")
+                    validateAndConfigureExistingPlayer()
+                    checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+                }
             }
         } else {
-            // Loading disabled - cancel any ongoing setup and pause player
-            print("DEBUG: [VIDEO SETUP] Loading disabled, cancelling setup for \(mid)")
+            // Loading disabled - pause player
+            print("DEBUG: [VIDEO SETUP] Loading disabled, pausing player for \(mid)")
             player?.pause()
         }
     }

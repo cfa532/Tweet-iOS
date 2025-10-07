@@ -215,6 +215,7 @@ struct MediaBrowserView: View {
             return SimpleVideoPlayer(
                 url: url,
                 mid: attachment.mid,
+                parentTweetId: nil, // Not needed for fullscreen
                 isVisible: true,
                 mediaType: attachment.type,
                 autoPlay: shouldAutoPlay,

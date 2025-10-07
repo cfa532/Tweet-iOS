@@ -345,6 +345,7 @@ struct MediaCell: View, Equatable {
             SimpleVideoPlayer(
                 url: url,
                 mid: attachment.mid,
+                parentTweetId: parentTweet.mid,
                 isVisible: isVisible,
                 mediaType: attachment.type,
                 autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),

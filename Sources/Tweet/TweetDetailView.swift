@@ -7,24 +7,49 @@ struct VideoPlayerRepresentable: UIViewRepresentable {
     
     func makeUIView(context: Context) -> UIView {
         let view = VideoPlayerView()
+        view.backgroundColor = .black
+        
+        NSLog("DEBUG: [VideoPlayerRepresentable] makeUIView - creating NEW view and layer")
+        
+        // Create layer immediately
         let playerLayer = AVPlayerLayer(player: player)
         playerLayer.videoGravity = .resizeAspect
-        playerLayer.frame = view.bounds
+        playerLayer.needsDisplayOnBoundsChange = true
         view.layer.addSublayer(playerLayer)
+        view.playerLayer = playerLayer
         
-        // Store playerLayer in context for updates
         context.coordinator.playerLayer = playerLayer
         context.coordinator.view = view
+        context.coordinator.currentPlayer = player
+        
+        NSLog("DEBUG: [VideoPlayerRepresentable] makeUIView - layer created and player assigned")
         
         return view
     }
     
     func updateUIView(_ uiView: UIView, context: Context) {
-        guard let videoView = uiView as? VideoPlayerView,
-              let playerLayer = context.coordinator.playerLayer else { return }
+        guard let videoView = uiView as? VideoPlayerView else { return }
         
-        // Update frame when view bounds change
-        playerLayer.frame = videoView.bounds
+        NSLog("DEBUG: [VideoPlayerRepresentable] updateUIView called")
+        
+        // Check if player instance changed
+        let playerChanged = videoView.playerLayer?.player !== player
+        
+        // Always refresh player connection
+        if let playerLayer = videoView.playerLayer {
+            NSLog("DEBUG: [VideoPlayerRepresentable] updateUIView - updating player, changed: \(playerChanged)")
+            playerLayer.player = player
+            context.coordinator.currentPlayer = player
+            
+            // CRITICAL: Reset recreation flag when player changes
+            // This ensures layer will be recreated for the new player
+            if playerChanged {
+                videoView.hasRecreatedLayer = false
+                NSLog("DEBUG: [VideoPlayerRepresentable] Player changed - reset recreation flag")
+            }
+        } else {
+            NSLog("DEBUG: [VideoPlayerRepresentable] updateUIView - NO LAYER EXISTS!")
+        }
     }
     
     func makeCoordinator() -> Coordinator {
@@ -34,18 +59,49 @@ struct VideoPlayerRepresentable: UIViewRepresentable {
     class Coordinator: NSObject {
         var playerLayer: AVPlayerLayer?
         var view: VideoPlayerView?
+        var currentPlayer: AVPlayer?
     }
 }
 
 // Custom UIView that properly handles layout
 class VideoPlayerView: UIView {
+    var playerLayer: AVPlayerLayer?
+    var hasRecreatedLayer = false  // Not private - needs to be reset by representable
+    
     override func layoutSubviews() {
         super.layoutSubviews()
-        // Update player layer frame when view layout changes
-        layer.sublayers?.forEach { sublayer in
-            if let playerLayer = sublayer as? AVPlayerLayer {
-                playerLayer.frame = bounds
-            }
+        
+        guard let layer = playerLayer else { return }
+        
+        let hadZeroBounds = layer.frame.width == 0 || layer.frame.height == 0
+        let hasValidBounds = bounds.width > 0 && bounds.height > 0
+        
+        // ALWAYS recreate layer if it has zero bounds - don't trust the flag
+        // This handles view reuse cases where the flag might be stale
+        if hadZeroBounds && hasValidBounds {
+            NSLog("DEBUG: [VideoPlayerView] Recreating layer - old frame: \(layer.frame), new bounds: \(bounds), flag was: \(hasRecreatedLayer)")
+            hasRecreatedLayer = true
+            
+            // Get player before removing layer
+            let player = layer.player
+            layer.removeFromSuperlayer()
+            
+            // CRITICAL: Create layer WITHOUT player, set frame FIRST, then assign player
+            let newLayer = AVPlayerLayer()
+            newLayer.videoGravity = .resizeAspect
+            newLayer.frame = bounds  // Set frame BEFORE assigning player
+            newLayer.needsDisplayOnBoundsChange = true
+            self.layer.addSublayer(newLayer)
+            
+            // NOW assign player after frame is set
+            newLayer.player = player
+            
+            playerLayer = newLayer
+            
+            NSLog("DEBUG: [VideoPlayerView] Layer recreated - frame set BEFORE player assigned")
+        } else {
+            // Just update frame
+            layer.frame = bounds
         }
     }
 }
@@ -100,6 +156,7 @@ struct DetailMediaCell: View {
                         SimpleVideoPlayer(
                             url: url,
                             mid: attachment.mid,
+                            parentTweetId: parentTweet.mid,
                             isVisible: true,
                             mediaType: attachment.type,
                             autoPlay: true,
