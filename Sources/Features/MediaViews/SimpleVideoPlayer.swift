@@ -583,11 +583,9 @@ struct SimpleVideoPlayer: View {
                 print("DEBUG: [VIDEO VALIDATE] Player item failed for \(mid), attempting recovery")
                 handleError(strategy: .loadFailure)
             case .unknown:
-                print("DEBUG: [VIDEO VALIDATE] Player item status unknown for \(mid), waiting...")
-                // Wait a bit and try again
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.validateAndConfigureExistingPlayer()
-                }
+                NSLog("DEBUG: [VIDEO VALIDATE] Player item status unknown for \(mid), will retry on next validation cycle")
+                // Player will be validated again when visibility or other state changes
+                // No arbitrary delay - let natural state flow handle it
             @unknown default:
                 print("DEBUG: [VIDEO VALIDATE] Unknown player item status for \(mid)")
             }
@@ -680,12 +678,6 @@ struct SimpleVideoPlayer: View {
         // Otherwise, create a new player with performance considerations
         Task.detached(priority: .userInitiated) {
             do {
-                // Add a small delay to prevent overwhelming the system when multiple videos load simultaneously
-                let currentRetryCount = await loadingState.retryCount
-                if currentRetryCount == 0 {
-                    try await Task.sleep(nanoseconds: UInt64(currentRetryCount * 50_000_000)) // 0.05s delay per retry
-                }
-                
                 NSLog("DEBUG: [SimpleVideoPlayer] About to call SharedAssetCache.getOrCreatePlayer for \(mid) with mediaType: \(mediaType.rawValue)")
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
                 NSLog("DEBUG: [SimpleVideoPlayer] SharedAssetCache.getOrCreatePlayer completed for \(mid)")
@@ -943,12 +935,9 @@ struct SimpleVideoPlayer: View {
             if mode == .mediaBrowser {
                 restoreCachedVideoState()
             } else if currentRetryCount < 3 {
-                // For MediaCell, retry with backoff
-                loadingState = .loading
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.loadingState = .failed(retryCount: currentRetryCount + 1)
-                    self.setupPlayer()
-                }
+                // For MediaCell, retry immediately
+                loadingState = .failed(retryCount: currentRetryCount + 1)
+                setupPlayer()
             }
             
         case .manualReset, .networkRecovery:
@@ -1156,10 +1145,8 @@ struct SimpleVideoPlayer: View {
                     
                     // Resume playback if it was playing and conditions are met
                     if cachedState.wasPlaying && self.isVisible && self.currentAutoPlay && self.shouldLoadVideo {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            print("DEBUG: [VIDEO REATTACH] Resuming playback for \(self.mid)")
-                            player.play()
-                        }
+                        NSLog("DEBUG: [VIDEO REATTACH] Resuming playback for \(self.mid)")
+                        player.play()
                     }
                 }
             }

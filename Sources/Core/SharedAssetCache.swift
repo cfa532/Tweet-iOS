@@ -505,11 +505,9 @@ class SharedAssetCache: ObservableObject {
         // Cache the player for future use
         await MainActor.run { cachePlayer(player, for: mediaID) }
         
-        // Auto-play the player to start requesting segments
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            player.play()
-            print("DEBUG: [SHARED ASSET CACHE] Auto-playing player for mediaID: \(mediaID)")
-        }
+        // DON'T auto-play here - let the view decide when to play
+        // The player is ready, the view will call play() when appropriate
+        NSLog("DEBUG: [SHARED ASSET CACHE] Player created and cached for mediaID: \(mediaID), ready for playback")
         
         return player
     }
@@ -711,6 +709,7 @@ class SharedAssetCache: ObservableObject {
             let delay = priority.delay(for: index)
             
             Task {
+                // Preload immediately if delay is 0, otherwise use async timing
                 if delay > 0 {
                     try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 }
@@ -917,9 +916,8 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func handleAppDidBecomeActive() {
-        // Use Task to avoid potential MainActor deadlock
+        // Refresh players immediately when app becomes active
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
             self.refreshCachedPlayers()
         }
     }

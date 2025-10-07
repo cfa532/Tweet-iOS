@@ -260,8 +260,7 @@ class VideoLoadingManager: ObservableObject {
                 )
             }
             
-            // Small delay to prevent overwhelming the system
-            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+            // No artificial delay - process videos as fast as the system allows
         }
     }
     
@@ -329,8 +328,7 @@ class VideoLoadingManager: ObservableObject {
                     print("DEBUG: [VideoLoadingManager] Processed queued video preloading for tweet \(tweetId)")
                 }
                 
-                // Small delay to prevent overwhelming the system
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                // No artificial delay - process queue as fast as possible
             }
             
             isProcessingQueue = false

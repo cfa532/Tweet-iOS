@@ -163,12 +163,11 @@ struct CachingVideoPlayer: View {
                         self.playerDelegate = delegate
                         cachingPlayerItem.delegate = delegate
                     } else {
-                        // For regular AVPlayerItem, just set loading to false when ready
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            self.isLoading = false
-                            if self.autoPlay && self.isVisible {
-                                newPlayer.play()
-                            }
+                        // For regular AVPlayerItem, set loading to false immediately
+                        // The player will be ready by the time view renders
+                        self.isLoading = false
+                        if self.autoPlay && self.isVisible {
+                            newPlayer.play()
                         }
                     }
                     

@@ -88,13 +88,11 @@ class DetailVideoManager: NSObject, ObservableObject {
                         }
                     }
                     
-                    // Auto-play the player to start requesting segments (for HLS videos)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        if autoPlay {
-                            self.currentPlayer?.play()
-                            self.isPlaying = true
-                            print("DEBUG: [DETAIL VIDEO MANAGER] Auto-playing player for mediaID: \(mid)")
-                        }
+                    // Auto-play immediately if requested
+                    if autoPlay {
+                        self.currentPlayer?.play()
+                        self.isPlaying = true
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Auto-playing player for mediaID: \(mid)")
                     }
                 }
             } catch {
@@ -231,9 +229,8 @@ class DetailVideoManager: NSObject, ObservableObject {
     }
     
     private func handleAppDidBecomeActive() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            self.refreshVideoLayer()
-        }
+        // Refresh immediately when app becomes active
+        refreshVideoLayer()
     }
     
     private func refreshVideoLayer() {
@@ -247,10 +244,8 @@ class DetailVideoManager: NSObject, ObservableObject {
         // Force a seek to refresh the video layer
         player.seek(to: currentTime) { finished in
             if finished && wasPlaying {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    player.play()
-                    self.isPlaying = true
-                }
+                player.play()
+                self.isPlaying = true
             }
         }
     }

@@ -411,9 +411,11 @@ struct MediaCell: View, Equatable {
             }
         }
         
-        // Force reload by toggling shouldLoadVideo
+        // Force reload by clearing cache and resetting state
+        // The state change will trigger proper reload through onChange observer
         shouldLoadVideo = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        // Use Task to avoid blocking
+        Task { @MainActor in
             shouldLoadVideo = true
         }
     }
