@@ -494,47 +494,15 @@ extension Array where Element == Tweet {
     mutating func mergeTweets(_ newTweets: [Tweet]) {
         // Create a dictionary to track unique tweets by their mid
         var uniqueTweets: [String: Tweet] = [:]
-        // Track video IDs to prevent duplicate videos in feed
-        var seenVideoIDs: Set<String> = []
         
-        // Add existing tweets to dictionary and track their videos
+        // Add existing tweets to dictionary
         for tweet in self {
             uniqueTweets[tweet.mid] = tweet
-            
-            // Track video IDs from existing tweets
-            if let attachments = tweet.attachments {
-                for attachment in attachments where attachment.type == .video || attachment.type == .hls_video {
-                    seenVideoIDs.insert(attachment.mid)
-                }
-            }
         }
         
         // Add new tweets, overwriting existing ones if they have the same mid
-        // Skip tweets with duplicate video attachments
         for tweet in newTweets {
-            // Check if this tweet has videos that already exist in the feed
-            var hasDuplicateVideo = false
-            if let attachments = tweet.attachments {
-                for attachment in attachments where attachment.type == .video || attachment.type == .hls_video {
-                    if seenVideoIDs.contains(attachment.mid) {
-                        hasDuplicateVideo = true
-                        print("DEBUG: [Tweet Deduplication] Skipping tweet \(tweet.mid) - video \(attachment.mid) already in feed")
-                        break
-                    }
-                }
-            }
-            
-            // Only add tweet if it doesn't have duplicate videos or if it's an update to existing tweet
-            if !hasDuplicateVideo || uniqueTweets[tweet.mid] != nil {
-                uniqueTweets[tweet.mid] = tweet
-                
-                // Track this tweet's videos
-                if let attachments = tweet.attachments {
-                    for attachment in attachments where attachment.type == .video || attachment.type == .hls_video {
-                        seenVideoIDs.insert(attachment.mid)
-                    }
-                }
-            }
+            uniqueTweets[tweet.mid] = tweet
         }
         
         // Convert back to array and sort by timestamp in descending order
@@ -546,35 +514,8 @@ extension Array where Element == Tweet {
         // Create a set of existing tweet IDs for quick lookup
         let existingIds = Set(self.map { $0.mid })
         
-        // Track video IDs to prevent duplicate videos
-        var seenVideoIDs: Set<String> = []
-        for tweet in self {
-            if let attachments = tweet.attachments {
-                for attachment in attachments where attachment.type == .video || attachment.type == .hls_video {
-                    seenVideoIDs.insert(attachment.mid)
-                }
-            }
-        }
-        
-        // Filter out tweets that already exist or have duplicate videos
-        let trulyNewTweets = newTweets.filter { tweet in
-            // Keep if tweet ID already exists (it's an update)
-            if existingIds.contains(tweet.mid) {
-                return true
-            }
-            
-            // Check for duplicate videos
-            if let attachments = tweet.attachments {
-                for attachment in attachments where attachment.type == .video || attachment.type == .hls_video {
-                    if seenVideoIDs.contains(attachment.mid) {
-                        print("DEBUG: [Tweet Deduplication Smooth] Skipping tweet \(tweet.mid) - video \(attachment.mid) already in feed")
-                        return false
-                    }
-                }
-            }
-            
-            return true
-        }
+        // Filter out tweets that already exist to avoid unnecessary updates
+        let trulyNewTweets = newTweets.filter { !existingIds.contains($0.mid) }
         
         if trulyNewTweets.isEmpty {
             return
@@ -589,16 +530,7 @@ extension Array where Element == Tweet {
         }
         
         // Add truly new tweets at the end (they will be sorted by timestamp)
-        // Also track their videos
-        for tweet in trulyNewTweets where !existingIds.contains(tweet.mid) {
-            if let attachments = tweet.attachments {
-                for attachment in attachments where attachment.type == .video || attachment.type == .hls_video {
-                    seenVideoIDs.insert(attachment.mid)
-                }
-            }
-        }
-        
-        self.append(contentsOf: trulyNewTweets.filter { !existingIds.contains($0.mid) })
+        self.append(contentsOf: trulyNewTweets)
         
         // Sort only if we added new tweets to maintain chronological order
         if !trulyNewTweets.isEmpty {

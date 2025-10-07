@@ -76,8 +76,6 @@ extension Notification.Name {
     // MARK: - Video Related
     /// Posted to stop all videos in the tweet list when entering full screen
     static let stopAllVideos = Notification.Name("StopAllVideos")
-    /// Posted when a video instance needs other instances of same video to release their player
-    static let releasePlayerForMediaID = Notification.Name("ReleasePlayerForMediaID")
     
     // MARK: - Error Handling
     /// Posted when an error occurs that should be displayed as a toast
