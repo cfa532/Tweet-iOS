@@ -324,10 +324,25 @@ struct SimpleVideoPlayer: View {
                 // Entering full screen - force unmute
                 player.isMuted = false
                 NSLog("DEBUG: [VIDEO MODE CHANGE] Entered full screen (\(oldMode) -> \(newMode)), forced unmuted")
+                
+                // CRITICAL: Force layer detachment and increment representableId
+                // This ensures the VideoPlayerRepresentable in MediaCell releases the layer
+                // before AVPlayerViewController tries to use it, preventing black screen
+                self.representableId += 1
+                NSLog("DEBUG: [VIDEO MODE CHANGE] Incremented representableId to \(self.representableId) to force layer detachment from MediaCell")
+                
+                // Small delay to ensure layer detachment completes before AVPlayerViewController attaches
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    NSLog("DEBUG: [VIDEO MODE CHANGE] Layer detachment complete, AVPlayerViewController can now attach")
+                }
             } else if newMode == .mediaCell && oldMode == .mediaBrowser {
                 // Exiting full screen to MediaCell - apply global mute state
                 player.isMuted = MuteState.shared.isMuted
                 NSLog("DEBUG: [VIDEO MODE CHANGE] Exited full screen to MediaCell (\(oldMode) -> \(newMode)), applied global mute state: \(MuteState.shared.isMuted)")
+                
+                // Force recreation of VideoPlayerRepresentable to ensure fresh layer attachment
+                self.representableId += 1
+                NSLog("DEBUG: [VIDEO MODE CHANGE] Incremented representableId to \(self.representableId) for fresh MediaCell layer")
             } else if newMode == .mediaCell {
                 // Any other transition to MediaCell - apply global mute state
                 player.isMuted = MuteState.shared.isMuted
@@ -580,7 +595,10 @@ struct SimpleVideoPlayer: View {
                     if mode == .mediaBrowser {
                         // Use AVPlayerViewController for fullscreen modes to get native controls
                         AVPlayerViewControllerRepresentable(player: player)
-                            .id(mid) // Force recreation when mediaID changes
+                            .id("\(mid)_\(representableId)") // Force recreation with representableId changes
+                            .onAppear {
+                                NSLog("DEBUG: [AVPlayerViewController] View appeared for \(mid)")
+                            }
                             .onTapGesture {
                                 if let onVideoTap = onVideoTap {
                                     onVideoTap()
@@ -749,16 +767,19 @@ struct SimpleVideoPlayer: View {
         
         // SECOND: Check if we have cached content for this tweet
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: mid)
-        print("DEBUG: [VIDEO SETUP] hasCachedContent: \(hasCachedContent)")
+        NSLog("DEBUG: [VIDEO SETUP] hasCachedContent: \(hasCachedContent) for \(mid) in mode \(mode)")
         
         if hasCachedContent {
-            print("DEBUG: [VIDEO SETUP] Tweet \(mid) has cached content, loading from cache")
+            NSLog("DEBUG: [VIDEO SETUP] Tweet \(mid) has cached content, loading from cache in mode \(mode)")
             
             // Try async loading from cache
             Task.detached(priority: .userInitiated) {
+                NSLog("DEBUG: [VIDEO SETUP] Starting async Task to load player from cache for \(mid) in mode \(mode)")
                 do {
+                    NSLog("DEBUG: [VIDEO SETUP] Calling getOrCreatePlayer for \(mid)")
                     // Use uniquePlayerURL to ensure each tweet gets its own player instance
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: mid, mediaType: mediaType)
+                    NSLog("DEBUG: [VIDEO SETUP] getOrCreatePlayer returned successfully for \(mid)")
                     
                     // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
                     // This prevents any brief moment where the player might start with wrong audio state
@@ -809,22 +830,33 @@ struct SimpleVideoPlayer: View {
         }
         
         // Check if we have a cached player first - prioritize for fullscreen modes
+        NSLog("DEBUG: [VIDEO SETUP] Checking VideoStateCache for \(mid)")
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
-            print("DEBUG: [VIDEO CACHE] Found cached player for \(mid) in \(mode) mode")
+            NSLog("DEBUG: [VIDEO CACHE] Found cached player for \(mid) in \(mode) mode")
             restoreFromCache(cachedState)
             return
         }
+        NSLog("DEBUG: [VIDEO SETUP] No VideoStateCache found for \(mid)")
         
         // For fullscreen modes, if no cached state and no player, try to restore from cache again
         // This handles cases where the cache was cleared but we still need the video
         if mode == .mediaBrowser && player == nil && !loadingState.isLoading {
-            print("DEBUG: [VIDEO CACHE] Fullscreen mode with no player, attempting to restore cached state for \(mid)")
+            NSLog("DEBUG: [VIDEO CACHE] Fullscreen mode with no player, attempting to restore cached state for \(mid)")
             restoreCachedVideoState()
-            return
+            
+            // If restoration found a player, we're done
+            if player != nil {
+                NSLog("DEBUG: [VIDEO CACHE] Successfully restored player from cache for \(mid), exiting setup")
+                return
+            }
+            // Otherwise, continue to create new player
+            NSLog("DEBUG: [VIDEO CACHE] No cached player found, will create new player for \(mid)")
         }
         
         // Otherwise, create a new player with performance considerations
+        NSLog("DEBUG: [VIDEO SETUP] Creating new player for \(mid) in mode \(mode)")
         Task.detached(priority: .userInitiated) {
+            NSLog("DEBUG: [VIDEO SETUP] Async Task started for \(mid)")
             do {
                 // Use shared cached player for all modes - simpler and more efficient
                 NSLog("DEBUG: [SimpleVideoPlayer] Getting shared player for \(mid)")
@@ -1432,20 +1464,22 @@ struct VideoLayerRefreshView: UIViewRepresentable {
             }
             
             func makeUIViewController(context: Context) -> AVPlayerViewController {
+                NSLog("DEBUG: [AVPlayerViewController] makeUIViewController CALLED - creating new controller")
                 let controller = AVPlayerViewController()
                 controller.showsPlaybackControls = true
                 controller.videoGravity = .resizeAspect
                 controller.view.backgroundColor = .black
                 
-                // Don't set player here - let updateUIViewController handle it
-                // This ensures consistent behavior between first and subsequent loads
+                // Set player immediately to ensure it's attached from the start
+                controller.player = player
+                NSLog("DEBUG: [AVPlayerViewController] Set player in makeUIViewController")
                 
                 if let player = player {
-                    NSLog("DEBUG: [AVPlayerViewController] Created controller for player, will attach in update")
+                    NSLog("DEBUG: [AVPlayerViewController] Created controller with player")
                     NSLog("DEBUG: [AVPlayerViewController] Player item status: \(player.currentItem?.status.rawValue ?? -1)")
                     NSLog("DEBUG: [AVPlayerViewController] Player rate: \(player.rate)")
                 } else {
-                    NSLog("DEBUG: [AVPlayerViewController] Created with nil player")
+                    NSLog("DEBUG: [AVPlayerViewController] Created with nil player - this shouldn't happen!")
                 }
                 
                 return controller
