@@ -73,9 +73,10 @@ struct SettingsView: View {
     private func cleanupCache() {
         isCleaningCache = true
         Task.detached(priority: .background) {
-            // Clear all disk caches completely
-            ImageCacheManager.shared.clearAllCache()
-            TweetCacheManager.shared.clearAllCache()
+            // Use tweet-centered cleanup - clears ALL tweets (including private) and their media
+            TweetCacheManager.shared.manualClearAllCache()
+            
+            // Clear chat cache
             ChatCacheManager.shared.clearAllCache()
             
             // Clear all video cache files from disk
@@ -83,9 +84,6 @@ struct SettingsView: View {
             
             // Clear all memory caches on main actor
             await MainActor.run {
-                // Clear shared asset cache (video players and assets)
-                SharedAssetCache.shared.clearCache()
-                
                 // Clear video state cache (player states and positions)
                 VideoStateCache.shared.clearAllCache()
                 

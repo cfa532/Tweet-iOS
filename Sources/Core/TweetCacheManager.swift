@@ -5,14 +5,20 @@ import UIKit
 final class TweetCacheManager: @unchecked Sendable {
     static let shared = TweetCacheManager()
     private let coreDataManager = CoreDataManager.shared
-    private let maxCacheAge: TimeInterval = 30 * 24 * 60 * 60 // 30 days
+    private let maxCacheAge: TimeInterval = 14 * 24 * 60 * 60 // 14 days (2 weeks) for auto-cleanup
     private let maxCacheSize: Int = 5000 // Maximum number of tweets to cache
     private var cleanupTimer: Timer?
+    
+    // Track last access time for tweets (in memory, persisted to UserDefaults)
+    private var tweetAccessTimes: [String: Date] = [:]
+    private let accessTimesKey = "TweetAccessTimes"
 
     private init() {
+        // Load access times from UserDefaults
+        loadAccessTimes()
+        
         // Set up periodic cleanup
         setupPeriodicCleanup()
-        
     }
     
     deinit {
@@ -27,11 +33,38 @@ final class TweetCacheManager: @unchecked Sendable {
         }
     }
     
+    // Load access times from UserDefaults
+    private func loadAccessTimes() {
+        if let data = UserDefaults.standard.data(forKey: accessTimesKey),
+           let times = try? JSONDecoder().decode([String: Date].self, from: data) {
+            tweetAccessTimes = times
+            print("DEBUG: [TweetCacheManager] Loaded \(times.count) tweet access times")
+        }
+    }
+    
+    // Save access times to UserDefaults
+    private func saveAccessTimes() {
+        if let data = try? JSONEncoder().encode(tweetAccessTimes) {
+            UserDefaults.standard.set(data, forKey: accessTimesKey)
+        }
+    }
+    
+    // Mark tweet as accessed (called when tweet is viewed)
+    func markTweetAccessed(_ tweetId: String) {
+        tweetAccessTimes[tweetId] = Date()
+        // Save periodically, not on every access (performance)
+        if tweetAccessTimes.count % 20 == 0 {
+            saveAccessTimes()
+        }
+    }
     
     private func performPeriodicCleanup() {
         context.performAndWait {
-            // Delete expired tweets
+            // Delete expired tweets (2 weeks old, excluding private tweets)
             deleteExpiredTweets()
+            
+            // Save access times after cleanup
+            saveAccessTimes()
             
             // Limit total number of tweets
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
@@ -52,6 +85,86 @@ final class TweetCacheManager: @unchecked Sendable {
     }
     
     var context: NSManagedObjectContext { coreDataManager.context }
+    
+    // MARK: - Media Cleanup
+    
+    /// Delete media files associated with a tweet
+    private func deleteMediaForTweet(_ tweet: Tweet) {
+        // Collect all media IDs from attachments
+        var mediaIds: [String] = []
+        
+        if let attachments = tweet.attachments {
+            for attachment in attachments {
+                mediaIds.append(attachment.mid)
+            }
+        }
+        
+        if mediaIds.isEmpty { return }
+        
+        print("DEBUG: [TweetCacheManager] Deleting \(mediaIds.count) media files for tweet \(tweet.mid)")
+        
+        // Delete from SharedAssetCache (videos/audio) on main actor
+        Task { @MainActor in
+            for mediaId in mediaIds {
+                SharedAssetCache.shared.clearAssetCache(for: mediaId)
+            }
+        }
+        
+        // Delete from ImageCacheManager (images)
+        for mediaId in mediaIds {
+            ImageCacheManager.shared.clearCache(for: mediaId)
+        }
+    }
+    
+    // MARK: - Manual Cleanup (Settings Screen)
+    
+    /// Manual cleanup from settings screen - clears everything including private tweets
+    func manualClearAllCache() {
+        print("DEBUG: [TweetCacheManager] Manual cache clear - clearing EVERYTHING")
+        
+        context.performAndWait {
+            // Get all tweets
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            if let allTweets = try? context.fetch(request) {
+                print("DEBUG: [TweetCacheManager] Manual clear: deleting \(allTweets.count) tweets and their media")
+                
+                for cdTweet in allTweets {
+                    // Delete associated media
+                    if let tweet = try? Tweet.from(cdTweet: cdTweet) {
+                        deleteMediaForTweet(tweet)
+                    }
+                    
+                    // Delete tweet
+                    context.delete(cdTweet)
+                }
+                
+                try? context.save()
+            }
+        }
+        
+        // Clear access times
+        tweetAccessTimes.removeAll()
+        saveAccessTimes()
+        
+        // Clear all caches
+        Task { @MainActor in
+            SharedAssetCache.shared.clearAllCaches()
+        }
+        ImageCacheManager.shared.clearAllCache()
+        
+        // Clear memory cache
+        Tweet.clearAllInstances()
+        
+        print("✅ Manual cache clear complete")
+    }
+    
+    // MARK: - Signout Cleanup
+    
+    /// Clear everything on signout
+    func clearCacheOnSignout() {
+        print("DEBUG: [TweetCacheManager] Signout - clearing EVERYTHING")
+        manualClearAllCache()
+    }
 }
 
 // MARK: - Tweet Caching
@@ -181,12 +294,47 @@ extension TweetCacheManager {
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             let expirationDate = Date().addingTimeInterval(-maxCacheAge)
-            request.predicate = NSPredicate(format: "timeCached < %@", expirationDate as NSDate)
-            if let expiredTweets = try? context.fetch(request) {
-                for tweet in expiredTweets {
-                    context.delete(tweet)
+            
+            if let allCachedTweets = try? context.fetch(request) {
+                var deletedCount = 0
+                var preservedPrivateCount = 0
+                
+                for cdTweet in allCachedTweets {
+                    guard let tweetId = cdTweet.tid else { continue }
+                    
+                    // Decode tweet to check if it's private
+                    guard let tweet = try? Tweet.from(cdTweet: cdTweet) else { continue }
+                    
+                    // NEVER auto-delete private tweets - only manual or signout
+                    if tweet.isPrivate == true {
+                        preservedPrivateCount += 1
+                        continue
+                    }
+                    
+                    // Check last access time (if available), otherwise fall back to timeCached
+                    let lastAccess = tweetAccessTimes[tweetId] ?? (cdTweet.timeCached as? Date ?? Date.distantPast)
+                    
+                    if lastAccess < expirationDate {
+                        // Tweet hasn't been accessed in 2 weeks - delete it and its media
+                        print("DEBUG: [TweetCacheManager] Deleting expired tweet: \(tweetId) (last access: \(lastAccess))")
+                        
+                        // Delete associated media files
+                        deleteMediaForTweet(tweet)
+                        
+                        // Remove from access times
+                        tweetAccessTimes.removeValue(forKey: tweetId)
+                        
+                        // Delete tweet from CoreData
+                        context.delete(cdTweet)
+                        deletedCount += 1
+                    }
                 }
-                try? context.save()
+                
+                if deletedCount > 0 {
+                    try? context.save()
+                    saveAccessTimes()
+                    print("DEBUG: [TweetCacheManager] Deleted \(deletedCount) expired tweets, preserved \(preservedPrivateCount) private tweets")
+                }
             }
         }
     }

@@ -306,6 +306,9 @@ struct EmbeddedTweetView: View, Equatable {
         .onAppear {
             isVisible = true
             tweet.isVisible = true
+            
+            // Mark tweet as accessed for cache management
+            TweetCacheManager.shared.markTweetAccessed(tweet.mid)
         }
         .onDisappear {
             isVisible = false

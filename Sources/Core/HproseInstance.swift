@@ -956,13 +956,12 @@ final class HproseInstance: ObservableObject {
     func logout() async {
         preferenceHelper?.setUserId(nil as String?)
         
-        // Clear all caches
-        TweetCacheManager.shared.clearAllCache()
-        ImageCacheManager.shared.clearAllCache()
+        // Clear all caches on signout - includes private tweets and all media
+        TweetCacheManager.shared.clearCacheOnSignout()
         ChatCacheManager.shared.clearAllCache()
-        Task { @MainActor in
-            SharedAssetCache.shared.clearCache()
-        }
+        
+        // Clear all video cache files from disk
+        await CachingPlayerItem.clearAllCache()
         
         // Reset appUser to guest user
         let guestUser = User.getInstance(mid: Constants.GUEST_ID)

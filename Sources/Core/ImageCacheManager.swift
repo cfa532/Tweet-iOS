@@ -98,6 +98,20 @@ class ImageCacheManager {
         }
     }
     
+    /// Clear cache for a specific media ID (image)
+    func clearCache(for mediaId: String) {
+        // Clear from memory cache
+        cache.removeObject(forKey: mediaId as NSString)
+        
+        // Clear from disk cache
+        let cachedFile = cacheDirectory.appendingPathComponent(mediaId)
+        try? fileManager.removeItem(at: cachedFile)
+        
+        // Also try compressed version
+        let compressedFile = cacheDirectory.appendingPathComponent("\(mediaId)_compressed")
+        try? fileManager.removeItem(at: compressedFile)
+    }
+    
     func clearAvatarCache(for userId: String) {
         // NSCache doesn't have allKeys, so we'll just clear the disk cache
         // The memory cache will be cleared when the app receives memory warnings

@@ -83,7 +83,7 @@ class SharedAssetCache: ObservableObject {
     
     // MARK: - Configuration
     private let maxCacheSize = 30 // Maximum number of cached assets and players (reduced for memory)
-    private let maxPlayerCacheSize = 10 // Maximum cached players (separate limit)
+    private let maxPlayerCacheSize = 25 // Maximum cached players (app-level memory manager ensures we stay under 2GB)
     private let cacheExpirationInterval: TimeInterval = 1800 // 30 minutes
     private let maxVideoFileSize: Int64 = 50 * 1024 * 1024 // 50MB max per video file
     
