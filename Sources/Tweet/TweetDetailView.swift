@@ -435,9 +435,9 @@ struct TweetDetailView: View {
             print("DEBUG: [TweetDetailView] Tweet ID: \(tweet.mid)")
             print("DEBUG: [TweetDetailView] Attachments count: \(tweet.attachments?.count ?? 0)")
             
-            // Stop all videos in the tweet list when entering detail view
-            NotificationCenter.default.post(name: .stopAllVideos, object: nil)
-            print("DEBUG: [TweetDetailView] Posted stopAllVideos notification")
+            // Don't stop videos - let them naturally pause when scrolled off screen
+            // Posting stopAllVideos causes player conflicts when MediaCell and TweetDetailView share the same player
+            print("DEBUG: [TweetDetailView] View appeared - not posting stopAllVideos to avoid player conflicts")
             
             // Log all attachments
             if let attachments = tweet.attachments {
