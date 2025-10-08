@@ -118,7 +118,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Serving cached playlist from \(cachePath)")
             
             do {
-                let cachedData = try Data(contentsOf: URL(fileURLWithPath: cachePath))
+                _ = try Data(contentsOf: URL(fileURLWithPath: cachePath))
                 
             // Redirect to LocalHTTPServer to serve the cached playlist
             guard let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID) else {

@@ -76,6 +76,7 @@ class SharedAssetCache: ObservableObject {
     private var playerCache: [String: AVPlayer] = [:] // mediaID -> AVPlayer
     private var cacheTimestamps: [String: Date] = [:] // mediaID -> timestamp
     private var cachingPlayerDelegates: [String: CachingPlayerItemDelegateImpl] = [:] // mediaID -> Delegate
+    private var cachingPlayerItems: [String: CachingPlayerItem] = [:] // mediaID -> CachingPlayerItem
     private var resourceLoaderDelegates: [String: ResourceLoaderDelegate] = [:] // mediaID -> ResourceLoaderDelegate
     private var loadingTasks: [String: Task<AVAsset, Error>] = [:] // mediaID -> loading task
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
@@ -123,6 +124,8 @@ class SharedAssetCache: ObservableObject {
             assetCache.removeValue(forKey: key)
             playerCache.removeValue(forKey: key)
             cacheTimestamps.removeValue(forKey: key)
+            cachingPlayerItems.removeValue(forKey: key)
+            resourceLoaderDelegates.removeValue(forKey: key)
         }
         
         // Manage cache size
@@ -345,15 +348,19 @@ class SharedAssetCache: ObservableObject {
                 }
                 asset = AVURLAsset(url: customSchemeURL)
                 
-                // Create and store ResourceLoaderDelegate for this asset
+                // Create and store CachingPlayerItem and ResourceLoaderDelegate for this asset
                 let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
-                let delegate = ResourceLoaderDelegate(url: resolvedURL, mediaID: mediaID, saveFilePath: savePath, owner: CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID))
+                let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
+                let delegate = ResourceLoaderDelegate(url: resolvedURL, mediaID: mediaID, saveFilePath: savePath, owner: cachingPlayerItem)
                 (asset as? AVURLAsset)?.resourceLoader.setDelegate(delegate, queue: DispatchQueue.global(qos: .userInitiated))
                 
                 print("DEBUG: [SHARED ASSET CACHE] Created ResourceLoaderDelegate for mediaID: \(mediaID), URL: \(resolvedURL.absoluteString)")
                 
-                // Store the delegate to prevent deallocation
-                await MainActor.run { self.resourceLoaderDelegates[mediaID] = delegate }
+                // Store both the delegate and caching player item to prevent deallocation
+                await MainActor.run { 
+                    self.cachingPlayerItems[mediaID] = cachingPlayerItem
+                    self.resourceLoaderDelegates[mediaID] = delegate 
+                }
             } else {
                 // For non-HLS videos, use regular AVURLAsset
                 asset = AVURLAsset(url: resolvedURL)
@@ -443,6 +450,8 @@ class SharedAssetCache: ObservableObject {
     @MainActor func clearAssetCache(for mediaID: String) {
         assetCache.removeValue(forKey: mediaID)
         cacheTimestamps.removeValue(forKey: mediaID)
+        cachingPlayerItems.removeValue(forKey: mediaID)
+        resourceLoaderDelegates.removeValue(forKey: mediaID)
         print("DEBUG: [SHARED ASSET CACHE] Cleared asset cache for mediaID: \(mediaID)")
     }
     
@@ -678,6 +687,7 @@ class SharedAssetCache: ObservableObject {
         }
         playerCache.removeAll()
         cachingPlayerDelegates.removeAll()
+        cachingPlayerItems.removeAll()
         resourceLoaderDelegates.removeAll()
         
         // Clear asset cache
@@ -825,6 +835,8 @@ class SharedAssetCache: ObservableObject {
                     for key in keysToRemove {
                         self.assetCache.removeValue(forKey: key)
                         self.cacheTimestamps.removeValue(forKey: key)
+                        self.cachingPlayerItems.removeValue(forKey: key)
+                        self.resourceLoaderDelegates.removeValue(forKey: key)
                     }
                 }
             }
@@ -849,6 +861,8 @@ class SharedAssetCache: ObservableObject {
                             }
                             self.playerCache.removeValue(forKey: key)
                             self.cacheTimestamps.removeValue(forKey: key)
+                            self.cachingPlayerItems.removeValue(forKey: key)
+                            self.resourceLoaderDelegates.removeValue(forKey: key)
                         }
                     }
                 }

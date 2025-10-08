@@ -312,7 +312,7 @@ extension TweetCacheManager {
                     }
                     
                     // Check last access time (if available), otherwise fall back to timeCached
-                    let lastAccess = tweetAccessTimes[tweetId] ?? (cdTweet.timeCached as? Date ?? Date.distantPast)
+                    let lastAccess = tweetAccessTimes[tweetId] ?? (cdTweet.timeCached ?? Date.distantPast)
                     
                     if lastAccess < expirationDate {
                         // Tweet hasn't been accessed in 2 weeks - delete it and its media

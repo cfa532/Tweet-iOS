@@ -142,25 +142,28 @@ class DetailVideoManager: NSObject, ObservableObject {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
             queue: .main
-        ) { notification in
-            Task { @MainActor in
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
                 guard let player = self.currentPlayer else { 
                     print("DEBUG: [DETAIL VIDEO MANAGER] No current player when video finished")
                     return 
                 }
-                print("DEBUG: [DETAIL VIDEO MANAGER] Video completion notification received for \(self.currentVideoMid ?? "unknown")")
+                let currentMid = self.currentVideoMid
+                print("DEBUG: [DETAIL VIDEO MANAGER] Video completion notification received for \(currentMid ?? "unknown")")
                 print("DEBUG: [DETAIL VIDEO MANAGER] Notification object: \(notification.object ?? "nil")")
                 print("DEBUG: [DETAIL VIDEO MANAGER] Player current item: \(player.currentItem?.description ?? "nil")")
                 
                 // Reset video to beginning (but don't auto-restart)
                 player.seek(to: .zero) { finished in
                     guard finished else { 
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Seek to zero failed for \(self.currentVideoMid ?? "unknown")")
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Seek to zero failed for \(currentMid ?? "unknown")")
                         return 
                     }
-                    Task { @MainActor in
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Successfully seeked to zero for \(self.currentVideoMid ?? "unknown")")
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Video reset to beginning, ready to replay for \(self.currentVideoMid ?? "unknown")")
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { return }
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Successfully seeked to zero for \(currentMid ?? "unknown")")
+                        print("DEBUG: [DETAIL VIDEO MANAGER] Video reset to beginning, ready to replay for \(currentMid ?? "unknown")")
                         self.isPlaying = false
                     }
                 }
@@ -242,10 +245,12 @@ class DetailVideoManager: NSObject, ObservableObject {
         let currentTime = player.currentTime()
         
         // Force a seek to refresh the video layer
-        player.seek(to: currentTime) { finished in
+        player.seek(to: currentTime) { [weak self] finished in
             if finished && wasPlaying {
                 player.play()
-                self.isPlaying = true
+                Task { @MainActor [weak self] in
+                    self?.isPlaying = true
+                }
             }
         }
     }
