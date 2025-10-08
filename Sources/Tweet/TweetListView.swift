@@ -98,10 +98,15 @@ struct TweetListView<RowView: View>: View {
                         )
                     }
                 }
+                .safeAreaInset(edge: .top) {
+                    Color.clear.frame(height: 0)
+                }
                 .coordinateSpace(name: "scroll")
-                .modifier(ScrollDetectionModifier(onScroll: onScroll))
+                // Scroll detection disabled to prevent content disappearing
+                // .modifier(ScrollDetectionModifier(onScroll: onScroll))
                 .onAppear {
-                    onScroll?(0)
+                    // Scroll callback disabled to prevent content issues
+                    // onScroll?(0)
                 }
                 
                 if showToast {
@@ -433,8 +438,6 @@ struct TweetListContentView<RowView: View>: View {
     
     var body: some View {
         LazyVStack(spacing: 0) {
-            Color.clear.frame(height: 0)
-            
             // Header content
             if let header = header {
                 header()
@@ -465,6 +468,11 @@ struct TweetListContentView<RowView: View>: View {
                 .padding()
             } else {
                 // Show tweets
+                // Small spacer to maintain layout stability
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(height: 1)
+                
                 ForEach(Array(tweets.compactMap { $0 }.enumerated()), id: \.element.mid) { index, tweet in
                     VStack(spacing: 0) {
                         if index > 0 {

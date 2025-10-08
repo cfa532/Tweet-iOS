@@ -1173,11 +1173,11 @@ struct SimpleVideoPlayer: View {
             // Activate audio session for video playback
             AudioSessionManager.shared.activateForVideoPlayback()
             
-            // For MediaCell mode, don't auto-restart if video has finished
-            if mode == .mediaCell && playbackState.hasFinished {
-                NSLog("DEBUG: [VIDEO PLAYBACK] MediaCell mode - video has finished, not auto-restarting for \(mid)")
-                return
-            }
+        // For MediaCell mode, don't auto-restart if video has finished
+        if mode == .mediaCell && playbackState.hasFinished {
+            NSLog("DEBUG: [VIDEO PLAYBACK] MediaCell mode - video has finished, not auto-restarting for \(mid)")
+            return
+        }
             
             // Always ensure video is reset to beginning if it has finished playing
             if playbackState.hasFinished || isVideoAtEnd(player!) {

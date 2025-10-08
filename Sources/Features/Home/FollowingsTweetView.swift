@@ -47,7 +47,7 @@ struct FollowingsTweetView: View {
                 )
             ],
             onScroll: { offset in
-                handleScroll(offset: offset)
+                onScroll?(offset) // Only call parent's onScroll callback
             },
             rowView: { tweet in
                 TweetItemView(
@@ -119,70 +119,6 @@ struct FollowingsTweetView: View {
     @State private var isInertiaScrolling: Bool = false
     
     private func handleScroll(offset: CGFloat) {
-        // Cancel any existing timer
-        scrollEndTimer?.invalidate()
-        
-        // Calculate scroll direction and threshold
-        let scrollDelta = offset - previousScrollOffset
-        let scrollThreshold: CGFloat = 30
-        
-        // Track consecutive small movements to detect inertia scrolling
-        if abs(scrollDelta) > scrollThreshold {
-            consecutiveSmallMovements = 0
-            isInertiaScrolling = false
-        } else {
-            consecutiveSmallMovements += 1
-            // If we have many consecutive small movements, we're likely in inertia scrolling
-            if consecutiveSmallMovements > 3 {
-                isInertiaScrolling = true
-            }
-        }
-        
-        // Only change navigation state if we're not in inertia scrolling
-        if !isInertiaScrolling {
-            // Determine scroll direction
-            let isScrollingDown = scrollDelta < -scrollThreshold
-            let isScrollingUp = scrollDelta > scrollThreshold
-            
-            // Determine if we should show navigation
-            let shouldShowNavigation: Bool
-            
-            if offset >= 0 {
-                // Always show when at the top
-                shouldShowNavigation = true
-            } else if isScrollingDown && isNavigationVisible {
-                // Scrolling down and navigation is visible - hide it
-                shouldShowNavigation = false
-            } else if isScrollingUp && !isNavigationVisible {
-                // Scrolling up and navigation is hidden - show it
-                shouldShowNavigation = true
-            } else {
-                // Keep current state
-                shouldShowNavigation = isNavigationVisible
-            }
-            
-            // Only update if the state actually changed
-            if shouldShowNavigation != isNavigationVisible {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    isNavigationVisible = shouldShowNavigation
-                }
-                NotificationCenter.default.post(
-                    name: .navigationVisibilityChanged,
-                    object: nil,
-                    userInfo: ["isVisible": shouldShowNavigation]
-                )
-                print("[FollowingsTweetView] Navigation visibility changed to: \(shouldShowNavigation)")
-            }
-        }
-        
-        previousScrollOffset = offset
-        
-        // Reset inertia scrolling state after 0.3 seconds of no scroll activity
-        scrollEndTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
-            Task { @MainActor in
-                consecutiveSmallMovements = 0
-                isInertiaScrolling = false
-            }
-        }
+        // Scroll handling disabled to prevent conflicts
     }
 }
