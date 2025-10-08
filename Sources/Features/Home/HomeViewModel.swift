@@ -156,27 +156,37 @@ struct HomeView: View {
     
     // MARK: - Scroll Handling
     @State private var accumulatedDelta: CGFloat = 0
+    @State private var scrollUpAccumulated: CGFloat = 0
     
     private func handleScroll(delta: CGFloat) {
         // Positive delta = scrolling down, negative = scrolling up
-        accumulatedDelta += delta
         
-        let threshold: CGFloat = 50
-        
-        if accumulatedDelta > threshold && isNavigationVisible {
-            // Scrolled down enough - hide header
-            withAnimation(.easeInOut(duration: 0.25)) {
-                isNavigationVisible = false
+        if delta > 5 {
+            // Scrolling down - accumulate
+            accumulatedDelta += delta
+            scrollUpAccumulated = 0 // Reset scroll up counter
+            
+            if accumulatedDelta > 50 && isNavigationVisible {
+                // Scrolled down enough - hide header
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isNavigationVisible = false
+                }
+                onNavigationVisibilityChanged?(false)
+                accumulatedDelta = 0
             }
-            onNavigationVisibilityChanged?(false)
-            accumulatedDelta = 0
-        } else if accumulatedDelta < -threshold && !isNavigationVisible {
-            // Scrolled up enough - show header
-            withAnimation(.easeInOut(duration: 0.25)) {
-                isNavigationVisible = true
+        } else if delta < -5 {
+            // Scrolling up - accumulate a bit before showing
+            scrollUpAccumulated += abs(delta)
+            accumulatedDelta = 0 // Reset scroll down counter
+            
+            if scrollUpAccumulated > 20 && !isNavigationVisible {
+                // Scrolled up a bit - show header
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isNavigationVisible = true
+                }
+                onNavigationVisibilityChanged?(true)
+                scrollUpAccumulated = 0
             }
-            onNavigationVisibilityChanged?(true)
-            accumulatedDelta = 0
         }
     }
 }
