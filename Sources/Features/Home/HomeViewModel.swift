@@ -82,10 +82,6 @@ struct HomeView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .padding(.leading, -4)
-            .onTapGesture(count: 2) {
-                // Double tap to toggle header for testing
-                toggleHeader()
-            }
         }
         .padding(.top, 8) // Small top padding
         .toolbar(.hidden, for: .navigationBar) // Hide the navigation bar (iOS 17+)
@@ -143,15 +139,6 @@ struct HomeView: View {
             onNavigationVisibilityChanged?(true)
             print("DEBUG: [HomeView] View appeared, navigation set to visible")
         }
-    }
-    
-    // MARK: - Header Toggle (for testing)
-    private func toggleHeader() {
-        withAnimation(.easeInOut(duration: 0.3)) {
-            isNavigationVisible.toggle()
-        }
-        onNavigationVisibilityChanged?(isNavigationVisible)
-        print("DEBUG: [HomeView] Header toggled to: \(isNavigationVisible)")
     }
     
     // MARK: - Scroll Handling
