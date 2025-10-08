@@ -569,6 +569,17 @@ struct SimpleVideoPlayer: View {
                         .background(Color.black.opacity(0.3))
                         .cornerRadius(8)
                 }
+            }
+        } else {
+            // No player yet - show subtle loading placeholder to avoid black flicker
+            ZStack {
+                Color.gray.opacity(0.2)
+                
+                if loadingState.isLoading {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.2)
+                }
                 
                 // Error state
                 if loadingState.hasFailed {
@@ -578,10 +589,10 @@ struct SimpleVideoPlayer: View {
                             .foregroundColor(.white)
                         Text("Failed to load video")
                             .foregroundColor(.white)
-                        .font(.caption)
-                    Button(action: {
-                        handleError(strategy: .manualReset)
-                    }) {
+                            .font(.caption)
+                        Button(action: {
+                            handleError(strategy: .manualReset)
+                        }) {
                             HStack {
                                 Image(systemName: "arrow.clockwise")
                                 Text("Retry")
@@ -607,15 +618,6 @@ struct SimpleVideoPlayer: View {
                         }
                 }
             }
-        } else {
-            // Placeholder while loading
-            Rectangle()
-                .fill(Color.gray.opacity(0.3))
-                .overlay(
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.5)
-                )
         }
     }
     
