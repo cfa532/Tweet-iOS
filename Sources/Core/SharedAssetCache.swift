@@ -580,22 +580,7 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Clear cache
-    @MainActor func clearCache() {
-        assetCache.removeAll()
-        playerCache.removeAll()
-        cacheTimestamps.removeAll()
-        cachingPlayerDelegates.removeAll()
-        resourceLoaderDelegates.removeAll()
-        loadingTasks.values.forEach { $0.cancel() }
-        loadingTasks.removeAll()
-        preloadTasks.values.forEach { $0.cancel() }
-        preloadTasks.removeAll()
-        
-        // Save empty cache metadata
-        saveCacheMetadata()
-    }
-    
-    /// Clear all caches (emergency cleanup)
+    /// Clear all caches (manual cleanup, signout, or emergency)
     @MainActor func clearAllCaches() {
         print("DEBUG: [SharedAssetCache] Clearing all caches")
         

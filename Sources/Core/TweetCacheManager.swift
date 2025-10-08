@@ -129,12 +129,12 @@ final class TweetCacheManager: @unchecked Sendable {
                 print("DEBUG: [TweetCacheManager] Manual clear: deleting \(allTweets.count) tweets and their media")
                 
                 for cdTweet in allTweets {
-                    // Delete associated media
+                    // Delete associated media (clears from caches per media ID)
                     if let tweet = try? Tweet.from(cdTweet: cdTweet) {
                         deleteMediaForTweet(tweet)
                     }
                     
-                    // Delete tweet
+                    // Delete tweet from CoreData
                     context.delete(cdTweet)
                 }
                 
@@ -146,7 +146,7 @@ final class TweetCacheManager: @unchecked Sendable {
         tweetAccessTimes.removeAll()
         saveAccessTimes()
         
-        // Clear all caches
+        // Final sweep: clear any remaining caches that might not be tweet-associated
         Task { @MainActor in
             SharedAssetCache.shared.clearAllCaches()
         }

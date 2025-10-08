@@ -412,6 +412,38 @@ struct SimpleVideoPlayer: View {
             handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo)
         }
         
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            // App going to background - mark player as detached
+            NSLog("DEBUG: [VIDEO BACKGROUND] App going to background for \(mid)")
+            isPlayerDetached = true
+            
+            // Pause all players to save battery
+            if let player = player {
+                player.pause()
+                NSLog("DEBUG: [VIDEO BACKGROUND] Paused player for \(mid)")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // App returning to foreground - restore player rendering
+            NSLog("DEBUG: [VIDEO FOREGROUND] App returning to foreground for \(mid)")
+            isPlayerDetached = false
+            
+            // Force player view recreation to fix black screen
+            if let player = player {
+                representableId += 1 // Increment to force VideoPlayer recreation
+                
+                // Give iOS a moment to restore rendering pipeline, then check playback
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    // Only resume if video should be playing based on conditions
+                    if isVisible && currentAutoPlay && mode == .mediaCell {
+                        player.play()
+                        NSLog("DEBUG: [VIDEO FOREGROUND] Resumed playback for \(mid)")
+                    }
+                }
+                
+                NSLog("DEBUG: [VIDEO FOREGROUND] Recreated player view for \(mid)")
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
             // Direct handler for stopAllVideos notification
             NSLog("DEBUG: [SimpleVideoPlayer] Received stopAllVideos notification for \(mid), mode: \(mode)")
@@ -504,9 +536,10 @@ struct SimpleVideoPlayer: View {
     
     // MARK: - Unique ID for view identity
     private var uniqueViewId: String {
-        // Combine URL with timestamp to force recreation every time
-        // This ensures VideoPlayer is recreated when scrolling back to prevent black screens
-        return "\(uniquePlayerURL.absoluteString)_\(viewConfigTimestamp)"
+        // Combine URL with timestamp and representableId to force recreation
+        // Timestamp: scrolling back prevention
+        // RepresentableId: foreground/background transition handling
+        return "\(uniquePlayerURL.absoluteString)_\(viewConfigTimestamp)_\(representableId)"
     }
     
     // MARK: - Video Player View
