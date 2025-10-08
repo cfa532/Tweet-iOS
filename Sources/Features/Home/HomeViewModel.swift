@@ -86,13 +86,13 @@ struct HomeView: View {
                     },
                     onScroll: nil // FollowingsTweetView now handles its own scroll detection
                 )
-                // Remove the .id(refreshKey) that forces recreation
+                .padding(.top, 8) // Add padding to prevent overlap with header
                 .tag(0)
 
                 RecommendedTweetView(onScroll: { offset in
                     handleScroll(offset: offset)
                 })
-                    .tag(1)
+                .tag(1)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .padding(.leading, -4)
