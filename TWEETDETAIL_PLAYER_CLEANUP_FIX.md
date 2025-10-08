@@ -2,33 +2,24 @@
 
 ## Problem
 
-Videos in TweetDetailView start playing but then immediately stop, showing black screen or freezing. This happens because:
+When exiting TweetDetailView, the video player was not being properly stopped and released. This caused:
 
-1. **Video starts playing** when TweetDetailView appears
-2. **Player is immediately stopped and released** by spurious `onDisappear` event
-3. **Black screen or frozen video** as the player is destroyed while still visible
-4. **Poor user experience** requiring multiple attempts to play video
+1. **Video continues playing** in the background even after leaving the detail view
+2. **Memory leaks** as the player instance remained in memory
+3. **Audio bleeding** where video audio continues playing after navigation
+4. **Resource waste** with unnecessary player instances
 
 ## Root Cause
 
-The `onDisappear` handler in `SimpleVideoPlayer.swift` was releasing the player for tweetDetail mode:
+The `onDisappear` handler in `SimpleVideoPlayer.swift` had different logic for different display modes:
 
-```swift
-// OLD CODE - BUG:
-else if mode == .tweetDetail {
-    player?.pause()
-    player = nil  // ← Released player!
-}
-```
+- **MediaCell**: Player was paused and released ✅
+- **MediaBrowser** (fullscreen): Player was kept alive (intentionally, as it shares with MediaCell) ✅
+- **TweetDetail**: Player was **NOT** released ❌
 
-However, **TweetDetailView uses a TabView** (line 513 in TweetDetailView.swift) for displaying media, and TabView triggers **spurious `onDisappear` events during layout**, even when the view is still visible!
+The issue was in the comment: *"For other modes, don't release - VideoManager and stopAllVideos handle pausing"*
 
-This caused:
-1. Video player created and starts playing
-2. TabView triggers `onDisappear` during layout
-3. Player stopped and released by onDisappear handler
-4. Black screen because player is nil
-5. User must retry multiple times until timing works out
+However, **TweetDetailView uses a separate player instance** that is NOT shared with MediaCell, so it should be properly stopped and released when exiting, just like MediaCell.
 
 ## Player Instance Architecture
 
@@ -53,46 +44,36 @@ TweetDetail
 
 ## Solution
 
-Updated the `onDisappear` handler to **NOT release** the player for TweetDetail mode:
+Updated the `onDisappear` handler to properly handle TweetDetail mode:
 
 ```swift
-// For MediaCell mode, release player to force fresh creation on next appearance
+// For MediaCell and TweetDetail modes, release player to force fresh creation on next appearance
+// This avoids AVPlayerLayer corruption from reusing the same AVPlayer instance
+// TweetDetail uses a separate player instance that should be stopped when exiting
 if mode == .mediaCell {
     player?.pause()
     player = nil
-    NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - released player for \(mid)")
-}
-// For TweetDetail mode: DON'T release player on disappear
-// TabView in TweetDetailView triggers spurious onDisappear events during layout
-// The player will be properly cleaned up when the actual TweetDetailView is dismissed
-else if mode == .tweetDetail {
-    player?.pause()  // Just pause, don't release
-    NSLog("DEBUG: [VIDEO DISAPPEAR] TweetDetail - paused player (keeping alive for TabView)")
+    NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - released player for \(mid), will create fresh on next appearance")
+} else if mode == .tweetDetail {
+    player?.pause()
+    player = nil
+    NSLog("DEBUG: [VIDEO DISAPPEAR] TweetDetail - stopped and released player for \(mid)")
 }
 
 // For mediaBrowser mode, don't release - it shares the player with MediaCell
+// VideoManager and stopAllVideos handle pausing for shared players
 ```
-
-### Key Insight
-
-The solution is **counter-intuitive**: instead of releasing the player more aggressively, we need to **keep it alive** to work around TabView's spurious lifecycle events!
 
 ## How It Works
 
-### TabView Spurious Events
-1. User opens TweetDetailView with TabView
-2. TabView lays out media pages
-3. **SwiftUI triggers `onDisappear` during layout** (even though view is visible!)
-4. Our handler **only pauses** the player, doesn't release it
-5. Player stays alive and continues working
-6. Video plays correctly ✅
-
-### Actual View Dismissal
+### Exiting TweetDetailView
 1. User navigates back from TweetDetailView
-2. Entire TweetDetailView is dismissed
-3. SwiftUI automatically cleans up all child views
-4. SimpleVideoPlayer's `deinit` is eventually called
-5. Resources are freed properly
+2. `onDisappear` is triggered
+3. Mode is detected as `.tweetDetail`
+4. Player is paused: `player?.pause()`
+5. Player is released: `player = nil`
+6. Video stops immediately
+7. Resources are freed
 
 ### Exiting MediaCell
 1. Works as before
@@ -182,6 +163,4 @@ This fix complements:
 
 ## Conclusion
 
-This fix resolves the **TweetDetailView video stopping/black screen issue** by working around SwiftUI's TabView spurious lifecycle events. Instead of aggressively releasing the player, we keep it alive during spurious `onDisappear` calls, allowing it to work properly. Final cleanup happens automatically when the TweetDetailView itself is dismissed.
-
-**Key Takeaway**: SwiftUI's TabView triggers `onDisappear` events during layout, not just when views actually disappear. When using TabView, be careful about aggressive resource cleanup in `onDisappear` - it may fire when you don't expect it!
+This fix ensures that **TweetDetailView properly cleans up its video player when exiting**, preventing audio bleeding, memory leaks, and resource waste. The player lifecycle is now correctly managed for all three display modes: MediaCell, MediaBrowser, and TweetDetail.

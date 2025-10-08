@@ -300,21 +300,22 @@ struct SimpleVideoPlayer: View {
                 )
             }
             
-            // For MediaCell and TweetDetail modes, release player to force fresh creation on next appearance
-            // This avoids AVPlayerLayer corruption from reusing the same AVPlayer instance
-            // TweetDetail uses a separate player instance that should be stopped when exiting
+            // Pause player when view disappears, but keep it alive in VideoStateCache for sharing
+            // MediaCell and MediaBrowser share the same player instance via VideoStateCache
             if mode == .mediaCell {
                 player?.pause()
-                player = nil
-                NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - released player for \(mid), will create fresh on next appearance")
+                NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - paused player for \(mid), kept alive in cache for sharing with fullscreen")
+            } else if mode == .mediaBrowser {
+                // Exiting fullscreen - pause but keep player alive for MediaCell to reuse
+                player?.pause()
+                NSLog("DEBUG: [VIDEO DISAPPEAR] MediaBrowser - paused player for \(mid), kept alive in cache for MediaCell")
             } else if mode == .tweetDetail {
+                // TweetDetail releases its player since it doesn't share with MediaCell
                 player?.pause()
                 player = nil
+                VideoStateCache.shared.clearCache(for: mid)
                 NSLog("DEBUG: [VIDEO DISAPPEAR] TweetDetail - stopped and released player for \(mid)")
             }
-            
-            // For mediaBrowser mode, don't release - it shares the player with MediaCell
-            // VideoManager and stopAllVideos handle pausing for shared players
         }
         .onChange(of: mode) { oldMode, newMode in
             // When mode changes, apply appropriate mute state
@@ -728,42 +729,24 @@ struct SimpleVideoPlayer: View {
         NSLog("DEBUG: [VIDEO SETUP] isVisible: \(isVisible), shouldLoadVideo: \(shouldLoadVideo), mode: \(mode)")
         NSLog("DEBUG: [VIDEO SETUP] URL: \(url)")
         
-        // FIRST: Check SharedAssetCache for existing player instance
-        // Use playerCacheKey (includes mode) to prevent MediaCell/TweetDetailView sharing
-        NSLog("DEBUG: [VIDEO SETUP] Looking up cache with key: \(playerCacheKey)")
-        
-        // For MediaCell mode: DON'T reuse cached player (causes AVPlayerLayer corruption)
-        // Create fresh player each time; disk cache makes it fast
-        if mode == .mediaCell {
-            NSLog("DEBUG: [VIDEO SETUP] MediaCell mode - will create fresh player (disk cache makes it fast)")
-            // Skip player cache, create fresh player below
-        } else {
-            // For other modes: reuse cached AVPlayer (no layer corruption issues in fullscreen)
-            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: playerCacheKey) {
-                NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING cached player for \(mid)")
-                
-                // Apply proper mute state based on mode BEFORE configuring
-                // This ensures the player starts with the correct audio state
-                if mode == .mediaCell {
-                    cachedPlayer.isMuted = MuteState.shared.isMuted
-                    NSLog("DEBUG: [VIDEO SETUP] Applied global mute state (\(MuteState.shared.isMuted)) to cached player for MediaCell")
-                } else {
-                    cachedPlayer.isMuted = false
-                    NSLog("DEBUG: [VIDEO SETUP] Unmuted cached player for fullscreen/detail mode")
-                }
-                
-                // Update state FIRST before configuring
-                self.player = cachedPlayer
-                self.loadingState = .loaded
-                self.playbackState = .notStarted
-                NSLog("DEBUG: [VIDEO SETUP] State updated, about to call configurePlayer for \(mid)")
-                
-                // Then configure
-                configurePlayer(cachedPlayer)
-                NSLog("DEBUG: [VIDEO SETUP] Returned from configurePlayer for \(mid)")
-                return
+        // FIRST: Check VideoStateCache for shared player (all modes share ONE player per mid)
+        NSLog("DEBUG: [VIDEO SETUP] Checking VideoStateCache for shared player: \(mid)")
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            NSLog("DEBUG: [VIDEO CACHE] ✅ Found shared player for \(mid) in \(mode) mode")
+            
+            // Apply mute state based on current mode
+            if mode == .mediaCell {
+                cachedState.player.isMuted = MuteState.shared.isMuted
+                NSLog("DEBUG: [VIDEO CACHE] Applied global mute state to shared player for MediaCell")
+            } else if mode == .mediaBrowser {
+                cachedState.player.isMuted = false
+                NSLog("DEBUG: [VIDEO CACHE] Unmuted shared player for fullscreen")
             }
+            
+            restoreFromCache(cachedState)
+            return
         }
+        NSLog("DEBUG: [VIDEO SETUP] No shared player found in VideoStateCache")
         
         // SECOND: Check if we have cached content for this tweet
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: mid)
@@ -829,31 +812,7 @@ struct SimpleVideoPlayer: View {
             loadingState = .idle
         }
         
-        // Check if we have a cached player first - prioritize for fullscreen modes
-        NSLog("DEBUG: [VIDEO SETUP] Checking VideoStateCache for \(mid)")
-        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
-            NSLog("DEBUG: [VIDEO CACHE] Found cached player for \(mid) in \(mode) mode")
-            restoreFromCache(cachedState)
-            return
-        }
-        NSLog("DEBUG: [VIDEO SETUP] No VideoStateCache found for \(mid)")
-        
-        // For fullscreen modes, if no cached state and no player, try to restore from cache again
-        // This handles cases where the cache was cleared but we still need the video
-        if mode == .mediaBrowser && player == nil && !loadingState.isLoading {
-            NSLog("DEBUG: [VIDEO CACHE] Fullscreen mode with no player, attempting to restore cached state for \(mid)")
-            restoreCachedVideoState()
-            
-            // If restoration found a player, we're done
-            if player != nil {
-                NSLog("DEBUG: [VIDEO CACHE] Successfully restored player from cache for \(mid), exiting setup")
-                return
-            }
-            // Otherwise, continue to create new player
-            NSLog("DEBUG: [VIDEO CACHE] No cached player found, will create new player for \(mid)")
-        }
-        
-        // Otherwise, create a new player with performance considerations
+        // No shared player found, create a new one
         NSLog("DEBUG: [VIDEO SETUP] Creating new player for \(mid) in mode \(mode)")
         Task.detached(priority: .userInitiated) {
             NSLog("DEBUG: [VIDEO SETUP] Async Task started for \(mid)")
@@ -1027,14 +986,18 @@ struct SimpleVideoPlayer: View {
         self.viewConfigTimestamp = Date().timeIntervalSince1970 // Force unique view ID
         NSLog("DEBUG: [VIDEO CONFIGURE] Incremented representableId to \(representableId), timestamp: \(viewConfigTimestamp) for \(mid)")
         
-        // Cache the player for non-MediaCell modes only
-        // MediaCell creates fresh AVPlayer from cached CachingPlayerItem each time
-        if mode != .mediaCell {
-            SharedAssetCache.shared.cachePlayer(player, for: playerCacheKey)
-            NSLog("DEBUG: [VIDEO CONFIGURE] Cached AVPlayer with key: \(playerCacheKey) (mode: \(mode))")
-        } else {
-            NSLog("DEBUG: [VIDEO CONFIGURE] MediaCell mode - not caching AVPlayer (will create fresh from CachingPlayerItem each time)")
-        }
+        // Cache the player in VideoStateCache for sharing across ALL modes
+        // This allows MediaCell and MediaBrowser to share the same player
+        let currentTime = player.currentTime()
+        let wasPlaying = player.rate > 0
+        VideoStateCache.shared.cacheVideoState(
+            for: mid,
+            player: player,
+            time: currentTime,
+            wasPlaying: wasPlaying,
+            originalMuteState: player.isMuted
+        )
+        NSLog("DEBUG: [VIDEO CONFIGURE] Cached player in VideoStateCache for \(mid) (shared across all modes)")
         
         NSLog("DEBUG: [VIDEO CONFIGURE] About to call checkPlaybackConditions - autoPlay: \(currentAutoPlay), isVisible: \(isVisible)")
         
