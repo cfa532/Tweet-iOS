@@ -429,9 +429,12 @@ class SharedAssetCache: ObservableObject {
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaID: \(mediaID), mediaType: \(mediaType?.rawValue ?? "nil")")
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for tweetId: \(tweetId ?? "nil")")
         
+        // Use full URL (including query params) as cache key to support duo videos
+        let cacheKey = url.absoluteString
+        
         // Try to get cached player first
-        if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: mediaID) }) {
-            print("DEBUG: [SHARED ASSET CACHE] Returning cached player for mediaID: \(mediaID)")
+        if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
+            print("DEBUG: [SHARED ASSET CACHE] Returning cached player for URL: \(cacheKey)")
             return cachedPlayer
         }
         
@@ -458,8 +461,9 @@ class SharedAssetCache: ObservableObject {
             let playerItem = AVPlayerItem(asset: asset)
             let player = AVPlayer(playerItem: playerItem)
             
-            // Cache the player for future use
-            await MainActor.run { cachePlayer(player, for: mediaID) }
+            // Cache the player using full URL as key (to support duo videos with different query params)
+            let cacheKey = url.absoluteString
+            await MainActor.run { cachePlayer(player, for: cacheKey) }
             
             return player
         }
@@ -502,12 +506,12 @@ class SharedAssetCache: ObservableObject {
         // Create player with CachingPlayerItem
         let player = AVPlayer(playerItem: cachingPlayerItem)
         
-        // Cache the player for future use
-        await MainActor.run { cachePlayer(player, for: mediaID) }
+        // Cache the player using full URL as key (to support duo videos with different query params)
+        await MainActor.run { cachePlayer(player, for: cacheKey) }
         
         // DON'T auto-play here - let the view decide when to play
         // The player is ready, the view will call play() when appropriate
-        NSLog("DEBUG: [SHARED ASSET CACHE] Player created and cached for mediaID: \(mediaID), ready for playback")
+        NSLog("DEBUG: [SHARED ASSET CACHE] Player created and cached for URL: \(cacheKey), ready for playback")
         
         return player
     }
