@@ -259,20 +259,10 @@ struct SimpleVideoPlayer: View {
                 }
             }
             
-            // For MediaCell mode, always create fresh player to avoid AVPlayerLayer corruption
-            if mode == .mediaCell && player == nil && shouldLoadVideo {
-                NSLog("DEBUG: [VIDEO APPEAR] MediaCell appearing, setting up fresh player for \(mid)")
+            // Set up player if needed
+            if player == nil && shouldLoadVideo && isVisible {
+                NSLog("DEBUG: [VIDEO APPEAR] Setting up player for \(mid)")
                 setupPlayer()
-            } else if mode != .mediaCell && player == nil && shouldLoadVideo && isVisible {
-                // Non-MediaCell modes
-                print("DEBUG: [VIDEO APPEAR] Calling setupPlayer for \(mid)")
-                setupPlayer()
-            } else if player != nil {
-                // Player exists - update timestamp to force view recreation
-                NSLog("DEBUG: [VIDEO APPEAR] View reappearing with existing player for \(mid)")
-                player?.isMuted = mode == .mediaCell ? MuteState.shared.isMuted : false
-                self.viewConfigTimestamp = Date().timeIntervalSince1970
-                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             }
         }
         .onDisappear {
@@ -305,15 +295,15 @@ struct SimpleVideoPlayer: View {
                 )
             }
             
-            // For MediaCell mode, release player explicitly (since we don't cache it)
+            // For MediaCell mode, release player to force fresh creation on next appearance
+            // This avoids AVPlayerLayer corruption from reusing the same AVPlayer instance
             if mode == .mediaCell {
                 player?.pause()
                 player = nil
-                NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - released player for \(mid)")
+                NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - released player for \(mid), will create fresh on next appearance")
             }
             
-            // Don't pause on disappear for other modes - VideoManager and stopAllVideos notification handle pausing
-            // This prevents pausing shared players when navigating to fullscreen/detail views
+            // For other modes, don't release - VideoManager and stopAllVideos handle pausing
         }
         .onChange(of: isMuted) { _, newMuteState in
             // For full screen modes, always keep unmuted regardless of the isMuted parameter
@@ -659,20 +649,20 @@ struct SimpleVideoPlayer: View {
         NSLog("DEBUG: [VIDEO SETUP] isVisible: \(isVisible), shouldLoadVideo: \(shouldLoadVideo), mode: \(mode)")
         NSLog("DEBUG: [VIDEO SETUP] URL: \(url)")
         
-        // FIRST: For MediaCell mode, check if we have cached asset (not player) to avoid AVPlayerLayer corruption
-        // For other modes, check for cached player
+        // FIRST: Check SharedAssetCache for existing player instance
+        // Use uniquePlayerURL (with query params) as cache key to support duo videos
+        let cacheKey = uniquePlayerURL.absoluteString
+        NSLog("DEBUG: [VIDEO SETUP] Looking up cache with key: \(cacheKey)")
+        
+        // For MediaCell mode: DON'T reuse cached player (causes AVPlayerLayer corruption)
+        // Create fresh player each time; disk cache makes it fast
         if mode == .mediaCell {
-            NSLog("DEBUG: [VIDEO SETUP] MediaCell mode - will create fresh player from asset to avoid layer corruption")
-            // Skip player cache, will create fresh player from asset below
+            NSLog("DEBUG: [VIDEO SETUP] MediaCell mode - will create fresh player (disk cache makes it fast)")
+            // Skip player cache, create fresh player below
         } else {
-            // Non-MediaCell modes: use cached player for efficiency
-            let cacheKey = uniquePlayerURL.absoluteString
-            NSLog("DEBUG: [VIDEO SETUP] Looking up cache with key: \(cacheKey)")
-            
+            // For other modes: reuse cached AVPlayer (no layer corruption issues in fullscreen)
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: cacheKey) {
-                NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING shared player for \(mid)")
-                NSLog("DEBUG: [VIDEO SETUP] Cached player rate: \(cachedPlayer.rate), isMuted: \(cachedPlayer.isMuted)")
-                
+                NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING cached player for \(mid)")
                 cachedPlayer.isMuted = false
                 
                 // Update state FIRST before configuring
@@ -915,13 +905,13 @@ struct SimpleVideoPlayer: View {
         NSLog("DEBUG: [VIDEO CONFIGURE] Incremented representableId to \(representableId), timestamp: \(viewConfigTimestamp) for \(mid)")
         
         // Cache the player for non-MediaCell modes only
-        // MediaCell creates fresh players each time to avoid AVPlayerLayer corruption
+        // MediaCell creates fresh AVPlayer from cached CachingPlayerItem each time
         if mode != .mediaCell {
             let cacheKey = uniquePlayerURL.absoluteString
             SharedAssetCache.shared.cachePlayer(player, for: cacheKey)
-            NSLog("DEBUG: [VIDEO CONFIGURE] Cached player with key: \(cacheKey) (mode: \(mode))")
+            NSLog("DEBUG: [VIDEO CONFIGURE] Cached AVPlayer with key: \(cacheKey) (mode: \(mode))")
         } else {
-            NSLog("DEBUG: [VIDEO CONFIGURE] MediaCell mode - not caching player (fresh instance each time)")
+            NSLog("DEBUG: [VIDEO CONFIGURE] MediaCell mode - not caching AVPlayer (will create fresh from CachingPlayerItem each time)")
         }
         
         NSLog("DEBUG: [VIDEO CONFIGURE] About to call checkPlaybackConditions - autoPlay: \(currentAutoPlay), isVisible: \(isVisible)")
