@@ -39,7 +39,7 @@ struct HomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header section - simple VStack approach
+            // Header section
             VStack(spacing: 0) {
                 AppHeaderView()
                     .padding(.vertical, 8)
@@ -55,6 +55,9 @@ struct HomeView: View {
                 .padding(.top, 8)
                 .padding(.leading, -4)
             }
+            .frame(height: isNavigationVisible ? nil : 0)
+            .opacity(isNavigationVisible ? 1 : 0)
+            .clipped()
 
             // Tab Content
             TabView(selection: $selectedTab) {
@@ -66,19 +69,23 @@ struct HomeView: View {
                     onTweetTap: { tweet in
                         navigationPath.append(tweet)
                     },
-                    onScroll: { offset in
-                        handleScroll(offset: offset)
+                    onScroll: { delta in
+                        handleScroll(delta: delta)
                     }
                 )
                 .tag(0)
 
-                RecommendedTweetView(onScroll: { offset in
-                    handleScroll(offset: offset)
+                RecommendedTweetView(onScroll: { delta in
+                    handleScroll(delta: delta)
                 })
                 .tag(1)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .padding(.leading, -4)
+            .onTapGesture(count: 2) {
+                // Double tap to toggle header for testing
+                toggleHeader()
+            }
         }
         .padding(.top, 8) // Small top padding
         .toolbar(.hidden, for: .navigationBar) // Hide the navigation bar (iOS 17+)
@@ -138,10 +145,39 @@ struct HomeView: View {
         }
     }
     
-    // MARK: - Scroll Handling (disabled for now)
-    private func handleScroll(offset: CGFloat) {
-        // Scroll handling disabled - header stays visible
-        // This prevents any accumulation or positioning issues
+    // MARK: - Header Toggle (for testing)
+    private func toggleHeader() {
+        withAnimation(.easeInOut(duration: 0.3)) {
+            isNavigationVisible.toggle()
+        }
+        onNavigationVisibilityChanged?(isNavigationVisible)
+        print("DEBUG: [HomeView] Header toggled to: \(isNavigationVisible)")
+    }
+    
+    // MARK: - Scroll Handling
+    @State private var accumulatedDelta: CGFloat = 0
+    
+    private func handleScroll(delta: CGFloat) {
+        // Positive delta = scrolling down, negative = scrolling up
+        accumulatedDelta += delta
+        
+        let threshold: CGFloat = 50
+        
+        if accumulatedDelta > threshold && isNavigationVisible {
+            // Scrolled down enough - hide header
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isNavigationVisible = false
+            }
+            onNavigationVisibilityChanged?(false)
+            accumulatedDelta = 0
+        } else if accumulatedDelta < -threshold && !isNavigationVisible {
+            // Scrolled up enough - show header
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isNavigationVisible = true
+            }
+            onNavigationVisibilityChanged?(true)
+            accumulatedDelta = 0
+        }
     }
 }
 

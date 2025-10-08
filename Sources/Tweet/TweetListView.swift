@@ -95,19 +95,21 @@ struct TweetListView<RowView: View>: View {
                             isLoading: isLoading,
                             initialLoadComplete: initialLoadComplete,
                             loadMoreTweets: { loadMoreTweets() }
-                        )
-                    }
-                }
-                .safeAreaInset(edge: .top) {
-                    Color.clear.frame(height: 0)
-                }
-                .coordinateSpace(name: "scroll")
-                // Scroll detection disabled to prevent content disappearing
-                // .modifier(ScrollDetectionModifier(onScroll: onScroll))
-                .onAppear {
-                    // Scroll callback disabled to prevent content issues
-                    // onScroll?(0)
-                }
+                       )
+                   }
+               }
+               .safeAreaInset(edge: .top) {
+                   Color.clear.frame(height: 0)
+               }
+               .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                   geometry.contentOffset.y
+               } action: { oldValue, newValue in
+                   let delta = newValue - oldValue
+                   onScroll?(delta)
+               }
+               .onAppear {
+                   onScroll?(0)
+               }
                 
                 if showToast {
                     VStack {

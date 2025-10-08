@@ -46,8 +46,8 @@ struct FollowingsTweetView: View {
                     action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
                 )
             ],
-            onScroll: { offset in
-                onScroll?(offset) // Only call parent's onScroll callback
+            onScroll: { delta in
+                onScroll?(delta) // Pass delta directly to parent
             },
             rowView: { tweet in
                 TweetItemView(
@@ -113,12 +113,18 @@ struct FollowingsTweetView: View {
         }
     }
     
-    // MARK: - Scroll Handling (same algorithm as ProfileView)
+    // MARK: - Scroll Handling
     @State private var scrollEndTimer: Timer?
-    @State private var consecutiveSmallMovements: Int = 0
-    @State private var isInertiaScrolling: Bool = false
+    @State private var lastScrollOffset: CGFloat = 0
     
     private func handleScroll(offset: CGFloat) {
-        // Scroll handling disabled to prevent conflicts
+        // Calculate scroll delta
+        let delta = offset - lastScrollOffset
+        lastScrollOffset = offset
+        
+        // Pass the delta to parent (positive = scrolling up, negative = scrolling down)
+        onScroll?(delta)
+        
+        print("DEBUG: [FollowingsTweetView] Scroll offset: \(offset), delta: \(delta)")
     }
 }
