@@ -56,15 +56,28 @@ Grid-level coordination for video preloading across multiple videos.
 - Coordination with individual cell preloading
 
 #### 4. **SimpleVideoPlayer** (`Sources/Features/MediaViews/SimpleVideoPlayer.swift`)
-The video player component that benefits from preloaded assets.
+The unified video player component used across all contexts (MediaCell, MediaBrowser, TweetDetail).
 
 **Key Features:**
-- Integration with SharedAssetCache
+- **Mode-based operation**: .mediaCell, .mediaBrowser, .tweetDetail
+- **VideoStateCache integration**: Player sharing between MediaCell and MediaBrowser
+- **Automatic mute state management**: Mode-specific audio behavior
+- **Seamless transitions**: Zero-delay fullscreen via player reuse
+- Integration with SharedAssetCache for asset caching
 - Black screen fix after background
 - ReadyForDisplay monitoring
 - Player layer refresh mechanisms
 
-#### 5. **CachingPlayerItem** (`Sources/CachingPlayerItem/CachingPlayerItem.swift`)
+#### 5. **VideoStateCache** (`Sources/Features/MediaViews/SimpleVideoPlayer.swift`)
+Player sharing system that enables seamless MediaCell ↔ MediaBrowser transitions.
+
+**Key Features:**
+- **One player per video**: Shared between MediaCell and MediaBrowser
+- **State preservation**: Playback position, mute state, playing status
+- **Zero-delay transitions**: Same player instance, just layer switch
+- **Independent TweetDetail**: Separate players for detail views
+
+#### 6. **CachingPlayerItem** (`Sources/CachingPlayerItem/CachingPlayerItem.swift`)
 Revolutionary custom `AVPlayerItem` subclass that provides on-demand caching with immediate playback.
 
 **Key Features:**
@@ -76,7 +89,7 @@ Revolutionary custom `AVPlayerItem` subclass that provides on-demand caching wit
 - **HLS support**: Handles master playlists and sub-playlists intelligently
 - **Background segment download**: Non-blocking segment preloading
 
-#### 6. **ResourceLoaderDelegate** (`Sources/CachingPlayerItem/ResourceLoaderDelegate.swift`)
+#### 7. **ResourceLoaderDelegate** (`Sources/CachingPlayerItem/ResourceLoaderDelegate.swift`)
 Custom `AVAssetResourceLoaderDelegate` that handles HLS content loading and caching.
 
 **Key Features:**
@@ -86,7 +99,7 @@ Custom `AVAssetResourceLoaderDelegate` that handles HLS content loading and cach
 - **LocalHTTPServer integration**: Serves cached content through local HTTP server
 - **Background downloading**: Downloads segments while current ones play
 
-#### 7. **VideoConversionService** (`Sources/Core/VideoConversionService.swift`)
+#### 8. **VideoConversionService** (`Sources/Core/VideoConversionService.swift`)
 Advanced video conversion service for HLS streaming with background processing.
 
 **Key Features:**
@@ -107,16 +120,18 @@ User scrolls to video → VideoLoadingManager approves → SimpleVideoPlayer req
 → HLS playlist downloaded and modified → Segments preloaded (next 3 only) → Video plays immediately
 ```
 
-### 2. Fullscreen Transition
+### 2. Fullscreen Transition (Player Sharing)
 ```
-User taps video → MediaBrowserView opens → CachingVideoPlayer reuses existing player instance
-→ No delay in playback → Video continues seamlessly → Auto-restart on completion
+User taps video → MediaBrowserView opens → SimpleVideoPlayer (mode: .mediaBrowser)
+→ VideoStateCache returns SAME player from MediaCell → Unmutes player → Zero delay playback
+→ Video continues from exact position → Seamless transition
 ```
 
-### 3. Detail View Playback
+### 3. Detail View Playback (Independent Player)
 ```
-User opens tweet detail → DetailVideoPlayerView creates independent player → SharedAssetCache.getAsset()
-→ New AVPlayer instance from cached asset → Immediate playback → Auto-restart on completion
+User opens tweet detail → SimpleVideoPlayer (mode: .tweetDetail) → Creates independent player
+→ SharedAssetCache.getOrCreatePlayer() → New AVPlayer from cached asset → Immediate playback
+→ Cleared on exit to avoid interference with MediaCell
 ```
 
 ## Implementation Details
