@@ -81,6 +81,10 @@ class SharedAssetCache: ObservableObject {
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
     
+    // MARK: - Disk Cache Status Cache (to avoid repeated disk I/O)
+    private var diskCacheStatus: [String: (exists: Bool, timestamp: Date)] = [:] // mediaID -> (cache exists, check timestamp)
+    private let diskCacheStatusTTL: TimeInterval = 60 // Cache disk status for 60 seconds
+    
     // MARK: - Configuration
     private let maxCacheSize = 30 // Maximum number of cached assets and players (reduced for memory)
     private let maxPlayerCacheSize = 25 // Maximum cached players (app-level memory manager ensures we stay under 2GB)
@@ -187,10 +191,23 @@ class SharedAssetCache: ObservableObject {
         return false
     }
     
-    /// Check if mediaID has disk cache available
+    /// Check if mediaID has disk cache available (with in-memory caching to avoid repeated disk I/O)
     private func hasDiskCache(for mediaID: String) -> Bool {
+        // Check in-memory cache first
+        if let cachedStatus = diskCacheStatus[mediaID] {
+            let age = Date().timeIntervalSince(cachedStatus.timestamp)
+            if age < diskCacheStatusTTL {
+                // Cache is still valid
+                return cachedStatus.exists
+            }
+            // Cache expired, will recheck
+        }
+        
+        // Perform disk check
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+        
+        var diskCacheExists = false
         
         // Check if cache directory exists and has files
         if FileManager.default.fileExists(atPath: mediaCacheDir.path) {
@@ -202,13 +219,22 @@ class SharedAssetCache: ObservableObject {
                 }
                 if hasVideoFiles {
                     print("DEBUG: [SharedAssetCache] Found disk cache for mediaID: \(mediaID)")
-                    return true
+                    diskCacheExists = true
                 }
             } catch {
                 print("DEBUG: [SharedAssetCache] Error checking disk cache for \(mediaID): \(error)")
             }
         }
-        return false
+        
+        // Update in-memory cache
+        diskCacheStatus[mediaID] = (exists: diskCacheExists, timestamp: Date())
+        
+        return diskCacheExists
+    }
+    
+    /// Invalidate disk cache status for a mediaID (call when cache is created or deleted)
+    private func invalidateDiskCacheStatus(for mediaID: String) {
+        diskCacheStatus.removeValue(forKey: mediaID)
     }
     
     /// Cancel all loading tasks for a tweet only if no cache is available
@@ -477,12 +503,19 @@ class SharedAssetCache: ObservableObject {
         
         NSLog("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for HLS video: \(url.absoluteString), mediaID: \(mediaID)")
         
-        // Always create CachingPlayerItem - no cache checking, will load on demand
-        NSLog("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for on-demand loading: \(mediaID)")
+        // Check if we have cached content first to avoid network requests
+        let cachedResolvedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url)
         
-        // Resolve the HLS URL to get the actual playlist URL (master.m3u8 or playlist.m3u8)
-        let resolvedURL = await resolveHLSURL(url)
-        print("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL for on-demand loading: \(resolvedURL.absoluteString)")
+        // Resolve the HLS URL (use cached info if available, otherwise make network requests)
+        let resolvedURL: URL
+        if let cachedURL = cachedResolvedURL {
+            NSLog("DEBUG: [SHARED ASSET CACHE] Using cached HLS URL (no network request needed): \(cachedURL.absoluteString)")
+            resolvedURL = cachedURL
+        } else {
+            NSLog("DEBUG: [SHARED ASSET CACHE] No cached playlist found, resolving HLS URL from network")
+            resolvedURL = await resolveHLSURL(url)
+            NSLog("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL from network: \(resolvedURL.absoluteString)")
+        }
         
         // Create a unique save path for the HLS playlist
         let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
@@ -507,7 +540,11 @@ class SharedAssetCache: ObservableObject {
         let player = AVPlayer(playerItem: cachingPlayerItem)
         
         // Cache the player using full URL as key (to support duo videos with different query params)
-        await MainActor.run { cachePlayer(player, for: cacheKey) }
+        await MainActor.run { 
+            cachePlayer(player, for: cacheKey)
+            // Invalidate disk cache status since we're creating new cache content
+            invalidateDiskCacheStatus(for: mediaID)
+        }
         
         // DON'T auto-play here - let the view decide when to play
         // The player is ready, the view will call play() when appropriate
@@ -516,6 +553,57 @@ class SharedAssetCache: ObservableObject {
         return player
     }
     
+    
+    /// Check if we have cached HLS playlist locally (to avoid network requests for cached videos)
+    private func checkCachedHLSPlaylist(for mediaID: String, baseURL: URL) async -> URL? {
+        // Get the cache directory for this media
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+        
+        // Check if cache directory exists
+        guard FileManager.default.fileExists(atPath: mediaCacheDir.path) else {
+            NSLog("DEBUG: [SHARED ASSET CACHE] No cache directory found for mediaID: \(mediaID)")
+            return nil
+        }
+        
+        // Look for cached playlist files in order of preference
+        // The cache stores playlists with their original names (master.m3u8, _master.m3u8, playlist.m3u8)
+        let possiblePlaylistNames = ["_master.m3u8", "master.m3u8", "_playlist.m3u8", "playlist.m3u8"]
+        
+        for playlistName in possiblePlaylistNames {
+            let playlistPath = mediaCacheDir.appendingPathComponent(playlistName)
+            
+            if FileManager.default.fileExists(atPath: playlistPath.path) {
+                // Validate that the cached playlist is not empty and contains valid content
+                do {
+                    let data = try Data(contentsOf: playlistPath)
+                    let playlistString = String(data: data, encoding: .utf8) ?? ""
+                    
+                    // Check if playlist contains valid HLS content (segment references or sub-playlist references)
+                    let hasValidContent = playlistString.contains("#EXTM3U") && 
+                                         (playlistString.contains(".ts") || playlistString.contains(".m3u8"))
+                    
+                    if hasValidContent {
+                        // Reconstruct the URL that this playlist represents
+                        // If it's _master.m3u8, the original was master.m3u8
+                        let originalFilename = playlistName.replacingOccurrences(of: "_", with: "")
+                        let reconstructedURL = baseURL.appendingPathComponent(originalFilename)
+                        
+                        NSLog("DEBUG: [SHARED ASSET CACHE] Found valid cached playlist at: \(playlistPath.path)")
+                        NSLog("DEBUG: [SHARED ASSET CACHE] Reconstructed URL: \(reconstructedURL.absoluteString)")
+                        return reconstructedURL
+                    } else {
+                        NSLog("DEBUG: [SHARED ASSET CACHE] Cached playlist at \(playlistPath.path) is invalid or empty")
+                    }
+                } catch {
+                    NSLog("DEBUG: [SHARED ASSET CACHE] Error reading cached playlist at \(playlistPath.path): \(error)")
+                }
+            }
+        }
+        
+        NSLog("DEBUG: [SHARED ASSET CACHE] No valid cached playlist found for mediaID: \(mediaID)")
+        return nil
+    }
     
     /// Resolve HLS URL with specific fallback strategy
     private func resolveHLSURL(_ url: URL) async -> URL {
@@ -608,6 +696,9 @@ class SharedAssetCache: ObservableObject {
         
         // Clear URL tracking
         tweetUrlMapping.removeAll()
+        
+        // Clear disk cache status
+        diskCacheStatus.removeAll()
         
         // Clear disk cache using the cleanup manager
         DiskCacheCleanupManager.shared.clearAllCache()

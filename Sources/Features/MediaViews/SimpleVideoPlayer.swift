@@ -300,15 +300,39 @@ struct SimpleVideoPlayer: View {
                 )
             }
             
-            // For MediaCell mode, release player to force fresh creation on next appearance
+            // For MediaCell and TweetDetail modes, release player to force fresh creation on next appearance
             // This avoids AVPlayerLayer corruption from reusing the same AVPlayer instance
+            // TweetDetail uses a separate player instance that should be stopped when exiting
             if mode == .mediaCell {
                 player?.pause()
                 player = nil
                 NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - released player for \(mid), will create fresh on next appearance")
+            } else if mode == .tweetDetail {
+                player?.pause()
+                player = nil
+                NSLog("DEBUG: [VIDEO DISAPPEAR] TweetDetail - stopped and released player for \(mid)")
             }
             
-            // For other modes, don't release - VideoManager and stopAllVideos handle pausing
+            // For mediaBrowser mode, don't release - it shares the player with MediaCell
+            // VideoManager and stopAllVideos handle pausing for shared players
+        }
+        .onChange(of: mode) { oldMode, newMode in
+            // When mode changes, apply appropriate mute state
+            guard let player = player else { return }
+            
+            if newMode == .mediaBrowser {
+                // Entering full screen - force unmute
+                player.isMuted = false
+                NSLog("DEBUG: [VIDEO MODE CHANGE] Entered full screen (\(oldMode) -> \(newMode)), forced unmuted")
+            } else if newMode == .mediaCell && oldMode == .mediaBrowser {
+                // Exiting full screen to MediaCell - apply global mute state
+                player.isMuted = MuteState.shared.isMuted
+                NSLog("DEBUG: [VIDEO MODE CHANGE] Exited full screen to MediaCell (\(oldMode) -> \(newMode)), applied global mute state: \(MuteState.shared.isMuted)")
+            } else if newMode == .mediaCell {
+                // Any other transition to MediaCell - apply global mute state
+                player.isMuted = MuteState.shared.isMuted
+                NSLog("DEBUG: [VIDEO MODE CHANGE] Transitioned to MediaCell (\(oldMode) -> \(newMode)), applied global mute state: \(MuteState.shared.isMuted)")
+            }
         }
         .onChange(of: isMuted) { _, newMuteState in
             // For full screen modes, always keep unmuted regardless of the isMuted parameter
@@ -699,7 +723,16 @@ struct SimpleVideoPlayer: View {
             // For other modes: reuse cached AVPlayer (no layer corruption issues in fullscreen)
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: playerCacheKey) {
                 NSLog("DEBUG: [VIDEO SETUP] ✅ Found EXISTING cached player for \(mid)")
-                cachedPlayer.isMuted = false
+                
+                // Apply proper mute state based on mode BEFORE configuring
+                // This ensures the player starts with the correct audio state
+                if mode == .mediaCell {
+                    cachedPlayer.isMuted = MuteState.shared.isMuted
+                    NSLog("DEBUG: [VIDEO SETUP] Applied global mute state (\(MuteState.shared.isMuted)) to cached player for MediaCell")
+                } else {
+                    cachedPlayer.isMuted = false
+                    NSLog("DEBUG: [VIDEO SETUP] Unmuted cached player for fullscreen/detail mode")
+                }
                 
                 // Update state FIRST before configuring
                 self.player = cachedPlayer
@@ -726,10 +759,23 @@ struct SimpleVideoPlayer: View {
                 do {
                     // Use uniquePlayerURL to ensure each tweet gets its own player instance
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: mid, mediaType: mediaType)
+                    
+                    // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
+                    // This prevents any brief moment where the player might start with wrong audio state
+                    if await MainActor.run(body: { self.mode }) == .mediaCell {
+                        let muteState = await MainActor.run { MuteState.shared.isMuted }
+                        newPlayer.isMuted = muteState
+                        NSLog("DEBUG: [VIDEO SETUP] Applied mute state (\(muteState)) immediately after player creation for MediaCell")
+                    } else {
+                        newPlayer.isMuted = false
+                        NSLog("DEBUG: [VIDEO SETUP] Unmuted immediately after player creation for fullscreen/detail")
+                    }
+                    
                     await MainActor.run {
-                        // Apply mute state immediately for MediaCell mode
+                        // Double-check and reapply mute state for safety
                         if self.mode == .mediaCell {
                             newPlayer.isMuted = MuteState.shared.isMuted
+                            NSLog("DEBUG: [VIDEO SETUP] Reconfirmed mute state (\(MuteState.shared.isMuted)) before configuring MediaCell player")
                         } else {
                             newPlayer.isMuted = false
                         }
@@ -786,10 +832,23 @@ struct SimpleVideoPlayer: View {
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: mid, mediaType: mediaType)
                 
                 NSLog("DEBUG: [SimpleVideoPlayer] Player creation completed for \(mid)")
+                
+                // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
+                // This prevents any brief moment where the player might start with wrong audio state
+                if await MainActor.run(body: { self.mode }) == .mediaCell {
+                    let muteState = await MainActor.run { MuteState.shared.isMuted }
+                    newPlayer.isMuted = muteState
+                    NSLog("DEBUG: [VIDEO SETUP] Applied mute state (\(muteState)) immediately after player creation for MediaCell")
+                } else {
+                    newPlayer.isMuted = false
+                    NSLog("DEBUG: [VIDEO SETUP] Unmuted immediately after player creation for fullscreen/detail")
+                }
+                
                 await MainActor.run {
-                    // Apply mute state for MediaCell mode
+                    // Double-check and reapply mute state for safety
                     if self.mode == .mediaCell {
                         newPlayer.isMuted = MuteState.shared.isMuted
+                        NSLog("DEBUG: [VIDEO SETUP] Reconfirmed mute state (\(MuteState.shared.isMuted)) before configuring MediaCell player")
                     } else {
                         newPlayer.isMuted = false
                     }
