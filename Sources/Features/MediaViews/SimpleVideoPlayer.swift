@@ -153,7 +153,8 @@ struct SimpleVideoPlayer: View {
     // Server ignores the query param and returns the same video content
     // Cache key that includes mode to prevent MediaCell and TweetDetailView from sharing players
     private var playerCacheKey: String {
-        return "\(uniquePlayerURL.absoluteString)_\(mode)"
+        // Use mid (mediaID) for stable caching - URLs can have query params that change
+        return mid
     }
     
     private var uniquePlayerURL: URL {

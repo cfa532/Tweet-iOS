@@ -177,20 +177,29 @@ class SharedAssetCache: ObservableObject {
         tweetUrlMapping[tweetId]?.insert(mediaID)
     }
     
-    /// Check if tweet has cached content available (memory or disk)
-    @MainActor func hasCachedContent(for tweetId: String) -> Bool {
-        let tweetMediaIDs = getMediaIDsForTweet(tweetId)
+    /// Check if content has been cached (works for both tweet IDs and media IDs)
+    /// Just checks if the ID exists in any cache - IDs never overlap so no ambiguity
+    @MainActor func hasCachedContent(for id: String) -> Bool {
+        // Direct check - works for both tweet IDs and media IDs since they don't overlap
+        if assetCache[id] != nil || playerCache[id] != nil {
+            return true
+        }
+        
+        if hasDiskCache(for: id) {
+            return true
+        }
+        
+        // Also check if this ID maps to any media (in case it's a tweet ID)
+        let tweetMediaIDs = getMediaIDsForTweet(id)
         for mediaID in tweetMediaIDs {
-            // Check memory cache
             if assetCache[mediaID] != nil || playerCache[mediaID] != nil {
                 return true
             }
-            
-            // Check disk cache
             if hasDiskCache(for: mediaID) {
                 return true
             }
         }
+        
         return false
     }
     
