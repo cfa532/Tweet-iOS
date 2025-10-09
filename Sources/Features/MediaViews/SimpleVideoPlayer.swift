@@ -312,11 +312,8 @@ struct SimpleVideoPlayer: View {
                 player?.pause()
                 NSLog("DEBUG: [VIDEO DISAPPEAR] MediaBrowser - paused player for \(mid), kept alive in cache for MediaCell")
             } else if mode == .tweetDetail {
-                // TweetDetail releases its player since it doesn't share with MediaCell
-                player?.pause()
-                player = nil
-                VideoStateCache.shared.clearCache(for: mid)
-                NSLog("DEBUG: [VIDEO DISAPPEAR] TweetDetail - stopped and released player for \(mid)")
+                // TweetDetail: DO ABSOLUTELY NOTHING
+                // Singleton player lives in DetailVideoManager, view recreation shouldn't affect it
             }
         }
         .onChange(of: mode) { oldMode, newMode in
@@ -522,19 +519,13 @@ struct SimpleVideoPlayer: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
-            // Direct handler for stopAllVideos notification
-            NSLog("DEBUG: [SimpleVideoPlayer] Received stopAllVideos notification for \(mid), mode: \(mode)")
-            
-            // Only pause and mute MediaCell videos
-            // Fullscreen and detail modes ignore this notification
+            // Only pause MediaCell videos - TweetDetail and MediaBrowser are immune
             if mode == .mediaCell {
                 player?.pause()
-                // Also mute the player to stop audio
                 player?.isMuted = true
-                NSLog("DEBUG: [SimpleVideoPlayer] Paused MediaCell video \(mid)")
-            } else {
-                NSLog("DEBUG: [SimpleVideoPlayer] Ignoring stopAllVideos for \(mode) mode video \(mid)")
+                NSLog("DEBUG: [SimpleVideoPlayer] stopAllVideos - paused MediaCell \(mid)")
             }
+            // TweetDetail and MediaBrowser: DO NOTHING
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             // App going to background - detach player to prevent black screens
@@ -625,12 +616,12 @@ struct SimpleVideoPlayer: View {
             ZStack {
                 // Main video player - only show if not detached
                 if !isPlayerDetached {
-                    if mode == .mediaBrowser {
-                        // Use AVPlayerViewController for fullscreen modes to get native controls
+                    if mode == .mediaBrowser || mode == .tweetDetail {
+                        // Use AVPlayerViewController for fullscreen and detail modes to get native controls and reliable autoplay
                         AVPlayerViewControllerRepresentable(player: player, isBuffering: $isBuffering)
                             .id("\(mid)_\(representableId)") // Force recreation with representableId changes
                             .onAppear {
-                                NSLog("DEBUG: [AVPlayerViewController] View appeared for \(mid)")
+                                NSLog("DEBUG: [AVPlayerViewController] View appeared for \(mid) in mode \(mode)")
                             }
                             .onTapGesture {
                                 if let onVideoTap = onVideoTap {
@@ -638,7 +629,7 @@ struct SimpleVideoPlayer: View {
                                 }
                             }
                     } else {
-                        // Use native SwiftUI VideoPlayer - let iOS handle everything
+                        // MediaCell: Use native SwiftUI VideoPlayer
                         VideoPlayer(player: player)
                             .id(uniqueViewId) // Hash of tweet+video+state for unique identity
                             .onTapGesture {
@@ -773,7 +764,60 @@ struct SimpleVideoPlayer: View {
         NSLog("DEBUG: [VIDEO SETUP] isVisible: \(isVisible), shouldLoadVideo: \(shouldLoadVideo), mode: \(mode)")
         NSLog("DEBUG: [VIDEO SETUP] URL: \(url)")
         
-        // FIRST: Check VideoStateCache for shared player (all modes share ONE player per mid)
+        // SPECIAL CASE: For TweetDetail mode, use singleton DetailVideoManager
+        if mode == .tweetDetail {
+            NSLog("DEBUG: [VIDEO SETUP] TweetDetail mode - checking singleton for \(mid)")
+            
+            // Check if singleton already has this exact video playing
+            if let existingPlayer = DetailVideoManager.shared.currentPlayer,
+               DetailVideoManager.shared.currentVideoMid == mid {
+                NSLog("DEBUG: [VIDEO SETUP] ✅ Reusing existing singleton player for \(mid)")
+                self.player = existingPlayer
+                self.loadingState = .loaded
+                
+                // Resume if paused
+                if existingPlayer.rate == 0 {
+                    existingPlayer.play()
+                    NSLog("DEBUG: [VIDEO SETUP] Resumed singleton player")
+                }
+                return
+            }
+            
+            // Different video or no singleton - create new player and store in singleton
+            NSLog("DEBUG: [VIDEO SETUP] Creating new player for singleton (\(mid))")
+            Task.detached(priority: .userInitiated) {
+                NSLog("DEBUG: [VIDEO SETUP] Task started for \(mid)")
+                do {
+                    NSLog("DEBUG: [VIDEO SETUP] Calling getOrCreatePlayer...")
+                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: "tweetDetail_\(mid)", mediaType: mediaType)
+                    NSLog("DEBUG: [VIDEO SETUP] Player created, now storing in singleton...")
+                    newPlayer.isMuted = false
+                    
+                    await MainActor.run {
+                        NSLog("DEBUG: [VIDEO SETUP] On MainActor, storing player...")
+                        // Stop old singleton player if exists
+                        DetailVideoManager.shared.currentPlayer?.pause()
+                        
+                        // Store new player in singleton
+                        DetailVideoManager.shared.currentPlayer = newPlayer
+                        DetailVideoManager.shared.currentVideoMid = mid
+                        
+                        self.player = newPlayer
+                        self.loadingState = .loaded
+                        self.configurePlayer(newPlayer)
+                        NSLog("DEBUG: [VIDEO SETUP] ✅ Stored new player in singleton for \(mid)")
+                    }
+                } catch {
+                    NSLog("DEBUG: [VIDEO SETUP] ❌ Failed to create singleton player: \(error.localizedDescription)")
+                    await MainActor.run {
+                        self.handleError(strategy: .loadFailure)
+                    }
+                }
+            }
+            return
+        }
+        
+        // NORMAL FLOW: Check VideoStateCache for shared player (MediaCell/MediaBrowser)
         NSLog("DEBUG: [VIDEO SETUP] Checking VideoStateCache for shared player: \(mid)")
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
             NSLog("DEBUG: [VIDEO CACHE] ✅ Found shared player for \(mid) in \(mode) mode")

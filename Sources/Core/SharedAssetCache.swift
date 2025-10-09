@@ -479,9 +479,10 @@ class SharedAssetCache: ObservableObject {
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaID: \(mediaID), mediaType: \(mediaType?.rawValue ?? "nil")")
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for tweetId: \(tweetId ?? "nil")")
         
-        // CRITICAL: Use mediaID as cache key for HLS videos to ignore query params (dig=xxx)
-        // Query params like "dig" are just for cache busting but point to the same video
-        let cacheKey = mediaID
+        // Use tweetId if provided (for mode-specific caching), otherwise use mediaID
+        // This allows TweetDetail to have separate players from MediaCell
+        let cacheKey = tweetId ?? mediaID
+        NSLog("DEBUG: [SHARED ASSET CACHE] Using cache key: \(cacheKey)")
         
         // Try to get cached player first
         if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
@@ -575,6 +576,47 @@ class SharedAssetCache: ObservableObject {
         NSLog("DEBUG: [SHARED ASSET CACHE] Player created and cached for mediaID: \(mediaID), ready for playback")
         
         return player
+    }
+    
+    /// Get or create a player item for the given URL and media type
+    /// Used by singleton players that want to swap items instead of creating new players
+    /// IMPORTANT: Always creates NEW items because AVPlayerItem can only be attached to ONE AVPlayer
+    func getOrCreatePlayerItem(for url: URL, mediaID: String, mediaType: MediaType? = nil) async throws -> AVPlayerItem {
+        guard let extractedMediaID = extractMediaID(from: url) else {
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL: \(url)"])
+        }
+        
+        NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayerItem called for mediaID: \(extractedMediaID) - creating fresh item")
+        
+        // Determine if this is HLS
+        let isHLSVideo: Bool
+        if let mediaType = mediaType {
+            isHLSVideo = (mediaType == .hls_video)
+        } else {
+            isHLSVideo = url.absoluteString.hasSuffix(".m3u8")
+        }
+        
+        if isHLSVideo {
+            // Create fresh HLS player item for singleton player
+            let resolvedURL = await resolveHLSURL(url)
+            
+            LocalHTTPServer.shared.start()
+            let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: extractedMediaID, avUrlAssetOptions: nil)
+            
+            // Create delegate but DON'T cache it (singleton manages its own lifecycle)
+            let delegate = CachingPlayerItemDelegateImpl()
+            cachingPlayerItem.delegate = delegate
+            
+            NSLog("DEBUG: [SHARED ASSET CACHE] Created fresh HLS player item for singleton for mediaID: \(extractedMediaID)")
+            return cachingPlayerItem
+        } else {
+            // Create fresh progressive video player item
+            let asset = AVURLAsset(url: url)
+            let playerItem = AVPlayerItem(asset: asset)
+            
+            NSLog("DEBUG: [SHARED ASSET CACHE] Created fresh progressive player item for singleton for mediaID: \(extractedMediaID)")
+            return playerItem
+        }
     }
     
     

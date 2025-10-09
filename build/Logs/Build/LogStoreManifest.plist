@@ -5,6 +5,49 @@
 	<key>logFormatVersion</key>
 	<integer>11</integer>
 	<key>logs</key>
-	<dict/>
+	<dict>
+		<key>EC2D358A-70A1-4319-B982-B9328BF70755</key>
+		<dict>
+			<key>className</key>
+			<string>IDECommandLineBuildLog</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
+			<key>fileName</key>
+			<string>EC2D358A-70A1-4319-B982-B9328BF70755.xcactivitylog</string>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>S</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>0</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>0</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>Tweet project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>Tweet</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Cleaning workspace Tweet with scheme Tweet and configuration Debug</string>
+			<key>timeStartedRecording</key>
+			<real>781705101.421121</real>
+			<key>timeStoppedRecording</key>
+			<real>781705101.72546601</real>
+			<key>title</key>
+			<string>Cleaning workspace Tweet with scheme Tweet and configuration Debug</string>
+			<key>uniqueIdentifier</key>
+			<string>EC2D358A-70A1-4319-B982-B9328BF70755</string>
+		</dict>
+	</dict>
 </dict>
 </plist>

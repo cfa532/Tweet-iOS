@@ -502,6 +502,22 @@ struct TweetDetailView: View {
                     GlobalImageLoadManager.shared.cancelLoad(id: mainLoadId)
                 }
             }
+            
+            print("DEBUG: [TweetDetailView] onDisappear called")
+        }
+        .task {
+            // This task is cancelled when the view is permanently dismissed
+            // Keep singleton alive while view exists
+            defer {
+                // This runs when task is cancelled (view dismissed)
+                DetailVideoManager.shared.currentPlayer?.pause()
+                DetailVideoManager.shared.currentPlayer = nil
+                DetailVideoManager.shared.currentVideoMid = nil
+                print("DEBUG: [TweetDetailView] Task cancelled - cleaned up singleton")
+            }
+            
+            // Just wait forever - cleanup happens in defer when cancelled
+            try? await Task.sleep(for: .seconds(3600))
         }
     }
     
