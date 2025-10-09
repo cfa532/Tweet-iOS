@@ -175,6 +175,25 @@ struct SimpleVideoPlayer: View {
     }
     
     var body: some View {
+        videoContentView
+            .onAppear { handleOnAppear() }
+            .onDisappear { handleOnDisappear() }
+            .onChange(of: mode) { oldMode, newMode in handleModeChange(oldMode: oldMode, newMode: newMode) }
+            .onChange(of: isMuted) { _, newMuteState in handleMuteChange(newMuteState: newMuteState) }
+            .onReceive(MuteState.shared.$isMuted) { globalMuteState in handleGlobalMuteChange(globalMuteState: globalMuteState) }
+            .onChange(of: currentAutoPlay) { _, shouldAutoPlay in handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay) }
+            .onChange(of: isVisible) { _, visible in handleVisibilityChange(visible: visible) }
+            .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
+            .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
+            .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in handleWillEnterForeground() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in handleDidBecomeActive() }
+            .onTapGesture { handleTap() }
+            .onLongPressGesture(minimumDuration: 0.5) { handleLongPress() } onPressingChanged: { pressing in handlePressingChanged(pressing: pressing) }
+    }
+    
+    private var videoContentView: some View {
         GeometryReader { geometry in
             let screenWidth = geometry.size.width
             let screenHeight = geometry.size.height
@@ -232,63 +251,245 @@ struct SimpleVideoPlayer: View {
                     .frame(maxWidth: screenWidth, maxHeight: screenHeight)
             }
         }
-        .onAppear {
-            NSLog("DEBUG: [VIDEO APPEAR] onAppear called for \(mid)")
-            NSLog("DEBUG: [VIDEO APPEAR] player: \(player != nil), shouldLoadVideo: \(shouldLoadVideo), isVisible: \(isVisible), mode: \(mode)")
+    }
+    
+    // MARK: - Lifecycle Handlers
+    
+    private func handleOnAppear() {
+        NSLog("DEBUG: [VIDEO APPEAR] onAppear called for \(mid)")
+        NSLog("DEBUG: [VIDEO APPEAR] player: \(player != nil), shouldLoadVideo: \(shouldLoadVideo), isVisible: \(isVisible), mode: \(mode)")
+        
+        // Handle idle timer for fullscreen modes
+        if mode == .mediaBrowser {
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        
+        // For fullscreen and detail modes, always try to set up player regardless of shouldLoadVideo
+        if mode == .mediaBrowser || mode == .tweetDetail {
+            NSLog("DEBUG: [VIDEO APPEAR] Fullscreen/Detail mode - forcing player setup for \(mid)")
+            if player == nil {
+                setupPlayer()
+            } else {
+                // Player exists, validate and configure it
+                validateAndConfigureExistingPlayer()
+            }
+            return
+        }
+        
+        // For MediaCell mode, use existing logic but be less aggressive about failure detection
+        if let player = player, let playerItem = player.currentItem {
+            if playerItem.status == .failed && loadingState.hasFailed {
+                // Only trigger recovery if we've already marked this as failed
+                print("DEBUG: [VIDEO APPEAR] Player item is in failed state and already marked as failed for \(mid), triggering recovery")
+                handleError(strategy: .loadFailure)
+                return
+            } else if playerItem.status == .failed {
+                // Player item is failed but not marked as failed yet - just log and continue
+                print("DEBUG: [VIDEO APPEAR] Player item is in failed state for \(mid), but not marked as failed yet - continuing")
+            }
+        }
+        
+        // Set up player if needed
+        if player == nil && shouldLoadVideo && isVisible {
+            NSLog("DEBUG: [VIDEO APPEAR] Setting up player for \(mid)")
+            setupPlayer()
+        }
+    }
+    
+    private func handleOnDisappear() {
+        // Handle idle timer for fullscreen modes
+        if mode == .mediaBrowser {
+            UIApplication.shared.isIdleTimerDisabled = false
             
-            // Handle idle timer for fullscreen modes
-            if mode == .mediaBrowser {
-                UIApplication.shared.isIdleTimerDisabled = true
+            // Before exiting full screen, restore the mute state to global mute state
+            // This ensures the player instance is properly muted when returning to MediaCell
+            if let player = player {
+                player.isMuted = MuteState.shared.isMuted
+                NSLog("DEBUG: [VIDEO DISAPPEAR] Restored mute state to global state (\(MuteState.shared.isMuted)) before exiting full screen")
+            }
+        }
+        
+        // Remove observers to prevent memory leaks
+        removePlayerObservers()
+
+        // Cache the current video state
+        if let player = player {
+            // For MediaCell mode, save the current global mute state
+            // For detail/fullscreen modes, we need to track the original global mute state
+            let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
+            VideoStateCache.shared.cacheVideoState(
+                for: mid,
+                player: player,
+                time: player.currentTime(),
+                wasPlaying: player.rate > 0,
+                originalMuteState: originalMuteState
+            )
+        }
+        
+        // Pause player when view disappears, but keep it alive in VideoStateCache for sharing
+        // MediaCell and MediaBrowser share the same player instance via VideoStateCache
+        if mode == .mediaCell {
+            player?.pause()
+            NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - paused player for \(mid), kept alive in cache for sharing with fullscreen")
+        } else if mode == .mediaBrowser {
+            // Exiting fullscreen - pause but keep player alive for MediaCell to reuse
+            player?.pause()
+            NSLog("DEBUG: [VIDEO DISAPPEAR] MediaBrowser - paused player for \(mid), kept alive in cache for MediaCell")
+        } else if mode == .tweetDetail {
+            // TweetDetail: DO ABSOLUTELY NOTHING
+            // Singleton player lives in DetailVideoManager, view recreation shouldn't affect it
+        }
+    }
+    
+    private func handleModeChange(oldMode: Mode, newMode: Mode) {
+        NSLog("DEBUG: [VIDEO MODE CHANGE] ========== MODE TRANSITION START ==========")
+        NSLog("DEBUG: [VIDEO MODE CHANGE] Transitioning \(mid) from \(oldMode) to \(newMode)")
+        NSLog("DEBUG: [VIDEO MODE CHANGE] Current player: \(player != nil)")
+        NSLog("DEBUG: [VIDEO MODE CHANGE] Player item: \(player?.currentItem != nil)")
+        NSLog("DEBUG: [VIDEO MODE CHANGE] Player item status: \(player?.currentItem?.status.rawValue ?? -999)")
+        NSLog("DEBUG: [VIDEO MODE CHANGE] Player rate: \(player?.rate ?? -1)")
+        NSLog("DEBUG: [VIDEO MODE CHANGE] Current representableId: \(representableId)")
+        
+        // When mode changes, apply appropriate mute state
+        guard let player = player else {
+            NSLog("DEBUG: [VIDEO MODE CHANGE] ⚠️ No player available during mode change for \(mid)")
+            return
+        }
+        
+        if newMode == .mediaBrowser {
+            // Entering full screen - force unmute
+            NSLog("DEBUG: [VIDEO MODE CHANGE] Entering fullscreen")
+            
+            player.isMuted = false
+            NSLog("DEBUG: [VIDEO MODE CHANGE] Unmuted player for fullscreen")
+            
+            // CRITICAL: Force layer detachment and increment representableId
+            // This ensures the VideoPlayerRepresentable in MediaCell releases the layer
+            // before AVPlayerViewController tries to use it, preventing black screen
+            self.representableId += 1
+            NSLog("DEBUG: [VIDEO MODE CHANGE] Incremented representableId to \(self.representableId) to force layer detachment from MediaCell")
+            
+            // Don't pause here - let AVPlayerViewController handle play/pause
+            NSLog("DEBUG: [VIDEO MODE CHANGE] AVPlayerViewController will handle playback")
+        } else if newMode == .mediaCell && oldMode == .mediaBrowser {
+            // Exiting full screen to MediaCell - apply global mute state
+            NSLog("DEBUG: [VIDEO MODE CHANGE] Exiting fullscreen to MediaCell")
+            
+            // CRITICAL: Pause player briefly to help with layer detachment from AVPlayerViewController
+            let wasPlaying = player.rate > 0
+            if wasPlaying {
+                player.pause()
+                NSLog("DEBUG: [VIDEO MODE CHANGE] Paused player for layer transition from fullscreen")
             }
             
-            // For fullscreen and detail modes, always try to set up player regardless of shouldLoadVideo
+            player.isMuted = MuteState.shared.isMuted
+            NSLog("DEBUG: [VIDEO MODE CHANGE] Applied global mute state: \(MuteState.shared.isMuted)")
+            
+            // Force recreation of VideoPlayerRepresentable to ensure fresh layer attachment
+            self.representableId += 1
+            NSLog("DEBUG: [VIDEO MODE CHANGE] Incremented representableId to \(self.representableId) for fresh MediaCell layer")
+            
+            // Give layer time to detach from AVPlayerViewController before resuming
+            if wasPlaying {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    NSLog("DEBUG: [VIDEO MODE CHANGE] Resuming playback in MediaCell after layer reattachment")
+                    player.play()
+                }
+            }
+        } else if newMode == .mediaCell {
+            // Any other transition to MediaCell - apply global mute state
+            player.isMuted = MuteState.shared.isMuted
+            NSLog("DEBUG: [VIDEO MODE CHANGE] Transitioned to MediaCell (\(oldMode) -> \(newMode)), applied global mute state: \(MuteState.shared.isMuted)")
+        }
+        
+        NSLog("DEBUG: [VIDEO MODE CHANGE] ========== MODE TRANSITION END ==========")
+    }
+    
+    private func handleMuteChange(newMuteState: Bool) {
+        // For full screen modes, always keep unmuted regardless of the isMuted parameter
+        if mode == .mediaBrowser {
+            player?.isMuted = false
+            print("DEBUG: [VIDEO MUTE CHANGE] Forced unmuted for full screen mode")
+        } else {
+            player?.isMuted = newMuteState
+        }
+    }
+    
+    private func handleGlobalMuteChange(globalMuteState: Bool) {
+        // For MediaCell mode, always sync with global mute state
+        if mode == .mediaCell {
+            player?.isMuted = globalMuteState
+            print("DEBUG: [VIDEO GLOBAL MUTE] Synced with global mute state: \(globalMuteState)")
+        }
+        // For full screen modes, ignore global mute state and always keep unmuted
+        else if mode == .mediaBrowser {
+            player?.isMuted = false
+            print("DEBUG: [VIDEO GLOBAL MUTE] Ignored global mute state for full screen mode")
+        }
+    }
+    
+    private func handleAutoPlayChange(shouldAutoPlay: Bool) {
+        // Handle autoPlay state changes (reactive to VideoManager)  
+        // DON'T pause here - shared players might be in use by fullscreen/detail
+        // Let visibility changes and VideoManager's sequential playback handle pausing
+        if mode == .mediaCell {
+            NSLog("DEBUG: [VIDEO AUTOPLAY CHANGE] MediaCell autoPlay changed to \(shouldAutoPlay) for \(mid)")
+            // Only check playback conditions, don't pause
+            // Pausing here interferes with shared players used by fullscreen/detail
+            checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
+        } else {
+            NSLog("DEBUG: [VIDEO AUTOPLAY CHANGE] Ignoring VideoManager state change for \(mode) mode \(mid)")
+        }
+    }
+    
+    private func handleVisibilityChange(visible: Bool) {
+        print("DEBUG: [VIDEO VISIBILITY] isVisible changed to \(visible) for \(mid)")
+        print("DEBUG: [VIDEO VISIBILITY] shouldLoadVideo: \(shouldLoadVideo), player: \(player != nil), mode: \(mode)")
+        
+        // Handle visibility changes - simplified logic to avoid conflicts
+        if visible {
+            // For fullscreen and detail modes, always allow setup regardless of shouldLoadVideo
             if mode == .mediaBrowser || mode == .tweetDetail {
-                NSLog("DEBUG: [VIDEO APPEAR] Fullscreen/Detail mode - forcing player setup for \(mid)")
+                NSLog("DEBUG: [VIDEO VISIBILITY] Fullscreen/Detail mode - forcing player setup for \(mid)")
                 if player == nil {
                     setupPlayer()
                 } else {
-                    // Player exists, validate and configure it
                     validateAndConfigureExistingPlayer()
                 }
                 return
             }
             
-            // For MediaCell mode, use existing logic but be less aggressive about failure detection
+            // For MediaCell mode, respect shouldLoadVideo setting
+            guard shouldLoadVideo else {
+                print("DEBUG: [VIDEO VISIBILITY] Video became visible but loading is disabled for \(mid)")
+                return
+            }
+            
+            // Validate existing player state if present - but be less aggressive about failure detection
             if let player = player, let playerItem = player.currentItem {
                 if playerItem.status == .failed && loadingState.hasFailed {
                     // Only trigger recovery if we've already marked this as failed
-                    print("DEBUG: [VIDEO APPEAR] Player item is in failed state and already marked as failed for \(mid), triggering recovery")
+                    print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state and already marked as failed for \(mid), triggering recovery")
                     handleError(strategy: .loadFailure)
                     return
                 } else if playerItem.status == .failed {
                     // Player item is failed but not marked as failed yet - just log and continue
-                    print("DEBUG: [VIDEO APPEAR] Player item is in failed state for \(mid), but not marked as failed yet - continuing")
+                    print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state for \(mid), but not marked as failed yet - continuing")
                 }
             }
             
-            // Set up player if needed
-            if player == nil && shouldLoadVideo && isVisible {
-                NSLog("DEBUG: [VIDEO APPEAR] Setting up player for \(mid)")
+            // If no player and loading is enabled, set up the player
+            if player == nil {
+                print("DEBUG: [VIDEO VISIBILITY] Video became visible with no player, setting up: \(mid)")
                 setupPlayer()
+            } else {
+                // Restore cached video state if available
+                restoreCachedVideoState()
+                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: visible)
             }
-        }
-        .onDisappear {
-            // Handle idle timer for fullscreen modes
-            if mode == .mediaBrowser {
-                UIApplication.shared.isIdleTimerDisabled = false
-                
-                // Before exiting full screen, restore the mute state to global mute state
-                // This ensures the player instance is properly muted when returning to MediaCell
-                if let player = player {
-                    player.isMuted = MuteState.shared.isMuted
-                    NSLog("DEBUG: [VIDEO DISAPPEAR] Restored mute state to global state (\(MuteState.shared.isMuted)) before exiting full screen")
-                }
-            }
-            
-            // Remove observers to prevent memory leaks
-            removePlayerObservers()
-
-            // Cache the current video state
+        } else {
+            // When becoming invisible, cache state but don't pause here
+            // (pause is handled in onDisappear to avoid conflicts)
             if let player = player {
                 // For MediaCell mode, save the current global mute state
                 // For detail/fullscreen modes, we need to track the original global mute state
@@ -301,303 +502,111 @@ struct SimpleVideoPlayer: View {
                     originalMuteState: originalMuteState
                 )
             }
-            
-            // Pause player when view disappears, but keep it alive in VideoStateCache for sharing
-            // MediaCell and MediaBrowser share the same player instance via VideoStateCache
-            if mode == .mediaCell {
-                player?.pause()
-                NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - paused player for \(mid), kept alive in cache for sharing with fullscreen")
-            } else if mode == .mediaBrowser {
-                // Exiting fullscreen - pause but keep player alive for MediaCell to reuse
-                player?.pause()
-                NSLog("DEBUG: [VIDEO DISAPPEAR] MediaBrowser - paused player for \(mid), kept alive in cache for MediaCell")
-            } else if mode == .tweetDetail {
-                // TweetDetail: DO ABSOLUTELY NOTHING
-                // Singleton player lives in DetailVideoManager, view recreation shouldn't affect it
-            }
         }
-        .onChange(of: mode) { oldMode, newMode in
-            NSLog("DEBUG: [VIDEO MODE CHANGE] ========== MODE TRANSITION START ==========")
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Transitioning \(mid) from \(oldMode) to \(newMode)")
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Current player: \(player != nil)")
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Player item: \(player?.currentItem != nil)")
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Player item status: \(player?.currentItem?.status.rawValue ?? -999)")
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Player rate: \(player?.rate ?? -1)")
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Current representableId: \(representableId)")
-            
-            // When mode changes, apply appropriate mute state
-            guard let player = player else {
-                NSLog("DEBUG: [VIDEO MODE CHANGE] ⚠️ No player available during mode change for \(mid)")
-                return
-            }
-            
-            if newMode == .mediaBrowser {
-                // Entering full screen - force unmute
-                NSLog("DEBUG: [VIDEO MODE CHANGE] Entering fullscreen")
-                
-                player.isMuted = false
-                NSLog("DEBUG: [VIDEO MODE CHANGE] Unmuted player for fullscreen")
-                
-                // CRITICAL: Force layer detachment and increment representableId
-                // This ensures the VideoPlayerRepresentable in MediaCell releases the layer
-                // before AVPlayerViewController tries to use it, preventing black screen
-                self.representableId += 1
-                NSLog("DEBUG: [VIDEO MODE CHANGE] Incremented representableId to \(self.representableId) to force layer detachment from MediaCell")
-                
-                // Don't pause here - let AVPlayerViewController handle play/pause
-                NSLog("DEBUG: [VIDEO MODE CHANGE] AVPlayerViewController will handle playback")
-            } else if newMode == .mediaCell && oldMode == .mediaBrowser {
-                // Exiting full screen to MediaCell - apply global mute state
-                NSLog("DEBUG: [VIDEO MODE CHANGE] Exiting fullscreen to MediaCell")
-                
-                // CRITICAL: Pause player briefly to help with layer detachment from AVPlayerViewController
-                let wasPlaying = player.rate > 0
-                if wasPlaying {
-                    player.pause()
-                    NSLog("DEBUG: [VIDEO MODE CHANGE] Paused player for layer transition from fullscreen")
-                }
-                
-                player.isMuted = MuteState.shared.isMuted
-                NSLog("DEBUG: [VIDEO MODE CHANGE] Applied global mute state: \(MuteState.shared.isMuted)")
-                
-                // Force recreation of VideoPlayerRepresentable to ensure fresh layer attachment
-                self.representableId += 1
-                NSLog("DEBUG: [VIDEO MODE CHANGE] Incremented representableId to \(self.representableId) for fresh MediaCell layer")
-                
-                // Give layer time to detach from AVPlayerViewController before resuming
-                if wasPlaying {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                        NSLog("DEBUG: [VIDEO MODE CHANGE] Resuming playback in MediaCell after layer reattachment")
-                        player.play()
-                    }
-                }
-            } else if newMode == .mediaCell {
-                // Any other transition to MediaCell - apply global mute state
-                player.isMuted = MuteState.shared.isMuted
-                NSLog("DEBUG: [VIDEO MODE CHANGE] Transitioned to MediaCell (\(oldMode) -> \(newMode)), applied global mute state: \(MuteState.shared.isMuted)")
-            }
-            
-            NSLog("DEBUG: [VIDEO MODE CHANGE] ========== MODE TRANSITION END ==========")
+    }
+    
+    private func handlePlayerChange(newPlayer: AVPlayer?) {
+        // When player becomes available, check if we should autoplay
+        if newPlayer != nil {
+            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
         }
-        .onChange(of: isMuted) { _, newMuteState in
-            // For full screen modes, always keep unmuted regardless of the isMuted parameter
-            if mode == .mediaBrowser {
-                player?.isMuted = false
-                print("DEBUG: [VIDEO MUTE CHANGE] Forced unmuted for full screen mode")
-            } else {
-                player?.isMuted = newMuteState
-            }
+    }
+    
+    private func handleStopAllVideos() {
+        // Only pause MediaCell videos - TweetDetail and MediaBrowser are immune
+        if mode == .mediaCell {
+            player?.pause()
+            player?.isMuted = true
+            NSLog("DEBUG: [SimpleVideoPlayer] stopAllVideos - paused MediaCell \(mid)")
         }
-        .onReceive(MuteState.shared.$isMuted) { globalMuteState in
-            // For MediaCell mode, always sync with global mute state
-            if mode == .mediaCell {
-                player?.isMuted = globalMuteState
-                print("DEBUG: [VIDEO GLOBAL MUTE] Synced with global mute state: \(globalMuteState)")
-            }
-            // For full screen modes, ignore global mute state and always keep unmuted
-            else if mode == .mediaBrowser {
-                player?.isMuted = false
-                print("DEBUG: [VIDEO GLOBAL MUTE] Ignored global mute state for full screen mode")
-            }
-        }
-        .onChange(of: currentAutoPlay) { _, shouldAutoPlay in
-            // Handle autoPlay state changes (reactive to VideoManager)  
-            // DON'T pause here - shared players might be in use by fullscreen/detail
-            // Let visibility changes and VideoManager's sequential playback handle pausing
-            if mode == .mediaCell {
-                NSLog("DEBUG: [VIDEO AUTOPLAY CHANGE] MediaCell autoPlay changed to \(shouldAutoPlay) for \(mid)")
-                // Only check playback conditions, don't pause
-                // Pausing here interferes with shared players used by fullscreen/detail
-                checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
-            } else {
-                NSLog("DEBUG: [VIDEO AUTOPLAY CHANGE] Ignoring VideoManager state change for \(mode) mode \(mid)")
-            }
-        }
-        .onChange(of: isVisible) { _, visible in
-            print("DEBUG: [VIDEO VISIBILITY] isVisible changed to \(visible) for \(mid)")
-            print("DEBUG: [VIDEO VISIBILITY] shouldLoadVideo: \(shouldLoadVideo), player: \(player != nil), mode: \(mode)")
-            
-            // Handle visibility changes - simplified logic to avoid conflicts
-            if visible {
-                // For fullscreen and detail modes, always allow setup regardless of shouldLoadVideo
-                if mode == .mediaBrowser || mode == .tweetDetail {
-                    NSLog("DEBUG: [VIDEO VISIBILITY] Fullscreen/Detail mode - forcing player setup for \(mid)")
-                    if player == nil {
-                        setupPlayer()
-                    } else {
-                        validateAndConfigureExistingPlayer()
-                    }
-                    return
-                }
-                
-                // For MediaCell mode, respect shouldLoadVideo setting
-                guard shouldLoadVideo else {
-                    print("DEBUG: [VIDEO VISIBILITY] Video became visible but loading is disabled for \(mid)")
-                    return
-                }
-                
-                // Validate existing player state if present - but be less aggressive about failure detection
-                if let player = player, let playerItem = player.currentItem {
-                    if playerItem.status == .failed && loadingState.hasFailed {
-                        // Only trigger recovery if we've already marked this as failed
-                        print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state and already marked as failed for \(mid), triggering recovery")
-                        handleError(strategy: .loadFailure)
-                        return
-                    } else if playerItem.status == .failed {
-                        // Player item is failed but not marked as failed yet - just log and continue
-                        print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state for \(mid), but not marked as failed yet - continuing")
-                    }
-                }
-                
-                // If no player and loading is enabled, set up the player
-                if player == nil {
-                    print("DEBUG: [VIDEO VISIBILITY] Video became visible with no player, setting up: \(mid)")
-                    setupPlayer()
-                } else {
-                    // Restore cached video state if available
-                    restoreCachedVideoState()
-                    checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: visible)
-                }
-            } else {
-                // When becoming invisible, cache state but don't pause here
-                // (pause is handled in onDisappear to avoid conflicts)
-                if let player = player {
-                    // For MediaCell mode, save the current global mute state
-                    // For detail/fullscreen modes, we need to track the original global mute state
-                    let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
-                    VideoStateCache.shared.cacheVideoState(
-                        for: mid,
-                        player: player,
-                        time: player.currentTime(),
-                        wasPlaying: player.rate > 0,
-                        originalMuteState: originalMuteState
-                    )
-                }
-            }
-        }
-        .onChange(of: player) { _, newPlayer in
-            // When player becomes available, check if we should autoplay
-            if newPlayer != nil {
-                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
-            }
-        }
-        .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in
-            // Grid-level loading state changed - consolidate all loading decisions here
-            handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo)
+        // TweetDetail and MediaBrowser: DO NOTHING
+    }
+    
+    private func handleDidEnterBackground() {
+        // App going to background - detach player to prevent black screens
+        print("DEBUG: [VIDEO BACKGROUND] App entering background for \(mid)")
+        detachPlayerForBackground()
+    }
+    
+    private func handleWillEnterForeground() {
+        // App will enter foreground - reattach player to prevent black screens
+        print("DEBUG: [VIDEO FOREGROUND] App will enter foreground for \(mid)")
+        reattachPlayerForForeground()
+    }
+    
+    private func handleDidBecomeActive() {
+        // App became active - ensure player is properly reattached and configured
+        print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
+        
+        // CRITICAL: Force view recreation to fix black screen for ALL modes
+        if player != nil {
+            // Increment representableId to force view recreation for ALL modes
+            // This works for both AVPlayerViewController (mediaBrowser/tweetDetail) and native VideoPlayer (mediaCell)
+            // since uniqueViewId is computed from representableId
+            representableId += 1
+            print("DEBUG: [VIDEO APP ACTIVE] Forced view recreation for \(mid), new representableId: \(representableId)")
         }
         
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
-            // App going to background - mark player as detached
-            NSLog("DEBUG: [VIDEO BACKGROUND] App going to background for \(mid)")
-            isPlayerDetached = true
-            
-            // Pause all players to save battery
-            if let player = player {
-                player.pause()
-                NSLog("DEBUG: [VIDEO BACKGROUND] Paused player for \(mid)")
+        // Only restore cached state if no player exists and we're not already detached
+        if player == nil && shouldLoadVideo && !isPlayerDetached {
+            print("DEBUG: [VIDEO APP ACTIVE] No player found, attempting to restore cached state for \(mid)")
+            restoreCachedVideoState()
+        }
+        
+        // If still no player after cache restoration, try to get from SharedAssetCache
+        if player == nil && shouldLoadVideo && !isPlayerDetached {
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: playerCacheKey) {
+                print("DEBUG: [VIDEO APP ACTIVE] Found cached player in SharedAssetCache for \(mid) with key: \(playerCacheKey)")
+                configurePlayer(cachedPlayer)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // App returning to foreground - restore player rendering
-            NSLog("DEBUG: [VIDEO FOREGROUND] App returning to foreground for \(mid)")
-            isPlayerDetached = false
-            
-            // Force player view recreation to fix black screen
-            if let player = player {
-                representableId += 1 // Increment to force VideoPlayer recreation
-                
-                // Give iOS a moment to restore rendering pipeline, then check playback
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    // Only resume if video should be playing based on conditions
-                    if isVisible && currentAutoPlay && mode == .mediaCell {
-                        player.play()
-                        NSLog("DEBUG: [VIDEO FOREGROUND] Resumed playback for \(mid)")
-                    }
-                }
-                
-                NSLog("DEBUG: [VIDEO FOREGROUND] Recreated player view for \(mid)")
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
-            // Only pause MediaCell videos - TweetDetail and MediaBrowser are immune
-            if mode == .mediaCell {
-                player?.pause()
-                player?.isMuted = true
-                NSLog("DEBUG: [SimpleVideoPlayer] stopAllVideos - paused MediaCell \(mid)")
-            }
-            // TweetDetail and MediaBrowser: DO NOTHING
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-            // App going to background - detach player to prevent black screens
-            print("DEBUG: [VIDEO BACKGROUND] App entering background for \(mid)")
-            detachPlayerForBackground()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            // App will enter foreground - reattach player to prevent black screens
-            print("DEBUG: [VIDEO FOREGROUND] App will enter foreground for \(mid)")
+        
+        // Ensure player is reattached if it was detached (but don't duplicate reattach calls)
+        if isPlayerDetached {
+            print("DEBUG: [VIDEO APP ACTIVE] Player was detached, reattaching for \(mid)")
             reattachPlayerForForeground()
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            // App became active - ensure player is properly reattached and configured
-            print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
-            
-            // Only restore cached state if no player exists and we're not already detached
-            if player == nil && shouldLoadVideo && !isPlayerDetached {
-                print("DEBUG: [VIDEO APP ACTIVE] No player found, attempting to restore cached state for \(mid)")
-                restoreCachedVideoState()
-            }
-            
-            // If still no player after cache restoration, try to get from SharedAssetCache
-            if player == nil && shouldLoadVideo && !isPlayerDetached {
-                if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: playerCacheKey) {
-                    print("DEBUG: [VIDEO APP ACTIVE] Found cached player in SharedAssetCache for \(mid) with key: \(playerCacheKey)")
-                    configurePlayer(cachedPlayer)
-                }
-            }
-            
-            // Ensure player is reattached if it was detached (but don't duplicate reattach calls)
-            if isPlayerDetached {
-                print("DEBUG: [VIDEO APP ACTIVE] Player was detached, reattaching for \(mid)")
-                reattachPlayerForForeground()
-            }
-            
-            // Ensure mute state is properly applied when app becomes active
-            // This handles cases where MuteState was refreshed after video was created
-            if let player = player {
-                if mode == .mediaCell {
-                    player.isMuted = MuteState.shared.isMuted
-                    print("DEBUG: [VIDEO APP ACTIVE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
-                } else if mode == .mediaBrowser {
-                    player.isMuted = false
-                    print("DEBUG: [VIDEO APP ACTIVE] Forced unmuted for full screen mode")
-                }
-            }
-            
-            // If video is visible and should play, resume playback
-            if isVisible && currentAutoPlay && shouldLoadVideo {
-                print("DEBUG: [VIDEO APP ACTIVE] Resuming playback for \(mid)")
-                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
-            }
-            
-            // Reset error state for videos that might have been interrupted
-            if loadingState.hasFailed {
-                print("DEBUG: [VIDEO APP ACTIVE] Resetting error state for \(mid)")
-                loadingState = .idle
+        
+        // Ensure mute state is properly applied when app becomes active
+        // This handles cases where MuteState was refreshed after video was created
+        if let player = player {
+            if mode == .mediaCell {
+                player.isMuted = MuteState.shared.isMuted
+                print("DEBUG: [VIDEO APP ACTIVE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
+            } else if mode == .mediaBrowser {
+                player.isMuted = false
+                print("DEBUG: [VIDEO APP ACTIVE] Forced unmuted for full screen mode")
             }
         }
-        .onTapGesture {
-            if let onVideoTap = onVideoTap {
-                onVideoTap()
-            }
+        
+        // If video is visible and should play, resume playback
+        if isVisible && currentAutoPlay && shouldLoadVideo {
+            print("DEBUG: [VIDEO APP ACTIVE] Resuming playback for \(mid)")
+            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
         }
-        .onLongPressGesture(minimumDuration: 0.5) {
-            isLongPressing = true
-            // Handle manual video reset on long press
-            handleError(strategy: .manualReset)
-        } onPressingChanged: { pressing in
-            if !pressing {
-                isLongPressing = false
-            }
+        
+        // Reset error state for videos that might have been interrupted
+        if loadingState.hasFailed {
+            print("DEBUG: [VIDEO APP ACTIVE] Resetting error state for \(mid)")
+            loadingState = .idle
+        }
+    }
+    
+    private func handleTap() {
+        if let onVideoTap = onVideoTap {
+            onVideoTap()
+        }
+    }
+    
+    private func handleLongPress() {
+        isLongPressing = true
+        // Handle manual video reset on long press
+        handleError(strategy: .manualReset)
+    }
+    
+    private func handlePressingChanged(pressing: Bool) {
+        if !pressing {
+            isLongPressing = false
         }
     }
     

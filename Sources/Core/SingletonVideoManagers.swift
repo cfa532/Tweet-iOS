@@ -239,17 +239,26 @@ class DetailVideoManager: NSObject, ObservableObject {
     private func refreshVideoLayer() {
         guard let player = currentPlayer else { return }
         
+        print("DEBUG: [DetailVideoManager] Refreshing video layer after background/foreground transition")
         
         // Store current state
         let wasPlaying = isPlaying
         let currentTime = player.currentTime()
         
-        // Force a seek to refresh the video layer
-        player.seek(to: currentTime) { [weak self] finished in
-            if finished && wasPlaying {
-                player.play()
-                Task { @MainActor [weak self] in
-                    self?.isPlaying = true
+        // Pause first to ensure clean state
+        player.pause()
+        
+        // Force a seek with zero tolerance to refresh the video layer
+        // This triggers the AVPlayerLayer to redraw its contents
+        player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+            if finished {
+                print("DEBUG: [DetailVideoManager] Seek completed after layer refresh")
+                if wasPlaying {
+                    // Resume playback if it was playing before
+                    player.play()
+                    Task { @MainActor [weak self] in
+                        self?.isPlaying = true
+                    }
                 }
             }
         }
