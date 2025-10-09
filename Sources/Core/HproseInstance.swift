@@ -210,7 +210,19 @@ final class HproseInstance: ObservableObject {
             _appUser.followingList = Gadget.getAlphaIds()
             
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
+            
+            // Mark initialization as complete so error messages can be shown
+            // This is safe to do here since the user can now interact with the app
+            isAppInitializing = false
+            print("DEBUG: [HproseInstance] App initialization flag cleared - errors will now be shown to user")
         }
+    }
+    
+    /// Manually mark initialization as complete (for cases where initialize() is not called)
+    func markInitializationComplete() {
+        isAppInitializing = false
+        isInitializationComplete = true
+        print("DEBUG: [HproseInstance] Manually marked initialization as complete")
     }
     
     /// Schedule background tasks
@@ -3338,39 +3350,89 @@ final class HproseInstance: ObservableObject {
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
         return try await withRetry {
-            // Create a copy of the tweet and remove its author attribute
-            tweet.author = nil
+            // Create a clean upload payload with only allowed fields (excluding nil values)
+            var uploadPayload: [String: Any] = [
+                "mid": tweet.mid,
+                "authorId": tweet.authorId,
+                "timestamp": tweet.timestamp.timeIntervalSince1970 * 1000 // milliseconds
+            ]
+            
+            // Add optional fields only if they are not nil
+            if let content = tweet.content {
+                uploadPayload["content"] = content
+            }
+            if let title = tweet.title {
+                uploadPayload["title"] = title
+            }
+            if let originalTweetId = tweet.originalTweetId {
+                uploadPayload["originalTweetId"] = originalTweetId
+            }
+            if let originalAuthorId = tweet.originalAuthorId {
+                uploadPayload["originalAuthorId"] = originalAuthorId
+            }
+            if let attachments = tweet.attachments, !attachments.isEmpty {
+                uploadPayload["attachments"] = attachments.map { attachment in
+                    var attachmentDict: [String: Any] = ["mid": attachment.mid]
+                    attachmentDict["timestamp"] = attachment.timestamp.timeIntervalSince1970 * 1000
+                    return attachmentDict
+                }
+            }
+            if let isPrivate = tweet.isPrivate {
+                uploadPayload["isPrivate"] = isPrivate
+            }
+            if let downloadable = tweet.downloadable {
+                uploadPayload["downloadable"] = downloadable
+            }
+            
+            // Convert to JSON string
+            let jsonData = try JSONSerialization.data(withJSONObject: uploadPayload, options: [])
+            let tweetJSON = String(data: jsonData, encoding: .utf8) ?? ""
+            
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
                 "hostid": appUser.hostIds?.first as Any,
-                "tweet": String(data: try JSONEncoder().encode(tweet), encoding: .utf8) ?? ""
+                "tweet": tweetJSON
             ]
+            
+            print("DEBUG: [uploadTweet] Complete params: \(params)")
+            print("DEBUG: [uploadTweet] Tweet JSON: \(tweetJSON)")
+            print("DEBUG: [uploadTweet] Tweet authorId: \(tweet.authorId), content: \(tweet.content ?? "nil"), attachments count: \(tweet.attachments?.count ?? 0)")
             
             let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: ["add_tweet", params])
             
+            print("DEBUG: [uploadTweet] Raw response: \(String(describing: rawResponse))")
+            
             // Handle the JSON response format
             guard let responseDict = rawResponse as? [String: Any] else {
+                print("DEBUG: [uploadTweet] ERROR: Invalid response format - not a dictionary")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
             }
             
+            print("DEBUG: [uploadTweet] Response dictionary keys: \(responseDict.keys)")
+            
             guard let success = responseDict["success"] as? Bool else {
+                print("DEBUG: [uploadTweet] ERROR: Missing or invalid 'success' field in response")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format: missing success field"])
             }
             
             if success {
                 // Success case: extract the tweet ID
                 guard let newTweetId = responseDict["mid"] as? String else {
+                    print("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
                 }
                 
+                print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
                 let uploadedTweet = tweet
                 uploadedTweet.mid = newTweetId
                 uploadedTweet.author = try? await self.fetchUser(tweet.authorId)
                 return uploadedTweet
             } else {
                 // Failure case: extract error message
-                let errorMessage = responseDict["message"] as? String ?? "Unknown upload error"
+                print("DEBUG: [uploadTweet] Server returned success=false, full response: \(responseDict)")
+                let errorMessage = responseDict["message"] as? String ?? responseDict["msg"] as? String ?? responseDict["error"] as? String ?? "Unknown upload error"
+                print("DEBUG: [uploadTweet] Error message: \(errorMessage)")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
         }
@@ -3459,17 +3521,40 @@ final class HproseInstance: ObservableObject {
         } catch {
             print("Error uploading tweet: \(error)")
             
-            // Show toast error only after all retries have failed and app is initialized
-            // The withRetry mechanism in uploadTweet() handles the retries internally
-            await MainActor.run {
-                if !self.isAppInitializing {
-                    NotificationCenter.default.post(
-                        name: .backgroundUploadFailed,
-                        object: nil,
-                        userInfo: ["error": error]
-                    )
-                } else {
-                    print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
+            // Check if we've reached max retries
+            let maxRetries = 2
+            
+            print("DEBUG: [Error handling] retryCount=\(retryCount), maxRetries=\(maxRetries), will show error: \(retryCount >= maxRetries)")
+            
+            if retryCount >= maxRetries {
+                // All retries exhausted - show error to user
+                print("DEBUG: [Error handling] MAX RETRIES REACHED - Showing error to user and removing pending upload")
+                let userFriendlyMessage = NSLocalizedString("Failed to upload tweet. Please try again.", comment: "Tweet upload failed error")
+                
+                await MainActor.run {
+                    if !self.isAppInitializing {
+                        print("DEBUG: [Error handling] Posting backgroundUploadFailed notification")
+                        NotificationCenter.default.post(
+                            name: .backgroundUploadFailed,
+                            object: nil,
+                            userInfo: ["error": userFriendlyMessage]
+                        )
+                    } else {
+                        print("DEBUG: [Error handling] App still initializing, NOT showing error")
+                    }
+                }
+                
+                // Remove pending upload since we're giving up
+                await removePendingUpload()
+            } else {
+                // Will retry in background - don't show error yet
+                print("DEBUG: [Error handling] Retry \(retryCount + 1) of \(maxRetries + 1) failed, scheduling background retry")
+                
+                // Schedule immediate background retry
+                let delay = UInt64(retryCount + 1) * 2_000_000_000 // 2, 4 seconds exponential backoff
+                Task.detached(priority: .background) {
+                    try? await Task.sleep(nanoseconds: delay)
+                    await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData, retryCount: retryCount + 1)
                 }
             }
         }
@@ -3754,7 +3839,7 @@ final class HproseInstance: ObservableObject {
                         NotificationCenter.default.post(
                             name: .backgroundUploadFailed,
                             object: nil,
-                            userInfo: ["error": error]
+                            userInfo: ["error": error.localizedDescription]
                         )
                     } else {
                         print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
@@ -3938,27 +4023,18 @@ final class HproseInstance: ObservableObject {
                     }
                 }
                 
-                // Check if we've exceeded the maximum retry limit (2 retries = 3 total attempts)
+                // Increment retry count for the next attempt
+                let newRetryCount = pendingUpload.retryCount + 1
                 let maxBackgroundRetries = 2
-                if pendingUpload.retryCount >= maxBackgroundRetries {
-                    print("DEBUG: Background retry limit reached (\(pendingUpload.retryCount)/\(maxBackgroundRetries)), removing pending upload")
-                    
-                    // Show toast error message to user
-                    await MainActor.run {
-                        NotificationCenter.default.post(
-                            name: .backgroundUploadFailed,
-                            object: nil,
-                            userInfo: ["error": NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload failed after multiple attempts. Please check your network connection and try again.", comment: "Background upload failed after retries")])]
-                        )
-                    }
-                    
+                
+                print("DEBUG: Background retry attempt \(newRetryCount)/\(maxBackgroundRetries)")
+                
+                // If this will be the final attempt, the upload function will show the error
+                if newRetryCount > maxBackgroundRetries {
+                    print("DEBUG: Max retries exceeded (\(pendingUpload.retryCount) attempts made), removing pending upload without retrying")
                     try? FileManager.default.removeItem(at: fileURL)
                     return
                 }
-                
-                // Increment retry count and attempt recovery
-                let newRetryCount = pendingUpload.retryCount + 1
-                print("DEBUG: Background retry attempt \(newRetryCount)/\(maxBackgroundRetries)")
                 
                 // Show toast message for retry attempt
                 await MainActor.run {
@@ -4077,7 +4153,7 @@ final class HproseInstance: ObservableObject {
                         NotificationCenter.default.post(
                             name: .backgroundUploadFailed,
                             object: nil,
-                            userInfo: ["error": error]
+                            userInfo: ["error": error.localizedDescription]
                         )
                     } else {
                         print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
