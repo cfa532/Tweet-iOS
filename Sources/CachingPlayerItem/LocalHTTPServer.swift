@@ -81,7 +81,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // Try to find an available port, starting from 8080
         let maxAttempts = 10
-        var startPort = port
+        let startPort = port
         
         for attempt in 0..<maxAttempts {
             let tryPort = startPort + UInt16(attempt)
@@ -90,11 +90,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                 let testListener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: tryPort))
                 
                 // Check if it started successfully
-                var didStart = false
                 testListener.stateUpdateHandler = { [weak self] state in
                     switch state {
                     case .ready:
-                        didStart = true
                         self?.port = tryPort
                         NSLog("DEBUG: [LocalHTTPServer] ✅ Successfully started on port \(tryPort)")
                     case .failed(let error):
