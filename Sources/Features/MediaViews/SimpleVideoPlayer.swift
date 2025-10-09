@@ -665,10 +665,11 @@ struct SimpleVideoPlayer: View {
                 // Show buffering spinner when buffering (fullscreen only)
                 if isBuffering && mode == .mediaBrowser {
                     ZStack {
-                        Color.black.opacity(0.3)
+                        Color.black.opacity(0.15)
                         ProgressView()
                             .scaleEffect(1.5)
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .opacity(0.6)
                     }
                     .transition(.opacity)
                 }
