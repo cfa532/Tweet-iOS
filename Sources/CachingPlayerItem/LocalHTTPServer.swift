@@ -70,21 +70,60 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func startServer() {
+        // Don't start if already listening
+        if listener?.state == .ready {
+            NSLog("DEBUG: [LocalHTTPServer] Already running on port \(port)")
+            return
+        }
+        
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
         
-        do {
-            listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: port))
+        // Try to find an available port, starting from 8080
+        let maxAttempts = 10
+        var startPort = port
+        
+        for attempt in 0..<maxAttempts {
+            let tryPort = startPort + UInt16(attempt)
             
-            listener?.newConnectionHandler = { [weak self] connection in
-                self?.handleConnection(connection)
+            do {
+                let testListener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: tryPort))
+                
+                // Check if it started successfully
+                var didStart = false
+                testListener.stateUpdateHandler = { [weak self] state in
+                    switch state {
+                    case .ready:
+                        didStart = true
+                        self?.port = tryPort
+                        NSLog("DEBUG: [LocalHTTPServer] ✅ Successfully started on port \(tryPort)")
+                    case .failed(let error):
+                        NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) failed: \(error)")
+                    default:
+                        break
+                    }
+                }
+                
+                testListener.newConnectionHandler = { [weak self] connection in
+                    self?.handleConnection(connection)
+                }
+                
+                testListener.start(queue: queue)
+                
+                // Store the successful listener
+                self.listener = testListener
+                
+                // Port found successfully
+                NSLog("DEBUG: [LocalHTTPServer] Attempting to bind to port \(tryPort)...")
+                return
+                
+            } catch {
+                NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) unavailable: \(error.localizedDescription)")
+                continue
             }
-            
-            listener?.start(queue: queue)
-            NSLog("DEBUG: [LocalHTTPServer] Started on port \(port)")
-        } catch {
-            NSLog("DEBUG: [LocalHTTPServer] Failed to start: \(error)")
         }
+        
+        NSLog("DEBUG: [LocalHTTPServer] ❌ Failed to find available port after \(maxAttempts) attempts")
     }
     
     private func handleConnection(_ connection: NWConnection) {
