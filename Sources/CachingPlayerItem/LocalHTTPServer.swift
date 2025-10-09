@@ -48,7 +48,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     public func registerMedia(mediaID: String, cachePath: String) {
         queue.async { [weak self] in
             self?.mediaCache[mediaID] = cachePath
-            NSLog("DEBUG: [LocalHTTPServer] Registered media \(mediaID) -> \(cachePath)")
+            // Removed repetitive registration log
         }
     }
     
@@ -61,7 +61,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Return localhost URL: http://localhost:8080/mediaID/path
         // AVPlayer will request this, and we'll serve from cache or fetch from realURL
         let localhostURL = URL(string: "http://127.0.0.1:\(port)/\(mediaID)\(realURL.path)")!
-        NSLog("DEBUG: [LocalHTTPServer] Registered \(mediaID): localhost=\(localhostURL.absoluteString), real=\(realURL.absoluteString)")
+        // Removed repetitive registration log
         return localhostURL
     }
     
@@ -139,14 +139,13 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             if let data = data, !data.isEmpty {
                 let request = String(data: data, encoding: .utf8) ?? ""
-                let requestLine = request.components(separatedBy: .newlines).first ?? ""
-                NSLog("DEBUG: [LocalHTTPServer] Received request: \(requestLine)")
+                // Removed repetitive request log
                 
                 // Handle the request
                 self.handleRequest(request, connection: connection) {
                     // After handling, continue listening for more requests
                     if !isComplete && error == nil {
-                        NSLog("DEBUG: [LocalHTTPServer] Waiting for next request on same connection...")
+                        // Removed repetitive connection waiting log
                         self.receiveNextRequest(connection: connection)
                     } else {
                         NSLog("DEBUG: [LocalHTTPServer] Connection complete or error, closing")
@@ -202,7 +201,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Reconstruct the relative path (everything after mediaID)
         let relativePath = "/" + pathComponents[1...].joined(separator: "/")
         
-        NSLog("DEBUG: [LocalHTTPServer] Request: mediaID=\(mediaID), relativePath=\(relativePath)")
+        // Removed repetitive request log
         
         // Get real URL for this media
         guard let realURL = mediaRealURLs[mediaID] else {
@@ -237,9 +236,9 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         if hadQuery {
-            NSLog("DEBUG: [LocalHTTPServer] Resolved (stripped query): \(fullRealURL.absoluteString)")
+            // Removed repetitive URL resolution logs
         } else {
-            NSLog("DEBUG: [LocalHTTPServer] Resolved: \(fullRealURL.absoluteString)")
+            // Removed repetitive URL resolution logs
         }
         
         // Check if this is a playlist (.m3u8) or segment (.ts)
@@ -261,7 +260,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // Check cache first
         if FileManager.default.fileExists(atPath: cachePath) {
-            NSLog("DEBUG: [LocalHTTPServer] Serving cached playlist: \(cachePath)")
+            // Removed repetitive cache hit log
             
             // Read, rewrite URLs, and serve
             if let data = try? Data(contentsOf: URL(fileURLWithPath: cachePath)),
@@ -285,7 +284,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         // Not cached - fetch from real server
-        NSLog("DEBUG: [LocalHTTPServer] Fetching playlist from: \(fullRealURL.absoluteString)")
+        // Removed repetitive fetch log
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method)
     }
     
@@ -294,13 +293,13 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // Check cache first
         if FileManager.default.fileExists(atPath: cachePath) {
-            NSLog("DEBUG: [LocalHTTPServer] Serving cached segment: \(cachePath)")
+            // Removed repetitive cache hit log
             serveFile(path: cachePath, connection: connection, method: method)
             return
         }
         
         // Not cached - fetch from real server
-        NSLog("DEBUG: [LocalHTTPServer] Fetching segment from: \(fullRealURL.absoluteString)")
+        // Removed repetitive fetch log
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method)
     }
     

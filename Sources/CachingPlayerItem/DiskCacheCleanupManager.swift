@@ -99,9 +99,8 @@ class DiskCacheCleanupManager {
                         try FileManager.default.removeItem(at: cacheDir)
                         cleanedCount += 1
                         print("DEBUG: [DiskCacheCleanupManager] Removed old cache for public tweet: \(mediaID) (age: \(Int(timeSinceAccess/86400)) days)")
-                    } else {
-                        print("DEBUG: [DiskCacheCleanupManager] Keeping cache for public tweet: \(mediaID) (age: \(Int(timeSinceAccess/86400)) days)")
                     }
+                    // Removed repetitive "Keeping cache" log
                 }
             }
             

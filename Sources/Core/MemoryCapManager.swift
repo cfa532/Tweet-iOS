@@ -116,9 +116,7 @@ class MemoryCapManager {
         let percentage = memoryUsagePercentage
         let usageMB = Double(currentMemoryUsage) / (1024.0 * 1024.0)
         
-        // Always log current memory usage
-        print("DEBUG: [MEMORY] Current usage: \(String(format: "%.1f", usageMB))MB / 2048MB (\(String(format: "%.1f", percentage * 100))%)")
-        
+        // Only log when above warning threshold
         if percentage >= emergencyThreshold {
             logger.error("EMERGENCY: Memory at \(percentage * 100, privacy: .public)% - HARD CAP enforcement")
             print("⚠️ EMERGENCY: Memory at \(String(format: "%.1f", percentage * 100))% - performing emergency cleanup")

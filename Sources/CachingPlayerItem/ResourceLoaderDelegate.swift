@@ -21,10 +21,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             return false
         }
         
-        NSLog("DEBUG: [CachingPlayerItem] resourceLoader: isHLS = true, requestURL = \(requestURL.absoluteString)")
-        NSLog("DEBUG: [CachingPlayerItem] resourceLoader: original url = \(url.absoluteString)")
-        NSLog("DEBUG: [CachingPlayerItem] resourceLoader: mediaID = \(mediaID ?? "nil")")
-        NSLog("DEBUG: [CachingPlayerItem] resourceLoader: saveFilePath = \(saveFilePath)")
+        // Removed repetitive resource loader logs
         
         // Convert custom scheme URL back to original URL
         guard let originalURL = convertCustomSchemeToOriginalURL(requestURL) else {
@@ -32,7 +29,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             return false
         }
         
-        NSLog("DEBUG: [CachingPlayerItem] resourceLoader: converted original URL = \(originalURL.absoluteString)")
+        // Removed repetitive URL conversion log
         
         // Handle different types of requests
         if originalURL.pathExtension == "m3u8" {
@@ -64,8 +61,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             return false 
         }
         
-        NSLog("DEBUG: [CachingPlayerItem] handleHLSRequest: requestURL = \(requestURL.absoluteString)")
-        NSLog("DEBUG: [CachingPlayerItem] handleHLSRequest: original url = \(url.absoluteString)")
+        // Removed repetitive HLS request logs
         
         // For HLS videos, we serve content directly through ResourceLoaderDelegate
         // Check if this is the initial request (base URL without .m3u8)
@@ -103,13 +99,13 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             return false
         }
         
-        NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: mediaID = \(mediaID)")
+        // Removed repetitive playlist request log
         
         // Use the resolved HLS URL instead of converting from requestURL
         // The resolvedURL contains the properly resolved master.m3u8 or playlist.m3u8 URL
         let actualPlaylistURL = resolvedURL
         
-        NSLog("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Actual playlist URL = \(actualPlaylistURL.absoluteString)")
+        // Removed repetitive URL log
         
         // Check if we have a cached playlist for this specific URL
         let cachePath = getCachePath(for: actualPlaylistURL)
