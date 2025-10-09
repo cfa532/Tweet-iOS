@@ -14,3 +14,4 @@ build/Logs/Build/LogStoreManifest.plist
 /build
 *.plist
 build/Logs/Build/LogStoreManifest.plist
+/build/Logs
