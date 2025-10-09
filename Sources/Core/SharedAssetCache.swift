@@ -351,24 +351,17 @@ class SharedAssetCache: ObservableObject {
             // For HLS videos, create AVURLAsset with custom scheme that ResourceLoaderDelegate will handle
             let asset: AVAsset
             if resolvedURL.pathExtension == "m3u8" {
-                // Create custom scheme URL for HLS videos - ResourceLoaderDelegate will handle it
-                guard let customSchemeURL = resolvedURL.withScheme("cachingPlayerItemScheme") else {
-                    throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create custom scheme URL"])
-                }
-                asset = AVURLAsset(url: customSchemeURL)
+                // For HLS videos, use CachingPlayerItem which handles LocalHTTPServer
+                LocalHTTPServer.shared.start()
                 
-                // Create and store CachingPlayerItem and ResourceLoaderDelegate for this asset
-                let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
-                let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
-                let delegate = ResourceLoaderDelegate(url: resolvedURL, mediaID: mediaID, saveFilePath: savePath, owner: cachingPlayerItem)
-                (asset as? AVURLAsset)?.resourceLoader.setDelegate(delegate, queue: DispatchQueue.global(qos: .userInitiated))
+                let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: mediaID, avUrlAssetOptions: nil)
+                asset = cachingPlayerItem.asset
                 
-                print("DEBUG: [SHARED ASSET CACHE] Created ResourceLoaderDelegate for mediaID: \(mediaID), URL: \(resolvedURL.absoluteString)")
+                print("DEBUG: [SHARED ASSET CACHE] Created HLS CachingPlayerItem with LocalHTTPServer for mediaID: \(mediaID), URL: \(resolvedURL.absoluteString)")
                 
-                // Store both the delegate and caching player item to prevent deallocation
+                // Store caching player item to prevent deallocation
                 await MainActor.run { 
                     self.cachingPlayerItems[mediaID] = cachingPlayerItem
-                    self.resourceLoaderDelegates[mediaID] = delegate 
                 }
             } else {
                 // For non-HLS videos, use regular AVURLAsset
@@ -549,22 +542,23 @@ class SharedAssetCache: ObservableObject {
         }
         
         // Create a unique save path for the HLS playlist
-        let savePath = CachingPlayerItem.hlsPlaylistPath(for: mediaID)
-        
-        // Start LocalHTTPServer and register media for serving cached content
+        // Start LocalHTTPServer for HLS video serving
         LocalHTTPServer.shared.start()
-        let mediaCacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!.appendingPathComponent(mediaID)
-        LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
         
-        // Create CachingPlayerItem with the RESOLVED HLS URL
-        let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
+        // Create CachingPlayerItem using HLS initializer (handles LocalHTTPServer internally)
+        let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: mediaID, avUrlAssetOptions: nil)
         
         // Create and store delegate for caching events
         let delegate = CachingPlayerItemDelegateImpl()
         cachingPlayerItem.delegate = delegate
         
+        print("DEBUG: [SHARED ASSET CACHE] Created HLS CachingPlayerItem with LocalHTTPServer for mediaID: \(mediaID), URL: \(resolvedURL.absoluteString)")
+        
         // Store the delegate to prevent deallocation (use mediaID to ignore query params)
-        await MainActor.run { cachingPlayerDelegates[mediaID] = delegate }
+        await MainActor.run { 
+            cachingPlayerDelegates[mediaID] = delegate
+            cachingPlayerItems[mediaID] = cachingPlayerItem
+        }
         
         // Create player with CachingPlayerItem
         let player = AVPlayer(playerItem: cachingPlayerItem)

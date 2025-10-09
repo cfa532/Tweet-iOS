@@ -10,6 +10,26 @@ public class LocalHTTPServer: @unchecked Sendable {
     private var mediaRealURLs: [String: URL] = [:] // mediaID -> real URL
     private let queue = DispatchQueue(label: "LocalHTTPServer", qos: .userInitiated)
     
+    // Connection pool for efficient HTTP requests
+    private lazy var connectionPool: URLSession = {
+        let config = URLSessionConfiguration.default
+        
+        // Connection pool settings for better performance
+        config.httpMaximumConnectionsPerHost = 6  // Multiple concurrent connections per node
+        config.timeoutIntervalForRequest = 30     // 30 seconds per request
+        config.timeoutIntervalForResource = 300   // 5 minutes total
+        
+        // Enable HTTP pipelining for better throughput
+        config.httpShouldUsePipelining = true
+        
+        // Disable URLSession cache (we handle caching ourselves)
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        
+        NSLog("DEBUG: [LocalHTTPServer] Connection pool initialized with max 6 connections per host")
+        return URLSession(configuration: config)
+    }()
+    
     private init() {}
     
     public func start() {
@@ -76,47 +96,67 @@ public class LocalHTTPServer: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self = self else { return }
             
-            if let data = data, !data.isEmpty {
-                let request = String(data: data, encoding: .utf8) ?? ""
-                NSLog("DEBUG: [LocalHTTPServer] Received request: \(request.components(separatedBy: .newlines).first ?? "")")
-                
-                self.handleRequest(request, connection: connection)
-                
-                // Keep receiving more requests on this connection (HTTP keep-alive)
-                if !isComplete {
-                    self.receiveNextRequest(connection: connection)
-                }
+            if let error = error {
+                NSLog("DEBUG: [LocalHTTPServer] Receive error: \(error), isComplete: \(isComplete)")
             }
             
-            if isComplete || error != nil {
+            if let data = data, !data.isEmpty {
+                let request = String(data: data, encoding: .utf8) ?? ""
+                let requestLine = request.components(separatedBy: .newlines).first ?? ""
+                NSLog("DEBUG: [LocalHTTPServer] Received request: \(requestLine)")
+                
+                // Handle the request
+                self.handleRequest(request, connection: connection) {
+                    // After handling, continue listening for more requests
+                    if !isComplete && error == nil {
+                        NSLog("DEBUG: [LocalHTTPServer] Waiting for next request on same connection...")
+                        self.receiveNextRequest(connection: connection)
+                    } else {
+                        NSLog("DEBUG: [LocalHTTPServer] Connection complete or error, closing")
+                        connection.cancel()
+                    }
+                }
+            } else if isComplete || error != nil {
+                NSLog("DEBUG: [LocalHTTPServer] No data, connection complete or error - closing")
                 connection.cancel()
+            } else {
+                // No data yet, keep waiting
+                self.receiveNextRequest(connection: connection)
             }
         }
     }
     
-    private func handleRequest(_ request: String, connection: NWConnection) {
+    private func handleRequest(_ request: String, connection: NWConnection, completion: @escaping () -> Void) {
         let lines = request.components(separatedBy: .newlines)
-        guard let firstLine = lines.first else { return }
+        guard let firstLine = lines.first else {
+            completion()
+            return
+        }
         
         let components = firstLine.components(separatedBy: " ")
-        guard components.count >= 3 else { return }
+        guard components.count >= 3 else {
+            completion()
+            return
+        }
         
         let method = components[0]
         let path = components[1]
         
         if method == "GET" || method == "HEAD" {
-            handleGetRequest(path: path, method: method, connection: connection)
+            handleGetRequest(path: path, method: method, connection: connection, completion: completion)
         } else {
             sendResponse(connection: connection, statusCode: 405, headers: [:], body: nil)
+            completion()
         }
     }
     
-    private func handleGetRequest(path: String, method: String, connection: NWConnection) {
+    private func handleGetRequest(path: String, method: String, connection: NWConnection, completion: @escaping () -> Void) {
         // NEW FORMAT: /mediaID/ipfs/hash/path (e.g., /QmAbc.../ipfs/QmAbc.../master.m3u8)
         // Extract mediaID (first component after /)
         let pathComponents = path.components(separatedBy: "/").filter { !$0.isEmpty }
         guard pathComponents.count >= 1 else {
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+            completion()
             return
         }
         
@@ -131,23 +171,51 @@ public class LocalHTTPServer: @unchecked Sendable {
         guard let realURL = mediaRealURLs[mediaID] else {
             NSLog("DEBUG: [LocalHTTPServer] No real URL found for mediaID: \(mediaID)")
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+            completion()
             return
         }
         
         // Construct full real URL for this specific file
-        let baseURL = realURL.deletingLastPathComponent()
-        let fullRealURL = URL(string: relativePath, relativeTo: baseURL)?.absoluteURL ?? realURL
+        // CRITICAL: Strip query params (like ?dig=XXXX) - they're only for AVPlayer cache-busting
+        // Remote server might not handle them correctly
+        guard var components = URLComponents(url: realURL, resolvingAgainstBaseURL: false) else {
+            NSLog("DEBUG: [LocalHTTPServer] Failed to parse URL components")
+            sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+            completion()
+            return
+        }
         
-        NSLog("DEBUG: [LocalHTTPServer] Resolved: \(fullRealURL.absoluteString)")
+        // Replace path with requested file
+        components.path = relativePath
+        
+        // CRITICAL: Remove query params - remote server should ignore them but might not!
+        let hadQuery = components.query != nil
+        components.query = nil
+        
+        guard let fullRealURL = components.url else {
+            NSLog("DEBUG: [LocalHTTPServer] Failed to construct URL")
+            sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+            completion()
+            return
+        }
+        
+        if hadQuery {
+            NSLog("DEBUG: [LocalHTTPServer] Resolved (stripped query): \(fullRealURL.absoluteString)")
+        } else {
+            NSLog("DEBUG: [LocalHTTPServer] Resolved: \(fullRealURL.absoluteString)")
+        }
         
         // Check if this is a playlist (.m3u8) or segment (.ts)
         if relativePath.hasSuffix(".m3u8") {
             handlePlaylistRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
+            completion()
         } else if relativePath.hasSuffix(".ts") {
             handleSegmentRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
+            completion()
         } else {
             NSLog("DEBUG: [LocalHTTPServer] Unknown file type: \(relativePath)")
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+            completion()
         }
     }
     
@@ -203,20 +271,47 @@ public class LocalHTTPServer: @unchecked Sendable {
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let mediaDir = cacheDir.appendingPathComponent(mediaID)
         
-        // Create directory if needed
-        try? FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
+        // CRITICAL: Preserve full path structure (including /720p, /480p folders)
+        // Extract path after /ipfs/mediaID/
+        let urlPath = url.path
+        if let range = urlPath.range(of: "/ipfs/\(mediaID)/") {
+            // Get everything after /ipfs/mediaID/ (e.g., "720p/playlist.m3u8" or "segment000.ts")
+            let relativePath = String(urlPath[range.upperBound...])
+            let cleanPath = relativePath.components(separatedBy: "?")[0] // Remove query params
+            let fullCacheURL = mediaDir.appendingPathComponent(cleanPath)
+            
+            // Create subdirectories if needed (e.g., /720p, /480p)
+            let subdirURL = fullCacheURL.deletingLastPathComponent()
+            try? FileManager.default.createDirectory(at: subdirURL, withIntermediateDirectories: true)
+            
+            return fullCacheURL.path
+        }
         
-        let filename = url.lastPathComponent.components(separatedBy: "?")[0] // Remove query params
+        // Fallback: just use filename (shouldn't happen with proper URLs)
+        let filename = url.lastPathComponent.components(separatedBy: "?")[0]
         return mediaDir.appendingPathComponent(filename).path
     }
     
     private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String) {
-        let task = URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+        let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
             guard let self = self else { return }
             
             if let error = error {
                 NSLog("DEBUG: [LocalHTTPServer] Fetch error: \(error.localizedDescription)")
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                return
+            }
+            
+            // CRITICAL: Validate HTTP response status
+            guard let httpResponse = response as? HTTPURLResponse else {
+                NSLog("DEBUG: [LocalHTTPServer] Invalid HTTP response")
+                self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                return
+            }
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                NSLog("DEBUG: [LocalHTTPServer] Server returned error status: \(httpResponse.statusCode)")
+                self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: [:], body: nil)
                 return
             }
             
@@ -226,14 +321,17 @@ public class LocalHTTPServer: @unchecked Sendable {
                 return
             }
             
-            // Cache the original data
+            // Cache the original data (trust HTTP 200 status, ignore incorrect content-type headers)
             try? data.write(to: URL(fileURLWithPath: cachePath))
             NSLog("DEBUG: [LocalHTTPServer] Cached to: \(cachePath) (size: \(data.count) bytes)")
             
             // For playlists, rewrite URLs to point to localhost
             var finalData = data
             if cachePath.hasSuffix(".m3u8"), let playlistString = String(data: data, encoding: .utf8) {
-                let mediaID = URL(fileURLWithPath: cachePath).deletingLastPathComponent().lastPathComponent
+                // CRITICAL: Extract actual mediaID (the Qm... hash folder)
+                let pathComponents = cachePath.components(separatedBy: "/")
+                let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
+                
                 let modifiedPlaylist = self.rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: url)
                 if let modifiedData = modifiedPlaylist.data(using: .utf8) {
                     finalData = modifiedData
@@ -292,10 +390,24 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func rewritePlaylistURLs(_ playlistString: String, mediaID: String, baseURL: URL) -> String {
         var modified = playlistString
-        let baseURLWithoutFilename = baseURL.deletingLastPathComponent()
+        
+        // Extract the directory path for relative URL resolution
+        // For http://server/ipfs/hash/720p/playlist.m3u8 → /ipfs/hash/720p
+        let playlistDirectory = baseURL.deletingLastPathComponent().path
         
         NSLog("DEBUG: [LocalHTTPServer] Rewriting playlist URLs, mediaID=\(mediaID), baseURL=\(baseURL.absoluteString)")
+        NSLog("DEBUG: [LocalHTTPServer] Playlist directory: \(playlistDirectory)")
         NSLog("DEBUG: [LocalHTTPServer] Original playlist:\n\(playlistString)")
+        
+        // CRITICAL: Add #EXT-X-PLAYLIST-TYPE:VOD if missing (tells AVPlayer it's VOD, not live)
+        if modified.contains("#EXTINF:") && !modified.contains("#EXT-X-PLAYLIST-TYPE") {
+            // This is a segment playlist without type - add VOD tag after #EXTM3U
+            if let extm3uRange = modified.range(of: "#EXTM3U") {
+                let insertIndex = modified.index(extm3uRange.upperBound, offsetBy: 0)
+                modified.insert(contentsOf: "\n#EXT-X-PLAYLIST-TYPE:VOD", at: insertIndex)
+                NSLog("DEBUG: [LocalHTTPServer] Added #EXT-X-PLAYLIST-TYPE:VOD to playlist")
+            }
+        }
         
         // Rewrite relative .m3u8 URLs (sub-playlists)
         // Pattern matches lines like "720p/playlist.m3u8"
@@ -305,10 +417,11 @@ public class LocalHTTPServer: @unchecked Sendable {
             NSLog("DEBUG: [LocalHTTPServer] Found \(matches.count) playlist URLs to rewrite")
             for match in matches.reversed() {
                 if let range = Range(match.range, in: modified) {
-                    let playlistName = String(modified[range])
-                    let localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(baseURLWithoutFilename.path)/\(playlistName)"
+                    let relativeName = String(modified[range])
+                    // Construct: http://127.0.0.1:port/mediaID/playlistDirectory/relativeName
+                    let localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(playlistDirectory)/\(relativeName)"
                     modified.replaceSubrange(range, with: localhostURL)
-                    NSLog("DEBUG: [LocalHTTPServer] Rewrote: \(playlistName) → \(localhostURL)")
+                    NSLog("DEBUG: [LocalHTTPServer] Rewrote: \(relativeName) → \(localhostURL)")
                 }
             }
         }
@@ -320,10 +433,12 @@ public class LocalHTTPServer: @unchecked Sendable {
             NSLog("DEBUG: [LocalHTTPServer] Found \(matches.count) segment URLs to rewrite")
             for match in matches.reversed() {
                 if let range = Range(match.range, in: modified) {
-                    let segmentName = String(modified[range])
-                    let localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(baseURLWithoutFilename.path)/\(segmentName)"
+                    let relativeName = String(modified[range])
+                    // Construct: http://127.0.0.1:port/mediaID/playlistDirectory/relativeName
+                    let localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(playlistDirectory)/\(relativeName)"
+                    NSLog("DEBUG: [LocalHTTPServer] Rewriting segment '\(relativeName)' -> port:\(port), mediaID:'\(mediaID)', dir:'\(playlistDirectory)'")
+                    NSLog("DEBUG: [LocalHTTPServer] Final URL: \(localhostURL)")
                     modified.replaceSubrange(range, with: localhostURL)
-                    NSLog("DEBUG: [LocalHTTPServer] Rewrote: \(segmentName) → \(localhostURL)")
                 }
             }
         }
@@ -347,6 +462,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?) {
         var response = "HTTP/1.1 \(statusCode) \(getStatusText(statusCode))\r\n"
         
+        // Add default headers first
+        response += "Connection: keep-alive\r\n"  // CRITICAL for HTTP keep-alive!
+        
+        // Add custom headers
         for (key, value) in headers {
             response += "\(key): \(value)\r\n"
         }
