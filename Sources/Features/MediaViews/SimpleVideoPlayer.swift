@@ -947,13 +947,19 @@ struct SimpleVideoPlayer: View {
                 NSLog("DEBUG: [VIDEO CACHE] ✅ Cached player item is ready to play for fullscreen/detail mode with buffered data")
             }
         } else {
-            // For MediaCell mode, be more strict about player readiness to avoid loading delays
+            // For MediaCell mode, check player readiness but trust players with buffered data
             if playerItem.status != .readyToPlay {
-                NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item not ready (status: \(playerItem.status.rawValue)) for MediaCell, clearing cache and creating new player for \(mid)")
-                VideoStateCache.shared.clearCache(for: mid)
-                SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
-                setupPlayer()
-                return
+                // If player has buffered data, it's transitioning and will be ready soon - use it!
+                if hasBufferedData {
+                    NSLog("DEBUG: [VIDEO CACHE] ⚠️ Player status not ready yet (status: \(playerItem.status.rawValue)) but HAS buffered data - will use it for MediaCell")
+                } else {
+                    // No data and not ready - reject it
+                    NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item not ready (status: \(playerItem.status.rawValue)) and no buffered data for MediaCell, clearing cache and creating new player for \(mid)")
+                    VideoStateCache.shared.clearCache(for: mid)
+                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+                    setupPlayer()
+                    return
+                }
             } else {
                 NSLog("DEBUG: [VIDEO CACHE] ✅ Cached player item is ready to play for MediaCell")
             }
@@ -978,6 +984,13 @@ struct SimpleVideoPlayer: View {
         // Restore the cached player (AFTER setting mute state)
         NSLog("DEBUG: [VIDEO CACHE] Assigning cached player to self.player")
         self.player = cachedState.player
+        
+        // CRITICAL: Increment representableId to force VideoPlayer layer recreation
+        // This fixes black screen issues when scrolling in MediaCell
+        if mode == .mediaCell {
+            self.representableId += 1
+            NSLog("DEBUG: [VIDEO CACHE] Incremented representableId to \(representableId) for MediaCell layer recreation")
+        }
         
         // Ensure the player is also cached in SharedAssetCache for consistency
         SharedAssetCache.shared.cachePlayer(cachedState.player, for: playerCacheKey)
