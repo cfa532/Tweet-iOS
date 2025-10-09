@@ -57,18 +57,26 @@ class VideoStateCache {
     
     private init() {}
     
-    func cacheVideoState(for mid: String, player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool) {
-        print("DEBUG: [VIDEO CACHE] Caching video state for \(mid) with original mute state: \(originalMuteState)")
-        cache[mid] = (player: player, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState)
+    /// Generate cache key based on mode - TweetDetail gets separate player to avoid conflicts with MediaCell
+    private func cacheKey(for mid: String, mode: Mode) -> String {
+        return mode == .tweetDetail ? "\(mid)_detail" : mid
     }
     
-    func getCachedState(for mid: String) -> (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)? {
-        return cache[mid]
+    func cacheVideoState(for mid: String, mode: Mode, player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool) {
+        let key = cacheKey(for: mid, mode: mode)
+        print("DEBUG: [VIDEO CACHE] Caching video state for \(mid) (mode: \(mode), key: \(key)) with original mute state: \(originalMuteState)")
+        cache[key] = (player: player, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState)
     }
     
-    func clearCache(for mid: String) {
-        print("DEBUG: [VIDEO CACHE] Clearing cache for \(mid)")
-        cache.removeValue(forKey: mid)
+    func getCachedState(for mid: String, mode: Mode) -> (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)? {
+        let key = cacheKey(for: mid, mode: mode)
+        return cache[key]
+    }
+    
+    func clearCache(for mid: String, mode: Mode) {
+        let key = cacheKey(for: mid, mode: mode)
+        print("DEBUG: [VIDEO CACHE] Clearing cache for \(mid) (key: \(key))")
+        cache.removeValue(forKey: key)
     }
     
     func clearAllCache() {
@@ -242,12 +250,16 @@ struct SimpleVideoPlayer: View {
             
             // For fullscreen and detail modes, always try to set up player regardless of shouldLoadVideo
             if mode == .mediaBrowser || mode == .tweetDetail {
-                NSLog("DEBUG: [VIDEO APPEAR] Fullscreen/Detail mode - forcing player setup for \(mid)")
-                if player == nil {
+                // Only setup if we don't have a player AND we're not currently loading
+                if player == nil && !loadingState.isLoading {
+                    NSLog("DEBUG: [VIDEO APPEAR] Fullscreen/Detail mode - setting up player for \(mid)")
                     setupPlayer()
-                } else {
-                    // Player exists, validate and configure it
+                } else if player != nil {
+                    // Player exists, just validate
+                    NSLog("DEBUG: [VIDEO APPEAR] Fullscreen/Detail mode - player exists, validating for \(mid)")
                     validateAndConfigureExistingPlayer()
+                } else {
+                    NSLog("DEBUG: [VIDEO APPEAR] Fullscreen/Detail mode - already loading, skipping setup for \(mid)")
                 }
                 return
             }
@@ -294,6 +306,7 @@ struct SimpleVideoPlayer: View {
                 let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
                 VideoStateCache.shared.cacheVideoState(
                     for: mid,
+                    mode: mode,
                     player: player,
                     time: player.currentTime(),
                     wasPlaying: player.rate > 0,
@@ -304,18 +317,21 @@ struct SimpleVideoPlayer: View {
             // Pause player when view disappears, but keep it alive in VideoStateCache for sharing
             // MediaCell and MediaBrowser share the same player instance via VideoStateCache
             if mode == .mediaCell {
-                player?.pause()
-                NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - paused player for \(mid), kept alive in cache for sharing with fullscreen")
+                // CRITICAL: Don't pause if player is already paused (might be in use by TweetDetail/Fullscreen)
+                if player?.rate ?? 0 > 0 {
+                    player?.pause()
+                    NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - paused playing video for \(mid)")
+                } else {
+                    NSLog("DEBUG: [VIDEO DISAPPEAR] MediaCell - player already paused (might be in use elsewhere)")
+                }
             } else if mode == .mediaBrowser {
                 // Exiting fullscreen - pause but keep player alive for MediaCell to reuse
                 player?.pause()
                 NSLog("DEBUG: [VIDEO DISAPPEAR] MediaBrowser - paused player for \(mid), kept alive in cache for MediaCell")
             } else if mode == .tweetDetail {
-                // TweetDetail releases its player since it doesn't share with MediaCell
-                player?.pause()
-                player = nil
-                VideoStateCache.shared.clearCache(for: mid)
-                NSLog("DEBUG: [VIDEO DISAPPEAR] TweetDetail - stopped and released player for \(mid)")
+                // TweetDetail keeps player alive - user might be reading comments while listening
+                // Player will be cleaned up when user navigates away from TweetDetailView
+                NSLog("DEBUG: [VIDEO DISAPPEAR] TweetDetail - keeping player alive for \(mid), might return to view")
             }
         }
         .onChange(of: mode) { oldMode, newMode in
@@ -469,6 +485,7 @@ struct SimpleVideoPlayer: View {
                     let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
                     VideoStateCache.shared.cacheVideoState(
                         for: mid,
+                        mode: mode,
                         player: player,
                         time: player.currentTime(),
                         wasPlaying: player.rate > 0,
@@ -624,12 +641,14 @@ struct SimpleVideoPlayer: View {
             ZStack {
                 // Main video player - only show if not detached
                 if !isPlayerDetached {
-                    if mode == .mediaBrowser {
-                        // Use AVPlayerViewController for fullscreen modes to get native controls
+                    if mode == .mediaBrowser || mode == .tweetDetail {
+                        // Use AVPlayerViewController for fullscreen/detail modes to get native controls
+                        // CRITICAL: Use player's memory address to force new view controller when player changes
+                        let playerId = player.currentItem != nil ? "\(mid)_\(Unmanaged.passUnretained(player).toOpaque())" : mid
                         AVPlayerViewControllerRepresentable(player: player, isBuffering: $isBuffering)
-                            .id("\(mid)_\(representableId)") // Force recreation with representableId changes
+                            .id(playerId) // Force new controller when player instance changes
                             .onAppear {
-                                NSLog("DEBUG: [AVPlayerViewController] View appeared for \(mid)")
+                                NSLog("DEBUG: [AVPlayerViewController] View appeared for \(mid) in \(mode) mode, playerId: \(playerId)")
                             }
                             .onTapGesture {
                                 if let onVideoTap = onVideoTap {
@@ -637,7 +656,7 @@ struct SimpleVideoPlayer: View {
                                 }
                             }
                     } else {
-                        // Use native SwiftUI VideoPlayer - let iOS handle everything
+                        // Use native SwiftUI VideoPlayer for MediaCell
                         VideoPlayer(player: player)
                             .id(uniqueViewId) // Hash of tweet+video+state for unique identity
                             .onTapGesture {
@@ -772,18 +791,18 @@ struct SimpleVideoPlayer: View {
         NSLog("DEBUG: [VIDEO SETUP] isVisible: \(isVisible), shouldLoadVideo: \(shouldLoadVideo), mode: \(mode)")
         NSLog("DEBUG: [VIDEO SETUP] URL: \(url)")
         
-        // FIRST: Check VideoStateCache for shared player (all modes share ONE player per mid)
-        NSLog("DEBUG: [VIDEO SETUP] Checking VideoStateCache for shared player: \(mid)")
-        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+        // FIRST: Check VideoStateCache for shared player (MediaCell/Browser share, TweetDetail separate)
+        NSLog("DEBUG: [VIDEO SETUP] Checking VideoStateCache for player: \(mid) (mode: \(mode))")
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid, mode: mode) {
             NSLog("DEBUG: [VIDEO CACHE] ✅ Found shared player for \(mid) in \(mode) mode")
             
             // Apply mute state based on current mode
             if mode == .mediaCell {
                 cachedState.player.isMuted = MuteState.shared.isMuted
                 NSLog("DEBUG: [VIDEO CACHE] Applied global mute state to shared player for MediaCell")
-            } else if mode == .mediaBrowser {
+            } else if mode == .mediaBrowser || mode == .tweetDetail {
                 cachedState.player.isMuted = false
-                NSLog("DEBUG: [VIDEO CACHE] Unmuted shared player for fullscreen")
+                NSLog("DEBUG: [VIDEO CACHE] Unmuted shared player for fullscreen/detail")
             }
             
             restoreFromCache(cachedState)
@@ -802,9 +821,9 @@ struct SimpleVideoPlayer: View {
             Task.detached(priority: .userInitiated) {
                 NSLog("DEBUG: [VIDEO SETUP] Starting async Task to load player from cache for \(mid) in mode \(mode)")
                 do {
-                    NSLog("DEBUG: [VIDEO SETUP] Calling getOrCreatePlayer for \(mid)")
+                    NSLog("DEBUG: [VIDEO SETUP] Calling getOrCreatePlayer for \(mid) with mode: \(mode)")
                     // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: mid, mediaType: mediaType)
+                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: mid, mediaType: mediaType, mode: mode)
                     NSLog("DEBUG: [VIDEO SETUP] getOrCreatePlayer returned successfully for \(mid)")
                     
                     // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
@@ -861,9 +880,9 @@ struct SimpleVideoPlayer: View {
             NSLog("DEBUG: [VIDEO SETUP] Async Task started for \(mid)")
             do {
                 // Use shared cached player for all modes - simpler and more efficient
-                NSLog("DEBUG: [SimpleVideoPlayer] Getting shared player for \(mid)")
+                NSLog("DEBUG: [SimpleVideoPlayer] Getting shared player for \(mid) with mode: \(mode)")
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: mid, mediaType: mediaType)
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: mid, mediaType: mediaType, mode: mode)
                 
                 NSLog("DEBUG: [SimpleVideoPlayer] Player creation completed for \(mid)")
                 
@@ -915,7 +934,7 @@ struct SimpleVideoPlayer: View {
         // Validate cached player before using it
         guard let playerItem = cachedState.player.currentItem else {
             NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player has no currentItem, clearing cache and creating new player for \(mid)")
-            VideoStateCache.shared.clearCache(for: mid)
+            VideoStateCache.shared.clearCache(for: mid, mode: mode)
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
             setupPlayer()
             return
@@ -926,7 +945,7 @@ struct SimpleVideoPlayer: View {
         // Check if player item is in a failed state
         if playerItem.status == .failed {
             NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item is in failed state, clearing cache and creating new player for \(mid)")
-            VideoStateCache.shared.clearCache(for: mid)
+            VideoStateCache.shared.clearCache(for: mid, mode: mode)
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
             setupPlayer()
             return
@@ -956,7 +975,7 @@ struct SimpleVideoPlayer: View {
                 } else {
                     // No data and not ready - reject it
                     NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item not ready (status: \(playerItem.status.rawValue)) and no buffered data for MediaCell, clearing cache and creating new player for \(mid)")
-                    VideoStateCache.shared.clearCache(for: mid)
+                    VideoStateCache.shared.clearCache(for: mid, mode: mode)
                     SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
                     setupPlayer()
                     return
@@ -976,10 +995,10 @@ struct SimpleVideoPlayer: View {
             }
             cachedState.player.isMuted = MuteState.shared.isMuted
             NSLog("DEBUG: [VIDEO CACHE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
-        } else {
-            // For full screen modes (mediaBrowser), always unmute regardless of cached state
+        } else if mode == .mediaBrowser || mode == .tweetDetail {
+            // For fullscreen/detail modes, always unmute regardless of cached state
             cachedState.player.isMuted = false
-            NSLog("DEBUG: [VIDEO CACHE] Forced unmuted for full screen mode")
+            NSLog("DEBUG: [VIDEO CACHE] Forced unmuted for \(mode) mode")
         }
         
         // Restore the cached player (AFTER setting mute state)
@@ -987,10 +1006,11 @@ struct SimpleVideoPlayer: View {
         self.player = cachedState.player
         
         // CRITICAL: Increment representableId to force VideoPlayer layer recreation
-        // This fixes black screen issues when scrolling in MediaCell
+        // Only needed for MediaCell which uses SwiftUI's VideoPlayer (has layer issues)
+        // TweetDetail uses AVPlayerViewController which manages layers properly
         if mode == .mediaCell {
             self.representableId += 1
-            NSLog("DEBUG: [VIDEO CACHE] Incremented representableId to \(representableId) for MediaCell layer recreation")
+            NSLog("DEBUG: [VIDEO CACHE] Incremented representableId to \(representableId) for MediaCell VideoPlayer layer recreation")
         }
         
         // Ensure the player is also cached in SharedAssetCache for consistency
@@ -1120,6 +1140,7 @@ struct SimpleVideoPlayer: View {
             let wasPlaying = player.rate > 0
             VideoStateCache.shared.cacheVideoState(
                 for: mid,
+                mode: mode,
                 player: player,
                 time: currentTime,
                 wasPlaying: wasPlaying,
@@ -1148,7 +1169,7 @@ struct SimpleVideoPlayer: View {
         let timeScale = CMTimeScale(NSEC_PER_SEC)
         let time = CMTime(seconds: 2.0, preferredTimescale: timeScale)
         
-        timeObserver = player.addPeriodicTimeObserver(forInterval: time, queue: .main) { [mid] time in
+        timeObserver = player.addPeriodicTimeObserver(forInterval: time, queue: .main) { [mid, mode] time in
             // Cache/update player state periodically when ready
             if let playerItem = player.currentItem,
                playerItem.status == .readyToPlay,
@@ -1157,6 +1178,7 @@ struct SimpleVideoPlayer: View {
                 let wasPlaying = player.rate > 0
                 VideoStateCache.shared.cacheVideoState(
                     for: mid,
+                    mode: mode,
                     player: player,
                     time: currentTime,
                     wasPlaying: wasPlaying,
@@ -1231,7 +1253,7 @@ struct SimpleVideoPlayer: View {
         print("DEBUG: [VIDEO ERROR] Handling error with strategy: \(strategy) for \(mid), retryCount: \(currentRetryCount)")
         
         // Clear caches using uniquePlayerURL to match caching key
-        VideoStateCache.shared.clearCache(for: mid)
+        VideoStateCache.shared.clearCache(for: mid, mode: mode)
         SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
         
         Task.detached {
@@ -1314,7 +1336,7 @@ struct SimpleVideoPlayer: View {
     
     private func restoreCachedVideoState() {
         // Check if we have a cached state
-        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid, mode: mode) {
             print("DEBUG: [VIDEO CACHE] Restoring cached video state for \(mid)")
             restoreFromCache(cachedState)
         } else {
@@ -1459,6 +1481,7 @@ struct SimpleVideoPlayer: View {
         // Cache the state for restoration
         VideoStateCache.shared.cacheVideoState(
             for: mid,
+            mode: mode,
             player: player,
             time: currentTime,
             wasPlaying: wasPlaying,
@@ -1486,7 +1509,7 @@ struct SimpleVideoPlayer: View {
         isPlayerDetached = false
         
         // Get cached state if available
-        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid, mode: mode) {
             print("DEBUG: [VIDEO REATTACH] Restoring cached state for \(mid)")
             
             // Restore mute state

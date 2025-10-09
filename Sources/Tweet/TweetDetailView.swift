@@ -491,6 +491,25 @@ struct TweetDetailView: View {
             refreshTimer = nil
             isVisible = false
             
+            // Stop and release all video players for this TweetDetail
+            if let attachments = displayTweet.attachments {
+                for attachment in attachments where attachment.type == .video || attachment.type == .hls_video {
+                    print("DEBUG: [TweetDetailView] Stopping video player for: \(attachment.mid)")
+                    
+                    // Get the player from cache and stop it
+                    if let cachedState = VideoStateCache.shared.getCachedState(for: attachment.mid, mode: .tweetDetail) {
+                        print("DEBUG: [TweetDetailView] Found cached player, stopping playback")
+                        cachedState.player.pause()
+                        cachedState.player.seek(to: .zero)
+                    }
+                    
+                    // Clear TweetDetail player cache
+                    VideoStateCache.shared.clearCache(for: attachment.mid, mode: .tweetDetail)
+                    // Remove from SharedAssetCache
+                    SharedAssetCache.shared.removeInvalidPlayer(for: "\(attachment.mid)_detail")
+                }
+            }
+            
             // Cancel any pending image loads to prevent memory leaks
             if let attachments = displayTweet.attachments {
                 for attachment in attachments {

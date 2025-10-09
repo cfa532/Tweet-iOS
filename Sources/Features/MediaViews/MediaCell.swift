@@ -401,7 +401,7 @@ struct MediaCell: View, Equatable {
             SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? attachment.mid)
             
             // Clear video state cache
-            VideoStateCache.shared.clearCache(for: attachment.mid)
+            VideoStateCache.shared.clearCache(for: attachment.mid, mode: .mediaCell)
             
             // Clear asset cache
             Task {
