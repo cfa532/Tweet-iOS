@@ -248,6 +248,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                     let filename = url.lastPathComponent
                     let fullURL = localURL.appendingPathComponent(filename)
                     
+                    // Use HTTP 302 redirect to LocalHTTPServer
                     let response = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
                         "Location": fullURL.absoluteString
                     ])
