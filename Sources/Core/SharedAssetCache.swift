@@ -435,6 +435,19 @@ class SharedAssetCache: ObservableObject {
                 return nil
             }
             
+            // Check if player has buffered data in memory
+            let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
+            print("DEBUG: [SHARED ASSET CACHE] Cached player has buffered data: \(hasBufferedData), loadedTimeRanges: \(playerItem.loadedTimeRanges.count)")
+            
+            // If no buffered data, force preroll to reload from disk cache
+            if !hasBufferedData && playerItem.status == .readyToPlay {
+                print("DEBUG: [SHARED ASSET CACHE] Cached player has no buffered data - forcing preroll to reload from cache")
+                playerItem.preferredForwardBufferDuration = 5.0
+                player.preroll(atRate: 1.0) { success in
+                    print("DEBUG: [SHARED ASSET CACHE] Preroll completed for cached player: \(success)")
+                }
+            }
+            
             cacheTimestamps[mediaID] = Date() // Update access time
             return player
         }
@@ -464,12 +477,13 @@ class SharedAssetCache: ObservableObject {
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaID: \(mediaID), mediaType: \(mediaType?.rawValue ?? "nil")")
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for tweetId: \(tweetId ?? "nil")")
         
-        // Use full URL (including query params) as cache key to support duo videos
-        let cacheKey = url.absoluteString
+        // CRITICAL: Use mediaID as cache key for HLS videos to ignore query params (dig=xxx)
+        // Query params like "dig" are just for cache busting but point to the same video
+        let cacheKey = mediaID
         
         // Try to get cached player first
         if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
-            print("DEBUG: [SHARED ASSET CACHE] Returning cached player for URL: \(cacheKey)")
+            NSLog("DEBUG: [SHARED ASSET CACHE] ✅ Returning cached player for mediaID: \(cacheKey)")
             return cachedPlayer
         }
         
@@ -496,9 +510,8 @@ class SharedAssetCache: ObservableObject {
             let playerItem = AVPlayerItem(asset: asset)
             let player = AVPlayer(playerItem: playerItem)
             
-            // Cache the player using full URL as key (to support duo videos with different query params)
-            let cacheKey = url.absoluteString
-            await MainActor.run { cachePlayer(player, for: cacheKey) }
+            // Cache the player using mediaID as key (ignore query params)
+            await MainActor.run { cachePlayer(player, for: mediaID) }
             
             return player
         }
@@ -534,30 +547,29 @@ class SharedAssetCache: ObservableObject {
         let mediaCacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!.appendingPathComponent(mediaID)
         LocalHTTPServer.shared.registerMedia(mediaID: mediaID, cachePath: mediaCacheDir.path)
         
-        // Create CachingPlayerItem with the RESOLVED HLS URL (not the LocalHTTPServer URL)
+        // Create CachingPlayerItem with the RESOLVED HLS URL
         let cachingPlayerItem = CachingPlayerItem(url: resolvedURL, saveFilePath: savePath, customFileExtension: "m3u8", avUrlAssetOptions: nil, isHLS: true, mediaID: mediaID)
         
         // Create and store delegate for caching events
         let delegate = CachingPlayerItemDelegateImpl()
         cachingPlayerItem.delegate = delegate
         
-        // Store the delegate to prevent deallocation
-        let cacheKey = url.absoluteString
-        await MainActor.run { cachingPlayerDelegates[cacheKey] = delegate }
+        // Store the delegate to prevent deallocation (use mediaID to ignore query params)
+        await MainActor.run { cachingPlayerDelegates[mediaID] = delegate }
         
         // Create player with CachingPlayerItem
         let player = AVPlayer(playerItem: cachingPlayerItem)
         
-        // Cache the player using full URL as key (to support duo videos with different query params)
+        // Cache the player using mediaID as key (ignore query params like dig=xxx)
         await MainActor.run { 
-            cachePlayer(player, for: cacheKey)
+            cachePlayer(player, for: mediaID)
             // Invalidate disk cache status since we're creating new cache content
             invalidateDiskCacheStatus(for: mediaID)
         }
         
         // DON'T auto-play here - let the view decide when to play
         // The player is ready, the view will call play() when appropriate
-        NSLog("DEBUG: [SHARED ASSET CACHE] Player created and cached for URL: \(cacheKey), ready for playback")
+        NSLog("DEBUG: [SHARED ASSET CACHE] Player created and cached for mediaID: \(mediaID), ready for playback")
         
         return player
     }
