@@ -187,26 +187,23 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 self.downloadHLSSegments(segments, baseURL: baseURL)
             }
             
-            // Redirect to LocalHTTPServer to serve the modified playlist
-            guard let mediaID = self.mediaID,
-                  let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID) else {
-                NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Failed to get local URL for playlist")
-                let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get local URL"])
-                loadingRequest.finishLoading(with: error)
-                return
+            // Serve playlist directly (no redirect!)
+            NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Serving playlist DIRECTLY (no redirect!)")
+            
+            // Provide ContentInformationRequest for metadata
+            if let contentRequest = loadingRequest.contentInformationRequest {
+                contentRequest.contentType = "application/vnd.apple.mpegurl"
+                contentRequest.contentLength = Int64(modifiedPlaylistData.count)
+                contentRequest.isByteRangeAccessSupported = true
             }
             
-            // Construct the full URL with the filename
-            let filename = actualPlaylistURL.lastPathComponent
-            let fullURL = localURL.appendingPathComponent(filename)
+            // Serve the modified playlist data directly
+            if let dataRequest = loadingRequest.dataRequest {
+                dataRequest.respond(with: modifiedPlaylistData)
+                NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Served \(modifiedPlaylistData.count) bytes instantly (no redirect!)")
+            }
             
-            let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-                "Location": fullURL.absoluteString
-            ])
-            loadingRequest.response = response
             loadingRequest.finishLoading()
-            
-            NSLog("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Redirected to LocalHTTPServer for playlist: \(localURL.absoluteString)")
         }
         
         task.resume()
@@ -233,29 +230,43 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 if cachedData.count < 1000 { // Less than 1KB is likely an incomplete download
                     NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Cached segment too small (\(cachedData.count) bytes), likely incomplete - will re-download")
                 } else {
-                    NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Serving cached segment from \(cachePath) (size: \(cachedData.count) bytes)")
+                    NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Serving cached segment DIRECTLY (no redirect!)")
                     
-                    // Redirect to LocalHTTPServer to serve the cached segment
-                    guard let mediaID = mediaID,
-                          let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID) else {
-                        NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Failed to get local URL for segment")
-                        let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get local URL"])
-                        loadingRequest.finishLoading(with: error)
-                        return false
+                    // CRITICAL: Serve data DIRECTLY (instant, no redirect!)
+                    // Provide ContentInformationRequest for metadata
+                    if let contentRequest = loadingRequest.contentInformationRequest {
+                        contentRequest.contentType = "video/MP2T"
+                        contentRequest.contentLength = Int64(cachedData.count)
+                        contentRequest.isByteRangeAccessSupported = true
                     }
                     
-                    // Construct the full URL with the filename
-                    let filename = url.lastPathComponent
-                    let fullURL = localURL.appendingPathComponent(filename)
+                    // Serve the data directly, respecting byte-range requests
+                    if let dataRequest = loadingRequest.dataRequest {
+                        let requestedOffset = dataRequest.requestedOffset
+                        let requestedLength = dataRequest.requestedLength
+                        let currentOffset = dataRequest.currentOffset
+                        
+                        NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: dataRequest - requestedOffset=\(requestedOffset), requestedLength=\(requestedLength), currentOffset=\(currentOffset)")
+                        
+                        // Calculate the range to serve
+                        let startOffset = Int(currentOffset)
+                        let endOffset: Int
+                        if dataRequest.requestsAllDataToEndOfResource {
+                            endOffset = cachedData.count
+                        } else {
+                            endOffset = min(Int(requestedOffset) + requestedLength, cachedData.count)
+                        }
+                        
+                        let rangeLength = endOffset - startOffset
+                        if rangeLength > 0 && startOffset < cachedData.count {
+                            let range = startOffset..<min(startOffset + rangeLength, cachedData.count)
+                            let subdata = cachedData.subdata(in: range)
+                            dataRequest.respond(with: subdata)
+                            NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Served \(subdata.count) bytes instantly (range \(startOffset)-\(endOffset), no redirect!)")
+                        }
+                    }
                     
-                    // Use HTTP 302 redirect to LocalHTTPServer
-                    let response = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-                        "Location": fullURL.absoluteString
-                    ])
-                    loadingRequest.response = response
                     loadingRequest.finishLoading()
-                    
-                    NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirected to LocalHTTPServer for cached segment: \(localURL.absoluteString)")
                     return true
                 }
             } catch {
@@ -619,13 +630,12 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                     cleanSegmentName = segmentName
                 }
                 
-                // For segments, always use the baseURLWithoutFilename path directly
-                // The segments are in the same directory as the playlist
+                // Use custom scheme (ResourceLoaderDelegate will serve directly, no redirect!)
                 let segmentPath = "\(baseURLWithoutFilename.path)/\(cleanSegmentName)"
                 let customSchemeURL = "cachingPlayerItemScheme://\(hostWithPort)\(port)\(segmentPath)"
                 
                 modifiedPlaylist.replaceSubrange(range, with: customSchemeURL)
-                NSLog("DEBUG: [CachingPlayerItem] modifyPlaylistForCustomScheme: Replaced \(segmentName) with \(customSchemeURL)")
+                NSLog("DEBUG: [CachingPlayerItem] modifyPlaylistForCustomScheme: Replaced \(segmentName) with custom scheme (delegate will serve directly!): \(customSchemeURL)")
             }
         }
         
@@ -644,7 +654,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 let port = baseURL.port != nil ? ":\(baseURL.port!)" : ""
                 let customSchemeURL = "cachingPlayerItemScheme://\(hostWithPort)\(port)\(baseURLWithoutFilename.path)/\(playlistName)"
                 modifiedPlaylist.replaceSubrange(range, with: customSchemeURL)
-                NSLog("DEBUG: [CachingPlayerItem] modifyPlaylistForCustomScheme: Replaced \(playlistName) with \(customSchemeURL)")
+                NSLog("DEBUG: [CachingPlayerItem] modifyPlaylistForCustomScheme: Replaced \(playlistName) with custom scheme (delegate will serve directly!): \(customSchemeURL)")
             }
         }
         

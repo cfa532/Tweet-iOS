@@ -146,15 +146,17 @@ public final class CachingPlayerItem: AVPlayerItem {
         self.isHLS = isHLS
         self.mediaID = mediaID
 
-        // For HLS videos, use custom scheme that ResourceLoaderDelegate will handle
+        // For HLS videos, use LocalHTTPServer directly (no ResourceLoaderDelegate!)
         let finalURL: URL
-        if isHLS, let _ = mediaID {
-            // Use custom scheme for HLS - ResourceLoaderDelegate will handle download and serve directly
-            guard let urlWithCustomScheme = url.withScheme(cachingPlayerItemScheme) else {
-                fatalError("CachingPlayerItem error: Failed to create custom scheme URL")
-            }
-            finalURL = urlWithCustomScheme
-            NSLog("DEBUG: [CachingPlayerItem] Using custom scheme URL for HLS (ResourceLoaderDelegate will serve directly): \(finalURL.absoluteString)")
+        let useResourceLoaderDelegate: Bool
+        if isHLS, let mediaID = mediaID {
+            // CRITICAL: Give AVPlayer localhost URL - LocalHTTPServer is the server!
+            // No custom scheme, no ResourceLoaderDelegate intercept, no redirects!
+            let localhostURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: url)
+            finalURL = localhostURL
+            useResourceLoaderDelegate = false  // LocalHTTPServer handles everything
+            NSLog("DEBUG: [CachingPlayerItem] Using LocalHTTPServer URL (no ResourceLoaderDelegate!): \(finalURL.absoluteString)")
+            NSLog("DEBUG: [CachingPlayerItem] Real URL: \(url.absoluteString)")
         } else {
             // For progressive videos, use custom scheme
             guard var urlWithCustomScheme = url.withScheme(cachingPlayerItemScheme) else {
@@ -170,6 +172,7 @@ public final class CachingPlayerItem: AVPlayerItem {
             }
             
             finalURL = urlWithCustomScheme
+            useResourceLoaderDelegate = true  // Progressive needs ResourceLoaderDelegate
         }
 
         if let headers = avUrlAssetOptions?["AVURLAssetHTTPHeaderFieldsKey"] as? [String: String] {
@@ -179,9 +182,15 @@ public final class CachingPlayerItem: AVPlayerItem {
         let asset = AVURLAsset(url: finalURL, options: avUrlAssetOptions)
         super.init(asset: asset, automaticallyLoadedAssetKeys: nil)
 
-        // Initialize resource loader delegate for all caching scenarios
-        resourceLoaderDelegate = ResourceLoaderDelegate(url: url, mediaID: mediaID, saveFilePath: saveFilePath, owner: self)
-        asset.resourceLoader.setDelegate(resourceLoaderDelegate, queue: DispatchQueue.main)
+        // Only use ResourceLoaderDelegate for progressive videos
+        // HLS uses LocalHTTPServer directly (no intercept needed!)
+        if useResourceLoaderDelegate {
+            resourceLoaderDelegate = ResourceLoaderDelegate(url: url, mediaID: mediaID, saveFilePath: saveFilePath, owner: self)
+            asset.resourceLoader.setDelegate(resourceLoaderDelegate, queue: DispatchQueue.main)
+            NSLog("DEBUG: [CachingPlayerItem] ResourceLoaderDelegate enabled for progressive video")
+        } else {
+            NSLog("DEBUG: [CachingPlayerItem] No ResourceLoaderDelegate - LocalHTTPServer handles everything")
+        }
 
         addObservers()
     }

@@ -5,8 +5,9 @@ public class LocalHTTPServer: @unchecked Sendable {
     public static let shared = LocalHTTPServer()
     
     private var listener: NWListener?
-    private var port: UInt16 = 8080
+    public private(set) var port: UInt16 = 8080  // Public read, private write
     private var mediaCache: [String: String] = [:] // mediaID -> cachePath
+    private var mediaRealURLs: [String: URL] = [:] // mediaID -> real URL
     private let queue = DispatchQueue(label: "LocalHTTPServer", qos: .userInitiated)
     
     private init() {}
@@ -29,6 +30,19 @@ public class LocalHTTPServer: @unchecked Sendable {
             self?.mediaCache[mediaID] = cachePath
             NSLog("DEBUG: [LocalHTTPServer] Registered media \(mediaID) -> \(cachePath)")
         }
+    }
+    
+    public func registerAndGetURL(for mediaID: String, realURL: URL) -> URL {
+        // Store the mapping (synchronous to ensure it's available immediately)
+        queue.sync {
+            mediaRealURLs[mediaID] = realURL
+        }
+        
+        // Return localhost URL: http://localhost:8080/mediaID/path
+        // AVPlayer will request this, and we'll serve from cache or fetch from realURL
+        let localhostURL = URL(string: "http://127.0.0.1:\(port)/\(mediaID)\(realURL.path)")!
+        NSLog("DEBUG: [LocalHTTPServer] Registered \(mediaID): localhost=\(localhostURL.absoluteString), real=\(realURL.absoluteString)")
+        return localhostURL
     }
     
     public func getLocalURL(for mediaID: String) -> URL? {
@@ -55,16 +69,26 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handleConnection(_ connection: NWConnection) {
         connection.start(queue: queue)
-        
+        receiveNextRequest(connection: connection)
+    }
+    
+    private func receiveNextRequest(connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self = self else { return }
+            
             if let data = data, !data.isEmpty {
                 let request = String(data: data, encoding: .utf8) ?? ""
                 NSLog("DEBUG: [LocalHTTPServer] Received request: \(request.components(separatedBy: .newlines).first ?? "")")
                 
-                self?.handleRequest(request, connection: connection)
+                self.handleRequest(request, connection: connection)
+                
+                // Keep receiving more requests on this connection (HTTP keep-alive)
+                if !isComplete {
+                    self.receiveNextRequest(connection: connection)
+                }
             }
             
-            if isComplete {
+            if isComplete || error != nil {
                 connection.cancel()
             }
         }
@@ -88,55 +112,152 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func handleGetRequest(path: String, method: String, connection: NWConnection) {
-        // Parse path: /media/{mediaID}/{filename}
-        let pathComponents = path.components(separatedBy: "/")
-        guard pathComponents.count >= 3, pathComponents[1] == "media" else {
+        // NEW FORMAT: /mediaID/ipfs/hash/path (e.g., /QmAbc.../ipfs/QmAbc.../master.m3u8)
+        // Extract mediaID (first component after /)
+        let pathComponents = path.components(separatedBy: "/").filter { !$0.isEmpty }
+        guard pathComponents.count >= 1 else {
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             return
         }
         
-        let mediaID = pathComponents[2]
-        let filename = pathComponents.count > 3 ? pathComponents[3] : ""
+        let mediaID = pathComponents[0]
         
-        NSLog("DEBUG: [LocalHTTPServer] Handling request for mediaID: \(mediaID), filename: \(filename)")
+        // Reconstruct the relative path (everything after mediaID)
+        let relativePath = "/" + pathComponents[1...].joined(separator: "/")
         
-        // Get cache path for this media
-        guard let cachePath = mediaCache[mediaID] else {
-            NSLog("DEBUG: [LocalHTTPServer] No cache found for mediaID: \(mediaID)")
+        NSLog("DEBUG: [LocalHTTPServer] Request: mediaID=\(mediaID), relativePath=\(relativePath)")
+        
+        // Get real URL for this media
+        guard let realURL = mediaRealURLs[mediaID] else {
+            NSLog("DEBUG: [LocalHTTPServer] No real URL found for mediaID: \(mediaID)")
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             return
         }
         
-        // If no filename specified, serve the main playlist
-        if filename.isEmpty {
-            // cachePath is now the media-specific directory, so we need to find the main playlist file
-            // Try different possible playlist names in order of preference
-            let possiblePlaylistNames = ["master.m3u8", "_master.m3u8", "\(mediaID).m3u8", "playlist.m3u8"]
+        // Construct full real URL for this specific file
+        let baseURL = realURL.deletingLastPathComponent()
+        let fullRealURL = URL(string: relativePath, relativeTo: baseURL)?.absoluteURL ?? realURL
+        
+        NSLog("DEBUG: [LocalHTTPServer] Resolved: \(fullRealURL.absoluteString)")
+        
+        // Check if this is a playlist (.m3u8) or segment (.ts)
+        if relativePath.hasSuffix(".m3u8") {
+            handlePlaylistRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
+        } else if relativePath.hasSuffix(".ts") {
+            handleSegmentRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
+        } else {
+            NSLog("DEBUG: [LocalHTTPServer] Unknown file type: \(relativePath)")
+            sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+        }
+    }
+    
+    private func handlePlaylistRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
+        let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
+        
+        // Check cache first
+        if FileManager.default.fileExists(atPath: cachePath) {
+            NSLog("DEBUG: [LocalHTTPServer] Serving cached playlist: \(cachePath)")
             
-            for playlistName in possiblePlaylistNames {
-                let playlistPath = URL(fileURLWithPath: cachePath).appendingPathComponent(playlistName).path
-                if FileManager.default.fileExists(atPath: playlistPath) {
-                    serveFile(path: playlistPath, connection: connection, method: method)
+            // Read, rewrite URLs, and serve
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: cachePath)),
+               let playlistString = String(data: data, encoding: .utf8) {
+                let modifiedPlaylist = rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: fullRealURL)
+                if let modifiedData = modifiedPlaylist.data(using: .utf8) {
+                    let headers: [String: String] = [
+                        "Content-Type": "application/vnd.apple.mpegurl",
+                        "Content-Length": "\(modifiedData.count)",
+                        "Accept-Ranges": "bytes"
+                    ]
+                    sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
+                    NSLog("DEBUG: [LocalHTTPServer] Served cached playlist with rewritten URLs")
                     return
                 }
             }
             
-            // If no playlist found, return 404
-            NSLog("DEBUG: [LocalHTTPServer] No playlist file found in: \(cachePath)")
-            sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+            // Fallback to original file if rewrite fails
+            serveFile(path: cachePath, connection: connection, method: method)
             return
         }
         
-        // For segments, look in the media-specific cache directory
-        // cachePath is now the media-specific directory containing both playlist and segments
-        let segmentPath = URL(fileURLWithPath: cachePath).appendingPathComponent(filename).path
+        // Not cached - fetch from real server
+        NSLog("DEBUG: [LocalHTTPServer] Fetching playlist from: \(fullRealURL.absoluteString)")
+        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method)
+    }
+    
+    private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
+        let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
         
-        if FileManager.default.fileExists(atPath: segmentPath) {
-            serveFile(path: segmentPath, connection: connection, method: method)
-        } else {
-            NSLog("DEBUG: [LocalHTTPServer] File not found: \(segmentPath)")
-            sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+        // Check cache first
+        if FileManager.default.fileExists(atPath: cachePath) {
+            NSLog("DEBUG: [LocalHTTPServer] Serving cached segment: \(cachePath)")
+            serveFile(path: cachePath, connection: connection, method: method)
+            return
         }
+        
+        // Not cached - fetch from real server
+        NSLog("DEBUG: [LocalHTTPServer] Fetching segment from: \(fullRealURL.absoluteString)")
+        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method)
+    }
+    
+    private func getCachePath(for url: URL, mediaID: String) -> String {
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let mediaDir = cacheDir.appendingPathComponent(mediaID)
+        
+        // Create directory if needed
+        try? FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
+        
+        let filename = url.lastPathComponent.components(separatedBy: "?")[0] // Remove query params
+        return mediaDir.appendingPathComponent(filename).path
+    }
+    
+    private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String) {
+        let task = URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+            guard let self = self else { return }
+            
+            if let error = error {
+                NSLog("DEBUG: [LocalHTTPServer] Fetch error: \(error.localizedDescription)")
+                self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                return
+            }
+            
+            guard let data = data, !data.isEmpty else {
+                NSLog("DEBUG: [LocalHTTPServer] Empty data received")
+                self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+                return
+            }
+            
+            // Cache the original data
+            try? data.write(to: URL(fileURLWithPath: cachePath))
+            NSLog("DEBUG: [LocalHTTPServer] Cached to: \(cachePath) (size: \(data.count) bytes)")
+            
+            // For playlists, rewrite URLs to point to localhost
+            var finalData = data
+            if cachePath.hasSuffix(".m3u8"), let playlistString = String(data: data, encoding: .utf8) {
+                let mediaID = URL(fileURLWithPath: cachePath).deletingLastPathComponent().lastPathComponent
+                let modifiedPlaylist = self.rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: url)
+                if let modifiedData = modifiedPlaylist.data(using: .utf8) {
+                    finalData = modifiedData
+                    NSLog("DEBUG: [LocalHTTPServer] Rewrote playlist URLs for localhost")
+                }
+            }
+            
+            // Serve it
+            let mimeType = self.getMimeType(for: cachePath)
+            let headers: [String: String] = [
+                "Content-Type": mimeType,
+                "Content-Length": "\(finalData.count)",
+                "Accept-Ranges": "bytes"
+            ]
+            
+            if method == "HEAD" {
+                self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: nil)
+            } else {
+                self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: finalData)
+            }
+            
+            NSLog("DEBUG: [LocalHTTPServer] Served fresh data (size: \(finalData.count) bytes)")
+        }
+        task.resume()
     }
     
     private func serveFile(path: String, connection: NWConnection, method: String) {
@@ -167,6 +288,48 @@ public class LocalHTTPServer: @unchecked Sendable {
             NSLog("DEBUG: [LocalHTTPServer] Failed to read file: \(error)")
             sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
         }
+    }
+    
+    private func rewritePlaylistURLs(_ playlistString: String, mediaID: String, baseURL: URL) -> String {
+        var modified = playlistString
+        let baseURLWithoutFilename = baseURL.deletingLastPathComponent()
+        
+        NSLog("DEBUG: [LocalHTTPServer] Rewriting playlist URLs, mediaID=\(mediaID), baseURL=\(baseURL.absoluteString)")
+        NSLog("DEBUG: [LocalHTTPServer] Original playlist:\n\(playlistString)")
+        
+        // Rewrite relative .m3u8 URLs (sub-playlists)
+        // Pattern matches lines like "720p/playlist.m3u8"
+        let playlistPattern = "^([^#\\n\\r]+\\.m3u8)$"
+        if let playlistRegex = try? NSRegularExpression(pattern: playlistPattern, options: [.anchorsMatchLines]) {
+            let matches = playlistRegex.matches(in: modified, options: [], range: NSRange(location: 0, length: modified.count))
+            NSLog("DEBUG: [LocalHTTPServer] Found \(matches.count) playlist URLs to rewrite")
+            for match in matches.reversed() {
+                if let range = Range(match.range, in: modified) {
+                    let playlistName = String(modified[range])
+                    let localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(baseURLWithoutFilename.path)/\(playlistName)"
+                    modified.replaceSubrange(range, with: localhostURL)
+                    NSLog("DEBUG: [LocalHTTPServer] Rewrote: \(playlistName) → \(localhostURL)")
+                }
+            }
+        }
+        
+        // Rewrite relative .ts URLs (segments)
+        let segmentPattern = "^([^#\\n\\r]+\\.ts)$"
+        if let segmentRegex = try? NSRegularExpression(pattern: segmentPattern, options: [.anchorsMatchLines]) {
+            let matches = segmentRegex.matches(in: modified, options: [], range: NSRange(location: 0, length: modified.count))
+            NSLog("DEBUG: [LocalHTTPServer] Found \(matches.count) segment URLs to rewrite")
+            for match in matches.reversed() {
+                if let range = Range(match.range, in: modified) {
+                    let segmentName = String(modified[range])
+                    let localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(baseURLWithoutFilename.path)/\(segmentName)"
+                    modified.replaceSubrange(range, with: localhostURL)
+                    NSLog("DEBUG: [LocalHTTPServer] Rewrote: \(segmentName) → \(localhostURL)")
+                }
+            }
+        }
+        
+        NSLog("DEBUG: [LocalHTTPServer] Modified playlist:\n\(modified)")
+        return modified
     }
     
     private func getMimeType(for path: String) -> String {
