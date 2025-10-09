@@ -206,10 +206,11 @@ SharedAssetCache.shared.cachePlayer(player, for: mediaID)
 - LocalHTTPServer redirect reliability
 
 ### ❌ What We Tried But Failed:
-1. **file:// URL redirects** → Error -12881 (AVPlayer requires delegate to load data)
+1. **file:// URL redirects** → Error -12881 (AVPlayer requires delegate to load data, not redirects)
 2. **Direct LocalHTTPServer URLs** → Error -1008 (resource unavailable with custom URL scheme)
-3. **Direct data serving** → Broke all video loading
-4. **Aggressive preroll callbacks** → Caused struct capture issues
+3. **Direct data serving via dataRequest.respond(with:)** → Error -12881 (improper handling of HLS byte-range requests)
+4. **Aggressive preroll callbacks** → Caused struct capture issues in SwiftUI
+5. **AVAssetDownloadTask** ([Apple's native HLS caching](https://developer.apple.com/documentation/AVFoundation/using-avfoundation-to-play-and-persist-http-live-streams)) → "Operation Stopped" (incompatible with custom IPFS gateway URLs)
 
 ## Key Technical Decisions
 
@@ -249,6 +250,15 @@ Implementing `dataRequest.respond(with: cachedData)` broke video loading, likely
 - Incorrect range request handling
 - Missing response headers
 - Timing issues with async data serving
+- HLS requires streaming protocol with multiple sequential requests per segment
+
+### Why AVAssetDownloadTask Doesn't Work
+Apple's [native HLS caching solution](https://developer.apple.com/documentation/AVFoundation/using-avfoundation-to-play-and-persist-http-live-streams) fails with our architecture because:
+- Requires standard HLS server URLs (e.g., AWS CloudFront, Vimeo)
+- **Incompatible with custom IPFS gateway URLs** (`http://125.229.161.122:8080/ipfs/...`)
+- Doesn't work with `ResourceLoaderDelegate` custom URL scheme handling
+- Downloads fail immediately with "Operation Stopped" error
+- **Conclusion**: AVAssetDownloadTask is for standard HLS, not custom IPFS/decentralized content
 
 ## Future Considerations
 
