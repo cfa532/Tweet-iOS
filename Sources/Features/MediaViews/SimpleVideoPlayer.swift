@@ -1599,19 +1599,18 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                     NSLog("DEBUG: [AVPlayerViewController]   - Time control status: \(player.timeControlStatus.rawValue) (0=paused, 1=waitingToPlay, 2=playing)")
                     
                     // Setup timeControlStatus observer to track buffering
-                    context.coordinator.timeControlObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { observedPlayer, _ in
+                    // CRITICAL: No .initial option to prevent immediate firing and update loops
+                    context.coordinator.timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { observedPlayer, _ in
                         DispatchQueue.main.async {
                             let isWaitingToPlay = observedPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                            NSLog("DEBUG: [AVPlayerViewController] Time control status changed: \(observedPlayer.timeControlStatus.rawValue), isBuffering: \(isWaitingToPlay)")
                             
                             if isWaitingToPlay {
                                 // Log reason for waiting
                                 if let reason = observedPlayer.reasonForWaitingToPlay {
-                                    NSLog("DEBUG: [AVPlayerViewController] Reason for waiting: \(reason.rawValue)")
+                                    NSLog("DEBUG: [AVPlayerViewController] Buffering: \(reason.rawValue)")
                                 }
                                 context.coordinator.isBuffering = true
                             } else if observedPlayer.timeControlStatus == .playing {
-                                NSLog("DEBUG: [AVPlayerViewController] ✅ Video is now playing - hiding spinner")
                                 context.coordinator.isBuffering = false
                             } else {
                                 // Paused
@@ -1687,26 +1686,19 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                 NSLog("DEBUG: [AVPlayerViewController] Reattaching new player...")
                 uiViewController.player = player
                 
-                // Always update timeControlStatus observer for player changes
-                if let player = player {
-                    NSLog("DEBUG: [AVPlayerViewController] Setting up timeControlStatus observer")
+                // Update timeControlStatus observer only if player changed
+                if let player = player, uiViewController.player != player {
+                    NSLog("DEBUG: [AVPlayerViewController] Player changed, setting up new timeControlStatus observer")
                     context.coordinator.timeControlObserver?.invalidate()
-                    context.coordinator.timeControlObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { observedPlayer, _ in
+                    context.coordinator.timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { observedPlayer, _ in
                         DispatchQueue.main.async {
                             let isWaitingToPlay = observedPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                            NSLog("DEBUG: [AVPlayerViewController] UPDATE: Time control status changed: \(observedPlayer.timeControlStatus.rawValue), isBuffering: \(isWaitingToPlay)")
                             
                             if isWaitingToPlay {
-                                // Log reason for waiting
-                                if let reason = observedPlayer.reasonForWaitingToPlay {
-                                    NSLog("DEBUG: [AVPlayerViewController] UPDATE: Reason for waiting: \(reason.rawValue)")
-                                }
                                 context.coordinator.isBuffering = true
                             } else if observedPlayer.timeControlStatus == .playing {
-                                NSLog("DEBUG: [AVPlayerViewController] ✅ UPDATE: Video is now playing - hiding spinner")
                                 context.coordinator.isBuffering = false
                             } else {
-                                // Paused
                                 context.coordinator.isBuffering = false
                             }
                         }
