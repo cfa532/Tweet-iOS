@@ -440,6 +440,7 @@
 "Unknown error" = "未知错误";
 "An error occurred. Please try again." = "发生错误，请重试。";
 "An unknown error occurred" = "发生未知错误";
+"Failed to upload tweet. Please try again." = "推文上传失败，请重试。";
 
 // MARK: - Success Messages
 "Avatar updated successfully!" = "头像更新成功！";

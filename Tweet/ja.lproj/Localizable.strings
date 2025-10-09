@@ -392,3 +392,4 @@
 "Success" = "成功";
 "Processing..." = "処理中...";
 "Invalid response format from server" = "サーバーからの無効な応答形式";
+"Failed to upload tweet. Please try again." = "ツイートのアップロードに失敗しました。もう一度お試しください。";

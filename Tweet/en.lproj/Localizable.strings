@@ -450,6 +450,7 @@
 "Unknown error" = "Unknown error";
 "An error occurred. Please try again." = "An error occurred. Please try again.";
 "An unknown error occurred" = "An unknown error occurred";
+"Failed to upload tweet. Please try again." = "Failed to upload tweet. Please try again.";
 
 // MARK: - Success Messages
 "Avatar updated successfully!" = "Avatar updated successfully!";
