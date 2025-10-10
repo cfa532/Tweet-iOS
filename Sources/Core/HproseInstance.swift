@@ -2524,8 +2524,8 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: Waiting for server CID: \(cid)")
             
             // Poll for server response with timeout
-            let maxAttempts = 30 // 30 attempts
-            let pollInterval: UInt64 = 2_000_000_000 // 2 seconds in nanoseconds
+            let maxAttempts = 12 // 12 attempts (60 seconds total with 5s intervals)
+            let pollInterval: UInt64 = 5_000_000_000 // 5 seconds in nanoseconds
             
             for attempt in 1...maxAttempts {
                 print("DEBUG: Polling attempt \(attempt)/\(maxAttempts) for CID: \(cid)")

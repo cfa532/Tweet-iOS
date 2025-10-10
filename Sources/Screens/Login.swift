@@ -97,6 +97,7 @@ struct LoginView: View {
                         .foregroundColor(.red)
                         .font(.body)
                         .multilineTextAlignment(.center)
+                        .lineLimit(3)
                 }
                 
                 DebounceButton(

@@ -6,7 +6,7 @@
 	<integer>11</integer>
 	<key>logs</key>
 	<dict>
-		<key>EC2D358A-70A1-4319-B982-B9328BF70755</key>
+		<key>166EC193-EE94-414D-972B-655C524B1E57</key>
 		<dict>
 			<key>className</key>
 			<string>IDECommandLineBuildLog</string>
@@ -15,7 +15,7 @@
 			<key>domainType</key>
 			<string>Xcode.IDEActivityLogDomainType.BuildLog</string>
 			<key>fileName</key>
-			<string>EC2D358A-70A1-4319-B982-B9328BF70755.xcactivitylog</string>
+			<string>166EC193-EE94-414D-972B-655C524B1E57.xcactivitylog</string>
 			<key>hasPrimaryLog</key>
 			<true/>
 			<key>primaryObservable</key>
@@ -38,15 +38,15 @@
 			<key>schemeIdentifier-sharedScheme</key>
 			<integer>1</integer>
 			<key>signature</key>
-			<string>Cleaning workspace Tweet with scheme Tweet and configuration Debug</string>
+			<string>Building workspace Tweet with scheme Tweet</string>
 			<key>timeStartedRecording</key>
-			<real>781705101.421121</real>
+			<real>781751493.44741702</real>
 			<key>timeStoppedRecording</key>
-			<real>781705101.72546601</real>
+			<real>781751500.90397096</real>
 			<key>title</key>
-			<string>Cleaning workspace Tweet with scheme Tweet and configuration Debug</string>
+			<string>Building workspace Tweet with scheme Tweet</string>
 			<key>uniqueIdentifier</key>
-			<string>EC2D358A-70A1-4319-B982-B9328BF70755</string>
+			<string>166EC193-EE94-414D-972B-655C524B1E57</string>
 		</dict>
 	</dict>
 </dict>
