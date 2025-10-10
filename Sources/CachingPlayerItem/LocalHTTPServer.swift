@@ -11,7 +11,12 @@ public class LocalHTTPServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "LocalHTTPServer", qos: .userInitiated)
     
     // Connection pool for efficient HTTP requests
-    private lazy var connectionPool: URLSession = {
+    private var _connectionPool: URLSession?
+    private var connectionPool: URLSession {
+        if let pool = _connectionPool {
+            return pool
+        }
+        
         let config = URLSessionConfiguration.default
         
         // Connection pool settings for better performance
@@ -26,9 +31,11 @@ public class LocalHTTPServer: @unchecked Sendable {
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         
+        let pool = URLSession(configuration: config)
+        _connectionPool = pool
         NSLog("DEBUG: [LocalHTTPServer] Connection pool initialized with max 6 connections per host")
-        return URLSession(configuration: config)
-    }()
+        return pool
+    }
     
     private init() {}
     
@@ -42,6 +49,22 @@ public class LocalHTTPServer: @unchecked Sendable {
         queue.async { [weak self] in
             self?.listener?.cancel()
             self?.listener = nil
+        }
+    }
+    
+    /// Reset the connection pool to recover from background suspension
+    /// This should be called when the app returns from a long background period
+    public func resetConnectionPool() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            NSLog("DEBUG: [LocalHTTPServer] Resetting connection pool for background recovery")
+            
+            // Invalidate existing session
+            self._connectionPool?.invalidateAndCancel()
+            self._connectionPool = nil
+            
+            // Next access will create a new session
+            NSLog("DEBUG: [LocalHTTPServer] Connection pool reset complete")
         }
     }
     

@@ -77,8 +77,8 @@ struct ProfileView: View {
                         // Different user navigation is handled by NavigationLink in TweetItemView
                     },
                     onPinnedTweetsRefresh: refreshPinnedTweets,
-                    onScroll: { offset in
-                        handleScroll(offset: offset)
+                    onScroll: { offset, delta in
+                        handleScroll(offset: offset, delta: delta)
                     },
                     header: {
                         VStack(spacing: 0) {
@@ -477,12 +477,12 @@ struct ProfileView: View {
     @State private var consecutiveSmallMovements: Int = 0
     @State private var isInertiaScrolling: Bool = false
     
-    private func handleScroll(offset: CGFloat) {
+    private func handleScroll(offset: CGFloat, delta: CGFloat) {
         // Cancel any existing timer
         scrollEndTimer?.invalidate()
         
         // Calculate scroll direction and threshold
-        let scrollDelta = offset - previousScrollOffset
+        let scrollDelta = delta
         let scrollThreshold: CGFloat = 30
         
         // Track consecutive small movements to detect inertia scrolling

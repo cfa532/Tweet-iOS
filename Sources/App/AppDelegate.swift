@@ -2,6 +2,7 @@ import UIKit
 import SwiftUI
 import BackgroundTasks
 import UserNotifications
+import AVFoundation
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
@@ -125,6 +126,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppDidBecomeActive() {
         print("[AppDelegate] App did become active - posting notification")
         
+        // Clear stale video state cache
+        VideoStateCache.shared.clearStaleCache()
+        
         // Refresh mute state from preferences when app becomes active
         // This ensures videos respect the current mute setting even if it was changed while app was in background
         MuteState.shared.refreshFromPreferences()
@@ -134,15 +138,57 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppDidEnterBackground() {
-        print("[AppDelegate] App did enter background - background handling moved to SimpleVideoPlayer")
+        print("[AppDelegate] App did enter background")
+        
+        // Store timestamp when app went to background
+        UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
         
         // Background handling is now done by SimpleVideoPlayer's notification observers
     }
     
     @objc private func handleAppWillEnterForeground() {
-        print("[AppDelegate] App will enter foreground - foreground handling moved to SimpleVideoPlayer")
+        print("[AppDelegate] App will enter foreground")
+        
+        // Check how long app was in background
+        if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
+            let timeInBackground = Date().timeIntervalSince(backgroundDate)
+            print("[AppDelegate] App was in background for \(timeInBackground) seconds")
+            
+            // If app was in background for more than 5 minutes, restart LocalHTTPServer
+            // and clear video player caches to force fresh initialization
+            if timeInBackground > 300 { // 5 minutes
+                print("[AppDelegate] Long background period detected, restarting video infrastructure")
+                
+                // Restart LocalHTTPServer to ensure it's running
+                Task {
+                    await restartVideoInfrastructure()
+                }
+            }
+        }
+        
+        // Ensure LocalHTTPServer is always running when returning to foreground
+        LocalHTTPServer.shared.start()
         
         // Foreground handling is now done by SimpleVideoPlayer's notification observers
+    }
+    
+    private func restartVideoInfrastructure() async {
+        print("[AppDelegate] Restarting video infrastructure after long background")
+        
+        // Reset LocalHTTPServer connection pool
+        LocalHTTPServer.shared.resetConnectionPool()
+        
+        // Restart the server
+        LocalHTTPServer.shared.stop()
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        LocalHTTPServer.shared.start()
+        
+        // Clear video player caches to force fresh initialization
+        await MainActor.run {
+            SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+        }
+        
+        print("[AppDelegate] Video infrastructure restart complete")
     }
     
     // MARK: - Notification Permission

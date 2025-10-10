@@ -53,17 +53,37 @@ enum PlaybackState {
 // MARK: - Video Player State Manager
 class VideoStateCache {
     static let shared = VideoStateCache()
-    private var cache: [String: (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)] = [:]
+    private var cache: [String: (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool, timestamp: Date)] = [:]
+    private let cacheExpirationInterval: TimeInterval = 600 // 10 minutes
     
     private init() {}
     
     func cacheVideoState(for mid: String, player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool) {
         print("DEBUG: [VIDEO CACHE] Caching video state for \(mid) with original mute state: \(originalMuteState)")
-        cache[mid] = (player: player, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState)
+        cache[mid] = (player: player, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState, timestamp: Date())
     }
     
     func getCachedState(for mid: String) -> (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)? {
-        return cache[mid]
+        guard let cachedState = cache[mid] else {
+            return nil
+        }
+        
+        // Check if cache is stale
+        let age = Date().timeIntervalSince(cachedState.timestamp)
+        if age > cacheExpirationInterval {
+            print("DEBUG: [VIDEO CACHE] Cache for \(mid) is stale (age: \(age)s), clearing")
+            cache.removeValue(forKey: mid)
+            return nil
+        }
+        
+        // Validate player is still valid
+        if cachedState.player.currentItem == nil || cachedState.player.currentItem?.status == .failed {
+            print("DEBUG: [VIDEO CACHE] Cached player for \(mid) is invalid, clearing")
+            cache.removeValue(forKey: mid)
+            return nil
+        }
+        
+        return (player: cachedState.player, time: cachedState.time, wasPlaying: cachedState.wasPlaying, originalMuteState: cachedState.originalMuteState)
     }
     
     func clearCache(for mid: String) {
@@ -74,6 +94,20 @@ class VideoStateCache {
     func clearAllCache() {
         print("DEBUG: [VIDEO CACHE] Clearing all cache")
         cache.removeAll()
+    }
+    
+    /// Clear stale cached states (older than expiration interval)
+    func clearStaleCache() {
+        let now = Date()
+        let staleKeys = cache.filter { now.timeIntervalSince($0.value.timestamp) > cacheExpirationInterval }.map { $0.key }
+        
+        for key in staleKeys {
+            cache.removeValue(forKey: key)
+        }
+        
+        if !staleKeys.isEmpty {
+            print("DEBUG: [VIDEO CACHE] Cleared \(staleKeys.count) stale cached states")
+        }
     }
 }
 
@@ -542,6 +576,17 @@ struct SimpleVideoPlayer: View {
         // App became active - ensure player is properly reattached and configured
         print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
         
+        // Validate player health first
+        if let player = player {
+            // Check if player item is still valid
+            if player.currentItem == nil || player.currentItem?.status == .failed {
+                print("DEBUG: [VIDEO APP ACTIVE] Player is invalid, clearing and will recreate for \(mid)")
+                self.player = nil
+                // Reset error state
+                loadingState = .idle
+            }
+        }
+        
         // CRITICAL: Force view recreation to fix black screen for ALL modes
         if player != nil {
             // Increment representableId to force view recreation for ALL modes
@@ -563,6 +608,12 @@ struct SimpleVideoPlayer: View {
                 print("DEBUG: [VIDEO APP ACTIVE] Found cached player in SharedAssetCache for \(mid) with key: \(playerCacheKey)")
                 configurePlayer(cachedPlayer)
             }
+        }
+        
+        // If still no player, force reload by calling setupPlayer
+        if player == nil && shouldLoadVideo && !isPlayerDetached && isVisible {
+            print("DEBUG: [VIDEO APP ACTIVE] No valid player found, forcing reload for \(mid)")
+            setupPlayer()
         }
         
         // Ensure player is reattached if it was detached (but don't duplicate reattach calls)

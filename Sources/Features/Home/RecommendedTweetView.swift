@@ -1,9 +1,9 @@
 import SwiftUI
 
 struct RecommendedTweetView: View {
-    let onScroll: ((CGFloat) -> Void)?
+    let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     
-    init(onScroll: ((CGFloat) -> Void)? = nil) {
+    init(onScroll: ((CGFloat, CGFloat) -> Void)? = nil) {
         self.onScroll = onScroll
     }
     

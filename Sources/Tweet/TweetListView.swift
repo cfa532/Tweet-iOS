@@ -16,7 +16,7 @@ struct TweetListView<RowView: View>: View {
     let rowView: (Tweet) -> RowView
     let header: (() -> AnyView)?
     let notifications: [TweetListNotification]
-    let onScroll: ((CGFloat) -> Void)?
+    let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     let shouldCacheServerTweets: Bool
     private let pageSize: UInt = 10
 
@@ -44,7 +44,7 @@ struct TweetListView<RowView: View>: View {
         showTitle: Bool = true,
         shouldCacheServerTweets: Bool = false,
         notifications: [TweetListNotification]? = nil,
-        onScroll: ((CGFloat) -> Void)? = nil,
+        onScroll: ((CGFloat, CGFloat) -> Void)? = nil,  // (offset, delta)
         header: (() -> AnyView)? = nil,
         rowView: @escaping (Tweet) -> RowView
     ) {
@@ -105,10 +105,10 @@ struct TweetListView<RowView: View>: View {
                    geometry.contentOffset.y
                } action: { oldValue, newValue in
                    let delta = newValue - oldValue
-                   onScroll?(delta)
+                   onScroll?(newValue, delta)  // Pass both offset and delta
                }
                .onAppear {
-                   onScroll?(0)
+                   onScroll?(0, 0)  // Pass both offset and delta
                }
                 
                 if showToast {

@@ -69,14 +69,14 @@ struct HomeView: View {
                     onTweetTap: { tweet in
                         navigationPath.append(tweet)
                     },
-                    onScroll: { delta in
-                        handleScroll(delta: delta)
+                    onScroll: { offset, delta in
+                        handleScroll(offset: offset, delta: delta)
                     }
                 )
                 .tag(0)
 
-                RecommendedTweetView(onScroll: { delta in
-                    handleScroll(delta: delta)
+                RecommendedTweetView(onScroll: { offset, delta in
+                    handleScroll(offset: offset, delta: delta)
                 })
                 .tag(1)
             }
@@ -145,8 +145,24 @@ struct HomeView: View {
     @State private var accumulatedDelta: CGFloat = 0
     @State private var scrollUpAccumulated: CGFloat = 0
     
-    private func handleScroll(delta: CGFloat) {
-        // Positive delta = scrolling down, negative = scrolling up
+    private func handleScroll(offset: CGFloat, delta: CGFloat) {
+        // Positive offset = scrolled down, negative offset = pull-to-refresh
+        // Positive delta = scrolling down, negative delta = scrolling up
+        
+        // CRITICAL: Always show header when at or near the top (offset <= 10)
+        // This prevents header from hiding during pull-to-refresh
+        if offset <= 10 {
+            if !isNavigationVisible {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isNavigationVisible = true
+                }
+                onNavigationVisibilityChanged?(true)
+            }
+            // Reset accumulated deltas when at top
+            accumulatedDelta = 0
+            scrollUpAccumulated = 0
+            return
+        }
         
         if delta > 5 {
             // Scrolling down - accumulate

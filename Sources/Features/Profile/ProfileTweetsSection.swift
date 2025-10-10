@@ -134,7 +134,7 @@ struct ProfileTweetsSection<Header: View>: View {
     let onTweetTap: (Tweet) -> Void
     let onAvatarTapInProfile: ((User) -> Void)?
     let onPinnedTweetsRefresh: () async -> Void
-    let onScroll: (CGFloat) -> Void
+    let onScroll: (CGFloat, CGFloat) -> Void  // (offset, delta)
     @StateObject private var viewModel: ProfileTweetsViewModel
     let header: () -> Header
     
@@ -147,7 +147,7 @@ struct ProfileTweetsSection<Header: View>: View {
         onTweetTap: @escaping (Tweet) -> Void,
         onAvatarTapInProfile: ((User) -> Void)? = nil,
         onPinnedTweetsRefresh: @escaping () async -> Void,
-        onScroll: @escaping (CGFloat) -> Void,
+        onScroll: @escaping (CGFloat, CGFloat) -> Void,  // (offset, delta)
         @ViewBuilder header: @escaping () -> Header = { EmptyView() }
     ) {
         self.pinnedTweets = pinnedTweets

@@ -1073,6 +1073,32 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
+    /// Clear video players for background recovery after long background periods
+    /// This is called when app returns from extended background (>5 minutes)
+    func clearVideoPlayersForBackgroundRecovery() {
+        print("DEBUG: [SharedAssetCache] Clearing video players for background recovery")
+        
+        // Count before
+        let playerCountBefore = playerCache.count
+        let assetCountBefore = assetCache.count
+        
+        // Clear all cached players - they may have invalid video layers
+        // Players will be recreated on demand with fresh video layers
+        for (_, player) in playerCache {
+            player.pause()
+        }
+        playerCache.removeAll()
+        
+        // Clear CachingPlayerItem instances - they hold references to old players
+        cachingPlayerItems.removeAll()
+        
+        // Keep assets - they're still valid and can be reused
+        // Keep resourceLoaderDelegates - they're needed for HLS playback
+        // Keep cacheTimestamps - they track cache expiration
+        
+        print("DEBUG: [SharedAssetCache] Background recovery complete - cleared \(playerCountBefore) players, kept \(assetCountBefore) assets")
+    }
+    
     // MARK: - Cache Persistence Methods
     
     /// Restore cache metadata from UserDefaults on app startup
@@ -1104,12 +1130,59 @@ class SharedAssetCache: ObservableObject {
     
     
     private func refreshCachedPlayers() {
-        // Refresh all cached players to ensure they show cached content
-        for (_, player) in playerCache {
-            // Force a seek to refresh the video layer
+        print("DEBUG: [SharedAssetCache] Refreshing \(playerCache.count) cached players")
+        
+        var validPlayers = 0
+        var invalidPlayers = 0
+        
+        // Validate and refresh all cached players
+        for (mediaID, player) in playerCache {
+            // Check if player item is still valid
+            guard let playerItem = player.currentItem else {
+                print("DEBUG: [SharedAssetCache] Player \(mediaID) has no currentItem, marking for removal")
+                invalidPlayers += 1
+                continue
+            }
+            
+            if playerItem.status == .failed {
+                print("DEBUG: [SharedAssetCache] Player \(mediaID) is in failed state, marking for removal")
+                invalidPlayers += 1
+                continue
+            }
+            
+            // Player is valid, refresh its video layer
+            validPlayers += 1
+            
+            // Force a seek to refresh the video layer and ensure buffering
             let currentTime = player.currentTime()
-            player.seek(to: currentTime) { _ in
-                // Video layer should now be refreshed and showing cached content
+            player.seek(to: currentTime) { finished in
+                if finished {
+                    // Trigger preroll to ensure video is ready to play
+                    player.preroll(atRate: 1.0) { success in
+                        if success {
+                            print("DEBUG: [SharedAssetCache] Player \(mediaID) refreshed and prerolled successfully")
+                        }
+                    }
+                }
+            }
+        }
+        
+        print("DEBUG: [SharedAssetCache] Player refresh complete - valid: \(validPlayers), invalid: \(invalidPlayers)")
+        
+        // Clean up invalid players after iteration
+        if invalidPlayers > 0 {
+            Task { @MainActor in
+                // Remove invalid players in a separate task to avoid mutation during iteration
+                let invalidMediaIDs = self.playerCache.filter { (_, player) in
+                    guard let item = player.currentItem else { return true }
+                    return item.status == .failed
+                }.map { $0.key }
+                
+                for mediaID in invalidMediaIDs {
+                    self.removeInvalidPlayer(for: mediaID)
+                }
+                
+                print("DEBUG: [SharedAssetCache] Removed \(invalidMediaIDs.count) invalid players")
             }
         }
     }

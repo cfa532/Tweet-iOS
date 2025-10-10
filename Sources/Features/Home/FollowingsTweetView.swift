@@ -4,11 +4,8 @@ struct FollowingsTweetView: View {
     @StateObject private var viewModel = FollowingsTweetViewModel.shared
     let onAvatarTap: (User) -> Void
     let onTweetTap: (Tweet) -> Void
-    let onScroll: ((CGFloat) -> Void)?
+    let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     
-    // Scroll detection state (same as ProfileView)
-    @State private var isNavigationVisible = true
-    @State private var previousScrollOffset: CGFloat = 0
     
     var body: some View {
         TweetListView<TweetItemView>(
@@ -46,8 +43,8 @@ struct FollowingsTweetView: View {
                     action: { tweet in viewModel.handleDeletedTweet(tweet.mid) }
                 )
             ],
-            onScroll: { delta in
-                onScroll?(delta) // Pass delta directly to parent
+            onScroll: { offset, delta in
+                onScroll?(offset, delta) // Pass both offset and delta to parent
             },
             rowView: { tweet in
                 TweetItemView(
@@ -101,30 +98,7 @@ struct FollowingsTweetView: View {
             }
         }
         .onAppear {
-            // Set initial navigation state
-            isNavigationVisible = true
-            onScroll?(0)
+            onScroll?(0, 0)
         }
-        .onDisappear {
-            // Clean up timer
-            scrollEndTimer?.invalidate()
-            scrollEndTimer = nil
-            print("DEBUG: [FollowingsTweetView] View disappeared")
-        }
-    }
-    
-    // MARK: - Scroll Handling
-    @State private var scrollEndTimer: Timer?
-    @State private var lastScrollOffset: CGFloat = 0
-    
-    private func handleScroll(offset: CGFloat) {
-        // Calculate scroll delta
-        let delta = offset - lastScrollOffset
-        lastScrollOffset = offset
-        
-        // Pass the delta to parent (positive = scrolling up, negative = scrolling down)
-        onScroll?(delta)
-        
-        print("DEBUG: [FollowingsTweetView] Scroll offset: \(offset), delta: \(delta)")
     }
 }
