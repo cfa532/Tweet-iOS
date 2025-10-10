@@ -88,12 +88,11 @@ struct ComposeTweetView: View {
                     .disabled(!viewModel.canPostTweet)
                 }
             }
-            .onAppear {
-                // Try to focus immediately
-                isEditorFocused = true
-                
-                // If immediate focus doesn't work, try again after a short delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            .task {
+                // Wait for sheet presentation animation to complete before focusing
+                // This ensures the text editor is fully presented and ready to receive focus
+                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms for sheet animation
+                await MainActor.run {
                     isEditorFocused = true
                 }
             }

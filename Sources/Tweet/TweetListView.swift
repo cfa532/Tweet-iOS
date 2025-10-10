@@ -294,8 +294,9 @@ struct TweetListView<RowView: View>: View {
         // Load first page immediately
         loadSinglePage(page: startPage) { success in
             if success && self.hasMoreTweets {
-                // Load second page after 3 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                // Load second page after 1.5 seconds to prevent scroll jumpiness
+                // Reduced from 3s for better responsiveness while still allowing UI to settle
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     if self.hasMoreTweets && !self.isLoadingMore {
                         self.loadSinglePage(page: startPage + 1) { _ in
                             // Second page load complete

@@ -375,13 +375,15 @@ struct SimpleVideoPlayer: View {
             // Exiting full screen to MediaCell - apply global mute state
             NSLog("DEBUG: [VIDEO MODE CHANGE] Exiting fullscreen to MediaCell")
             
-            // CRITICAL: Pause player briefly to help with layer detachment from AVPlayerViewController
+            // Store playback state before transition
             let wasPlaying = player.rate > 0
-            if wasPlaying {
-                player.pause()
-                NSLog("DEBUG: [VIDEO MODE CHANGE] Paused player for layer transition from fullscreen")
-            }
+            let currentTime = player.currentTime()
             
+            // Pause player to allow clean layer detachment
+            player.pause()
+            NSLog("DEBUG: [VIDEO MODE CHANGE] Paused player for layer transition from fullscreen")
+            
+            // Apply global mute state
             player.isMuted = MuteState.shared.isMuted
             NSLog("DEBUG: [VIDEO MODE CHANGE] Applied global mute state: \(MuteState.shared.isMuted)")
             
@@ -389,10 +391,12 @@ struct SimpleVideoPlayer: View {
             self.representableId += 1
             NSLog("DEBUG: [VIDEO MODE CHANGE] Incremented representableId to \(self.representableId) for fresh MediaCell layer")
             
-            // Give layer time to detach from AVPlayerViewController before resuming
+            // Resume playback using proper completion handler instead of arbitrary delay
             if wasPlaying {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    NSLog("DEBUG: [VIDEO MODE CHANGE] Resuming playback in MediaCell after layer reattachment")
+                // Seek to current position with completion handler to ensure layer is ready
+                player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    guard finished else { return }
+                    NSLog("DEBUG: [VIDEO MODE CHANGE] Layer ready, resuming playback in MediaCell")
                     player.play()
                 }
             }

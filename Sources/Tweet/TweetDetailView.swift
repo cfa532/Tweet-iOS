@@ -686,10 +686,11 @@ struct TweetDetailView: View {
     }
     
     private func setupInitialData() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            refreshTweet()
-        }
+        // Refresh immediately in background - the Task inside refreshTweet() makes it non-blocking
+        // View will display with current data, then update when refresh completes
+        refreshTweet()
         
+        // Set up periodic refresh timer (every 5 minutes)
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
             Task { @MainActor in
                 refreshTweet()
