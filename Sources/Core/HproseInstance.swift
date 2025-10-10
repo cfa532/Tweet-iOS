@@ -229,9 +229,18 @@ final class HproseInstance: ObservableObject {
     private func scheduleBackgroundTasks() {
         // Schedule domain update and pending upload recovery
         Task.detached(priority: .background) {
-            // Wait for 15 seconds to ensure app is fully initialized
-            print("DEBUG: [HproseInstance] Scheduling background tasks")
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            print("DEBUG: [HproseInstance] Waiting for app initialization to complete...")
+            
+            // Wait for app initialization to complete by polling the flag
+            while true {
+                let isComplete = await MainActor.run { self.isInitializationComplete }
+                if isComplete {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000) // Check every 100ms
+            }
+            
+            print("DEBUG: [HproseInstance] App initialized, starting background tasks")
             
             // Check for domain updates
             await self.checkAndUpdateDomain()
