@@ -151,11 +151,18 @@ These optimizations provide:
 4. **Simplify View Hierarchy**: Avoid deeply nested views in lists
 5. **Leverage Existing Caching**: Use existing cache systems instead of creating new ones
 
-## Related Documentation
+## Documentation
 
-- [Comment System Architecture](CommentSystemREADME.md)
-- [Video Caching System](VIDEO_CACHING_SYSTEM.md)
-- [Network Resilience](NETWORK_RESILIENCE.md)
+📚 **[Complete Documentation Index](Documentation/INDEX.md)**
+
+### Quick Links
+- **Architecture**: [Architecture Overview](Documentation/ARCHITECTURE.md) | [Features](Documentation/FEATURES.md)
+- **Video System**: [Video Architecture](Documentation/VIDEO_SYSTEM_ARCHITECTURE.md) | [Video Caching](Documentation/VIDEO_CACHING_SYSTEM.md)
+- **Features**: [Comment System](Documentation/CommentSystemREADME.md) | [Chat & Search](Documentation/CHAT_AND_SEARCH_FEATURES.md)
+- **Performance**: [Video Performance](Documentation/VIDEO_PERFORMANCE_OPTIMIZATION.md)
+- **Development**: [Debug Build](Documentation/DEBUG_BUILD_INSTRUCTIONS.md) | [Localization](Documentation/PERMISSION_LOCALIZATION_GUIDE.md)
+
+All technical documentation is organized in the [Documentation](Documentation/) folder. Start with the [INDEX.md](Documentation/INDEX.md) for a complete overview.
 
 ## Development
 
