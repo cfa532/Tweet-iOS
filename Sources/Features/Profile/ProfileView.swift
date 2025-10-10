@@ -270,11 +270,9 @@ struct ProfileView: View {
                     showToastMessage(NSLocalizedString("Avatar updated successfully!", comment: "Avatar update success"), type: .success)
                     // Clear all avatar cache to ensure fresh images are loaded everywhere
                     ImageCacheManager.shared.clearAllAvatarCache()
-                    // Force refresh all avatar images by triggering a UI update
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        // This will trigger the Avatar view to reload due to the .id(user.mid) modifier
-                        hproseInstance.objectWillChange.send()
-                    }
+                    // Force refresh all avatar images immediately by triggering a UI update
+                    // Cache clear is synchronous, so we can notify immediately
+                    hproseInstance.objectWillChange.send()
                 },
                 onAvatarUploadFailure: { errorMessage in
                     showToastMessage(errorMessage, type: .error)
