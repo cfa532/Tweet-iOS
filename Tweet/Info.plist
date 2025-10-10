@@ -23,12 +23,12 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>NSCameraUsageDescription</key>
-	<string>$(NSCameraUsageDescription)</string>
+	<string>We need access to your camera to take photos and videos for your posts.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>$(NSMicrophoneUsageDescription)</string>
+	<string>We need access to your microphone to record videos with audio for your posts.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>$(NSPhotoLibraryUsageDescription)</string>
+	<string>We need access to your photo library to select photos and videos to share in your posts.</string>
 	<key>NSUserNotificationUsageDescription</key>
-	<string>$(NSUserNotificationUsageDescription)</string>
+	<string>We need to send you notifications about new messages, replies, and interactions.</string>
 </dict>
 </plist>
