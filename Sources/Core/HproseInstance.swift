@@ -2828,7 +2828,7 @@ final class HproseInstance: ObservableObject {
             
             return MimeiFileType(
                 mid: cid,
-                type: mediaType.rawValue,
+                mediaType: mediaType,
                 size: Int64(fileSize),
                 fileName: fileName,
                 timestamp: fileTimestamp,
@@ -4284,11 +4284,15 @@ final class HproseInstance: ObservableObject {
             updatedUser.hostIds = [hostId]
         }
         
+        // Configure encoder to use milliseconds for timestamps
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        
         let entry = "set_author_core_data"
         let params = [
             "aid": appId,
             "ver": "last",
-            "user": String(data: try JSONEncoder().encode(updatedUser), encoding: .utf8) ?? ""
+            "user": String(data: try encoder.encode(updatedUser), encoding: .utf8) ?? ""
         ]
         
         print("DEBUG: updateUserCore - sending request to server with user data")
