@@ -799,7 +799,7 @@ final class HproseInstance: ObservableObject {
         
         // Check for IP address response first (user not found on this node)
         if let ipAddress = response as? String, !ipAddress.isEmpty {
-            print("DEBUG: [updateUserFromServer] User not found on current node, redirecting to IP: \(ipAddress)")
+            print("DEBUG: [updateUserFromServer] \(user.mid) not found on current node, redirecting to IP: \(ipAddress)")
             // the user is not found on this node, a provider IP of the user is returned.
             // point server to this new IP.
             await MainActor.run {
