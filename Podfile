@@ -33,6 +33,20 @@ post_install do |installer|
       # Ensure proper architecture settings
       config.build_settings['ARCHS'] = 'arm64'
       config.build_settings['VALID_ARCHS'] = 'arm64'
+      
+      # Suppress deprecation warnings in SDWebImage (third-party code using old UTType APIs)
+      if target.name == 'SDWebImage'
+        config.build_settings['GCC_WARN_DEPRECATED_FUNCTIONS'] = 'NO'
+        config.build_settings['CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS'] = 'NO'
+        config.build_settings['GCC_WARN_ABOUT_DEPRECATED_FUNCTIONS'] = 'NO'
+      end
+      
+      # Suppress deprecation warnings in hprose (third-party code using old SSL APIs)
+      if target.name == 'hprose'
+        config.build_settings['GCC_WARN_DEPRECATED_FUNCTIONS'] = 'NO'
+        config.build_settings['CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS'] = 'NO'
+        config.build_settings['GCC_WARN_ABOUT_DEPRECATED_FUNCTIONS'] = 'NO'
+      end
     end
   end
 end 
