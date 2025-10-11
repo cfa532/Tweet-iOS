@@ -484,3 +484,9 @@
 "Success" = "Success";
 "Processing..." = "Processing...";
 "Invalid response format from server" = "Invalid response format from server";
+"Client not initialized" = "Client not initialized";
+"Provider not found" = "Provider not found";
+"Nil response from server" = "Nil response from server";
+"Cannot extract mediaID from URL" = "Cannot extract mediaID from URL";
+"Failed to initialize app entry with any URL" = "Failed to initialize app entry with any URL";
+"Writable URL not available" = "Writable URL not available";

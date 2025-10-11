@@ -314,7 +314,7 @@ class SharedAssetCache: ObservableObject {
     /// Get cached asset or create new one
     @MainActor func getAsset(for url: URL, tweetId: String? = nil) async throws -> AVAsset {
         guard let mediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL: \(url)"])
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
         let cacheKey = mediaID
         
@@ -473,7 +473,7 @@ class SharedAssetCache: ObservableObject {
     /// Get cached player or create new one with asset
     func getOrCreatePlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
         guard let mediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL: \(url)"])
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
         
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaID: \(mediaID), mediaType: \(mediaType?.rawValue ?? "nil")")
@@ -523,7 +523,7 @@ class SharedAssetCache: ObservableObject {
     /// Create CachingPlayerItem for HLS videos
     private func createCachingPlayer(for url: URL, tweetId: String?) async throws -> AVPlayer {
         guard let mediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL: \(url)"])
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
         
         NSLog("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for HLS video: \(url.absoluteString), mediaID: \(mediaID)")
@@ -583,7 +583,7 @@ class SharedAssetCache: ObservableObject {
     /// IMPORTANT: Always creates NEW items because AVPlayerItem can only be attached to ONE AVPlayer
     func getOrCreatePlayerItem(for url: URL, mediaID: String, mediaType: MediaType? = nil) async throws -> AVPlayerItem {
         guard let extractedMediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL: \(url)"])
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
         
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayerItem called for mediaID: \(extractedMediaID) - creating fresh item")

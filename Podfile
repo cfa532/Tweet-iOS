@@ -30,9 +30,10 @@ post_install do |installer|
       # Disable bitcode (can cause dSYM issues)
       config.build_settings['ENABLE_BITCODE'] = 'NO'
       
-      # Ensure proper architecture settings
-      config.build_settings['ARCHS'] = 'arm64'
-      config.build_settings['VALID_ARCHS'] = 'arm64'
+      # Ensure proper architecture settings - support both arm64 and x86_64 for simulator
+      config.build_settings['ARCHS'] = '$(ARCHS_STANDARD)'
+      config.build_settings['VALID_ARCHS'] = 'arm64 x86_64'
+      config.build_settings['ONLY_ACTIVE_ARCH'] = 'NO'
       
       # Suppress deprecation warnings in SDWebImage (third-party code using old UTType APIs)
       if target.name == 'SDWebImage'

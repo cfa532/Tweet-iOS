@@ -393,3 +393,10 @@
 "Processing..." = "処理中...";
 "Invalid response format from server" = "サーバーからの無効な応答形式";
 "Failed to upload tweet. Please try again." = "ツイートのアップロードに失敗しました。もう一度お試しください。";
+"Unknown registration error." = "不明な登録エラー。";
+"Client not initialized" = "クライアントが初期化されていません";
+"Provider not found" = "プロバイダーが見つかりません";
+"Nil response from server" = "サーバーからの応答がありません";
+"Cannot extract mediaID from URL" = "URLからメディアIDを抽出できません";
+"Failed to initialize app entry with any URL" = "いずれのURLでもアプリエントリの初期化に失敗しました";
+"Writable URL not available" = "書き込み可能なURLが利用できません";

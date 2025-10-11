@@ -488,3 +488,9 @@
 "Success" = "成功";
 "Processing..." = "处理中...";
 "Invalid response format from server" = "服务器响应格式无效";
+"Client not initialized" = "客户端未初始化";
+"Provider not found" = "未找到提供者";
+"Nil response from server" = "服务器无响应";
+"Cannot extract mediaID from URL" = "无法从URL中提取媒体ID";
+"Failed to initialize app entry with any URL" = "无法使用任何URL初始化应用入口";
+"Writable URL not available" = "可写入URL不可用";
