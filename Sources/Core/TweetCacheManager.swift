@@ -450,12 +450,8 @@ extension TweetCacheManager {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
             request.predicate = NSPredicate(format: "mid == %@", mid)
             
-            // First, get the user and convert it
             if let cdUser = try? context.fetch(request).first {
                 user = User.from(cdUser: cdUser)
-                // Then update the cache time in a separate operation
-                cdUser.timeCached = Date()
-                try? context.save()
             }
         }
         return user ?? User.getInstance(mid: mid)

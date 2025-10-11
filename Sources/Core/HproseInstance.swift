@@ -255,10 +255,10 @@ final class HproseInstance: ObservableObject {
         guard appUser.isGuest else { return }
         
         do {
-            print("DEBUG: [HproseInstance] Fetching alphaId user for guest user: \(AppConfig.alphaId)")
+            print("DEBUG: [HproseInstance] Fetching alphaId user for guest user: \(Gadget.getAlphaIds().first ?? "")")
             
             // Create alphaId user with proper baseUrl
-            let alphaUser = User.getInstance(mid: AppConfig.alphaId)
+            let alphaUser = User.getInstance(mid: Gadget.getAlphaIds().first ?? "")
             await MainActor.run {
                 alphaUser.baseUrl = HproseInstance.baseUrl
             }
@@ -839,7 +839,14 @@ final class HproseInstance: ObservableObject {
             // User found on current node
             await MainActor.run {
                 do {
-                    _ = try User.from(dict: userDict)
+                    let updatedUser = try User.from(dict: userDict)
+                    // Preserve the baseUrl that was set before the server call
+                    updatedUser.baseUrl = user.baseUrl
+                    
+                    print("DEBUG: [updateUserFromServer] After User.from: name=\(updatedUser.name ?? "nil"), username=\(updatedUser.username ?? "nil"), mid=\(updatedUser.mid)")
+                    
+                    // Save the user to cache
+                    TweetCacheManager.shared.saveUser(updatedUser)
                 } catch {
                     print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
                     print("DEBUG: [updateUserFromServer] Response that caused error: \(response)")
@@ -1219,15 +1226,19 @@ final class HproseInstance: ObservableObject {
     /**
      * Called when appUser clicks the Follow button.
      * @param followedId is the user that appUser is following or unfollowing.
+     * @param userId is the user who is performing the follow/unfollow action (defaults to appUser.mid)
      * */
     func toggleFollowing(
-        followingId: MimeiId
+        followingId: MimeiId,
+        userId: MimeiId? = nil
     )  async throws -> Bool? {
+        let effectiveUserId = userId ?? appUser.mid
+        
         // Check if app user is blacklisted by the target user
         guard let targetUser = try await fetchUser(followingId) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Target user not found"])
         }
-        if targetUser.isUserBlacklisted(appUser.mid) {
+        if targetUser.isUserBlacklisted(effectiveUserId) {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot follow this user because you are blocked"])
         }
         
@@ -1237,7 +1248,7 @@ final class HproseInstance: ObservableObject {
                 "aid": appId,
                 "ver": "last",
                 "followingid": followingId,
-                "userid": appUser.mid,
+                "userid": effectiveUserId,
             ]
             guard let client = appUser.hproseClient else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
@@ -4233,11 +4244,6 @@ final class HproseInstance: ObservableObject {
         }
         let newUser = User(mid: appUser.mid, name: alias, username: username, password: password,
                            profile: profile, cloudDrivePort: cloudDrivePort, hostIds: hosts)
-        
-        // Set timestamp and lastLogin to current date
-        newUser.timestamp = Date.now
-        newUser.lastLogin = Date.now
-        
         let entry = "register"
         
         // Configure encoder to use milliseconds for timestamps
@@ -4695,7 +4701,7 @@ final class HproseInstance: ObservableObject {
     
     /// Send notification to system admin about reported and deleted content
     private func notifySystemAdmin(tweetId: String, category: String, comments: String) async {
-        let adminUserId = AppConfig.alphaId // System admin user ID
+        let adminUserId = Gadget.getAlphaIds().first ?? "" // System admin user ID
         
         // Create notification message
         let notificationContent = """
