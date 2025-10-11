@@ -450,7 +450,21 @@ class GlobalImageLoadManager: ObservableObject {
         }
         
         if kerr == KERN_SUCCESS {
-            currentMemoryUsage = memoryInfo.resident_size
+            // Use phys_footprint for accurate measurement instead of resident_size
+            var vmInfo = task_vm_info_data_t()
+            var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / mach_msg_type_number_t(MemoryLayout<natural_t>.size)
+            let vmKerr = withUnsafeMutablePointer(to: &vmInfo) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
+                }
+            }
+            
+            if vmKerr == KERN_SUCCESS {
+                currentMemoryUsage = UInt64(vmInfo.phys_footprint)
+            } else {
+                currentMemoryUsage = memoryInfo.resident_size // Fallback
+            }
+            
             if currentMemoryUsage > maxMemoryUsage {
                 maxMemoryUsage = currentMemoryUsage
             }
@@ -632,7 +646,20 @@ extension GlobalImageLoadManager {
         }
         
         if kerr == KERN_SUCCESS {
-            return info.resident_size
+            // Use phys_footprint for accurate measurement
+            var vmInfo = task_vm_info_data_t()
+            var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / mach_msg_type_number_t(MemoryLayout<natural_t>.size)
+            let vmKerr = withUnsafeMutablePointer(to: &vmInfo) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
+                }
+            }
+            
+            if vmKerr == KERN_SUCCESS {
+                return UInt64(vmInfo.phys_footprint)
+            } else {
+                return info.resident_size // Fallback
+            }
         } else {
             return 0
         }

@@ -112,7 +112,20 @@ class VideoConversionService {
         }
         
         if kerr == KERN_SUCCESS {
-            return Double(info.resident_size) / 1024.0 / 1024.0 // Convert to MB
+            // Use phys_footprint for accurate measurement
+            var vmInfo = task_vm_info_data_t()
+            var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / mach_msg_type_number_t(MemoryLayout<natural_t>.size)
+            let vmKerr = withUnsafeMutablePointer(to: &vmInfo) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
+                }
+            }
+            
+            if vmKerr == KERN_SUCCESS {
+                return Double(vmInfo.phys_footprint) / 1024.0 / 1024.0 // Convert to MB
+            } else {
+                return Double(info.resident_size) / 1024.0 / 1024.0 // Fallback
+            }
         } else {
             return 0.0
         }
