@@ -4233,12 +4233,22 @@ final class HproseInstance: ObservableObject {
         }
         let newUser = User(mid: appUser.mid, name: alias, username: username, password: password,
                            profile: profile, cloudDrivePort: cloudDrivePort, hostIds: hosts)
+        
+        // Set timestamp and lastLogin to current date
+        newUser.timestamp = Date.now
+        newUser.lastLogin = Date.now
+        
         let entry = "register"
+        
+        // Configure encoder to use milliseconds for timestamps
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        
         let params = [
             "aid": appId,
             "ver": "last",
-            "user": String(data: try JSONEncoder().encode(newUser), encoding: .utf8) ?? "",
-            "followings": String(data: try JSONEncoder().encode(Gadget.getAlphaIds()), encoding: .utf8) ?? ""
+            "user": String(data: try encoder.encode(newUser), encoding: .utf8) ?? "",
+            "followings": String(data: try encoder.encode(Gadget.getAlphaIds()), encoding: .utf8) ?? ""
         ]
         
         guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
