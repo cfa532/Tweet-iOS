@@ -18,6 +18,10 @@ struct MediaGridView: View {
     @StateObject private var videoManager = VideoManager()
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     
+    // Cache screen-based calculations to avoid repeated UIScreen.main calls
+    private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
+    private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32)
+    
     init(parentTweet: Tweet, attachments: [MimeiFileType]) {
         self.parentTweet = parentTweet
         self.attachments = attachments
@@ -70,10 +74,12 @@ struct MediaGridView: View {
     }
     
     var body: some View {
+        // Use cached dimensions to prevent repeated UIScreen.main calls
+        let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
+        let gridHeight = max(10, Self.cachedGridWidth / gridAspectRatio)
+        
         GeometryReader { geometry in
-            let gridWidth: CGFloat = max(10, geometry.size.width)
-            let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-            let gridHeight = max(10, gridWidth / gridAspectRatio)
+            let actualWidth = max(10, geometry.size.width)
             
             ZStack {
                 switch attachments.count {
@@ -86,7 +92,7 @@ struct MediaGridView: View {
                         onVideoFinished: onVideoFinished,
                         videoManager: videoManager
                     )
-                    .frame(width: gridWidth, height: gridHeight)
+                    .frame(width: actualWidth, height: gridHeight)
                     .clipped()
                     .contentShape(Rectangle())
                     // identify MediaCell border
@@ -106,12 +112,12 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    aspectRatio: Float((gridWidth/2 - 1) / gridHeight),
+                                    aspectRatio: Float((actualWidth/2 - 1) / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth/2 - 1, height: gridHeight)
+                                .frame(width: actualWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                             }
@@ -123,12 +129,12 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    aspectRatio: Float(gridWidth / (gridHeight/2 - 1)),
+                                    aspectRatio: Float(actualWidth / (gridHeight/2 - 1)),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth, height: gridHeight/2 - 1)
+                                .frame(width: actualWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                             }
@@ -140,50 +146,50 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    aspectRatio: Float((gridWidth * 1/3 - 1) / gridHeight),
+                                    aspectRatio: Float((actualWidth * 1/3 - 1) / gridHeight),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
+                                .frame(width: actualWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 1,
-                                    aspectRatio: Float((gridWidth * 2/3 - 1) / gridHeight),
+                                    aspectRatio: Float((actualWidth * 2/3 - 1) / gridHeight),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
+                                .frame(width: actualWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                             } else {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    aspectRatio: Float((gridWidth * 2/3 - 1) / gridHeight),
+                                    aspectRatio: Float((actualWidth * 2/3 - 1) / gridHeight),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth * 2/3 - 1, height: gridHeight)
+                                .frame(width: actualWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 1,
-                                    aspectRatio: Float((gridWidth * 1/3 - 1) / gridHeight),
+                                    aspectRatio: Float((actualWidth * 1/3 - 1) / gridHeight),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth * 1/3 - 1, height: gridHeight)
+                                .frame(width: actualWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                             }
@@ -209,13 +215,13 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    aspectRatio: Float((gridWidth * 0.618 - 1) / gridHeight),
+                                    aspectRatio: Float((actualWidth * 0.618 - 1) / gridHeight),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth * 0.618 - 1, height: gridHeight)
+                                .frame(width: actualWidth * 0.618 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                                 
@@ -225,13 +231,13 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
-                                            aspectRatio: Float((gridWidth * 0.382 - 1) / (gridHeight/2 - 1)),
+                                            aspectRatio: Float((actualWidth * 0.382 - 1) / (gridHeight/2 - 1)),
                                             
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
                                         )
-                                                .frame(width: gridWidth * 0.382 - 1, height: gridHeight/2 - 1)
+                                                .frame(width: actualWidth * 0.382 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
                                         .contentShape(Rectangle())
                                     }
@@ -244,13 +250,13 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    aspectRatio: Float(gridWidth / (gridHeight * 0.618 - 1)),
+                                    aspectRatio: Float(actualWidth / (gridHeight * 0.618 - 1)),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth, height: gridHeight * 0.618 - 1)
+                                .frame(width: actualWidth, height: gridHeight * 0.618 - 1)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                                 
@@ -260,13 +266,13 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
-                                            aspectRatio: Float((gridWidth/2 - 1) / (gridHeight * 0.382 - 1)),
+                                            aspectRatio: Float((actualWidth/2 - 1) / (gridHeight * 0.382 - 1)),
                                             
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
                                         )
-                                                .frame(width: gridWidth/2 - 1, height: gridHeight * 0.382 - 1)
+                                                .frame(width: actualWidth/2 - 1, height: gridHeight * 0.382 - 1)
                                         .clipped().contentShape(Rectangle())
                                         .contentShape(Rectangle())
                                     }
@@ -278,13 +284,13 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    aspectRatio: Float((gridWidth/2 - 1) / gridHeight),
+                                    aspectRatio: Float((actualWidth/2 - 1) / gridHeight),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth/2 - 1, height: gridHeight)
+                                .frame(width: actualWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                                 VStack(spacing: 2) {
@@ -292,13 +298,13 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
-                                            aspectRatio: Float((gridWidth/2 - 1) / (gridHeight/2 - 1)),
+                                            aspectRatio: Float((actualWidth/2 - 1) / (gridHeight/2 - 1)),
                                             
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
                                         )
-                                                .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                                                .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
                                     }
                                 }
@@ -309,26 +315,26 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    aspectRatio: Float(gridWidth / (gridHeight/2 - 1)),
+                                    aspectRatio: Float(actualWidth / (gridHeight/2 - 1)),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth, height: gridHeight/2 - 1)
+                                .frame(width: actualWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
                                 HStack(spacing: 2) {
                                     ForEach(1..<3) { idx in
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
-                                            aspectRatio: Float((gridWidth/2 - 1) / (gridHeight/2 - 1)),
+                                            aspectRatio: Float((actualWidth/2 - 1) / (gridHeight/2 - 1)),
                                             
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
                                         )
-                                                .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                                                .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
                                     }
                                 }
@@ -355,7 +361,7 @@ struct MediaGridView: View {
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                                .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
                             }
                         }
@@ -370,7 +376,7 @@ struct MediaGridView: View {
                                         onVideoFinished: onVideoFinished,
                                         videoManager: videoManager
                                     )
-                                        .frame(width: gridWidth/2 - 1, height: gridHeight/2 - 1)
+                                        .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                     .clipped().contentShape(Rectangle())
                                 }
                             }
@@ -384,13 +390,13 @@ struct MediaGridView: View {
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    aspectRatio: Float((gridWidth / 2 - 1) / (gridHeight / 2 - 1)),
+                                    aspectRatio: Float((actualWidth / 2 - 1) / (gridHeight / 2 - 1)),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager
                                 )
-                                .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
+                                .frame(width: actualWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .clipped().contentShape(Rectangle())
                             }
                         }
@@ -401,13 +407,13 @@ struct MediaGridView: View {
                                         MediaCell(
                                             parentTweet: parentTweet,
                                             attachmentIndex: idx,
-                                            aspectRatio: Float((gridWidth / 2 - 1) / (gridHeight / 2 - 1)),
+                                            aspectRatio: Float((actualWidth / 2 - 1) / (gridHeight / 2 - 1)),
                                             
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
                                         )
-                                                .frame(width: gridWidth / 2 - 1, height: gridHeight / 2 - 1)
+                                                .frame(width: actualWidth / 2 - 1, height: gridHeight / 2 - 1)
                                         .clipped().contentShape(Rectangle())
 
                                         
@@ -425,111 +431,113 @@ struct MediaGridView: View {
                     }
                 }
             }
-            .frame(width: gridWidth, height: gridHeight)
+            .frame(width: actualWidth, height: gridHeight)
             .clipped().contentShape(Rectangle())
-            .onAppear {
-                print("DEBUG: [MediaGridView] onAppear called for tweet \(parentTweet.mid)")
-                // Mark the grid as visible
-                isVisible = true
-                
-                // Simulator video playback disabled - uncomment to re-enable
-                // #if targetEnvironment(simulator)
-                // print("DEBUG: [MediaGridView] Running in simulator - disabling video playback to prevent crashes")
-                // shouldLoadVideo = false
-                // return
-                // #endif
-                
-                // Setup sequential playback for videos
-                let videoMids = attachments.enumerated().compactMap { index, attachment in
-                    if attachment.type == .video || attachment.type == .hls_video {
-                        return attachment.mid
-                    }
-                    return nil
+        }
+        // Fix the height to prevent layout shifts during scrolling
+        .frame(height: gridHeight)
+        .onAppear {
+            print("DEBUG: [MediaGridView] onAppear called for tweet \(parentTweet.mid)")
+            // Mark the grid as visible
+            isVisible = true
+            
+            // Simulator video playback disabled - uncomment to re-enable
+            // #if targetEnvironment(simulator)
+            // print("DEBUG: [MediaGridView] Running in simulator - disabling video playback to prevent crashes")
+            // shouldLoadVideo = false
+            // return
+            // #endif
+            
+            // Setup sequential playback for videos
+            let videoMids = attachments.enumerated().compactMap { index, attachment in
+                if attachment.type == .video || attachment.type == .hls_video {
+                    return attachment.mid
                 }
+                return nil
+            }
+            
+            // Always stop any existing playback first to handle reuse scenarios
+            videoManager.stopSequentialPlayback()
+            
+            if videoMids.count > 1 {
+                videoManager.setupSequentialPlayback(for: videoMids)
+                print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
+            } else if videoMids.count == 1 {
+                // For single videos, set up the video MID but don't enable sequential playback
+                let wasEmpty = videoManager.videoMids.isEmpty
+                let isNewSequence = videoManager.videoMids != videoMids && !wasEmpty
+                videoManager.videoMids = videoMids
+                videoManager.isSequentialPlaybackEnabled = false
+                videoManager.currentVideoIndex = 0
                 
-                // Always stop any existing playback first to handle reuse scenarios
-                videoManager.stopSequentialPlayback()
-                
-                if videoMids.count > 1 {
-                    videoManager.setupSequentialPlayback(for: videoMids)
-                    print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
-                } else if videoMids.count == 1 {
-                    // For single videos, set up the video MID but don't enable sequential playback
-                    let wasEmpty = videoManager.videoMids.isEmpty
-                    let isNewSequence = videoManager.videoMids != videoMids && !wasEmpty
-                    videoManager.videoMids = videoMids
-                    videoManager.isSequentialPlaybackEnabled = false
-                    videoManager.currentVideoIndex = 0
-                    
-                    if isNewSequence {
-                        print("DEBUG: [MediaGridView] Setup NEW single video playback for \(videoMids[0])")
-                        // Reset handled by SimpleVideoPlayer's internal state management
-                    } else {
-                        print("DEBUG: [MediaGridView] Setup \(wasEmpty ? "FIRST TIME" : "EXISTING") single video playback for \(videoMids[0])")
-                    }
+                if isNewSequence {
+                    print("DEBUG: [MediaGridView] Setup NEW single video playback for \(videoMids[0])")
+                    // Reset handled by SimpleVideoPlayer's internal state management
+                } else {
+                    print("DEBUG: [MediaGridView] Setup \(wasEmpty ? "FIRST TIME" : "EXISTING") single video playback for \(videoMids[0])")
                 }
+            }
+            
+            // Start media loading if this grid contains videos or audio
+            let hasVideos = attachments.contains(where: { $0.type == .video || $0.type == .hls_video })
+            let hasAudio = attachments.contains(where: { $0.type == .audio })
+            let hasMedia = hasVideos || hasAudio
+            
+            if hasMedia {
+                print("DEBUG: [MediaGridView] Grid contains media (videos: \(hasVideos), audio: \(hasAudio), attachments: \(attachments.count)) - checking VideoLoadingManager")
                 
-                // Start media loading if this grid contains videos or audio
-                let hasVideos = attachments.contains(where: { $0.type == .video || $0.type == .hls_video })
-                let hasAudio = attachments.contains(where: { $0.type == .audio })
-                let hasMedia = hasVideos || hasAudio
+                // Register this tweet as containing media (videos or audio)
+                // This is important for tweets with multiple attachments to be tracked
+                videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
                 
-                if hasMedia {
-                    print("DEBUG: [MediaGridView] Grid contains media (videos: \(hasVideos), audio: \(hasAudio), attachments: \(attachments.count)) - checking VideoLoadingManager")
-                    
-                    // Register this tweet as containing media (videos or audio)
-                    // This is important for tweets with multiple attachments to be tracked
-                    videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
-                    
-                    // Check if this tweet should load media based on VideoLoadingManager
-                    if videoLoadingManager.shouldLoadVideos(for: parentTweet.mid) {
-                        shouldLoadVideo = true
-                        print("DEBUG: [MediaGridView] VideoLoadingManager approved loading for tweet \(parentTweet.mid) with \(attachments.count) attachments")
-                    } else {
+                // Check if this tweet should load media based on VideoLoadingManager
+                if videoLoadingManager.shouldLoadVideos(for: parentTweet.mid) {
+                    shouldLoadVideo = true
+                    print("DEBUG: [MediaGridView] VideoLoadingManager approved loading for tweet \(parentTweet.mid) with \(attachments.count) attachments")
+                } else {
                     shouldLoadVideo = false
                     print("DEBUG: [MediaGridView] VideoLoadingManager denied loading for tweet \(parentTweet.mid) with \(attachments.count) attachments")
                 }
             } else {
-                    print("DEBUG: [MediaGridView] Grid contains no media")
-                }
+                print("DEBUG: [MediaGridView] Grid contains no media")
             }
-            .onDisappear {
-                // Mark the grid as not visible
-                isVisible = false
-                
-                // TIMER DISABLED - no timer to invalidate
-                shouldLoadVideo = false
+        }
+        .onDisappear {
+            // Mark the grid as not visible
+            isVisible = false
+            
+            // TIMER DISABLED - no timer to invalidate
+            shouldLoadVideo = false
+            videoManager.stopSequentialPlayback()
+        }
+        .onChange(of: isVisible) { _, newVisibility in
+            // Handle visibility changes
+            if !newVisibility {
+                // Grid became invisible - stop video playback
+                print("DEBUG: [MediaGridView] Grid became invisible - stopping playback")
                 videoManager.stopSequentialPlayback()
             }
-            .onChange(of: isVisible) { _, newVisibility in
-                // Handle visibility changes
-                if !newVisibility {
-                    // Grid became invisible - stop video playback
-                    print("DEBUG: [MediaGridView] Grid became invisible - stopping playback")
-                    videoManager.stopSequentialPlayback()
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
-                if let tweetId = notification.userInfo?["tweetId"] as? String,
-                   tweetId == parentTweet.mid {
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
+            if let tweetId = notification.userInfo?["tweetId"] as? String,
+               tweetId == parentTweet.mid {
                 print("DEBUG: [MediaGridView] Received cancel video loading notification for tweet \(tweetId)")
                 shouldLoadVideo = false
                 videoManager.stopSequentialPlayback()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
+            if let tweetId = notification.userInfo?["tweetId"] as? String,
+               tweetId == parentTweet.mid {
+                print("DEBUG: [MediaGridView] Received video preloading notification for tweet \(tweetId)")
+                // Enable video loading for preloading
+                shouldLoadVideo = true
             }
-            .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
-                if let tweetId = notification.userInfo?["tweetId"] as? String,
-                   tweetId == parentTweet.mid {
-                    print("DEBUG: [MediaGridView] Received video preloading notification for tweet \(tweetId)")
-                    // Enable video loading for preloading
-                    shouldLoadVideo = true
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
             print("DEBUG: [MediaGridView] Received stopAllVideos notification for tweet \(parentTweet.mid)")
             shouldLoadVideo = false
             videoManager.stopSequentialPlayback()
-            }
         }
     }
 }

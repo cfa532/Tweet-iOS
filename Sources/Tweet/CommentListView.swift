@@ -35,6 +35,10 @@ struct CommentListView<RowView: View>: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     @State private var initialLoadComplete = false
+    @State private var loadingStartTime: Date? = nil
+    
+    // Minimum duration to show the loading spinner (in seconds)
+    private let minimumLoadingDuration: TimeInterval = 0.5
 
     // MARK: - Initialization
     init(
@@ -161,11 +165,26 @@ struct CommentListView<RowView: View>: View {
         let pageSize = self.pageSize
         
         Task {
-            isLoadingMore = true
+            // Record loading start time
+            let startTime = Date()
+            
+            await MainActor.run {
+                isLoadingMore = true
+                loadingStartTime = startTime
+            }
             
             do {
                 let newComments = try await commentFetcher(nextPage, pageSize)
                 let validComments = newComments.compactMap { $0 }
+                
+                // Calculate elapsed time
+                let elapsedTime = Date().timeIntervalSince(startTime)
+                let remainingTime = max(0, minimumLoadingDuration - elapsedTime)
+                
+                // Wait for minimum duration if needed
+                if remainingTime > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
+                }
                 
                 await MainActor.run {
                     if !validComments.isEmpty {
@@ -178,6 +197,7 @@ struct CommentListView<RowView: View>: View {
                     } else if validComments.isEmpty {
                         // All comments are nil, auto-increment and try again
                         isLoadingMore = false
+                        loadingStartTime = nil
                         loadMoreComments(page: nextPage + 1)
                         return
                     } else {
@@ -186,14 +206,25 @@ struct CommentListView<RowView: View>: View {
                     }
                     
                     currentPage = nextPage
+                    isLoadingMore = false
+                    loadingStartTime = nil
                 }
             } catch {
+                // Calculate elapsed time for error case
+                let elapsedTime = Date().timeIntervalSince(startTime)
+                let remainingTime = max(0, minimumLoadingDuration - elapsedTime)
+                
+                // Wait for minimum duration even on error
+                if remainingTime > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
+                }
+                
                 await MainActor.run {
                     hasMoreComments = false
+                    isLoadingMore = false
+                    loadingStartTime = nil
                 }
             }
-            
-            await MainActor.run { isLoadingMore = false }
         }
     }
 

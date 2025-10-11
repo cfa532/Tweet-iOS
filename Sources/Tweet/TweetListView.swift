@@ -35,6 +35,10 @@ struct TweetListView<RowView: View>: View {
     @State private var initialLoadComplete = false
     @State private var deletedTweetIds = Set<String>()
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
+    @State private var loadingStartTime: Date? = nil
+    
+    // Minimum duration to show the loading spinner (in seconds)
+    private let minimumLoadingDuration: TimeInterval = 0.5
 
     // MARK: - Initialization
     init(
@@ -311,11 +315,27 @@ struct TweetListView<RowView: View>: View {
         let pageSize = self.pageSize
         
         Task {
-            isLoadingMore = true
+            // Record loading start time
+            let startTime = Date()
+            
+            await MainActor.run {
+                isLoadingMore = true
+                loadingStartTime = startTime
+            }
             
             do {
                 // Step 1: Load from cache first for instant UX
                 let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
+                
+                // Calculate elapsed time
+                let elapsedTime = Date().timeIntervalSince(startTime)
+                let remainingTime = max(0, minimumLoadingDuration - elapsedTime)
+                
+                // Wait for minimum duration if needed
+                if remainingTime > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
+                }
+                
                 await MainActor.run {
                     tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
                     
@@ -323,8 +343,9 @@ struct TweetListView<RowView: View>: View {
                     let tweetIds = tweets.map { $0.mid }
                     videoLoadingManager.updateTweetList(tweetIds)
                     
-                    // Clear loading state immediately after showing cached content
+                    // Clear loading state after minimum duration
                     isLoadingMore = false
+                    loadingStartTime = nil
                 }
                 
                 // Step 2: Load from server to update with fresh data (non-blocking, no retry)
@@ -333,9 +354,20 @@ struct TweetListView<RowView: View>: View {
                 }
             } catch {
                 print("[TweetListView] Error loading page \(page): \(error)")
+                
+                // Calculate elapsed time for error case
+                let elapsedTime = Date().timeIntervalSince(startTime)
+                let remainingTime = max(0, minimumLoadingDuration - elapsedTime)
+                
+                // Wait for minimum duration even on error
+                if remainingTime > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
+                }
+                
                 await MainActor.run { 
                     hasMoreTweets = false; 
-                    isLoadingMore = false 
+                    isLoadingMore = false
+                    loadingStartTime = nil
                 }
                 completion(false)
             }

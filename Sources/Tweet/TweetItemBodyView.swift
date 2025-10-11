@@ -20,6 +20,12 @@ struct TweetItemBodyView: View {
     @State private var isExpanded = false
     @State private var showLoginSheet = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+    
+    // Cache screen dimensions to avoid repeated UIScreen.main calls
+    private static let cachedGridWidth: CGFloat = {
+        let screenWidth = UIScreen.main.bounds.width
+        return max(10, screenWidth - 32)
+    }()
 
     private func handleGuestAction() {
         if hproseInstance.appUser.isGuest {
@@ -48,10 +54,13 @@ struct TweetItemBodyView: View {
             }
             // MediaGrid to show attachment previews.
             if let attachments = tweet.attachments, !attachments.isEmpty {
+                // Use cached grid width for performance
                 let aspect = MediaGridViewModel.aspectRatio(for: attachments)
+                let gridHeight = max(10, Self.cachedGridWidth / aspect)
+                
                 MediaGridView(parentTweet: tweet, attachments: attachments)
-                    .aspectRatio(aspect, contentMode: .fit)
                     .frame(maxWidth: .infinity)
+                    .frame(height: gridHeight) // Fixed height to prevent shifts
                     .clipped()
                     .cornerRadius(8)
             }
