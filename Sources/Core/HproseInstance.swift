@@ -1709,9 +1709,6 @@ final class HproseInstance: ObservableObject {
         _ = try await appUser.resolveWritableUrl()
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
         
-        // Force refresh upload service to ensure we have a fresh connection
-        appUser.refreshUploadClient()
-        
         // Use MediaProcessor to determine media type and handle upload
         let mediaProcessor = MediaProcessor()
         return try await mediaProcessor.processAndUpload(
