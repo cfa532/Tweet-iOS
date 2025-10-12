@@ -186,25 +186,39 @@ struct UserRowView: View {
                         return
                     }
                     
-                    // Validate user has required fields
-                    if fetchedUser.mid.isEmpty || (fetchedUser.username?.isEmpty ?? true) {
-                        print("DEBUG: [UserRowView] Invalid user data for ID: \(userId) - missing mid or username")
-                        await MainActor.run {
-                            // Check if task was cancelled before updating UI
-                            guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
-                            self.loadFailed = true
-                            self.isLoading = false
-                            // Notify parent that this user failed to load
-                            self.onLoadFailed?(userId)
-                        }
-                    } else {
-                        print("DEBUG: [UserRowView] Successfully fetched user: \(fetchedUser.mid)")
-                        await MainActor.run {
-                            // Check if task was cancelled before updating UI
-                            guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
-                            self.user = fetchedUser
-                            self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
-                            self.isLoading = false
+                    // Accept user even if username is nil (it will be populated by background fetch)
+                    print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid), username: \(fetchedUser.username ?? "nil")")
+                    await MainActor.run {
+                        // Check if task was cancelled before updating UI
+                        guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
+                        self.user = fetchedUser
+                        self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
+                        // Always show the user row, even if username is nil (will update via background fetch)
+                        self.isLoading = false
+                        
+                        // If username is nil, start a delayed check to verify background fetch succeeded
+                        if fetchedUser.username == nil || fetchedUser.username?.isEmpty == true {
+                            Task {
+                                // Wait 5 seconds for background fetch to complete
+                                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                                
+                                // Check if username is still nil after background fetch
+                                // Fetch from singleton to get latest data
+                                let updatedUser = User.getInstance(mid: userId)
+                                
+                                await MainActor.run {
+                                    guard taskCancellationToken == currentCancellationToken else { return }
+                                    if updatedUser.username == nil || updatedUser.username?.isEmpty == true {
+                                        print("DEBUG: [UserRowView] Background fetch failed to populate username for \(userId), hiding row")
+                                        self.loadFailed = true
+                                        self.onLoadFailed?(userId)
+                                    } else {
+                                        print("DEBUG: [UserRowView] Background fetch succeeded for \(userId): \(updatedUser.username ?? ""), updating view")
+                                        // Update the view with the populated user data
+                                        self.user = updatedUser
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
