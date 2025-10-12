@@ -3419,8 +3419,23 @@ final class HproseInstance: ObservableObject {
             }
             if let attachments = tweet.attachments, !attachments.isEmpty {
                 uploadPayload["attachments"] = attachments.map { attachment in
-                    var attachmentDict: [String: Any] = ["mid": attachment.mid]
+                    var attachmentDict: [String: Any] = [
+                        "mid": attachment.mid,
+                        "type": attachment.type.rawValue
+                    ]
                     attachmentDict["timestamp"] = attachment.timestamp.timeIntervalSince1970 * 1000
+                    
+                    // Add optional fields
+                    if let size = attachment.size {
+                        attachmentDict["size"] = size
+                    }
+                    if let fileName = attachment.fileName {
+                        attachmentDict["fileName"] = fileName
+                    }
+                    if let aspectRatio = attachment.aspectRatio {
+                        attachmentDict["aspectRatio"] = aspectRatio
+                    }
+                    
                     return attachmentDict
                 }
             }
