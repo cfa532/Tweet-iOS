@@ -114,13 +114,13 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 if baseUrl == HproseInstance.shared.appUser.baseUrl {
                     // Create a new client since the shared one is private
                     let client = HproseHttpClient()
-                    client.timeout = 30000
+                    client.timeout = 300000  // 5 minutes in milliseconds (matches Kotlin regular client)
                     client.uri = "\(baseUrl)/webapi/"
                     _hproseClient = client
                     return client
                 } else {
                     let client = HproseHttpClient()
-                    client.timeout = 30000
+                    client.timeout = 300000  // 5 minutes in milliseconds (matches Kotlin regular client)
                     client.uri = "\(baseUrl)/webapi/"
                     _hproseClient = client
                     return client
@@ -142,13 +142,13 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     // Use the main hprose client if available, otherwise create a new one
                     // Create a new client for upload
                     let client = HproseHttpClient()
-                    client.timeout = 180000
+                    client.timeout = 3000000  // 50 minutes (same as Kotlin) for large uploads
                     client.uri = "\(writableUrl)/webapi/"
                     _uploadClient = client
                     return client
                 } else {
                     let client = HproseHttpClient()
-                    client.timeout = 180000
+                    client.timeout = 3000000  // 50 minutes (same as Kotlin) for large uploads
                     client.uri = "\(writableUrl)/webapi/"
                     _uploadClient = client
                     return client
@@ -467,10 +467,5 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             }
         }
         throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No writable url available"])
-    }
-
-    /// Force refresh the upload client cache
-    func refreshUploadClient() {
-        _uploadClient = nil
     }
 }
