@@ -684,6 +684,12 @@ final class HproseInstance: ObservableObject {
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
+        // Step 0: Check if userId is blacklisted
+        if blackList.isBlacklisted(userId) {
+            print("DEBUG: [fetchUser] userId \(userId) is blacklisted, returning cached user only")
+            return TweetCacheManager.shared.fetchUser(mid: userId)
+        }
+        
         // Step 1: Check user cache in Core Data first
         let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
         
@@ -718,7 +724,19 @@ final class HproseInstance: ObservableObject {
         }
         
         // Step 2: Fetch from server with retry logic. No instance available in memory or cache.
-        return try await updateUserFromServer(userId, baseUrl: baseUrl)
+        do {
+            let user = try await updateUserFromServer(userId, baseUrl: baseUrl)
+            // Successfully fetched user - remove from blacklist candidates if it was there
+            if user != nil {
+                blackList.recordSuccess(userId)
+            }
+            return user
+        } catch {
+            // After all retries failed, add userId to blacklist and return nil
+            print("DEBUG: [fetchUser] All retries failed for userId: \(userId), adding to blacklist")
+            blackList.recordFailure(userId)
+            return nil
+        }
     }
     
     // Track ongoing user updates to prevent concurrent calls for the same user
@@ -816,8 +834,9 @@ final class HproseInstance: ObservableObject {
             let newResponse = redirectedClient.invoke("runMApp", withArgs: [entry, params])
             
             if let newUserDict = newResponse as? [String: Any] {
-                await MainActor.run {
-                    do {
+                // Valid user dictionary returned from redirected server - update cached user
+                do {
+                    try await MainActor.run {
                         // Capture the redirected IP before User.from() potentially overwrites it
                         let redirectedBaseUrl = user.baseUrl
                         let updatedUser = try User.from(dict: newUserDict)
@@ -828,17 +847,24 @@ final class HproseInstance: ObservableObject {
                         
                         // Save the user with the correct redirected IP to cache
                         TweetCacheManager.shared.saveUser(updatedUser)
-                    } catch {
-                        print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
                     }
+                } catch {
+                    print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
+                    throw error  // Re-throw to trigger retry logic
                 }
             } else if let newIpAddress = newResponse as? String {
-                print("DEBUG: [updateUserFromServer] User still not found on redirected IP: \(newIpAddress)")
+                // Second redirect returned - user not found on this server either
+                print("DEBUG: [updateUserFromServer] \(user.mid) not found on redirected IP: \(newIpAddress)")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "userid not found after redirect - second IP returned: \(newIpAddress)"])
+            } else {
+                // Nil or unexpected response from redirected server
+                print("DEBUG: [updateUserFromServer] \(user.mid) not found - nil or unexpected response from redirected server")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "userid not found after redirect - nil response"])
             }
         } else if let userDict = response as? [String: Any] {
             // User found on current node
-            await MainActor.run {
-                do {
+            do {
+                try await MainActor.run {
                     let updatedUser = try User.from(dict: userDict)
                     // Preserve the baseUrl that was set before the server call
                     updatedUser.baseUrl = user.baseUrl
@@ -847,10 +873,11 @@ final class HproseInstance: ObservableObject {
                     
                     // Save the user to cache
                     TweetCacheManager.shared.saveUser(updatedUser)
-                } catch {
-                    print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
-                    print("DEBUG: [updateUserFromServer] Response that caused error: \(response)")
                 }
+            } catch {
+                print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
+                print("DEBUG: [updateUserFromServer] Response that caused error: \(response)")
+                throw error  // Re-throw to trigger retry logic
             }
         } else {
             print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: response)), value: \(response)")
