@@ -140,6 +140,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppDidEnterBackground() {
         print("[AppDelegate] App did enter background")
         
+        // Stop LocalHTTPServer and release the port to free system resources
+        LocalHTTPServer.shared.stop()
+        
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
         
@@ -149,25 +152,28 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppWillEnterForeground() {
         print("[AppDelegate] App will enter foreground")
         
+        // Restart LocalHTTPServer (it was stopped when app went to background)
+        LocalHTTPServer.shared.start()
+        
         // Check how long app was in background
         if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
             print("[AppDelegate] App was in background for \(timeInBackground) seconds")
             
-            // If app was in background for more than 5 minutes, restart LocalHTTPServer
+            // If app was in background for more than 5 minutes, reset connection pool
             // and clear video player caches to force fresh initialization
             if timeInBackground > 300 { // 5 minutes
-                print("[AppDelegate] Long background period detected, restarting video infrastructure")
+                print("[AppDelegate] Long background period detected, resetting connection pool")
                 
-                // Restart LocalHTTPServer to ensure it's running
+                // Reset connection pool to recover from long background suspension
+                LocalHTTPServer.shared.resetConnectionPool()
+                
+                // Restart video infrastructure
                 Task {
                     await restartVideoInfrastructure()
                 }
             }
         }
-        
-        // Ensure LocalHTTPServer is always running when returning to foreground
-        LocalHTTPServer.shared.start()
         
         // Foreground handling is now done by SimpleVideoPlayer's notification observers
     }

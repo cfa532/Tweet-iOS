@@ -70,4 +70,18 @@ class PreferenceHelper {
     func setCloudPort(_ port: String?) {
         userDefaults.set(port, forKey: "cloudPort")
     }
+    
+    // MARK: - Local HTTP Server Port
+    func getLocalHTTPServerPort() -> UInt16 {
+        let savedPort = userDefaults.integer(forKey: "localHTTPServerPort")
+        if savedPort > 0 && savedPort <= 65535 {
+            return UInt16(savedPort)
+        }
+        return 8080 // Default port
+    }
+    
+    func setLocalHTTPServerPort(_ port: UInt16) {
+        userDefaults.set(Int(port), forKey: "localHTTPServerPort")
+        NSLog("DEBUG: [PreferenceHelper] Saved LocalHTTPServer port: \(port)")
+    }
 } 
