@@ -490,3 +490,17 @@
 "Cannot extract mediaID from URL" = "Cannot extract mediaID from URL";
 "Failed to initialize app entry with any URL" = "Failed to initialize app entry with any URL";
 "Writable URL not available" = "Writable URL not available";
+"Target user not found" = "User not found";
+"You cannot follow this user because you are blocked" = "You cannot follow this user because you are blocked";
+"You cannot comment on this tweet because you are blocked by the author" = "You cannot comment on this tweet because you are blocked by the author";
+"Recipient user not found" = "Recipient not found";
+"You cannot send a message to this user because you are blocked" = "You cannot send a message to this user because you are blocked";
+"Tweet not found" = "Tweet not found";
+"Upload client not available" = "Upload service unavailable";
+"Failed to upload file" = "Failed to upload file";
+"Failed to upload tweet" = "Failed to upload tweet";
+"Failed to upload attachment" = "Failed to upload attachment";
+"Failed to post comment" = "Failed to post comment";
+"Failed to update pinned tweet" = "Failed to update pinned tweet";
+"Failed to get pinned tweets" = "Failed to get pinned tweets";
+"Failed to report tweet" = "Failed to report tweet";

@@ -400,3 +400,17 @@
 "Cannot extract mediaID from URL" = "URLからメディアIDを抽出できません";
 "Failed to initialize app entry with any URL" = "いずれのURLでもアプリエントリの初期化に失敗しました";
 "Writable URL not available" = "書き込み可能なURLが利用できません";
+"Target user not found" = "ユーザーが見つかりません";
+"You cannot follow this user because you are blocked" = "ブロックされているため、このユーザーをフォローできません";
+"You cannot comment on this tweet because you are blocked by the author" = "投稿者にブロックされているため、このツイートにコメントできません";
+"Recipient user not found" = "受信者が見つかりません";
+"You cannot send a message to this user because you are blocked" = "ブロックされているため、このユーザーにメッセージを送信できません";
+"Tweet not found" = "ツイートが見つかりません";
+"Upload client not available" = "アップロードサービスが利用できません";
+"Failed to upload file" = "ファイルのアップロードに失敗しました";
+"Failed to upload tweet" = "ツイートのアップロードに失敗しました";
+"Failed to upload attachment" = "添付ファイルのアップロードに失敗しました";
+"Failed to post comment" = "コメントの投稿に失敗しました";
+"Failed to update pinned tweet" = "固定ツイートの更新に失敗しました";
+"Failed to get pinned tweets" = "固定ツイートの取得に失敗しました";
+"Failed to report tweet" = "ツイートの報告に失敗しました";

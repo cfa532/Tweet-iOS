@@ -494,3 +494,17 @@
 "Cannot extract mediaID from URL" = "无法从URL中提取媒体ID";
 "Failed to initialize app entry with any URL" = "无法使用任何URL初始化应用入口";
 "Writable URL not available" = "可写入URL不可用";
+"Target user not found" = "未找到用户";
+"You cannot follow this user because you are blocked" = "您已被屏蔽，无法关注此用户";
+"You cannot comment on this tweet because you are blocked by the author" = "您已被作者屏蔽，无法评论此推文";
+"Recipient user not found" = "未找到收件人";
+"You cannot send a message to this user because you are blocked" = "您已被屏蔽，无法向此用户发送消息";
+"Tweet not found" = "未找到推文";
+"Upload client not available" = "上传服务不可用";
+"Failed to upload file" = "文件上传失败";
+"Failed to upload tweet" = "推文上传失败";
+"Failed to upload attachment" = "附件上传失败";
+"Failed to post comment" = "评论发布失败";
+"Failed to update pinned tweet" = "置顶推文更新失败";
+"Failed to get pinned tweets" = "获取置顶推文失败";
+"Failed to report tweet" = "举报推文失败";

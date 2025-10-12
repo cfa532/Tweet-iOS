@@ -653,7 +653,7 @@ final class HproseInstance: ObservableObject {
                 print("Error processing tweet: \(error)")
             }
         }
-        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tweet not found"])
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Tweet not found", comment: "Tweet lookup error")])
     }
     
     func getUserId(_ username: String) async throws -> String? {
@@ -1263,10 +1263,10 @@ final class HproseInstance: ObservableObject {
         
         // Check if app user is blacklisted by the target user
         guard let targetUser = try await fetchUser(followingId) else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Target user not found"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Target user not found", comment: "User lookup error")])
         }
         if targetUser.isUserBlacklisted(effectiveUserId) {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot follow this user because you are blocked"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot follow this user because you are blocked", comment: "Follow blocked error")])
         }
         
         return try await withRetry {
@@ -1542,7 +1542,7 @@ final class HproseInstance: ObservableObject {
         // Check if app user is blacklisted by the tweet author
         if let tweetAuthor = tweet.author {
             if tweetAuthor.isUserBlacklisted(appUser.mid) {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot comment on this tweet because you are blocked by the author"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot comment on this tweet because you are blocked by the author", comment: "Comment blocked error")])
             }
         }
         
@@ -2781,7 +2781,7 @@ final class HproseInstance: ObservableObject {
             // Always resolve writableUrl to ensure we have the correct IP address
             _ = try await appUser.resolveWritableUrl()
             guard let uploadClient = appUser.uploadClient else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload client not available"])
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
             }
             
             // Create temporary file
@@ -2821,7 +2821,7 @@ final class HproseInstance: ObservableObject {
                     request["offset"] = offset
                     request["fsid"] = fsid
                 } else {
-                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk \(chunkCount)"])
+                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload file", comment: "Upload error")])
                 }
             }
             
@@ -2834,7 +2834,7 @@ final class HproseInstance: ObservableObject {
             let finalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
             
             guard let cid = finalResponse as? String else {
-                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get CID from final upload response"])
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload file", comment: "Upload error")])
             }
             
             // Get file attributes
@@ -3526,7 +3526,7 @@ final class HproseInstance: ObservableObject {
             }
             
             if uploadResults.contains(where: { $0 == nil }) {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment upload failure in pair"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload attachment", comment: "Attachment upload error")])
             }
             
             return uploadResults.compactMap { $0 }
@@ -3575,7 +3575,7 @@ final class HproseInstance: ObservableObject {
                     )
                 }
             } else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
             }
         } catch {
             print("Error uploading tweet: \(error)")
@@ -3698,7 +3698,7 @@ final class HproseInstance: ObservableObject {
         }
         
         if itemData.count != uploadedAttachments.count {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload attachment", comment: "Attachment upload error")])
         }
         
         return (uploadedAttachments, videoJobId)
@@ -3887,7 +3887,7 @@ final class HproseInstance: ObservableObject {
                         )
                     }
                 } else {
-                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
                 }
             } catch {
                 print("Error uploading tweet: \(error)")
@@ -4166,7 +4166,7 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 if itemData.count != uploadedAttachments.count {
-                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
+                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload attachment", comment: "Attachment upload error")])
                     await MainActor.run {
                         if !self.isAppInitializing {
                             NotificationCenter.default.post(
@@ -4193,7 +4193,7 @@ final class HproseInstance: ObservableObject {
                         // No need to post notifications here as they're handled in addComment
                     }
                 } else {
-                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment returned nil"])
+                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to post comment", comment: "Comment error")])
                     await MainActor.run {
                         if !self.isAppInitializing {
                             NotificationCenter.default.post(
@@ -4234,7 +4234,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid,
         ]
         guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "togglePinnedTweet: No response"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")])
         }
         return response
     }
@@ -4252,7 +4252,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid
         ]
         guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "getPinnedTweets: No response"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to get pinned tweets", comment: "Get pinned tweets error")])
         }
         var result: [[String: Any]] = []
         for dict in response {
@@ -4414,10 +4414,10 @@ final class HproseInstance: ObservableObject {
     func sendMessage(receiptId: String, message: ChatMessage) async throws -> ChatMessage {
         // Check if app user is blacklisted by the recipient
         guard let recipient = try await fetchUser(receiptId) else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Recipient user not found"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Recipient user not found", comment: "User lookup error")])
         }
         if recipient.isUserBlacklisted(appUser.mid) {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot send a message to this user because you are blocked"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot send a message to this user because you are blocked", comment: "Message blocked error")])
         }
         
         let entry = "message_outgoing"
@@ -4734,7 +4734,7 @@ final class HproseInstance: ObservableObject {
             print("[reportTweet] Successfully deleted tweet from backend: \(deletedTweetId)")
         } else {
             print("[reportTweet] Failed to delete tweet from backend: \(tweetId)")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete reported tweet from backend"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to report tweet", comment: "Report tweet error")])
         }
         
         // Send notification to system admin about the reported and deleted content
