@@ -21,7 +21,8 @@ struct Avatar: View {
     
     var body: some View {
         Group {
-            if let avatarUrl = user.avatarUrl {
+            // Check avatar field directly first
+            if let avatar = user.avatar, !avatar.isEmpty, let avatarUrl = user.avatarUrl {
                 Group {
                     if let cachedImage = cachedImage {
                         Image(uiImage: cachedImage)
@@ -55,15 +56,16 @@ struct Avatar: View {
                         loadAvatar(from: avatarUrl)
                     }
                 }
-                .onChange(of: user.avatarUrl) { _, _ in
-                    // Reset and reload when avatar URL changes
+                .onChange(of: user.avatar) { _, newAvatar in
+                    // Reset and reload when avatar changes
                     cachedImage = nil
                     loadFailed = false
-                    if let avatarUrl = user.avatarUrl {
+                    if let newAvatar = newAvatar, !newAvatar.isEmpty, let avatarUrl = user.avatarUrl {
                         loadAvatar(from: avatarUrl)
                     }
                 }
             } else {
+                // Avatar is nil or empty - show default icon
                 Image("manyone")
                     .resizable()
                     .aspectRatio(contentMode: .fill)
