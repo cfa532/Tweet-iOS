@@ -2340,17 +2340,26 @@ final class HproseInstance: ObservableObject {
                 request.httpMethod = "GET"
                 request.timeoutInterval = 3.0
                 
-                let (_, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await URLSession.shared.data(for: request)
                 
-                if let httpResponse = response as? HTTPURLResponse {
-                    let isAvailable = httpResponse.statusCode == 200 || httpResponse.statusCode == 404
-                    print("Cloud drive service \(isAvailable ? "available" : "unavailable") (HTTP \(httpResponse.statusCode))")
-                    return isAvailable
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    print("Cloud drive service unavailable (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))")
+                    return false
                 }
                 
-                return false
+                // Parse JSON response to verify service is actually running
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let status = json["status"] as? String,
+                   status == "ok" {
+                    print("✅ Cloud drive service available - using HLS conversion")
+                    return true
+                } else {
+                    print("Cloud drive service health check failed - invalid response")
+                    return false
+                }
             } catch {
-                print("Cloud drive service unavailable - using MP4 fallback")
+                print("Cloud drive service unavailable - using MP4 fallback (\(error.localizedDescription))")
                 return false
             }
         }
