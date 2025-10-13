@@ -365,7 +365,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             completion()
         } else {
             // Progressive video - proxy with Content-Type fix
-            NSLog("DEBUG: [LocalHTTPServer] Progressive video request: \(relativePath)")
             handleProgressiveVideoRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method, requestHeaders: requestLines)
             completion()
         }

@@ -8,7 +8,6 @@
 import Foundation
 import AVFoundation
 import UIKit
-import Combine
 
 // MARK: - Cache Metadata Structure
 private struct CacheMetadata: Codable {
@@ -82,7 +81,6 @@ class SharedAssetCache: ObservableObject {
     private var loadingTasks: [String: Task<AVAsset, Error>] = [:] // mediaID -> loading task
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
-    private var cancellables = Set<AnyCancellable>() // Combine subscriptions
     
     // MARK: - Disk Cache Status Cache (to avoid repeated disk I/O)
     private var diskCacheStatus: [String: (exists: Bool, timestamp: Date)] = [:] // mediaID -> (cache exists, check timestamp)
@@ -512,9 +510,7 @@ class SharedAssetCache: ObservableObject {
             return try await createCachingPlayer(for: url, tweetId: tweetId)
         } else {
             // For progressive videos, use LocalHTTPServer to proxy and fix Content-Type
-            NSLog("DEBUG: [SHARED ASSET CACHE] Creating progressive video player via LocalHTTPServer")
-            NSLog("DEBUG: [SHARED ASSET CACHE]   Original URL: \(url.absoluteString)")
-            NSLog("DEBUG: [SHARED ASSET CACHE]   MediaID: \(mediaID)")
+            NSLog("DEBUG: [SHARED ASSET CACHE] Creating progressive video player via LocalHTTPServer for \(mediaID)")
             
             // Remove query parameters
             var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -527,33 +523,10 @@ class SharedAssetCache: ObservableObject {
             // Register real URL and get localhost proxy URL
             let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
             
-            NSLog("DEBUG: [SHARED ASSET CACHE]   LocalHTTPServer URL: \(localURL.absoluteString)")
-            NSLog("DEBUG: [SHARED ASSET CACHE]   Will proxy from: \(cleanURL.absoluteString)")
-            NSLog("DEBUG: [SHARED ASSET CACHE]   LocalHTTPServer fixes Content-Type: video/mp4")
-            
             // Create AVPlayer with localhost URL (LocalHTTPServer fixes Content-Type)
             let asset = AVURLAsset(url: localURL)
             let playerItem = AVPlayerItem(asset: asset)
             let player = AVPlayer(playerItem: playerItem)
-            
-            // Monitor status
-            playerItem.publisher(for: \.status)
-                .sink { status in
-                    switch status {
-                    case .readyToPlay:
-                        NSLog("DEBUG: [SHARED ASSET CACHE] ✅ Progressive video READY: \(mediaID)")
-                    case .failed:
-                        NSLog("DEBUG: [SHARED ASSET CACHE] ❌ Progressive video FAILED: \(mediaID)")
-                        if let error = playerItem.error {
-                            NSLog("DEBUG: [SHARED ASSET CACHE]   Error: \(error.localizedDescription)")
-                        }
-                    case .unknown:
-                        break
-                    @unknown default:
-                        break
-                    }
-                }
-                .store(in: &cancellables)
             
             // Disable automatic waiting
             player.automaticallyWaitsToMinimizeStalling = false
