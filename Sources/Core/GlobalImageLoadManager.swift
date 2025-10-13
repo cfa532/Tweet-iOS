@@ -238,11 +238,17 @@ class GlobalImageLoadManager: ObservableObject {
     
     private func loadImageFromNetwork(_ request: ImageLoadRequest) async -> UIImage? {
         do {
-            let (data, response) = try await URLSession.shared.data(from: request.url)
+            // Create URLRequest with timeout
+            var urlRequest = URLRequest(url: request.url)
+            urlRequest.timeoutInterval = 10.0 // 10 second timeout
+            urlRequest.cachePolicy = .returnCacheDataElseLoad
+            
+            let (data, response) = try await URLSession.shared.data(for: urlRequest)
             
             // Check if we got a valid response
             guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
+                  (200...299).contains(httpResponse.statusCode) else {
+                print("Error: Invalid response (\((response as? HTTPURLResponse)?.statusCode ?? -1)) for image at \(request.url)")
                 return nil
             }
             
@@ -253,6 +259,7 @@ class GlobalImageLoadManager: ObservableObject {
             
             // Check if data is empty
             guard !data.isEmpty else {
+                print("Error: Empty data received for image at \(request.url)")
                 return nil
             }
             
@@ -264,9 +271,11 @@ class GlobalImageLoadManager: ObservableObject {
                 return image
             }
             
+            print("Error: Failed to create UIImage from data for \(request.url)")
             return nil
             
         } catch {
+            print("Error loading image from network (\(request.url)): \(error.localizedDescription)")
             return nil
         }
     }
@@ -335,11 +344,17 @@ class GlobalImageLoadManager: ObservableObject {
     
     private func loadImageFromNetworkOptimized(_ request: ImageLoadRequest, maxSize: CGSize) async -> UIImage? {
         do {
-            let (data, response) = try await URLSession.shared.data(from: request.url)
+            // Create URLRequest with timeout
+            var urlRequest = URLRequest(url: request.url)
+            urlRequest.timeoutInterval = 10.0 // 10 second timeout
+            urlRequest.cachePolicy = .returnCacheDataElseLoad
+            
+            let (data, response) = try await URLSession.shared.data(for: urlRequest)
             
             // Check if we got a valid response
             guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
+                  (200...299).contains(httpResponse.statusCode) else {
+                print("Error: Invalid response (\((response as? HTTPURLResponse)?.statusCode ?? -1)) for optimized image at \(request.url)")
                 return nil
             }
             

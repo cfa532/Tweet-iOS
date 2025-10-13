@@ -1,11 +1,16 @@
 # Video System Architecture
 
-**Last Updated:** October 10, 2025  
+**Last Updated:** October 12, 2025  
 **Status:** Production Ready
 
 ## Overview
 
-The Tweet iOS app implements a sophisticated video playback system with intelligent caching, player sharing, and seamless transitions between different viewing contexts. The system supports both HLS (HTTP Live Streaming) and progressive MP4 video formats with on-demand caching and immediate playback.
+The Tweet iOS app implements a sophisticated video playback system with intelligent caching, player sharing, and seamless transitions between different viewing contexts. The system supports both HLS (HTTP Live Streaming) and progressive video formats with on-demand caching and immediate playback.
+
+### Video Types
+
+1. **HLS Videos** (`MediaType.hls_video`): Adaptive bitrate streaming with master playlists and segments
+2. **Progressive Videos** (`MediaType.video`): Direct HTTP video streams (data blobs without file extensions)
 
 ## Architecture Diagram
 
@@ -106,7 +111,9 @@ Central asset and player cache with background loading support.
 - **Asset Caching:** AVAsset instances indexed by media ID
 - **Player Caching:** AVPlayer instances for reuse
 - **MediaID-Based Keys:** Stable IPFS hash identifiers
-- **HLS Support:** Integration with `CachingPlayerItem`
+- **Dual Format Support:**
+  - **HLS videos**: Integration with `CachingPlayerItem` + LocalHTTPServer
+  - **Progressive videos**: Plain AVPlayer with `ProgressiveVideoResourceLoader` for Content-Type fix
 - **Memory Management:** LRU eviction, proactive monitoring
 - **Disk Persistence:** Cache metadata survives app restarts
 
@@ -115,6 +122,16 @@ Central asset and player cache with background loading support.
 - Max Players: 25
 - Cache Expiration: 30 minutes
 - Max File Size: 50MB per video
+
+**Video Type Detection:**
+```swift
+// Uses MediaType from attachment.type property
+if mediaType == .hls_video {
+    // HLS: CachingPlayerItem + LocalHTTPServer
+} else {
+    // Progressive: Plain AVPlayer with custom ResourceLoader
+}
+```
 
 ### 4. CachingPlayerItem (HLS Segment Caching)
 
@@ -142,11 +159,39 @@ Custom `AVAssetResourceLoaderDelegate` for HLS playlist and segment handling.
 - Validates cached content integrity
 - Serves content through LocalHTTPServer
 
-### 6. LocalHTTPServer (Cache Content Server)
+### 6. ProgressiveVideoResourceLoader (Content-Type Fix)
+
+**Location:** `Sources/Core/SharedAssetCache.swift`
+
+Lightweight `AVAssetResourceLoaderDelegate` that fixes Content-Type headers for progressive videos.
+
+**Purpose:**
+- Server returns `Content-Type: application/octet-stream` for video blobs
+- AVPlayer requires proper content type to play videos
+- Intercepts resource loading requests and provides `video/mp4` content type
+- Redirects to original HTTP URL for actual data loading
+
+**Implementation:**
+```swift
+class ProgressiveVideoResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
+    func resourceLoader(_ resourceLoader: AVAssetResourceLoader, 
+                       shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest) -> Bool {
+        // Set correct content type
+        loadingRequest.contentInformationRequest?.contentType = "video/mp4"
+        // Redirect to original URL for data
+        let response = HTTPURLResponse(statusCode: 302, headerFields: ["Location": originalURL])
+        loadingRequest.response = response
+        loadingRequest.finishLoading()
+        return true
+    }
+}
+```
+
+### 7. LocalHTTPServer (Cache Content Server)
 
 **Location:** `Sources/CachingPlayerItem/LocalHTTPServer.swift`
 
-Local HTTP server running on port 8080 to serve cached media.
+Local HTTP server running on port 8080 to serve cached HLS media.
 
 **Features:**
 - Serves cached HLS playlists and segments
@@ -166,6 +211,66 @@ Singleton manager for TweetDetailView video playback.
 - **Auto-Play Support:** Automatic playback when ready
 - **Audio Session Management:** Proper audio handling
 - **Lifecycle Management:** Cleans up on view dismissal
+
+## Progressive Video vs HLS Video
+
+### Progressive Video (MediaType.video)
+
+**Server Storage:**
+- Stored as binary data blobs without file extensions
+- Server returns `Content-Type: application/octet-stream`
+- Direct HTTP streaming, no segmentation
+
+**iOS Implementation:**
+```swift
+// 1. Remove iOS-specific ?dig=xxx query parameter (only for HLS)
+var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+components?.query = nil
+let cleanURL = components?.url ?? url
+
+// 2. Use custom scheme to intercept Content-Type
+let customSchemeURL = cleanURL.replacingOccurrences(of: "http://", with: "progressivevideo://")
+
+// 3. Create AVURLAsset with custom ResourceLoader
+let asset = AVURLAsset(url: customSchemeURL)
+let loaderDelegate = ProgressiveVideoResourceLoader(originalURL: cleanURL)
+asset.resourceLoader.setDelegate(loaderDelegate, queue: .main)
+
+// 4. ResourceLoader fixes Content-Type to "video/mp4" and redirects to HTTP
+```
+
+**Key Differences from Android:**
+- Android ExoPlayer auto-detects video format from data stream
+- iOS AVPlayer requires explicit Content-Type
+- Solution: Custom ResourceLoader intercepts and provides correct Content-Type
+
+### HLS Video (MediaType.hls_video)
+
+**Server Storage:**
+- Master playlist (master.m3u8) with quality variants
+- Sub-playlists (playlist.m3u8) with segment references  
+- Video segments (.ts files)
+- Proper HLS structure
+
+**iOS Implementation:**
+```swift
+// 1. Resolve master.m3u8 or playlist.m3u8 URL
+let resolvedURL = await resolveHLSURL(url) // Tries master.m3u8, then playlist.m3u8
+
+// 2. Start LocalHTTPServer for segment serving
+LocalHTTPServer.shared.start()
+
+// 3. Create CachingPlayerItem with LocalHTTPServer integration
+let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: mediaID)
+
+// 4. LocalHTTPServer caches segments and serves them locally
+// 5. ?dig=xxx query parameter preserved for AVPlayer cache-busting
+```
+
+**Android Comparison:**
+- Both platforms handle HLS similarly
+- ExoPlayer has built-in caching
+- iOS uses custom LocalHTTPServer for caching
 
 ## Video Playback Flow by Mode
 
@@ -405,12 +510,15 @@ DEBUG: [VIDEO CACHE] Unmuted shared player for fullscreen
 - Automatic mode-based mute state management
 - SwiftUI-native layer management
 - On-demand video caching with immediate playback
-- Limited segment preloading (next 3 segments)
+- Limited segment preloading (next 3 segments for HLS)
 - MediaID-based cache persistence
-- HLS and progressive video support
+- **Dual video format support:**
+  - **HLS videos**: CachingPlayerItem + LocalHTTPServer for segment caching
+  - **Progressive videos**: Plain AVPlayer with Content-Type fix via ProgressiveVideoResourceLoader
 - Cache validation and integrity checking
 - Memory-efficient segment management
 - Automatic disk cache cleanup
+- Query parameter handling (`?dig=xxx` stripped for progressive videos)
 
 ### ✅ Performance Achievements
 - Zero-delay fullscreen transitions
@@ -425,6 +533,37 @@ DEBUG: [VIDEO CACHE] Unmuted shared player for fullscreen
 - HLS master playlists processed successfully
 - No UI freezing during video loading
 
+## Recent Updates (October 12, 2025)
+
+### Progressive Video Support Implementation
+
+**Problem:**
+- Progressive videos (MediaType.video) were not playing on iOS
+- Server returns `Content-Type: application/octet-stream` for video blobs
+- AVPlayer requires proper Content-Type to identify video files
+- Videos stored as data blobs without file extensions
+
+**Solution:**
+- Created `ProgressiveVideoResourceLoader` to fix Content-Type
+- Strips `?dig=xxx` query parameter for progressive videos (iOS-specific workaround only needed for HLS)
+- Uses custom scheme (`progressivevideo://`) to intercept resource loading
+- Redirects to original HTTP URL with correct Content-Type header
+
+**Implementation Details:**
+```swift
+// Progressive Video Flow:
+1. URL with ?dig=xxx → Strip query params → Clean URL
+2. Clean URL → Replace http:// with progressivevideo://
+3. AVURLAsset with custom scheme + ProgressiveVideoResourceLoader
+4. ResourceLoader intercepts → Sets Content-Type: video/mp4 → Redirects to HTTP URL
+5. AVPlayer plays successfully
+```
+
+**Android Comparison:**
+- Android ExoPlayer auto-detects format from data stream (no Content-Type fix needed)
+- iOS AVPlayer requires explicit Content-Type declaration
+- Both platforms use MediaType.video vs MediaType.hls_video for type detection
+
 ---
 
-*This document reflects the actual implementation as of October 2025. The system is production-ready and actively used in the Tweet iOS application.*
+*This document reflects the actual implementation as of October 12, 2025. The system is production-ready and actively used in the Tweet iOS application.*

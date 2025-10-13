@@ -294,14 +294,14 @@ public class LocalHTTPServer: @unchecked Sendable {
         let path = components[1]
         
         if method == "GET" || method == "HEAD" {
-            handleGetRequest(path: path, method: method, connection: connection, completion: completion)
+            handleGetRequest(path: path, method: method, requestLines: lines, connection: connection, completion: completion)
         } else {
             sendResponse(connection: connection, statusCode: 405, headers: [:], body: nil)
             completion()
         }
     }
     
-    private func handleGetRequest(path: String, method: String, connection: NWConnection, completion: @escaping () -> Void) {
+    private func handleGetRequest(path: String, method: String, requestLines: [String], connection: NWConnection, completion: @escaping () -> Void) {
         // NEW FORMAT: /mediaID/ipfs/hash/path (e.g., /QmAbc.../ipfs/QmAbc.../master.m3u8)
         // Extract mediaID (first component after /)
         let pathComponents = path.components(separatedBy: "/").filter { !$0.isEmpty }
@@ -356,7 +356,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Removed repetitive URL resolution logs
         }
         
-        // Check if this is a playlist (.m3u8) or segment (.ts)
+        // Check if this is a playlist (.m3u8), segment (.ts), or progressive video
         if relativePath.hasSuffix(".m3u8") {
             handlePlaylistRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
             completion()
@@ -364,8 +364,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             handleSegmentRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
             completion()
         } else {
-            NSLog("DEBUG: [LocalHTTPServer] Unknown file type: \(relativePath)")
-            sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+            // Progressive video - proxy with Content-Type fix
+            NSLog("DEBUG: [LocalHTTPServer] Progressive video request: \(relativePath)")
+            handleProgressiveVideoRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method, requestHeaders: requestLines)
             completion()
         }
     }
@@ -416,6 +417,64 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Not cached - fetch from real server
         // Removed repetitive fetch log
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method)
+    }
+    
+    private func handleProgressiveVideoRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String, requestHeaders: [String]) {
+        // Parse Range header from client request
+        var rangeHeader: String? = nil
+        for line in requestHeaders {
+            if line.lowercased().hasPrefix("range:") {
+                rangeHeader = String(line.dropFirst(6).trimmingCharacters(in: .whitespaces))
+                break
+            }
+        }
+        
+        // Create request to real server - pass through range as-is
+        var request = URLRequest(url: fullRealURL)
+        request.httpMethod = method
+        request.timeoutInterval = 30
+        
+        if let range = rangeHeader {
+            request.setValue(range, forHTTPHeaderField: "Range")
+        }
+        
+        // Fetch from real server
+        let task = connectionPool.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+            
+            if let error = error {
+                NSLog("DEBUG: [LocalHTTPServer] Fetch error: \(error.localizedDescription)")
+                self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                return
+            }
+            
+            guard let data = data else {
+                self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+                return
+            }
+            
+            // Build response headers with FIXED Content-Type
+            var headers: [String: String] = [
+                "Content-Type": "video/mp4",  // Fix from application/octet-stream
+                "Content-Length": "\(data.count)",
+                "Accept-Ranges": "bytes"
+            ]
+            
+            // Preserve Content-Range if present
+            if let contentRange = httpResponse.value(forHTTPHeaderField: "Content-Range") {
+                headers["Content-Range"] = contentRange
+            }
+            
+            // Send response
+            self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: headers, body: data)
+        }
+        
+        task.resume()
     }
     
     private func getCachePath(for url: URL, mediaID: String) -> String {

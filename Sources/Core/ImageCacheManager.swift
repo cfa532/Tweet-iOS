@@ -9,7 +9,7 @@ import AVFoundation
 import CryptoKit
 
 // MARK: - Image Cache Manager
-class ImageCacheManager {
+class ImageCacheManager: @unchecked Sendable {
     static let shared = ImageCacheManager()
     private let cache = NSCache<NSString, UIImage>()
     private let fileManager = FileManager.default
@@ -17,6 +17,10 @@ class ImageCacheManager {
     private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days in seconds
     private let maxDiskCacheSize: Int64 = 5000 * 1024 * 1024 // 500MB
     private let maxCompressedImageSize: Int = 300 * 1024 // 300KB for compressed images
+    
+    // Request deduplication: Track ongoing requests to prevent duplicate downloads
+    private var ongoingRequests: [String: Task<UIImage?, Never>] = [:]
+    private let requestsQueue = DispatchQueue(label: "com.tweet.imagecache.requests", attributes: .concurrent)
     
     private init() {
         // Get the cache directory
@@ -289,28 +293,112 @@ class ImageCacheManager {
     }
     
     func loadAndCacheImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            
-            // Cache the compressed version
-            cacheImageData(data, for: attachment, baseUrl: baseUrl)
-            
-            // Return the compressed image for thumbnail use
-            return getCompressedImage(for: attachment, baseUrl: baseUrl)
-        } catch {
-            print("Error loading image: \(error)")
-            return nil
+        let cacheKey = getCacheKey(for: attachment, baseUrl: baseUrl)
+        
+        // Check if there's already an ongoing request for this image
+        let existingTask: Task<UIImage?, Never>? = requestsQueue.sync {
+            return ongoingRequests[cacheKey]
         }
+        
+        if let existingTask = existingTask {
+            print("DEBUG: [ImageCacheManager] Reusing existing request for \(cacheKey)")
+            return await existingTask.value
+        }
+        
+        // Create new request task
+        let task = Task<UIImage?, Never> {
+            do {
+                // Create URLRequest with timeout
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 10.0 // 10 second timeout
+                request.cachePolicy = .returnCacheDataElseLoad
+                
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                // Check if response is valid
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    print("Error: Invalid response for image at \(url)")
+                    return nil
+                }
+                
+                // Cache the compressed version
+                cacheImageData(data, for: attachment, baseUrl: baseUrl)
+                
+                // Return the compressed image for thumbnail use
+                return getCompressedImage(for: attachment, baseUrl: baseUrl)
+            } catch {
+                print("Error loading image from \(url): \(error.localizedDescription)")
+                return nil
+            }
+        }
+        
+        // Store the task to prevent duplicate requests
+        requestsQueue.async(flags: .barrier) {
+            self.ongoingRequests[cacheKey] = task
+        }
+        
+        // Wait for result
+        let result = await task.value
+        
+        // Remove completed task
+        requestsQueue.async(flags: .barrier) {
+            self.ongoingRequests.removeValue(forKey: cacheKey)
+        }
+        
+        return result
     }
     
     func loadOriginalImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
-        // Load original image directly from network (no caching)
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            return UIImage(data: data)
-        } catch {
-            print("Error loading original image: \(error)")
-            return nil
+        let cacheKey = getCacheKey(for: attachment, baseUrl: baseUrl) + "_original"
+        
+        // Check if there's already an ongoing request for this original image
+        let existingTask: Task<UIImage?, Never>? = requestsQueue.sync {
+            return ongoingRequests[cacheKey]
         }
+        
+        if let existingTask = existingTask {
+            print("DEBUG: [ImageCacheManager] Reusing existing request for original image \(cacheKey)")
+            return await existingTask.value
+        }
+        
+        // Create new request task
+        let task = Task<UIImage?, Never> {
+            do {
+                // Create URLRequest with timeout
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 15.0 // 15 second timeout for original images (larger files)
+                request.cachePolicy = .returnCacheDataElseLoad
+                
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                // Check if response is valid
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    print("Error: Invalid response for original image at \(url)")
+                    return nil
+                }
+                
+                return UIImage(data: data)
+            } catch {
+                print("Error loading original image from \(url): \(error.localizedDescription)")
+                return nil
+            }
+        }
+        
+        // Store the task to prevent duplicate requests
+        requestsQueue.async(flags: .barrier) {
+            self.ongoingRequests[cacheKey] = task
+        }
+        
+        // Wait for result
+        let result = await task.value
+        
+        // Remove completed task
+        requestsQueue.async(flags: .barrier) {
+            self.ongoingRequests.removeValue(forKey: cacheKey)
+        }
+        
+        return result
     }
 }
