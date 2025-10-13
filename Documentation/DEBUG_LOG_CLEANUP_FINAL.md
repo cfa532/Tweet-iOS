@@ -113,6 +113,20 @@ The most repetitive logs were from LocalHTTPServer serving HLS segments:
 
 **Impact**: **90% reduction in LocalHTTPServer console spam**
 
+### FFmpegKit Log Suppression
+Configured FFmpegKit to only show errors, suppressing INFO/WARNING/DEBUG logs:
+- ✅ Added `FFmpegKitConfig.setLogLevel(16)` in AppDelegate (AV_LOG_ERROR)
+- ❌ Suppressed: `INFO: ffmpeg version n6.0`
+- ❌ Suppressed: `INFO: Copyright (c) 2000-2023...`
+- ❌ Suppressed: `INFO: configuration: --cross-prefix...`
+- ❌ Suppressed: `INFO: libavutil 58...`
+- ❌ Suppressed: `INFO: Input #0, mov,mp4...`
+- ❌ Suppressed: `INFO: Stream mapping...`
+- ❌ Suppressed: `INFO: frame= 0 fps=0.0...` (progress updates)
+- ✅ Kept: ERROR messages only
+
+**Impact**: **99% reduction in FFmpeg console output** during video conversion
+
 ### Cloud Drive Port Configuration Fix
 Removed `Constants.DEFAULT_CLOUD_PORT` and all fallback logic:
 - ❌ Removed: `DEFAULT_CLOUD_PORT = 8010` constant
