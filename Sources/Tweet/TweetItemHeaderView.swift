@@ -1,9 +1,5 @@
 import SwiftUI
 
-
-
-
-
 struct TweetItemHeaderView: View {
     @ObservedObject var tweet: Tweet
     

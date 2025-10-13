@@ -1148,7 +1148,6 @@ class SharedAssetCache: ObservableObject {
         let metadata = CacheMetadata(cachedMediaIDs: cacheTimestamps)
         if let data = try? JSONEncoder().encode(metadata) {
             UserDefaults.standard.set(data, forKey: cacheMetadataKey)
-            print("DEBUG: [SHARED ASSET CACHE] Saved cache metadata for \(cacheTimestamps.count) mediaIDs")
         }
     }
     

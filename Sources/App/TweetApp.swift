@@ -169,4 +169,3 @@ struct TweetApp: App {
         }
     }
 } 
-

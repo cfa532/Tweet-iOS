@@ -309,4 +309,3 @@ struct CommentListContentView<RowView: View>: View {
         }
     }
 }
-

@@ -56,8 +56,6 @@ struct TweetItemView: View, Equatable {
                     tweetContent
                 }
                 .buttonStyle(PlainButtonStyle())
-
-
             } else {
                 // Use tap gesture when onTap callback is provided
                 tweetContent

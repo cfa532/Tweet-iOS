@@ -295,8 +295,6 @@ public final class CachingPlayerItem: AVPlayerItem {
 
         addObservers()
     }
-
-
     // MARK: Public methods
 
     /// Downloads the media file. Works only with the initializers intended for play and cache.
@@ -481,4 +479,3 @@ public final class CachingPlayerItem: AVPlayerItem {
         }
     }
 }
-

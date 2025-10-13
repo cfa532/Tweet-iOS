@@ -4,8 +4,6 @@
 //
 //  Created by 超方 on 2025/7/3.
 //
-
-
 enum Constants {
     static let GUEST_ID = "000000000000000000000000000"
     static let MAX_TWEET_SIZE = 28000

@@ -486,8 +486,6 @@ class Tweet: Identifiable, Codable, ObservableObject {
         }
     }
 }
-
-
 // MARK: - Tweet Array Extension
 extension Array where Element == Tweet {
     /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.

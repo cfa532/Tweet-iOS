@@ -1769,27 +1769,21 @@ final class HproseInstance: ObservableObject {
             
             /// Detect file type using multiple methods
             static func detectFromData(_ data: Data) async -> MediaType {
-                print("DEBUG: [FILE TYPE] Starting file type detection for \(data.count) bytes")
-                
                 // Method 1: Try iOS UniformTypeIdentifiers first (most reliable)
                 if let mediaType = detectUsingUTType(data) {
-                    print("DEBUG: [FILE TYPE] Detected using UTType: \(mediaType.rawValue)")
                     return mediaType
                 }
                 
                 // Method 2: Try comprehensive file signature detection
                 if let mediaType = detectUsingFileSignatures(data) {
-                    print("DEBUG: [FILE TYPE] Detected using file signatures: \(mediaType.rawValue)")
                     return mediaType
                 }
                 
                 // Method 3: Try AVFoundation for media files
                 if let mediaType = await detectUsingAVFoundation(data) {
-                    print("DEBUG: [FILE TYPE] Detected using AVFoundation: \(mediaType.rawValue)")
                     return mediaType
                 }
                 
-                print("DEBUG: [FILE TYPE] Could not determine file type")
                 return .unknown
             }
             
@@ -1804,11 +1798,8 @@ final class HproseInstance: ObservableObject {
                     try data.write(to: tempURL)
                     defer { try? FileManager.default.removeItem(at: tempURL) }
                     
-                    // Try to determine the UTI
                     let resourceValues = try tempURL.resourceValues(forKeys: [.typeIdentifierKey])
                     if let typeIdentifier = resourceValues.typeIdentifier {
-                        print("DEBUG: [FILE TYPE] UTType identifier: \(typeIdentifier)")
-                        
                         // Map UTI to MediaType
                         if typeIdentifier.hasPrefix("public.image") || 
                             typeIdentifier.contains("jpeg") || 
@@ -1851,7 +1842,7 @@ final class HproseInstance: ObservableObject {
                         }
                     }
                 } catch {
-                    print("DEBUG: [FILE TYPE] UTType detection failed: \(error)")
+                    // Silent fail - try next method
                 }
                 
                 return nil
@@ -1866,8 +1857,6 @@ final class HproseInstance: ObservableObject {
                 // Check basic signatures first
                 for (signature, mediaType, name) in fileSignatures {
                     if bytes.starts(with: signature) {
-                        print("DEBUG: [FILE TYPE] Found signature for \(name)")
-                        
                         // Refine detection for complex formats
                         switch mediaType {
                         case .image where name == "WebP/RIFF":
@@ -1890,7 +1879,6 @@ final class HproseInstance: ObservableObject {
                     if ftypString.hasPrefix("ftyp") && (ftypString.contains("heic") || ftypString.contains("heix") || 
                                                         ftypString.contains("heis") || ftypString.contains("heim") ||
                                                         ftypString.contains("hevc") || ftypString.contains("hevx")) {
-                        print("DEBUG: [FILE TYPE] Detected HEIC/HEIF from ftyp")
                         return .image
                     }
                 }
@@ -1899,7 +1887,6 @@ final class HproseInstance: ObservableObject {
                 if data.count >= 512 {
                     let textCheck = data.prefix(512)
                     if !textCheck.contains(0) && textCheck.allSatisfy({ $0 >= 32 || $0 == 9 || $0 == 10 || $0 == 13 }) {
-                        print("DEBUG: [FILE TYPE] Detected as plain text")
                         return .txt
                     }
                 }
@@ -1919,22 +1906,18 @@ final class HproseInstance: ObservableObject {
                     
                     let asset = AVURLAsset(url: tempURL)
                     
-                    // Check if it has video tracks
                     let videoTracks = try await asset.loadTracks(withMediaType: .video)
                     if !videoTracks.isEmpty {
-                        print("DEBUG: [FILE TYPE] AVFoundation detected video tracks")
                         return .video
                     }
                     
-                    // Check if it has audio tracks
                     let audioTracks = try await asset.loadTracks(withMediaType: .audio)
                     if !audioTracks.isEmpty {
-                        print("DEBUG: [FILE TYPE] AVFoundation detected audio tracks")
                         return .audio
                     }
                     
                 } catch {
-                    print("DEBUG: [FILE TYPE] AVFoundation detection failed: \(error)")
+                    // Silent fail
                 }
                 
                 return nil
@@ -1962,7 +1945,6 @@ final class HproseInstance: ObservableObject {
                 guard bytes.count >= 12 else { return .video }
                 
                 let codecString = String(bytes: bytes[8...11], encoding: .ascii) ?? ""
-                print("DEBUG: [FILE TYPE] MP4 codec string: \(codecString)")
                 
                 // Video codecs
                 if codecString.contains("mp4") || codecString.contains("M4V") || codecString.contains("isom") ||
@@ -2016,14 +1998,10 @@ final class HproseInstance: ObservableObject {
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
             
-            // Determine media type
             let mediaType = await detectMediaType(from: typeIdentifier, fileName: fileName, data: data)
-            print("DEBUG: Detected media type: \(mediaType.rawValue)")
             
-            // Route to appropriate media type handler
             switch mediaType {
             case .video:
-                print("Processing video with backend conversion")
                 return try await processVideo(
                     data: data,
                     typeIdentifier: typeIdentifier,
@@ -2035,7 +2013,6 @@ final class HproseInstance: ObservableObject {
                     progressCallback: progressCallback
                 )
             case .image:
-                print("Processing image file")
                 return try await processImage(
                     data: data,
                     typeIdentifier: typeIdentifier,
@@ -2047,7 +2024,6 @@ final class HproseInstance: ObservableObject {
                     progressCallback: progressCallback
                 )
             case .audio:
-                print("Processing audio file")
                 return try await processAudio(
                     data: data,
                     typeIdentifier: typeIdentifier,
@@ -2058,7 +2034,6 @@ final class HproseInstance: ObservableObject {
                     progressCallback: progressCallback
                 )
             default:
-                print("Processing document file: \(mediaType.rawValue)")
                 return try await processDocument(
                     data: data,
                     typeIdentifier: typeIdentifier,
@@ -2085,7 +2060,6 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing image file")
             let result = try await uploadRegularFile(
                 data: data,
                 typeIdentifier: typeIdentifier,
@@ -2109,12 +2083,10 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing video file (size: \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB)")
             
-            // Check if cloudDrivePort is configured - if not, skip to fallback
             let cloudPort = appUser.cloudDrivePort ?? 0
             if cloudPort <= 0 {
-                print("Cloud drive port not configured - using MP4 resampling and IPFS upload")
+                print("Video upload: MP4 fallback (no cloud drive configured)")
                 return try await uploadVideoWithMp4Fallback(
                     data: data,
                     fileName: fileName,
@@ -2125,12 +2097,11 @@ final class HproseInstance: ObservableObject {
                 )
             }
             
-            // Check if clouddriveport service is available
             progressCallback?("Checking video service availability...", 5)
             let isCloudDriveAvailable = await checkCloudDriveServiceAvailability(appUser: appUser)
             
             if isCloudDriveAvailable {
-                print("Cloud drive service available - using HLS conversion and upload")
+                print("Video upload: HLS conversion (cloud drive available)")
                 return try await uploadVideoWithLocalHLSConversion(
                     data: data,
                     fileName: fileName,
@@ -2140,7 +2111,6 @@ final class HproseInstance: ObservableObject {
                     progressCallback: progressCallback
                 )
             } else {
-                print("Cloud drive service not available - using MP4 resampling and IPFS upload")
                 return try await uploadVideoWithMp4Fallback(
                     data: data,
                     fileName: fileName,
@@ -2162,7 +2132,6 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing audio file")
             let result = try await uploadRegularFile(
                 data: data,
                 typeIdentifier: typeIdentifier,
@@ -2186,7 +2155,6 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing document file: \(mediaType.rawValue)")
             let result = try await uploadRegularFile(
                 data: data,
                 typeIdentifier: typeIdentifier,
@@ -2238,11 +2206,9 @@ final class HproseInstance: ObservableObject {
             case "html", "htm":
                 return .html
             default:
-                // If type identifier and file extension cannot determine the type,
-                // try to read file header to figure out the file type
-                print("DEBUG: Type identifier and file extension cannot determine file type, analyzing file header...")
+                // Analyze file header for unknown types
                 let detectedType = await FileTypeDetector.detectFromData(data)
-                print("DEBUG: File header analysis detected type: \(detectedType.rawValue)")
+                print("Detected type via file header: \(detectedType.rawValue)")
                 return detectedType
             }
         }
@@ -2360,39 +2326,31 @@ final class HproseInstance: ObservableObject {
         /// Check if cloud drive service is available at clouddriveport
         private func checkCloudDriveServiceAvailability(appUser: User) async -> Bool {
             do {
-                // Always resolve writableUrl to ensure we have the correct IP address
                 let writableUrl = try await appUser.resolveWritableUrl()
                 guard let writableUrl = writableUrl else {
-                    print("DEBUG: Writable URL not available, cloud drive service not available")
                     return false
                 }
                 
-                // Construct cloud drive service URL
                 let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
                 let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
                 let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
                 let healthCheckURL = cloudBaseURL.appendingPathComponent("health")
                 
-                print("DEBUG: Checking cloud drive service availability at: \(healthCheckURL)")
-                
-                // Create a request with short timeout
                 var request = URLRequest(url: healthCheckURL)
                 request.httpMethod = "GET"
-                request.timeoutInterval = 3.0 // 3 second timeout
+                request.timeoutInterval = 3.0
                 
-                // Try to connect to the service
                 let (_, response) = try await URLSession.shared.data(for: request)
                 
                 if let httpResponse = response as? HTTPURLResponse {
                     let isAvailable = httpResponse.statusCode == 200 || httpResponse.statusCode == 404
-                    print("DEBUG: Cloud drive service availability check - status code: \(httpResponse.statusCode), available: \(isAvailable)")
+                    print("Cloud drive service \(isAvailable ? "available" : "unavailable") (HTTP \(httpResponse.statusCode))")
                     return isAvailable
                 }
                 
-                print("DEBUG: Cloud drive service not available - invalid response")
                 return false
             } catch {
-                print("DEBUG: Cloud drive service not available - error: \(error.localizedDescription)")
+                print("Cloud drive service unavailable - using MP4 fallback")
                 return false
             }
         }
@@ -2406,57 +2364,36 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Starting MP4 fallback conversion")
+            print("Starting MP4 conversion (\(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB)")
             progressCallback?("Converting video to MP4...", 10)
             
-            // Create temporary directory for conversion
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             
             defer {
-                // Clean up temp files
                 try? FileManager.default.removeItem(at: tempDir)
             }
             
-            // Save original video to temp file with proper .mp4 extension
             let originalFileName = fileName ?? "video.mp4"
-            // Ensure temp file has .mp4 extension for FFmpeg compatibility
             let tempFileName = (originalFileName as NSString).deletingPathExtension + ".mp4"
             let originalVideoURL = tempDir.appendingPathComponent(tempFileName)
             try data.write(to: originalVideoURL)
             
-            // Get video info using FFmpeg to determine original resolution
             let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: originalVideoURL.path)
             let videoAspectRatio: Float?
             let targetResolution: Int
             
             if let info = videoInfo {
-                // Calculate aspect ratio from display dimensions (after rotation correction)
                 videoAspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
-                
-                // Determine target resolution based on original video resolution
-                // Use the smaller dimension to determine if downsampling is needed
                 let minDimension = min(info.displayWidth, info.displayHeight)
-                
-                // Only downsample videos larger than 720p to save bandwidth
-                if minDimension > 720 {
-                    targetResolution = 720
-                } else {
-                    // Video is 720p or smaller - upload as-is without conversion
-                    targetResolution = minDimension
-                }
-                
-                print("DEBUG: [MP4 FALLBACK] FFmpeg detected: \(info.width)x\(info.height), display: \(info.displayWidth)x\(info.displayHeight), rotation: \(info.rotation)°")
-                print("DEBUG: [MP4 FALLBACK] Aspect ratio: \(videoAspectRatio!), minDimension: \(minDimension), target resolution: \(targetResolution)p")
+                targetResolution = minDimension > 720 ? 720 : minDimension
+                print("Converting \(info.displayWidth)x\(info.displayHeight) → \(targetResolution)p (aspect: \(String(format: "%.2f", videoAspectRatio ?? 0)))")
             } else {
                 videoAspectRatio = await getVideoAspectRatioWithFallback(from: data)
-                targetResolution = 720 // Default to 720p
-                print("DEBUG: [MP4 FALLBACK] Fallback to AVFoundation, aspect ratio: \(videoAspectRatio ?? 0.0), target resolution: \(targetResolution)p")
+                targetResolution = 720
+                print("Using fallback settings: \(targetResolution)p")
             }
             
-            // Always convert to MP4 to ensure proper container format and codecs
-            // This normalizes the video format even if resolution is already acceptable
-            print("DEBUG: [MP4 FALLBACK] Converting to MP4 format (target resolution: \(targetResolution)p)")
             progressCallback?("Converting to MP4 format...", 30)
             
             // Ensure output has .mp4 extension for FFmpeg
@@ -2472,19 +2409,17 @@ final class HproseInstance: ObservableObject {
             )
             
             guard conversionSuccess else {
-                print("DEBUG: Video conversion to MP4 failed")
+                print("ERROR: Video conversion to MP4 failed")
                 progressCallback?(NSLocalizedString("Video conversion failed", comment: "Video processing error"), 0)
                 throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to MP4"])
             }
             
             progressCallback?("Uploading video via IPFS...", 70)
             
-            // Read the converted video data
             let convertedData = try Data(contentsOf: outputVideoURL)
             let outputFileName = outputVideoName
-            print("DEBUG: [MP4 FALLBACK] Converted video size: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB")
+            print("Converted: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB → uploading to IPFS...")
             
-            // Upload through regular IPFS route
             let result = try await uploadRegularFile(
                 data: convertedData,
                 typeIdentifier: "public.mpeg-4",
@@ -2496,8 +2431,7 @@ final class HproseInstance: ObservableObject {
             )
             
             progressCallback?("Video upload completed", 100)
-            
-            print("DEBUG: [MP4 FALLBACK] Video uploaded successfully via IPFS with CID: \(result.mid)")
+            print("✅ Video uploaded: CID \(result.mid)")
             
             return (result, nil)
         }
@@ -2526,8 +2460,6 @@ final class HproseInstance: ObservableObject {
                     scaleFilter = "scale=-2:\(targetResolution)"
                 }
                 
-                // Build FFmpeg command for MP4 conversion
-                // Use H.264 video codec and AAC audio codec for maximum compatibility
                 let command = """
                     -i "\(inputURL.path)" \
                     -c:v libx264 \
@@ -2541,46 +2473,27 @@ final class HproseInstance: ObservableObject {
                     "\(outputURL.path)"
                     """
                 
-                print("DEBUG: [MP4 FALLBACK] Starting FFmpeg conversion with command: \(command)")
-                
                 FFmpegKit.executeAsync(command) { session in
                     guard let session = session else {
-                        print("DEBUG: [MP4 FALLBACK] Failed to create FFmpeg session")
+                        print("ERROR: Failed to create FFmpeg session")
                         continuation.resume(returning: false)
                         return
                     }
                     
                     let returnCode = session.getReturnCode()
-                    let logs = session.getLogs()
-                    
-                    print("DEBUG: [MP4 FALLBACK] Conversion completed with return code: \(String(describing: returnCode))")
-                    
-                    // Log FFmpeg output for debugging
-                    if let logs = logs {
-                        for log in logs {
-                            if let logObj = log as? Log, let message = logObj.getMessage() {
-                                if message.contains("error") || message.contains("Error") {
-                                    print("DEBUG: [FFMPEG ERROR] \(message)")
-                                }
-                            }
-                        }
-                    }
-                    
                     let success = ReturnCode.isSuccess(returnCode)
                     
                     if success {
-                        // Verify output file exists
                         if FileManager.default.fileExists(atPath: outputURL.path) {
                             let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
-                            print("DEBUG: [MP4 FALLBACK] Successfully converted to \(targetResolution)p MP4")
-                            print("DEBUG: [MP4 FALLBACK] Output file size: \(fileSize) bytes")
+                            print("✅ Converted to \(targetResolution)p MP4 (\(fileSize / 1024)KB)")
                             continuation.resume(returning: true)
                         } else {
-                            print("DEBUG: [MP4 FALLBACK] Output file does not exist: \(outputURL.path)")
+                            print("ERROR: Output file missing")
                             continuation.resume(returning: false)
                         }
                     } else {
-                        print("DEBUG: [MP4 FALLBACK] Conversion failed")
+                        print("ERROR: FFmpeg conversion failed (code: \(String(describing: returnCode)))")
                         continuation.resume(returning: false)
                     }
                 }
@@ -3010,15 +2923,12 @@ final class HproseInstance: ObservableObject {
             do {
                 let aspectRatio = try await getVideoAspectRatio(from: data)
                 if let ratio = aspectRatio, ratio > 0 {
-                    print("DEBUG: Successfully determined aspect ratio: \(ratio)")
                     return ratio
                 } else {
-                    print("DEBUG: Aspect ratio detection failed, using default 16:9")
-                    return 16.0 / 9.0 // Default to 16:9 aspect ratio
+                    return 16.0 / 9.0
                 }
             } catch {
-                print("DEBUG: Aspect ratio detection failed with error: \(error), using default 16:9")
-                return 16.0 / 9.0 // Default to 16:9 aspect ratio
+                return 16.0 / 9.0
             }
         }
         
@@ -3032,20 +2942,17 @@ final class HproseInstance: ObservableObject {
             appUser: User,
             appId: String
         ) async throws -> MimeiFileType {
-            print("Uploading regular file: type=\(mediaType.rawValue), size=\(data.count) bytes")
+            print("Uploading \(mediaType.rawValue): \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
             
-            // Always resolve writableUrl to ensure we have the correct IP address
             _ = try await appUser.resolveWritableUrl()
             guard let uploadClient = appUser.uploadClient else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
             }
             
-            // Create temporary file
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try data.write(to: tempURL)
             defer { try? FileManager.default.removeItem(at: tempURL) }
             
-            // Upload in chunks
             var offset: Int64 = 0
             let chunkSize = 1024 * 1024 // 1MB chunks
             var request: [String: Any] = [
@@ -3063,7 +2970,6 @@ final class HproseInstance: ObservableObject {
                 if chunkData.isEmpty { break }
                 
                 chunkCount += 1
-                print("DEBUG: [uploadRegularFile] Uploading chunk \(chunkCount), size: \(chunkData.count) bytes, offset: \(offset)")
                 
                 let nsData = chunkData as NSData
                 let response = try await uploadChunk(
@@ -3073,23 +2979,18 @@ final class HproseInstance: ObservableObject {
                     chunkNumber: chunkCount
                 )
                 
-                print("DEBUG: [uploadRegularFile] Chunk \(chunkCount) response type: \(type(of: response))")
-                print("DEBUG: [uploadRegularFile] Chunk \(chunkCount) response: \(String(describing: response))")
-                
                 if let fsid = response as? String {
-                    print("DEBUG: [uploadRegularFile] Chunk \(chunkCount) uploaded successfully, fsid: \(fsid)")
                     offset += Int64(chunkData.count)
                     request["offset"] = offset
                     request["fsid"] = fsid
                 } else {
-                    print("DEBUG: [uploadRegularFile] ERROR: Chunk \(chunkCount) upload failed, response is not a String")
+                    print("ERROR: Chunk \(chunkCount) upload failed - invalid response")
                     throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload file", comment: "Upload error")])
                 }
             }
             
-            print("DEBUG: [uploadRegularFile] All \(chunkCount) chunks uploaded, marking as finished")
+            print("Uploaded \(chunkCount) chunks, finalizing...")
             
-            // Mark upload as finished
             request["finished"] = "true"
             if let referenceId = referenceId {
                 request["referenceid"] = referenceId
@@ -3097,11 +2998,8 @@ final class HproseInstance: ObservableObject {
             
             let finalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
             
-            print("DEBUG: [uploadRegularFile] Final response type: \(type(of: finalResponse))")
-            print("DEBUG: [uploadRegularFile] Final response: \(String(describing: finalResponse))")
-            
             guard let cid = finalResponse as? String else {
-                print("DEBUG: [uploadRegularFile] ERROR: Final response is not a String, response: \(String(describing: finalResponse))")
+                print("ERROR: Upload finalization failed - invalid CID response")
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload file", comment: "Upload error")])
             }
             

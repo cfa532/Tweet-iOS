@@ -210,4 +210,3 @@ struct LoginView: View {
         isLoading = false
     }
 }
-

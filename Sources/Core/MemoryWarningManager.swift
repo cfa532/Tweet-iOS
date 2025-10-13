@@ -103,4 +103,3 @@ class MemoryWarningManager: ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
 }
-

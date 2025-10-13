@@ -25,8 +25,6 @@ struct MediaBrowserView: View {
     @State private var isDragging = false
     @State private var previousIndex: Int = -1 // Track previous index for video management
     @State private var isImageZoomed = false // Track if current image is zoomed
-
-
     private var attachments: [MimeiFileType] {
         return tweet.attachments ?? []
     }

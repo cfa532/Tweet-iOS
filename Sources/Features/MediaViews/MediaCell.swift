@@ -212,10 +212,8 @@ struct MediaCell: View, Equatable {
             }
         }
         .onAppear {
-            print("DEBUG: [MediaCell] onAppear called for \(attachment.mid)")
             // Set visibility to true immediately when cell appears
             isVisible = true
-            print("DEBUG: [MediaCell] isVisible set to true for \(attachment.mid)")
             
             // Load image if not already loaded - ONLY for image attachments
             if attachment.type == .image && image == nil {
@@ -440,7 +438,3 @@ struct MuteButton: View {
         }
     }
 }
-
-
-
-

@@ -522,7 +522,6 @@ struct TweetListContentView<RowView: View>: View {
                             .onAppear {
                                 // Update VideoLoadingManager when tweet becomes visible
                                 videoLoadingManager.updateVisibleTweetIndex(index)
-                                print("DEBUG: [TweetListContentView] Tweet \(tweet.mid) at index \(index) became visible")
                             }
                     }
                 }
@@ -556,4 +555,3 @@ struct TweetListContentView<RowView: View>: View {
         }
     }
 }
-

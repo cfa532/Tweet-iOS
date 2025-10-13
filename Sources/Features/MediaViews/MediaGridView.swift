@@ -437,7 +437,6 @@ struct MediaGridView: View {
         // Fix the height to prevent layout shifts during scrolling
         .frame(height: gridHeight)
         .onAppear {
-            print("DEBUG: [MediaGridView] onAppear called for tweet \(parentTweet.mid)")
             // Mark the grid as visible
             isVisible = true
             
@@ -484,7 +483,6 @@ struct MediaGridView: View {
             let hasMedia = hasVideos || hasAudio
             
             if hasMedia {
-                print("DEBUG: [MediaGridView] Grid contains media (videos: \(hasVideos), audio: \(hasAudio), attachments: \(attachments.count)) - checking VideoLoadingManager")
                 
                 // Register this tweet as containing media (videos or audio)
                 // This is important for tweets with multiple attachments to be tracked
@@ -493,10 +491,8 @@ struct MediaGridView: View {
                 // Check if this tweet should load media based on VideoLoadingManager
                 if videoLoadingManager.shouldLoadVideos(for: parentTweet.mid) {
                     shouldLoadVideo = true
-                    print("DEBUG: [MediaGridView] VideoLoadingManager approved loading for tweet \(parentTweet.mid) with \(attachments.count) attachments")
                 } else {
                     shouldLoadVideo = false
-                    print("DEBUG: [MediaGridView] VideoLoadingManager denied loading for tweet \(parentTweet.mid) with \(attachments.count) attachments")
                 }
             } else {
                 print("DEBUG: [MediaGridView] Grid contains no media")
@@ -514,7 +510,6 @@ struct MediaGridView: View {
             // Handle visibility changes
             if !newVisibility {
                 // Grid became invisible - stop video playback
-                print("DEBUG: [MediaGridView] Grid became invisible - stopping playback")
                 videoManager.stopSequentialPlayback()
             }
         }
@@ -606,8 +601,6 @@ struct ZoomableView<Content: View>: View {
         }
     }
 }
-
-
 
 // MARK: - MediaGridViewModel
 struct MediaGridViewModel {

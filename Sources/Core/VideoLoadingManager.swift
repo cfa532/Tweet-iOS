@@ -49,7 +49,6 @@ class VideoLoadingManager: ObservableObject {
     /// Update the list of all tweet IDs (called when tweet list changes)
     func updateTweetList(_ tweetIds: [String]) {
         allTweetIds = tweetIds
-        print("DEBUG: [VideoLoadingManager] Updated tweet list with \(tweetIds.count) tweets")
     }
     
     /// Register a tweet as containing videos or audio (or other loadable media)
@@ -72,7 +71,6 @@ class VideoLoadingManager: ObservableObject {
         let previousIndex = currentVisibleTweetIndex
         currentVisibleTweetIndex = index
         
-        print("DEBUG: [VideoLoadingManager] Visible tweet changed from index \(previousIndex) to \(index)")
         
         // Update visible tweet IDs
         updateVisibleTweetIds()
@@ -230,7 +228,6 @@ class VideoLoadingManager: ObservableObject {
         for (index, tweetId) in allTweetIds.enumerated() {
             if shouldCancelVideoLoading(for: tweetId) {
                 tweetsToCancel.insert(tweetId)
-                print("DEBUG: [VideoLoadingManager] Queued tweet \(tweetId) at index \(index) for background cancellation")
             }
         }
     }
@@ -311,11 +308,9 @@ class VideoLoadingManager: ObservableObject {
         }
         
         visibleTweetIds = newVisibleIds
-        print("DEBUG: [VideoLoadingManager] Updated visible tweet IDs: \(visibleTweetIds)")
     }
     
     private func manageVideoLoadingWithPerformance() {
-        print("DEBUG: [VideoLoadingManager] Managing video loading for visible tweet index: \(currentVisibleTweetIndex)")
         
         // Note: Cancellations are now handled by background timer, not here
         
@@ -327,7 +322,6 @@ class VideoLoadingManager: ObservableObject {
                 if shouldPreloadVideos(for: tweetId) {
                     if activeLoadingCount < maxConcurrentLoads {
                         triggerVideoPreloading(for: tweetId)
-                        print("DEBUG: [VideoLoadingManager] Triggered video preloading for tweet \(tweetId)")
                     } else {
                         // Add to queue if we're at capacity
                         if !loadingQueue.contains(tweetId) {

@@ -33,4 +33,3 @@ fileprivate extension Int {
     var KB: Int { return self * 1024 }
     var MB: Int { return self * 1024 * 1024 }
 }
-

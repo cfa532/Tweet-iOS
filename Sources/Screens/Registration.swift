@@ -360,4 +360,3 @@ struct RegistrationView: View {
         hasUnsavedChanges = hasChanges
     }
 }
-
