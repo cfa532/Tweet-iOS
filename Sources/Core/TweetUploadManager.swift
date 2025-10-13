@@ -8,7 +8,16 @@
 
 import Foundation
 import AVFoundation
+import UIKit
 import ffmpegkit
+
+// MARK: - Video Conversion Status
+struct VideoConversionStatus {
+    let status: String
+    let progress: Int
+    let message: String?
+    let cid: String?
+}
 
 /// Manager class for handling all tweet and media uploads
 class TweetUploadManager {
@@ -38,7 +47,7 @@ class TweetUploadManager {
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
         
         // Use MediaProcessor to determine media type and handle upload
-        let mediaProcessor = MediaProcessor()
+        let mediaProcessor = HproseInstance.MediaProcessor()
         return try await mediaProcessor.processAndUpload(
             data: data,
             typeIdentifier: typeIdentifier,
@@ -682,7 +691,7 @@ extension TweetUploadManager {
         }
         
         do {
-            let mediaProcessor = MediaProcessor()
+            let mediaProcessor = HproseInstance.MediaProcessor()
             let result = try await mediaProcessor.pollVideoConversionStatus(
                 jobId: jobId,
                 baseURL: baseURL,
@@ -732,14 +741,15 @@ extension TweetUploadManager {
 }
 
 // MARK: - Pending Tweet Upload Structure
-struct PendingTweetUpload: Codable {
-    let tweet: Tweet
-    let itemData: [ItemData]
-    let timestamp: Date
-    let retryCount: Int
-    let videoJobId: String?
-    
-    struct ItemData: Codable {
+extension TweetUploadManager {
+    struct PendingTweetUpload: Codable {
+        let tweet: Tweet
+        let itemData: [ItemData]
+        let timestamp: Date
+        let retryCount: Int
+        let videoJobId: String?
+        
+        struct ItemData: Codable {
         let identifier: String
         let typeIdentifier: String
         let data: Data
@@ -757,12 +767,13 @@ struct PendingTweetUpload: Codable {
         }
     }
     
-    init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0, videoJobId: String? = nil) {
-        self.tweet = tweet
-        self.itemData = itemData
-        self.timestamp = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
-        self.retryCount = retryCount
-        self.videoJobId = videoJobId
+        init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0, videoJobId: String? = nil) {
+            self.tweet = tweet
+            self.itemData = itemData
+            self.timestamp = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
+            self.retryCount = retryCount
+            self.videoJobId = videoJobId
+        }
     }
 }
 

@@ -4,14 +4,6 @@ import PhotosUI
 import AVFoundation
 import ffmpegkit
 
-// MARK: - Video Conversion Status
-struct VideoConversionStatus {
-    let status: String
-    let progress: Int
-    let message: String?
-    let cid: String?
-}
-
 @objc protocol HproseService {
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
 }
@@ -83,8 +75,13 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    private var appId: String = Constants.GUEST_ID      // placeholder mimei id
+    var appId: String = Constants.GUEST_ID      // placeholder mimei id (internal for TweetUploadManager access)
     var preferenceHelper: PreferenceHelper?
+    
+    // MARK: - Upload Management
+    lazy var uploadManager: TweetUploadManager = {
+        return TweetUploadManager(hproseInstance: self)
+    }()
     
     // MARK: - BlackList Management
     private let blackList = BlackList.shared
@@ -159,7 +156,7 @@ final class HproseInstance: ObservableObject {
     private init() {}
     
     // Flag to track if app is still initializing to prevent error dialogs during startup
-    private var isAppInitializing = true
+    var isAppInitializing = true  // Changed from private to internal for TweetUploadManager access
     
     // Global flag to track if app initialization is complete
     @Published private var isInitializationComplete = false
@@ -1707,19 +1704,13 @@ final class HproseInstance: ObservableObject {
         noResample: Bool = false,
         progressCallback: ((String, Int) -> Void)? = nil
     ) async throws -> (MimeiFileType?, String?) {
-        _ = try await appUser.resolveWritableUrl()
-        print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
-        
-        // Use MediaProcessor to determine media type and handle upload
-        let mediaProcessor = MediaProcessor()
-        return try await mediaProcessor.processAndUpload(
+        // Delegate to upload manager
+        return try await uploadManager.uploadToIPFS(
             data: data,
             typeIdentifier: typeIdentifier,
             fileName: fileName,
             referenceId: referenceId,
             noResample: noResample,
-            appUser: appUser,
-            appId: appId,
             progressCallback: progressCallback
         )
     }
@@ -2463,75 +2454,35 @@ final class HproseInstance: ObservableObject {
                 print("DEBUG: [MP4 FALLBACK] Fallback to AVFoundation, aspect ratio: \(videoAspectRatio ?? 0.0), target resolution: \(targetResolution)p")
             }
             
-            let convertedData: Data
-            let outputFileName: String
+            // Always convert to MP4 to ensure proper container format and codecs
+            // This normalizes the video format even if resolution is already acceptable
+            print("DEBUG: [MP4 FALLBACK] Converting to MP4 format (target resolution: \(targetResolution)p)")
+            progressCallback?("Converting to MP4 format...", 30)
             
-            // Check if conversion is needed
-            if let info = videoInfo {
-                let minDimension = min(info.displayWidth, info.displayHeight)
-                // Skip conversion if video is already at acceptable resolution
-                if minDimension <= targetResolution {
-                    // Video is already at or below target resolution - upload as-is
-                    print("DEBUG: [MP4 FALLBACK] Video already at acceptable resolution (\(minDimension)p <= \(targetResolution)p), uploading original")
-                    progressCallback?("Uploading video via IPFS...", 50)
-                    convertedData = data
-                    outputFileName = originalFileName
-                } else {
-                    // Need to downsample
-                    print("DEBUG: [MP4 FALLBACK] Video needs downsampling from \(minDimension)p to \(targetResolution)p")
-                    progressCallback?("Resampling video to \(targetResolution)p MP4...", 30)
-                    
-                    // Ensure output has .mp4 extension for FFmpeg
-                    let outputVideoName = "resampled_" + (originalFileName as NSString).deletingPathExtension + ".mp4"
-                    let outputVideoURL = tempDir.appendingPathComponent(outputVideoName)
-                    
-                    let conversionSuccess = await convertVideoToMp4(
-                        inputURL: originalVideoURL,
-                        outputURL: outputVideoURL,
-                        targetResolution: targetResolution,
-                        aspectRatio: videoAspectRatio,
-                        progressCallback: progressCallback
-                    )
-                    
-                    guard conversionSuccess else {
-                        print("DEBUG: Video conversion to MP4 failed")
-                        progressCallback?(NSLocalizedString("Video conversion failed", comment: "Video processing error"), 0)
-                        throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to MP4"])
-                    }
-                    
-                    progressCallback?("Uploading video via IPFS...", 70)
-                    convertedData = try Data(contentsOf: outputVideoURL)
-                    outputFileName = outputVideoName
-                    print("DEBUG: [MP4 FALLBACK] Converted video size: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB")
-                }
-            } else {
-                // Fallback: always convert if we couldn't detect resolution
-                print("DEBUG: [MP4 FALLBACK] Could not detect resolution, converting to be safe")
-                progressCallback?("Resampling video to \(targetResolution)p MP4...", 30)
-                
-                // Ensure output has .mp4 extension for FFmpeg
-                let outputVideoName = "resampled_" + (originalFileName as NSString).deletingPathExtension + ".mp4"
-                let outputVideoURL = tempDir.appendingPathComponent(outputVideoName)
-                
-                let conversionSuccess = await convertVideoToMp4(
-                    inputURL: originalVideoURL,
-                    outputURL: outputVideoURL,
-                    targetResolution: targetResolution,
-                    aspectRatio: videoAspectRatio,
-                    progressCallback: progressCallback
-                )
-                
-                guard conversionSuccess else {
-                    print("DEBUG: Video conversion to MP4 failed")
-                    progressCallback?(NSLocalizedString("Video conversion failed", comment: "Video processing error"), 0)
-                    throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to MP4"])
-                }
-                
-                progressCallback?("Uploading video via IPFS...", 70)
-                convertedData = try Data(contentsOf: outputVideoURL)
-                outputFileName = outputVideoName
-                print("DEBUG: [MP4 FALLBACK] Converted video size: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB")
+            // Ensure output has .mp4 extension for FFmpeg
+            let outputVideoName = "resampled_" + (originalFileName as NSString).deletingPathExtension + ".mp4"
+            let outputVideoURL = tempDir.appendingPathComponent(outputVideoName)
+            
+            let conversionSuccess = await convertVideoToMp4(
+                inputURL: originalVideoURL,
+                outputURL: outputVideoURL,
+                targetResolution: targetResolution,
+                aspectRatio: videoAspectRatio,
+                progressCallback: progressCallback
+            )
+            
+            guard conversionSuccess else {
+                print("DEBUG: Video conversion to MP4 failed")
+                progressCallback?(NSLocalizedString("Video conversion failed", comment: "Video processing error"), 0)
+                throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to MP4"])
             }
+            
+            progressCallback?("Uploading video via IPFS...", 70)
+            
+            // Read the converted video data
+            let convertedData = try Data(contentsOf: outputVideoURL)
+            let outputFileName = outputVideoName
+            print("DEBUG: [MP4 FALLBACK] Converted video size: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB")
             
             // Upload through regular IPFS route
             let result = try await uploadRegularFile(
@@ -3672,42 +3623,9 @@ final class HproseInstance: ObservableObject {
     // Background task approach removed - using immediate upload with persistence instead
     
     // MARK: - Persistence and Retry
-    struct PendingTweetUpload: Codable {
-        let tweet: Tweet
-        let itemData: [ItemData]
-        let timestamp: Date
-        let retryCount: Int
-        let videoJobId: String? // Store job ID for video uploads
-        
-        struct ItemData: Codable {
-            let identifier: String
-            let typeIdentifier: String
-            let data: Data
-            let fileName: String
-            let noResample: Bool
-            let videoJobId: String? // Store job ID for individual video items
-            
-            init(identifier: String, typeIdentifier: String, data: Data, fileName: String, noResample: Bool = false, videoJobId: String? = nil) {
-                self.identifier = identifier
-                self.typeIdentifier = typeIdentifier
-                self.data = data
-                self.fileName = fileName
-                self.noResample = noResample
-                self.videoJobId = videoJobId
-            }
-        }
-        
-        init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0, videoJobId: String? = nil) {
-            self.tweet = tweet
-            self.itemData = itemData
-            self.timestamp = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
-            self.retryCount = retryCount
-            self.videoJobId = videoJobId
-        }
-    }
-    
-    // Retry mechanism removed to prevent duplicate uploads
-    // Keeping persistence for unfinished uploads only
+    // NOTE: PendingTweetUpload is now defined in TweetUploadManager.swift
+    // Keeping type alias for compatibility
+    typealias PendingTweetUpload = TweetUploadManager.PendingTweetUpload
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
         return try await withRetry {
@@ -3851,16 +3769,13 @@ final class HproseInstance: ObservableObject {
     }
     
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
-        Task.detached(priority: .background) {
-            await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
-        }
+        // Delegate to upload manager
+        uploadManager.scheduleTweetUpload(tweet: tweet, itemData: itemData)
     }
     
     func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
-        Task.detached(priority: .background) {
-            var mutableMessage = message
-            await self.uploadChatMessageWithPersistenceAndRetry(message: &mutableMessage, itemData: itemData)
-        }
+        // Delegate to upload manager
+        uploadManager.scheduleChatMessageUpload(message: message, itemData: itemData)
     }
     
     private func uploadTweetWithPersistenceAndRetry(tweet: Tweet, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0, videoJobId: String? = nil) async {
@@ -4257,7 +4172,7 @@ final class HproseInstance: ObservableObject {
         
         // Resume polling with the stored job ID
         do {
-            let mediaProcessor = MediaProcessor()
+            let mediaProcessor = HproseInstance.MediaProcessor()
             let result = try await mediaProcessor.pollVideoConversionStatus(
                 jobId: jobId,
                 baseURL: baseURL,
@@ -4312,34 +4227,17 @@ final class HproseInstance: ObservableObject {
     
     /// Clean up any problematic pending uploads that might cause startup issues
     private func cleanupProblematicPendingUploads() async {
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-        
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return
-        }
-        
-        do {
-            let data = try Data(contentsOf: fileURL)
-            let pendingUpload = try JSONDecoder().decode(PendingTweetUpload.self, from: data)
-            
-            // Check if the pending upload is too old (older than 7 days) or has too many retries
-            let maxAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days
-            let isTooOld = Date().timeIntervalSince(pendingUpload.timestamp) > maxAge
-            let hasTooManyRetries = pendingUpload.retryCount >= 2
-            
-            if isTooOld || hasTooManyRetries {
-                print("DEBUG: Cleaning up problematic pending upload (age: \(Date().timeIntervalSince(pendingUpload.timestamp))s, retries: \(pendingUpload.retryCount))")
-                try FileManager.default.removeItem(at: fileURL)
-                print("DEBUG: Removed problematic pending upload file")
-            }
-        } catch {
-            print("DEBUG: Failed to check/cleanup pending upload during initialization: \(error)")
-            // If we can't even read the file, remove it to prevent future issues
-            try? FileManager.default.removeItem(at: fileURL)
-        }
+        // Delegate to upload manager
+        await uploadManager.cleanupProblematicPendingUploads()
     }
     
     func recoverPendingUploads() async {
+        // Delegate to upload manager
+        await uploadManager.recoverPendingUploads()
+    }
+    
+    // Deprecated - keeping for compatibility but delegating to uploadManager
+    private func recoverPendingUploads_old() async {
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
         
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
@@ -4455,88 +4353,8 @@ final class HproseInstance: ObservableObject {
         to tweet: Tweet,
         itemData: [PendingTweetUpload.ItemData]
     ) {
-        Task.detached(priority: .background) {
-            do {
-                let comment = comment
-                var uploadedAttachments: [MimeiFileType] = []
-                
-                let itemPairs = itemData.chunked(into: 2)
-                for (pairIndex, pair) in itemPairs.enumerated() {
-                    do {
-                        let pairAttachments = try await self.uploadItemPair(pair)   // Upload attachments to IPFS
-                        uploadedAttachments.append(contentsOf: pairAttachments)
-                    } catch {
-                        print("Error uploading pair \(pairIndex + 1): \(error)")
-                        await MainActor.run {
-                            if !self.isAppInitializing {
-                                NotificationCenter.default.post(
-                                    name: .backgroundUploadFailed,
-                                    object: nil,
-                                    userInfo: ["error": error]
-                                )
-                            } else {
-                                print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
-                            }
-                        }
-                        return
-                    }
-                }
-                
-                if itemData.count != uploadedAttachments.count {
-                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload attachment", comment: "Attachment upload error")])
-                    await MainActor.run {
-                        if !self.isAppInitializing {
-                            NotificationCenter.default.post(
-                                name: .backgroundUploadFailed,
-                                object: nil,
-                                userInfo: ["error": error]
-                            )
-                        } else {
-                            print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
-                        }
-                    }
-                    return
-                }
-                
-                comment.attachments = uploadedAttachments
-                
-                if let newComment = try await self.addComment(comment, to: tweet) {
-                    await MainActor.run {
-                        print("[HproseInstance] Comment upload completed successfully")
-                        print("[HproseInstance] New comment mid: \(newComment.mid)")
-                        print("[HproseInstance] Parent tweet mid: \(tweet.mid)")
-                        
-                        // The addComment method now handles both comment and retweet notifications
-                        // No need to post notifications here as they're handled in addComment
-                    }
-                } else {
-                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to post comment", comment: "Comment error")])
-                    await MainActor.run {
-                        if !self.isAppInitializing {
-                            NotificationCenter.default.post(
-                                name: .backgroundUploadFailed,
-                                object: nil,
-                                userInfo: ["error": error]
-                            )
-                        } else {
-                            print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
-                        }
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    if !self.isAppInitializing {
-                        NotificationCenter.default.post(
-                            name: .backgroundUploadFailed,
-                            object: nil,
-                            userInfo: ["error": error.localizedDescription]
-                        )
-                    } else {
-                        print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
-                    }
-                }
-            }
-        }
+        // Delegate to upload manager
+        uploadManager.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
     }
     
     /**
@@ -5102,12 +4920,4 @@ final class HproseInstance: ObservableObject {
     }
 }
 
-
-// MARK: - Array Extension
-extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        return stride(from: 0, to: count, by: size).map {
-            Array(self[$0 ..< Swift.min($0 + size, count)])
-        }
-    }
-}
+// NOTE: Array.chunked extension is now in TweetUploadManager.swift

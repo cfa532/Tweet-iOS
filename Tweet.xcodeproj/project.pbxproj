@@ -20,6 +20,7 @@
 		460680F72E1660C700D9D15A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 460680ED2E1660C700D9D15A /* Assets.xcassets */; };
 		460680FA2E1660C700D9D15A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 460680EF2E1660C700D9D15A /* Assets.xcassets */; };
 		4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D72DD5CA640051A92D /* HproseInstance.swift */; };
+		87BA2CB8BF2E44C8861960D5 /* TweetUploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 272BC479AE354CCB82E251A3 /* TweetUploadManager.swift */; };
 		4608E2DA2DD5CD920051A92D /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2D92DD5CD920051A92D /* User.swift */; };
 		4608E2DB2DD5CA640051A92D /* VideoConversionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */; };
 		4612ED1C2E924A18005D5B8B /* URLExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED192E924A18005D5B8B /* URLExtension.swift */; };
@@ -141,6 +142,7 @@
 		460680F12E1660C700D9D15A /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/Localizable.strings; sourceTree = "<group>"; };
 		460680F22E1660C700D9D15A /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		4608E2D72DD5CA640051A92D /* HproseInstance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseInstance.swift; sourceTree = "<group>"; };
+		272BC479AE354CCB82E251A3 /* TweetUploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetUploadManager.swift; sourceTree = "<group>"; };
 		4608E2D92DD5CD920051A92D /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoConversionService.swift; sourceTree = "<group>"; };
 		4612ED132E924A18005D5B8B /* AppLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogger.swift; sourceTree = "<group>"; };
@@ -344,14 +346,15 @@
 				4614381A2E3F5E97002D1B22 /* BlackList.swift */,
 				461438162E3E426A002D1B22 /* ChatCacheManager.swift */,
 				46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */,
-				469A995E2DEF300900954049 /* TweetCacheManager.swift */,
-				469A994C2DEB31EF00954049 /* NotificationNames.swift */,
-				4608E2D72DD5CA640051A92D /* HproseInstance.swift */,
-				4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */,
-			);
-			path = Core;
-			sourceTree = "<group>";
-		};
+			469A995E2DEF300900954049 /* TweetCacheManager.swift */,
+			469A994C2DEB31EF00954049 /* NotificationNames.swift */,
+			4608E2D72DD5CA640051A92D /* HproseInstance.swift */,
+			272BC479AE354CCB82E251A3 /* TweetUploadManager.swift */,
+			4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */,
+		);
+		path = Core;
+		sourceTree = "<group>";
+	};
 		1A1A1A1A1A1A1A1A1A1A1A0A /* Features */ = {
 			isa = PBXGroup;
 			children = (
@@ -741,10 +744,11 @@
 				46E5B3592DE005EC00AEF31F /* ThumbnailView.swift in Sources */,
 				460680EA2E16303100D9D15A /* Constants.swift in Sources */,
 				46E5B3472DDC0CFB00AEF31F /* Avatar.swift in Sources */,
-				4674940F2DF2C4D60082FAC6 /* CommentListView.swift in Sources */,
-				4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */,
-				4608E2DB2DD5CA640051A92D /* VideoConversionService.swift in Sources */,
-				4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
+			4674940F2DF2C4D60082FAC6 /* CommentListView.swift in Sources */,
+			4608E2D82DD5CA640051A92D /* HproseInstance.swift in Sources */,
+			87BA2CB8BF2E44C8861960D5 /* TweetUploadManager.swift in Sources */,
+			4608E2DB2DD5CA640051A92D /* VideoConversionService.swift in Sources */,
+			4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
 				461438232E403EAB002D1B22 /* ChatMessageView.swift in Sources */,
 				468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */,
 				468F19F12E6074A30085BFE5 /* AudioSessionManager.swift in Sources */,
