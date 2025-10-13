@@ -428,7 +428,50 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
-        // Create request to real server - pass through range as-is
+        // Parse byte range for caching (e.g., "bytes=0-65535")
+        var rangeStart: Int64? = nil
+        var rangeEnd: Int64? = nil
+        if let range = rangeHeader, range.lowercased().hasPrefix("bytes=") {
+            let bytesRange = range.dropFirst(6)  // Remove "bytes="
+            let parts = bytesRange.split(separator: "-")
+            if parts.count >= 1, let start = Int64(parts[0]) {
+                rangeStart = start
+            }
+            if parts.count >= 2, !parts[1].isEmpty, let end = Int64(parts[1]) {
+                rangeEnd = end
+            }
+        }
+        
+        // Calculate request size for caching decision
+        let requestSize = rangeEnd != nil ? (rangeEnd! - (rangeStart ?? 0) + 1) : Int64.max
+        let isProbeRequest = requestSize < 1024  // Requests < 1KB are just probes
+        
+        // Check cache for this specific range (skip probes)
+        if !isProbeRequest, let start = rangeStart, let cachedData = readCachedProgressiveRange(mediaID: mediaID, start: start, end: rangeEnd) {
+            // Validate cached data size
+            if cachedData.count >= 1024 {
+                // CACHE HIT - serve from cache instantly
+                var headers: [String: String] = [
+                    "Content-Type": "video/mp4",
+                    "Content-Length": "\(cachedData.count)",
+                    "Accept-Ranges": "bytes"
+                ]
+                
+                if let end = rangeEnd {
+                    headers["Content-Range"] = "bytes \(start)-\(end)/*"
+                }
+                
+                let statusCode = rangeHeader != nil ? 206 : 200
+                sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: cachedData)
+                return
+            } else {
+                // Delete corrupted cache
+                NSLog("DEBUG: [LocalHTTPServer] Deleting corrupted cache: \(cachedData.count) bytes")
+                deleteCachedProgressiveRange(mediaID: mediaID, start: start, end: rangeEnd)
+            }
+        }
+        
+        // CACHE MISS - fetch from real server
         var request = URLRequest(url: fullRealURL)
         request.httpMethod = method
         request.timeoutInterval = 30
@@ -442,7 +485,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             guard let self = self else { return }
             
             if let error = error {
-                NSLog("DEBUG: [LocalHTTPServer] Fetch error: \(error.localizedDescription)")
+                NSLog("DEBUG: [LocalHTTPServer] Progressive fetch error: \(error.localizedDescription)")
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
             }
@@ -455,6 +498,11 @@ public class LocalHTTPServer: @unchecked Sendable {
             guard let data = data else {
                 self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
                 return
+            }
+            
+            // Cache this byte range for future requests (skip tiny probe requests)
+            if !isProbeRequest, let start = rangeStart, data.count >= 1024 {
+                self.cacheProgressiveRange(mediaID: mediaID, start: start, end: rangeEnd, data: data)
             }
             
             // Build response headers with FIXED Content-Type
@@ -474,6 +522,47 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         task.resume()
+    }
+    
+    // MARK: - Progressive Video Byte-Range Cache Helpers
+    
+    private func readCachedProgressiveRange(mediaID: String, start: Int64, end: Int64?) -> Data? {
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let mediaDir = cacheDir.appendingPathComponent(mediaID).appendingPathComponent("ranges")
+        let rangeFileName = "r_\(start)_\(end?.description ?? "end")"
+        let cachePath = mediaDir.appendingPathComponent(rangeFileName)
+        
+        guard FileManager.default.fileExists(atPath: cachePath.path) else {
+            return nil
+        }
+        
+        return try? Data(contentsOf: cachePath)
+    }
+    
+    private func cacheProgressiveRange(mediaID: String, start: Int64, end: Int64?, data: Data) {
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let mediaDir = cacheDir.appendingPathComponent(mediaID).appendingPathComponent("ranges")
+        
+        // Create ranges directory if needed
+        try? FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
+        
+        let rangeFileName = "r_\(start)_\(end?.description ?? "end")"
+        let cachePath = mediaDir.appendingPathComponent(rangeFileName)
+        
+        do {
+            try data.write(to: cachePath)
+        } catch {
+            // Silently fail - caching is optional
+        }
+    }
+    
+    private func deleteCachedProgressiveRange(mediaID: String, start: Int64, end: Int64?) {
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let mediaDir = cacheDir.appendingPathComponent(mediaID).appendingPathComponent("ranges")
+        let rangeFileName = "r_\(start)_\(end?.description ?? "end")"
+        let cachePath = mediaDir.appendingPathComponent(rangeFileName)
+        
+        try? FileManager.default.removeItem(at: cachePath)
     }
     
     private func getCachePath(for url: URL, mediaID: String) -> String {
