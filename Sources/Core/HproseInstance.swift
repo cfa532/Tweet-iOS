@@ -4458,6 +4458,22 @@ final class HproseInstance: ObservableObject {
             if result == "success" {
                 print("DEBUG: updateUserCore - server returned success")
                 
+                // Update in-memory appUser with new values on MainActor (User has @Published properties)
+                await MainActor.run {
+                    if let alias = alias {
+                        self.appUser.name = alias
+                    }
+                    if let profile = profile {
+                        self.appUser.profile = profile
+                    }
+                    if let hostId = hostId, !hostId.isEmpty {
+                        self.appUser.hostIds = [hostId]
+                    }
+                    // CRITICAL: Update cloudDrivePort (including nil to clear it)
+                    self.appUser.cloudDrivePort = cloudDrivePort
+                    print("DEBUG: updateUserCore - updated in-memory appUser, cloudDrivePort: \(cloudDrivePort?.description ?? "nil")")
+                }
+                
                 // Clear user cache to ensure fresh data is loaded
                 TweetCacheManager.shared.deleteUser(mid: appUser.mid)
                 print("DEBUG: updateUserCore - cleared user cache for: \(appUser.mid)")

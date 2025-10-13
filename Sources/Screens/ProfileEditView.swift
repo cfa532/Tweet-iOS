@@ -360,13 +360,21 @@ struct ProfileEditView: View {
         // Call the submit function asynchronously
         Task {
             do {
+                // Convert cloudDrivePort: empty string → 0 (to explicitly clear on server)
+                let portValue: Int?
+                if cloudDrivePort.isEmpty {
+                    portValue = 0  // Explicitly send 0 to clear the port
+                } else {
+                    portValue = Int(cloudDrivePort)
+                }
+                
                 try await onSubmit(
                     username,
                     password.isEmpty ? nil : password,
                     alias.isEmpty ? nil : alias,
                     profile.isEmpty ? nil : profile,
                     hostId,
-                    Int(cloudDrivePort)
+                    portValue
                 )
                 
                 // Success - update initial values and close the screen

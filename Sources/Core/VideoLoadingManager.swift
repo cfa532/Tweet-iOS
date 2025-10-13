@@ -68,7 +68,6 @@ class VideoLoadingManager: ObservableObject {
     func updateVisibleTweetIndex(_ index: Int) {
         guard index >= 0 && index < allTweetIds.count else { return }
         
-        let previousIndex = currentVisibleTweetIndex
         currentVisibleTweetIndex = index
         
         
@@ -225,7 +224,7 @@ class VideoLoadingManager: ObservableObject {
     
     /// Queue tweets for background cancellation instead of immediate cancellation
     private func queueTweetsForCancellation() {
-        for (index, tweetId) in allTweetIds.enumerated() {
+        for tweetId in allTweetIds {
             if shouldCancelVideoLoading(for: tweetId) {
                 tweetsToCancel.insert(tweetId)
             }

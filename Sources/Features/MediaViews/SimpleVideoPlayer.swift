@@ -1016,7 +1016,6 @@ struct SimpleVideoPlayer: View {
             } else if !hasBufferedData {
                 NSLog("DEBUG: [VIDEO CACHE] ⚠️ Player ready but no buffered data yet for fullscreen - this may cause playback delays")
                 NSLog("DEBUG: [VIDEO CACHE] Will still use player but playback may take time to start")
-            } else {
             }
         } else {
             // For MediaCell mode, check player readiness but trust players with buffered data
@@ -1100,7 +1099,6 @@ struct SimpleVideoPlayer: View {
                     if cachedState.wasPlaying && self.isVisible && self.currentAutoPlay && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
                         cachedState.player.play()
                         NSLog("DEBUG: [VIDEO CACHE] ✅ Resumed playback from cache for \(self.mid) - VideoManager approved")
-                    } else {
                     }
                 } else {
                     NSLog("DEBUG: [VIDEO CACHE] ⚠️ Seek did not finish for \(self.mid)")
