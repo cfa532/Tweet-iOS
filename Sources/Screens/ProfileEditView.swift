@@ -295,7 +295,7 @@ struct ProfileEditView: View {
                 profile = appUser.profile ?? ""
                 hostId = appUser.hostIds?.first ?? ""
                 avatarId = appUser.avatar
-                cloudDrivePort = appUser.cloudDrivePort?.description ?? "8010"
+                cloudDrivePort = appUser.cloudDrivePort?.description ?? ""
                 
                 // Store initial values for change detection
                 initialValues = [

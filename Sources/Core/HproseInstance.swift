@@ -2,6 +2,7 @@ import Foundation
 import hprose
 import PhotosUI
 import AVFoundation
+import ffmpegkit
 
 // MARK: - Video Conversion Status
 struct VideoConversionStatus {
@@ -2039,6 +2040,7 @@ final class HproseInstance: ObservableObject {
                     referenceId: referenceId,
                     noResample: noResample,
                     appUser: appUser,
+                    appId: appId,
                     progressCallback: progressCallback
                 )
             case .image:
@@ -2113,17 +2115,50 @@ final class HproseInstance: ObservableObject {
             referenceId: String?,
             noResample: Bool,
             appUser: User,
+            appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing video file with local FFmpeg HLS conversion (size: \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB)")
-            return try await uploadVideoWithLocalHLSConversion(
-                data: data,
-                fileName: fileName,
-                referenceId: referenceId,
-                noResample: noResample,
-                appUser: appUser,
-                progressCallback: progressCallback
-            )
+            print("Processing video file (size: \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB)")
+            
+            // Check if cloudDrivePort is configured - if not, skip to fallback
+            let cloudPort = appUser.cloudDrivePort ?? 0
+            if cloudPort <= 0 {
+                print("Cloud drive port not configured - using MP4 resampling and IPFS upload")
+                return try await uploadVideoWithMp4Fallback(
+                    data: data,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    appUser: appUser,
+                    appId: appId,
+                    progressCallback: progressCallback
+                )
+            }
+            
+            // Check if clouddriveport service is available
+            progressCallback?("Checking video service availability...", 5)
+            let isCloudDriveAvailable = await checkCloudDriveServiceAvailability(appUser: appUser)
+            
+            if isCloudDriveAvailable {
+                print("Cloud drive service available - using HLS conversion and upload")
+                return try await uploadVideoWithLocalHLSConversion(
+                    data: data,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    noResample: noResample,
+                    appUser: appUser,
+                    progressCallback: progressCallback
+                )
+            } else {
+                print("Cloud drive service not available - using MP4 resampling and IPFS upload")
+                return try await uploadVideoWithMp4Fallback(
+                    data: data,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    appUser: appUser,
+                    appId: appId,
+                    progressCallback: progressCallback
+                )
+            }
         }
         
         /// Process and upload audio files
@@ -2329,6 +2364,276 @@ final class HproseInstance: ObservableObject {
             progressCallback?("HLS conversion completed", 100)
             
             return result
+        }
+        
+        /// Check if cloud drive service is available at clouddriveport
+        private func checkCloudDriveServiceAvailability(appUser: User) async -> Bool {
+            do {
+                // Always resolve writableUrl to ensure we have the correct IP address
+                let writableUrl = try await appUser.resolveWritableUrl()
+                guard let writableUrl = writableUrl else {
+                    print("DEBUG: Writable URL not available, cloud drive service not available")
+                    return false
+                }
+                
+                // Construct cloud drive service URL
+                let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
+                let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
+                let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+                let healthCheckURL = cloudBaseURL.appendingPathComponent("health")
+                
+                print("DEBUG: Checking cloud drive service availability at: \(healthCheckURL)")
+                
+                // Create a request with short timeout
+                var request = URLRequest(url: healthCheckURL)
+                request.httpMethod = "GET"
+                request.timeoutInterval = 3.0 // 3 second timeout
+                
+                // Try to connect to the service
+                let (_, response) = try await URLSession.shared.data(for: request)
+                
+                if let httpResponse = response as? HTTPURLResponse {
+                    let isAvailable = httpResponse.statusCode == 200 || httpResponse.statusCode == 404
+                    print("DEBUG: Cloud drive service availability check - status code: \(httpResponse.statusCode), available: \(isAvailable)")
+                    return isAvailable
+                }
+                
+                print("DEBUG: Cloud drive service not available - invalid response")
+                return false
+            } catch {
+                print("DEBUG: Cloud drive service not available - error: \(error.localizedDescription)")
+                return false
+            }
+        }
+        
+        /// Upload video with MP4 resampling fallback when cloud drive service is not available
+        private func uploadVideoWithMp4Fallback(
+            data: Data,
+            fileName: String?,
+            referenceId: String?,
+            appUser: User,
+            appId: String,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async throws -> (MimeiFileType?, String?) {
+            print("Starting MP4 fallback conversion")
+            progressCallback?("Converting video to MP4...", 10)
+            
+            // Create temporary directory for conversion
+            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            
+            defer {
+                // Clean up temp files
+                try? FileManager.default.removeItem(at: tempDir)
+            }
+            
+            // Save original video to temp file with proper .mp4 extension
+            let originalFileName = fileName ?? "video.mp4"
+            // Ensure temp file has .mp4 extension for FFmpeg compatibility
+            let tempFileName = (originalFileName as NSString).deletingPathExtension + ".mp4"
+            let originalVideoURL = tempDir.appendingPathComponent(tempFileName)
+            try data.write(to: originalVideoURL)
+            
+            // Get video info using FFmpeg to determine original resolution
+            let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: originalVideoURL.path)
+            let videoAspectRatio: Float?
+            let targetResolution: Int
+            
+            if let info = videoInfo {
+                // Calculate aspect ratio from display dimensions (after rotation correction)
+                videoAspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
+                
+                // Determine target resolution based on original video resolution
+                // Use the smaller dimension to determine if downsampling is needed
+                let minDimension = min(info.displayWidth, info.displayHeight)
+                
+                // Only downsample videos larger than 720p to save bandwidth
+                if minDimension > 720 {
+                    targetResolution = 720
+                } else {
+                    // Video is 720p or smaller - upload as-is without conversion
+                    targetResolution = minDimension
+                }
+                
+                print("DEBUG: [MP4 FALLBACK] FFmpeg detected: \(info.width)x\(info.height), display: \(info.displayWidth)x\(info.displayHeight), rotation: \(info.rotation)°")
+                print("DEBUG: [MP4 FALLBACK] Aspect ratio: \(videoAspectRatio!), minDimension: \(minDimension), target resolution: \(targetResolution)p")
+            } else {
+                videoAspectRatio = await getVideoAspectRatioWithFallback(from: data)
+                targetResolution = 720 // Default to 720p
+                print("DEBUG: [MP4 FALLBACK] Fallback to AVFoundation, aspect ratio: \(videoAspectRatio ?? 0.0), target resolution: \(targetResolution)p")
+            }
+            
+            let convertedData: Data
+            let outputFileName: String
+            
+            // Check if conversion is needed
+            if let info = videoInfo {
+                let minDimension = min(info.displayWidth, info.displayHeight)
+                // Skip conversion if video is already at acceptable resolution
+                if minDimension <= targetResolution {
+                    // Video is already at or below target resolution - upload as-is
+                    print("DEBUG: [MP4 FALLBACK] Video already at acceptable resolution (\(minDimension)p <= \(targetResolution)p), uploading original")
+                    progressCallback?("Uploading video via IPFS...", 50)
+                    convertedData = data
+                    outputFileName = originalFileName
+                } else {
+                    // Need to downsample
+                    print("DEBUG: [MP4 FALLBACK] Video needs downsampling from \(minDimension)p to \(targetResolution)p")
+                    progressCallback?("Resampling video to \(targetResolution)p MP4...", 30)
+                    
+                    // Ensure output has .mp4 extension for FFmpeg
+                    let outputVideoName = "resampled_" + (originalFileName as NSString).deletingPathExtension + ".mp4"
+                    let outputVideoURL = tempDir.appendingPathComponent(outputVideoName)
+                    
+                    let conversionSuccess = await convertVideoToMp4(
+                        inputURL: originalVideoURL,
+                        outputURL: outputVideoURL,
+                        targetResolution: targetResolution,
+                        aspectRatio: videoAspectRatio,
+                        progressCallback: progressCallback
+                    )
+                    
+                    guard conversionSuccess else {
+                        print("DEBUG: Video conversion to MP4 failed")
+                        progressCallback?(NSLocalizedString("Video conversion failed", comment: "Video processing error"), 0)
+                        throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to MP4"])
+                    }
+                    
+                    progressCallback?("Uploading video via IPFS...", 70)
+                    convertedData = try Data(contentsOf: outputVideoURL)
+                    outputFileName = outputVideoName
+                    print("DEBUG: [MP4 FALLBACK] Converted video size: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB")
+                }
+            } else {
+                // Fallback: always convert if we couldn't detect resolution
+                print("DEBUG: [MP4 FALLBACK] Could not detect resolution, converting to be safe")
+                progressCallback?("Resampling video to \(targetResolution)p MP4...", 30)
+                
+                // Ensure output has .mp4 extension for FFmpeg
+                let outputVideoName = "resampled_" + (originalFileName as NSString).deletingPathExtension + ".mp4"
+                let outputVideoURL = tempDir.appendingPathComponent(outputVideoName)
+                
+                let conversionSuccess = await convertVideoToMp4(
+                    inputURL: originalVideoURL,
+                    outputURL: outputVideoURL,
+                    targetResolution: targetResolution,
+                    aspectRatio: videoAspectRatio,
+                    progressCallback: progressCallback
+                )
+                
+                guard conversionSuccess else {
+                    print("DEBUG: Video conversion to MP4 failed")
+                    progressCallback?(NSLocalizedString("Video conversion failed", comment: "Video processing error"), 0)
+                    throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to MP4"])
+                }
+                
+                progressCallback?("Uploading video via IPFS...", 70)
+                convertedData = try Data(contentsOf: outputVideoURL)
+                outputFileName = outputVideoName
+                print("DEBUG: [MP4 FALLBACK] Converted video size: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB")
+            }
+            
+            // Upload through regular IPFS route
+            let result = try await uploadRegularFile(
+                data: convertedData,
+                typeIdentifier: "public.mpeg-4",
+                fileName: outputFileName,
+                referenceId: referenceId,
+                mediaType: .video,
+                appUser: appUser,
+                appId: appId
+            )
+            
+            progressCallback?("Video upload completed", 100)
+            
+            print("DEBUG: [MP4 FALLBACK] Video uploaded successfully via IPFS with CID: \(result.mid)")
+            
+            return (result, nil)
+        }
+        
+        /// Convert video to MP4 with target resolution
+        private func convertVideoToMp4(
+            inputURL: URL,
+            outputURL: URL,
+            targetResolution: Int,
+            aspectRatio: Float?,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async -> Bool {
+            return await withCheckedContinuation { continuation in
+                // Determine scaling filter based on aspect ratio
+                let scaleFilter: String
+                if let aspectRatio = aspectRatio {
+                    if aspectRatio < 1.0 {
+                        // Portrait: scale to target width
+                        scaleFilter = "scale=\(targetResolution):-2"
+                    } else {
+                        // Landscape: scale to target height
+                        scaleFilter = "scale=-2:\(targetResolution)"
+                    }
+                } else {
+                    // Fallback to height-based scaling
+                    scaleFilter = "scale=-2:\(targetResolution)"
+                }
+                
+                // Build FFmpeg command for MP4 conversion
+                // Use H.264 video codec and AAC audio codec for maximum compatibility
+                let command = """
+                    -i "\(inputURL.path)" \
+                    -c:v libx264 \
+                    -c:a aac \
+                    -vf "\(scaleFilter)" \
+                    -preset fast \
+                    -crf 23 \
+                    -b:a 128k \
+                    -movflags +faststart \
+                    -metadata:s:v:0 rotate=0 \
+                    "\(outputURL.path)"
+                    """
+                
+                print("DEBUG: [MP4 FALLBACK] Starting FFmpeg conversion with command: \(command)")
+                
+                FFmpegKit.executeAsync(command) { session in
+                    guard let session = session else {
+                        print("DEBUG: [MP4 FALLBACK] Failed to create FFmpeg session")
+                        continuation.resume(returning: false)
+                        return
+                    }
+                    
+                    let returnCode = session.getReturnCode()
+                    let logs = session.getLogs()
+                    
+                    print("DEBUG: [MP4 FALLBACK] Conversion completed with return code: \(String(describing: returnCode))")
+                    
+                    // Log FFmpeg output for debugging
+                    if let logs = logs {
+                        for log in logs {
+                            if let logObj = log as? Log, let message = logObj.getMessage() {
+                                if message.contains("error") || message.contains("Error") {
+                                    print("DEBUG: [FFMPEG ERROR] \(message)")
+                                }
+                            }
+                        }
+                    }
+                    
+                    let success = ReturnCode.isSuccess(returnCode)
+                    
+                    if success {
+                        // Verify output file exists
+                        if FileManager.default.fileExists(atPath: outputURL.path) {
+                            let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
+                            print("DEBUG: [MP4 FALLBACK] Successfully converted to \(targetResolution)p MP4")
+                            print("DEBUG: [MP4 FALLBACK] Output file size: \(fileSize) bytes")
+                            continuation.resume(returning: true)
+                        } else {
+                            print("DEBUG: [MP4 FALLBACK] Output file does not exist: \(outputURL.path)")
+                            continuation.resume(returning: false)
+                        }
+                    } else {
+                        print("DEBUG: [MP4 FALLBACK] Conversion failed")
+                        continuation.resume(returning: false)
+                    }
+                }
+            }
         }
         
         
@@ -2807,6 +3112,7 @@ final class HproseInstance: ObservableObject {
                 if chunkData.isEmpty { break }
                 
                 chunkCount += 1
+                print("DEBUG: [uploadRegularFile] Uploading chunk \(chunkCount), size: \(chunkData.count) bytes, offset: \(offset)")
                 
                 let nsData = chunkData as NSData
                 let response = try await uploadChunk(
@@ -2816,14 +3122,21 @@ final class HproseInstance: ObservableObject {
                     chunkNumber: chunkCount
                 )
                 
+                print("DEBUG: [uploadRegularFile] Chunk \(chunkCount) response type: \(type(of: response))")
+                print("DEBUG: [uploadRegularFile] Chunk \(chunkCount) response: \(String(describing: response))")
+                
                 if let fsid = response as? String {
+                    print("DEBUG: [uploadRegularFile] Chunk \(chunkCount) uploaded successfully, fsid: \(fsid)")
                     offset += Int64(chunkData.count)
                     request["offset"] = offset
                     request["fsid"] = fsid
                 } else {
+                    print("DEBUG: [uploadRegularFile] ERROR: Chunk \(chunkCount) upload failed, response is not a String")
                     throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload file", comment: "Upload error")])
                 }
             }
+            
+            print("DEBUG: [uploadRegularFile] All \(chunkCount) chunks uploaded, marking as finished")
             
             // Mark upload as finished
             request["finished"] = "true"
@@ -2833,7 +3146,11 @@ final class HproseInstance: ObservableObject {
             
             let finalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
             
+            print("DEBUG: [uploadRegularFile] Final response type: \(type(of: finalResponse))")
+            print("DEBUG: [uploadRegularFile] Final response: \(String(describing: finalResponse))")
+            
             guard let cid = finalResponse as? String else {
+                print("DEBUG: [uploadRegularFile] ERROR: Final response is not a String, response: \(String(describing: finalResponse))")
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload file", comment: "Upload error")])
             }
             

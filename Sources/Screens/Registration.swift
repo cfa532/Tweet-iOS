@@ -230,8 +230,7 @@ struct RegistrationView: View {
                 .animation(.easeInOut(duration: 0.3), value: showToast)
             )
             .onAppear {
-                // Initialize with default values for new registration
-                cloudDrivePort = "8010"
+                // No default cloudDrivePort - user must configure if needed
             }
             .onChange(of: username) { _, _ in checkForChanges() }
             .onChange(of: password) { _, _ in checkForChanges() }
@@ -355,7 +354,7 @@ struct RegistrationView: View {
                         !alias.isEmpty || 
                         !profile.isEmpty || 
                         !hostId.isEmpty || 
-                        cloudDrivePort != "8010" ||
+                        !cloudDrivePort.isEmpty ||
                         hasAcceptedTerms
         
         hasUnsavedChanges = hasChanges

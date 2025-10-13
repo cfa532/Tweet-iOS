@@ -16,7 +16,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4075"
             endingLineNumber = "4075"
-            landmarkName = "recoverPendingUploads()"
+            landmarkName = "checkVideoJobStatus(jobId:baseURL:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -36,7 +36,7 @@
             landmarkType = "7">
             <Locations>
                <Location
-                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - af363e5b7b33d70f"
+                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - af363e5b7b33d72c"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
                   continueAfterRunningActions = "No"
@@ -46,11 +46,11 @@
                   urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
                   startingColumnNumber = "9223372036854775807"
                   endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "1246"
-                  endingLineNumber = "1246">
+                  startingLineNumber = "1247"
+                  endingLineNumber = "1247">
                </Location>
                <Location
-                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 6864eb90a91540b"
+                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 6864eb90a915428"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
                   continueAfterRunningActions = "No"
@@ -60,11 +60,11 @@
                   urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
                   startingColumnNumber = "9223372036854775807"
                   endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "1246"
-                  endingLineNumber = "1246">
+                  startingLineNumber = "1247"
+                  endingLineNumber = "1247">
                </Location>
                <Location
-                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 6864eb90a91540b"
+                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 6864eb90a915428"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
                   continueAfterRunningActions = "No"
@@ -74,11 +74,11 @@
                   urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
                   startingColumnNumber = "9223372036854775807"
                   endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "1246"
-                  endingLineNumber = "1246">
+                  startingLineNumber = "1247"
+                  endingLineNumber = "1247">
                </Location>
                <Location
-                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 6864eb90a91540b"
+                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 6864eb90a915428"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
                   continueAfterRunningActions = "No"
@@ -88,11 +88,11 @@
                   urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
                   startingColumnNumber = "9223372036854775807"
                   endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "1246"
-                  endingLineNumber = "1246">
+                  startingLineNumber = "1247"
+                  endingLineNumber = "1247">
                </Location>
                <Location
-                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 3c832fb93c02912a"
+                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 3c832fb93c029109"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
                   continueAfterRunningActions = "No"
@@ -102,11 +102,11 @@
                   urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
                   startingColumnNumber = "9223372036854775807"
                   endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "1246"
-                  endingLineNumber = "1246">
+                  startingLineNumber = "1247"
+                  endingLineNumber = "1247">
                </Location>
                <Location
-                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 3c832fb93c02912a"
+                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 3c832fb93c029109"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
                   continueAfterRunningActions = "No"
@@ -116,8 +116,8 @@
                   urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
                   startingColumnNumber = "9223372036854775807"
                   endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "1246"
-                  endingLineNumber = "1246">
+                  startingLineNumber = "1247"
+                  endingLineNumber = "1247">
                </Location>
             </Locations>
          </BreakpointContent>
@@ -134,7 +134,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4250"
             endingLineNumber = "4250"
-            landmarkName = "getPinnedTweets(user:)"
+            landmarkName = "resumeVideoJobPolling(pendingUpload:jobId:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -150,7 +150,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4389"
             endingLineNumber = "4389"
-            landmarkName = "getProviderIP(_:)"
+            landmarkName = "recoverPendingUploads()"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -166,7 +166,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4390"
             endingLineNumber = "4390"
-            landmarkName = "getProviderIP(_:)"
+            landmarkName = "recoverPendingUploads()"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
