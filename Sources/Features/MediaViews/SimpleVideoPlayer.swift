@@ -1630,9 +1630,6 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                             let isWaitingToPlay = observedPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
                             
                             if isWaitingToPlay {
-                                // Log reason for waiting
-                                if let reason = observedPlayer.reasonForWaitingToPlay {
-                                }
                                 context.coordinator.isBuffering = true
                             } else if observedPlayer.timeControlStatus == .playing {
                                 context.coordinator.isBuffering = false
@@ -1676,16 +1673,8 @@ struct VideoLayerRefreshView: UIViewRepresentable {
             }
             
             func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-                
-                if let player = player {
-                }
-                
                 // CRITICAL: Detach player first, then re-attach
                 // This ensures the player's layer is not attached to any other view
-                let isSameInstance = uiViewController.player === player
-                if !isSameInstance {
-                } else {
-                }
                 
                 // Detach and reattach to force fresh layer connection
                 uiViewController.player = nil

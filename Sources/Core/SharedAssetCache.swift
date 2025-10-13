@@ -87,10 +87,10 @@ class SharedAssetCache: ObservableObject {
     private let diskCacheStatusTTL: TimeInterval = 60 // Cache disk status for 60 seconds
     
     // MARK: - Configuration
-    private let maxCacheSize = 30 // Maximum number of cached assets and players (reduced for memory)
-    private let maxPlayerCacheSize = 25 // Maximum cached players (app-level memory manager ensures we stay under 2GB)
-    private let cacheExpirationInterval: TimeInterval = 1800 // 30 minutes
-    private let maxVideoFileSize: Int64 = 50 * 1024 * 1024 // 50MB max per video file
+    private let maxCacheSize = Constants.MAX_ASSET_CACHE_SIZE
+    private let maxPlayerCacheSize = Constants.MAX_PLAYER_CACHE_SIZE
+    private let cacheExpirationInterval: TimeInterval = Constants.CACHE_EXPIRATION_SECONDS
+    private let maxVideoFileSize: Int64 = Constants.MAX_VIDEO_FILE_CACHE_SIZE
     
     // MARK: - Cache Persistence
     private let cacheMetadataKey = "SharedAssetCache_Metadata"

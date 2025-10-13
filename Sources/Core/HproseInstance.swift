@@ -2331,9 +2331,17 @@ final class HproseInstance: ObservableObject {
                     return false
                 }
                 
-                let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
-                let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-                let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+                guard let host = writableUrl.host else {
+                    return false
+                }
+                
+                guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+                    return false
+                }
+                
+                guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
+                    return false
+                }
                 let healthCheckURL = cloudBaseURL.appendingPathComponent("health")
                 
                 var request = URLRequest(url: healthCheckURL)
@@ -2573,10 +2581,19 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
-            // Use the cloud drive port for HLS uploads
-            let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
-            let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            // Get host from writableUrl - no fallback, must succeed
+            guard let host = writableUrl.host else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
+            }
+            
+            // Get cloud drive port - no fallback, must be configured
+            guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
+            }
+            
+            guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
+            }
             let uploadURL = cloudBaseURL.appendingPathComponent("process-zip").absoluteString
             
             print("DEBUG: Constructed process-zip URL: \(uploadURL)")
@@ -2660,10 +2677,19 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
-            // Use the cloud drive port for HLS status polling
-            let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
-            let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            // Get host from writableUrl - no fallback, must succeed
+            guard let host = writableUrl.host else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
+            }
+            
+            // Get cloud drive port - no fallback, must be configured
+            guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
+            }
+            
+            guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
+            }
             let statusURL = cloudBaseURL.appendingPathComponent("process-zip/status/\(jobId)")
             print("DEBUG: Polling status at: \(statusURL)")
             
@@ -2826,10 +2852,19 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
-            // For HLS video uploads, use the cloud drive port instead of writableUrl port
-            let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
-            let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            // Get host from writableUrl - no fallback, must succeed
+            guard let host = writableUrl.host else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
+            }
+            
+            // Get cloud drive port - no fallback, must be configured
+            guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
+            }
+            
+            guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
+            }
             let convertVideoURL = cloudBaseURL.appendingPathComponent("convert-video").absoluteString
             print("DEBUG: Constructed convert-video URL: \(convertVideoURL)")
             guard let url = URL(string: convertVideoURL) else {
@@ -3194,10 +3229,19 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid base URL for status polling"])
             }
             
-            // For HLS video status polling, use the cloud drive port
-            let host = baseURL.host ?? HproseInstance.baseUrl.host ?? "localhost"
-            let cloudPort = HproseInstance.shared.appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            // Get host from baseURL - no fallback, must succeed
+            guard let host = baseURL.host else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from base URL"])
+            }
+            
+            // Get cloud drive port - no fallback, must be configured
+            guard let cloudPort = HproseInstance.shared.appUser.cloudDrivePort, cloudPort > 0 else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
+            }
+            
+            guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
+            }
             let statusURL = cloudBaseURL.appendingPathComponent("convert-video/status/\(jobId)")
             print("DEBUG: Polling status at: \(statusURL)")
             
@@ -4064,10 +4108,22 @@ final class HproseInstance: ObservableObject {
         _ = try? await appUser.resolveWritableUrl()
         let originalBaseURL = appUser.writableUrl?.deletingLastPathComponent()
         
-        // For HLS video polling, use the cloud drive port
-        let host = originalBaseURL?.host ?? HproseInstance.baseUrl.host ?? "localhost"
-        let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-        let baseURL = URL(string: "http://\(host):\(cloudPort)")
+        // Get host - must succeed
+        guard let host = originalBaseURL?.host else {
+            print("ERROR: No host available for video job polling")
+            return
+        }
+        
+        // Get cloud drive port - must be configured
+        guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+            print("ERROR: Cloud drive port not configured for video job polling")
+            return
+        }
+        
+        guard let baseURL = URL(string: "http://\(host):\(cloudPort)") else {
+            print("ERROR: Failed to construct cloud drive URL")
+            return
+        }
         
         // Find the video item to get its data
         guard let videoItem = pendingUpload.itemData.first(where: { 
@@ -4170,10 +4226,25 @@ final class HproseInstance: ObservableObject {
                     _ = try? await appUser.resolveWritableUrl()
                     let originalBaseURL = appUser.writableUrl?.deletingLastPathComponent()
                     
-                    // For HLS video status checking, use the cloud drive port
-                    let host = originalBaseURL?.host ?? HproseInstance.baseUrl.host ?? "localhost"
-                    let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-                    let baseURL = URL(string: "http://\(host):\(cloudPort)")
+                    // Get host - must succeed
+                    guard let host = originalBaseURL?.host else {
+                        print("ERROR: No host available for video job status check")
+                        try? FileManager.default.removeItem(at: fileURL)
+                        return
+                    }
+                    
+                    // Get cloud drive port - must be configured
+                    guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+                        print("ERROR: Cloud drive port not configured for video job status check")
+                        try? FileManager.default.removeItem(at: fileURL)
+                        return
+                    }
+                    
+                    guard let baseURL = URL(string: "http://\(host):\(cloudPort)") else {
+                        print("ERROR: Failed to construct cloud drive URL")
+                        try? FileManager.default.removeItem(at: fileURL)
+                        return
+                    }
                     
                     if let status = await checkVideoJobStatus(jobId: videoJobId, baseURL: baseURL) {
                         switch status.status {

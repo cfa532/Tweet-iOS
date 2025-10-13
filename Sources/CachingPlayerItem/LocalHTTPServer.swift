@@ -249,26 +249,25 @@ public class LocalHTTPServer: @unchecked Sendable {
             guard let self = self else { return }
             
             if let error = error {
-                NSLog("DEBUG: [LocalHTTPServer] Receive error: \(error), isComplete: \(isComplete)")
+                // Only log non-connection-reset errors
+                if (error as NSError).code != 54 {  // 54 = Connection reset by peer
+                    NSLog("ERROR: [LocalHTTPServer] Receive error: \(error)")
+                }
             }
             
             if let data = data, !data.isEmpty {
                 let request = String(data: data, encoding: .utf8) ?? ""
-                // Removed repetitive request log
                 
                 // Handle the request
                 self.handleRequest(request, connection: connection) {
                     // After handling, continue listening for more requests
                     if !isComplete && error == nil {
-                        // Removed repetitive connection waiting log
                         self.receiveNextRequest(connection: connection)
                     } else {
-                        NSLog("DEBUG: [LocalHTTPServer] Connection complete or error, closing")
                         connection.cancel()
                     }
                 }
             } else if isComplete || error != nil {
-                NSLog("DEBUG: [LocalHTTPServer] No data, connection complete or error - closing")
                 connection.cancel()
             } else {
                 // No data yet, keep waiting
@@ -650,8 +649,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             } else {
                 self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: finalData)
             }
-            
-            NSLog("DEBUG: [LocalHTTPServer] Served fresh data (size: \(finalData.count) bytes)")
+            // Removed: Served fresh data log (too frequent)
         }
         task.resume()
     }
@@ -678,10 +676,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             } else {
                 sendResponse(connection: connection, statusCode: 200, headers: headers, body: data)
             }
-            
-            NSLog("DEBUG: [LocalHTTPServer] Served file: \(path) (size: \(data.count) bytes)")
+            // Removed: Served file log (too frequent)
         } catch {
-            NSLog("DEBUG: [LocalHTTPServer] Failed to read file: \(error)")
+            NSLog("ERROR: [LocalHTTPServer] Failed to read file: \(error)")
             sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
         }
     }
@@ -693,17 +690,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         // For http://server/ipfs/hash/720p/playlist.m3u8 → /ipfs/hash/720p
         let playlistDirectory = baseURL.deletingLastPathComponent().path
         
-        NSLog("DEBUG: [LocalHTTPServer] Rewriting playlist URLs, mediaID=\(mediaID), baseURL=\(baseURL.absoluteString)")
-        NSLog("DEBUG: [LocalHTTPServer] Playlist directory: \(playlistDirectory)")
-        NSLog("DEBUG: [LocalHTTPServer] Original playlist:\n\(playlistString)")
-        
         // CRITICAL: Add #EXT-X-PLAYLIST-TYPE:VOD if missing (tells AVPlayer it's VOD, not live)
         if modified.contains("#EXTINF:") && !modified.contains("#EXT-X-PLAYLIST-TYPE") {
             // This is a segment playlist without type - add VOD tag after #EXTM3U
             if let extm3uRange = modified.range(of: "#EXTM3U") {
                 let insertIndex = modified.index(extm3uRange.upperBound, offsetBy: 0)
                 modified.insert(contentsOf: "\n#EXT-X-PLAYLIST-TYPE:VOD", at: insertIndex)
-                NSLog("DEBUG: [LocalHTTPServer] Added #EXT-X-PLAYLIST-TYPE:VOD to playlist")
             }
         }
         
@@ -712,14 +704,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         let playlistPattern = "^([^#\\n\\r]+\\.m3u8)$"
         if let playlistRegex = try? NSRegularExpression(pattern: playlistPattern, options: [.anchorsMatchLines]) {
             let matches = playlistRegex.matches(in: modified, options: [], range: NSRange(location: 0, length: modified.count))
-            NSLog("DEBUG: [LocalHTTPServer] Found \(matches.count) playlist URLs to rewrite")
             for match in matches.reversed() {
                 if let range = Range(match.range, in: modified) {
                     let relativeName = String(modified[range])
                     // Construct: http://127.0.0.1:port/mediaID/playlistDirectory/relativeName
                     let localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(playlistDirectory)/\(relativeName)"
                     modified.replaceSubrange(range, with: localhostURL)
-                    NSLog("DEBUG: [LocalHTTPServer] Rewrote: \(relativeName) → \(localhostURL)")
                 }
             }
         }
@@ -728,20 +718,16 @@ public class LocalHTTPServer: @unchecked Sendable {
         let segmentPattern = "^([^#\\n\\r]+\\.ts)$"
         if let segmentRegex = try? NSRegularExpression(pattern: segmentPattern, options: [.anchorsMatchLines]) {
             let matches = segmentRegex.matches(in: modified, options: [], range: NSRange(location: 0, length: modified.count))
-            NSLog("DEBUG: [LocalHTTPServer] Found \(matches.count) segment URLs to rewrite")
             for match in matches.reversed() {
                 if let range = Range(match.range, in: modified) {
                     let relativeName = String(modified[range])
                     // Construct: http://127.0.0.1:port/mediaID/playlistDirectory/relativeName
                     let localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(playlistDirectory)/\(relativeName)"
-                    NSLog("DEBUG: [LocalHTTPServer] Rewriting segment '\(relativeName)' -> port:\(port), mediaID:'\(mediaID)', dir:'\(playlistDirectory)'")
-                    NSLog("DEBUG: [LocalHTTPServer] Final URL: \(localhostURL)")
                     modified.replaceSubrange(range, with: localhostURL)
                 }
             }
         }
         
-        NSLog("DEBUG: [LocalHTTPServer] Modified playlist:\n\(modified)")
         return modified
     }
     

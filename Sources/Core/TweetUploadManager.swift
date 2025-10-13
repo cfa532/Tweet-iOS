@@ -194,9 +194,25 @@ class TweetUploadManager {
                     _ = try? await hproseInstance.appUser.resolveWritableUrl()
                     let originalBaseURL = hproseInstance.appUser.writableUrl?.deletingLastPathComponent()
                     
-                    let host = originalBaseURL?.host ?? HproseInstance.baseUrl.host ?? "localhost"
-                    let cloudPort = hproseInstance.appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-                    let baseURL = URL(string: "http://\(host):\(cloudPort)")
+                    // Get host - must succeed
+                    guard let host = originalBaseURL?.host else {
+                        print("ERROR: No host available for video job status check")
+                        try? FileManager.default.removeItem(at: fileURL)
+                        return
+                    }
+                    
+                    // Get cloud drive port - must be configured
+                    guard let cloudPort = hproseInstance.appUser.cloudDrivePort, cloudPort > 0 else {
+                        print("ERROR: Cloud drive port not configured for video job status check")
+                        try? FileManager.default.removeItem(at: fileURL)
+                        return
+                    }
+                    
+                    guard let baseURL = URL(string: "http://\(host):\(cloudPort)") else {
+                        print("ERROR: Failed to construct cloud drive URL")
+                        try? FileManager.default.removeItem(at: fileURL)
+                        return
+                    }
                     
                     if let status = await checkVideoJobStatus(jobId: videoJobId, baseURL: baseURL) {
                         switch status.status {
@@ -679,9 +695,22 @@ extension TweetUploadManager {
         _ = try? await hproseInstance.appUser.resolveWritableUrl()
         let originalBaseURL = hproseInstance.appUser.writableUrl?.deletingLastPathComponent()
         
-        let host = originalBaseURL?.host ?? HproseInstance.baseUrl.host ?? "localhost"
-        let cloudPort = hproseInstance.appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-        let baseURL = URL(string: "http://\(host):\(cloudPort)")
+        // Get host - must succeed
+        guard let host = originalBaseURL?.host else {
+            print("ERROR: No host available for video job polling")
+            return
+        }
+        
+        // Get cloud drive port - must be configured
+        guard let cloudPort = hproseInstance.appUser.cloudDrivePort, cloudPort > 0 else {
+            print("ERROR: Cloud drive port not configured for video job polling")
+            return
+        }
+        
+        guard let baseURL = URL(string: "http://\(host):\(cloudPort)") else {
+            print("ERROR: Failed to construct cloud drive URL")
+            return
+        }
         
         guard let videoItem = pendingUpload.itemData.first(where: {
             $0.typeIdentifier.contains("video") || $0.typeIdentifier.contains("movie")

@@ -16,7 +16,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4075"
             endingLineNumber = "4075"
-            landmarkName = "resumeVideoJobPolling(pendingUpload:jobId:)"
+            landmarkName = "handleCompletedVideoJob(pendingUpload:cid:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -150,7 +150,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4389"
             endingLineNumber = "4389"
-            landmarkName = "updateUserCore(password:alias:profile:hostId:cloudDrivePort:)"
+            landmarkName = "registerUser(username:password:alias:profile:hostId:cloudDrivePort:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -166,7 +166,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4390"
             endingLineNumber = "4390"
-            landmarkName = "updateUserCore(password:alias:profile:hostId:cloudDrivePort:)"
+            landmarkName = "registerUser(username:password:alias:profile:hostId:cloudDrivePort:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
