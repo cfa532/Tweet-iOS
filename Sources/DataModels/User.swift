@@ -19,7 +19,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var profile: String?
     @Published var timestamp: Date
     @Published var lastLogin: Date?
-    @Published var cloudDrivePort: Int? = nil
+    @Published var cloudDrivePort: Int = 0
     
     @Published var tweetCount: Int? {
         didSet {
@@ -181,7 +181,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         avatar: MimeiId? = nil,
         email: String? = nil,
         profile: String? = nil,
-        cloudDrivePort: Int? = nil,
+        cloudDrivePort: Int = 0,
         hostIds: [MimeiId]? = nil,
         publicKey: String? = nil,
         hasAcceptedTerms: Bool = false
@@ -357,7 +357,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         profile = try container.decodeIfPresent(String.self, forKey: .profile)
         timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date.now
         lastLogin = try container.decodeIfPresent(Date.self, forKey: .lastLogin)
-        cloudDrivePort = try container.decodeIfPresent(Int.self, forKey: .cloudDrivePort)
+        cloudDrivePort = try container.decodeIfPresent(Int.self, forKey: .cloudDrivePort) ?? 0
         
         tweetCount = try container.decodeIfPresent(Int.self, forKey: .tweetCount)
         followingCount = try container.decodeIfPresent(Int.self, forKey: .followingCount)
@@ -394,7 +394,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         try container.encodeIfPresent(profile, forKey: .profile)
         try container.encode(timestamp, forKey: .timestamp)
         try container.encodeIfPresent(lastLogin, forKey: .lastLogin)
-        try container.encodeIfPresent(cloudDrivePort, forKey: .cloudDrivePort)
+        try container.encode(cloudDrivePort, forKey: .cloudDrivePort)
         
         try container.encodeIfPresent(tweetCount, forKey: .tweetCount)
         try container.encodeIfPresent(followingCount, forKey: .followingCount)

@@ -221,7 +221,7 @@ struct ProfileView: View {
                 onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
                     // Set submission state
                     isSubmittingProfile = true
-                    print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort?.description ?? "nil")")
+                    print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort)")
                     
                     let success = try await hproseInstance.updateUserCore(
                         password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort
@@ -242,10 +242,8 @@ struct ProfileView: View {
                             hproseInstance.appUser.hostIds = [hostId]
                             print("DEBUG: Updated hostIds to: [\(hostId)]")
                         }
-                        if let cloudDrivePort = cloudDrivePort {
-                            hproseInstance.appUser.cloudDrivePort = cloudDrivePort
-                            print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
-                        }
+                        hproseInstance.appUser.cloudDrivePort = cloudDrivePort
+                        print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
                         
                         // Clear user cache to ensure fresh data is loaded on next app launch
                         TweetCacheManager.shared.deleteUser(mid: hproseInstance.appUser.mid)

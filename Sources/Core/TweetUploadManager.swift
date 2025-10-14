@@ -211,9 +211,8 @@ extension TweetUploadManager {
             // Get base URL for polling
             guard let baseURL = try? await hproseInstance.appUser.resolveWritableUrl(),
                   let host = baseURL.host,
-                  let cloudPort = hproseInstance.appUser.cloudDrivePort,
-                  cloudPort > 0,
-                  let pollURL = URL(string: "http://\(host):\(cloudPort)") else {
+                  hproseInstance.appUser.cloudDrivePort > 0,
+                  let pollURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
                 print("❌ [Retry] Cannot construct polling URL")
                 await MainActor.run {
                     UploadProgressManager.shared.failUpload(message: "Configuration error")
@@ -535,9 +534,8 @@ extension TweetUploadManager {
         // Get base URL for polling
         guard let baseURL = try? await hproseInstance.appUser.resolveWritableUrl(),
               let host = baseURL.host,
-              let cloudPort = hproseInstance.appUser.cloudDrivePort,
-              cloudPort > 0,
-              let pollURL = URL(string: "http://\(host):\(cloudPort)") else {
+              hproseInstance.appUser.cloudDrivePort > 0,
+              let pollURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
             print("❌ [Background Poll] Cannot construct polling URL")
             await showFailureToast(message: NSLocalizedString("Failed to check video status", comment: "Error"))
             await removePendingUpload()
@@ -1071,12 +1069,12 @@ extension TweetUploadManager {
         }
         
         // Get cloud drive port - must be configured
-        guard let cloudPort = hproseInstance.appUser.cloudDrivePort, cloudPort > 0 else {
+        guard hproseInstance.appUser.cloudDrivePort > 0 else {
             print("ERROR: Cloud drive port not configured for video job polling")
             return
         }
         
-        guard let baseURL = URL(string: "http://\(host):\(cloudPort)") else {
+        guard let baseURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
             print("ERROR: Failed to construct cloud drive URL")
             return
         }

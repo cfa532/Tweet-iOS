@@ -11,7 +11,7 @@ import PhotosUI
 @available(iOS 16.0, *)
 struct ProfileEditView: View {
     @Environment(\.dismiss) private var dismiss
-    var onSubmit: (String, String?, String?, String?, String?, Int?) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort
+    var onSubmit: (String, String?, String?, String?, String?, Int) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort
     var onSubmissionStateChange: ((Bool) -> Void)? = nil // Callback for submission state
     var onAvatarUploadStateChange: ((Bool) -> Void)? = nil // Callback for avatar upload state
     var onAvatarUploadSuccess: (() -> Void)? = nil // Callback for successful avatar upload
@@ -45,7 +45,7 @@ struct ProfileEditView: View {
         case password, confirmPassword, alias, profile, hostId, cloudDrivePort
     }
 
-    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int?) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onAvatarUploadStateChange: ((Bool) -> Void)? = nil, onAvatarUploadSuccess: (() -> Void)? = nil, onAvatarUploadFailure: ((String) -> Void)? = nil, onProfileUpdateFailure: ((String) -> Void)? = nil) {
+    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onAvatarUploadStateChange: ((Bool) -> Void)? = nil, onAvatarUploadSuccess: (() -> Void)? = nil, onAvatarUploadFailure: ((String) -> Void)? = nil, onProfileUpdateFailure: ((String) -> Void)? = nil) {
         self.onSubmit = onSubmit
         self.onSubmissionStateChange = onSubmissionStateChange
         self.onAvatarUploadStateChange = onAvatarUploadStateChange
@@ -295,7 +295,7 @@ struct ProfileEditView: View {
                 profile = appUser.profile ?? ""
                 hostId = appUser.hostIds?.first ?? ""
                 avatarId = appUser.avatar
-                cloudDrivePort = (appUser.cloudDrivePort == nil || appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort!.description
+                cloudDrivePort = (appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort.description
                 
                 // Store initial values for change detection
                 initialValues = [
@@ -361,11 +361,11 @@ struct ProfileEditView: View {
         Task {
             do {
                 // Convert cloudDrivePort: empty string → 0 (to explicitly clear on server)
-                let portValue: Int?
+                let portValue: Int
                 if cloudDrivePort.isEmpty {
                     portValue = 0  // Explicitly send 0 to clear the port
                 } else {
-                    portValue = Int(cloudDrivePort)
+                    portValue = Int(cloudDrivePort) ?? 0
                 }
                 
                 try await onSubmit(

@@ -129,7 +129,7 @@ final class HproseInstance: ObservableObject {
         print("Avatar: \(appUser.avatar ?? "nil")")
         print("Base URL: \(appUser.baseUrl?.absoluteString ?? "nil")")
         print("Writable URL: \(appUser.writableUrl?.absoluteString ?? "nil")")
-        print("Cloud Drive Port: \(appUser.cloudDrivePort?.description ?? "nil")")
+        print("Cloud Drive Port: \(appUser.cloudDrivePort)")
         print("Host IDs: \(appUser.hostIds ?? [])")
         print("Tweet Count: \(appUser.tweetCount?.description ?? "nil")")
         print("Following Count: \(appUser.followingCount?.description ?? "nil")")
@@ -2082,7 +2082,7 @@ final class HproseInstance: ObservableObject {
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
             
-            let cloudPort = appUser.cloudDrivePort ?? 0
+            let cloudPort = appUser.cloudDrivePort
             if cloudPort <= 0 {
                 print("Video upload: MP4 fallback (no cloud drive configured)")
                 return try await uploadVideoWithMp4Fallback(
@@ -2325,11 +2325,11 @@ final class HproseInstance: ObservableObject {
                     return false
                 }
                 
-                guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+                guard appUser.cloudDrivePort > 0 else {
                     return false
                 }
                 
-                guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
+                guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
                     return false
                 }
                 let healthCheckURL = cloudBaseURL.appendingPathComponent("health")
@@ -2577,11 +2577,11 @@ final class HproseInstance: ObservableObject {
             }
             
             // Get cloud drive port - no fallback, must be configured
-            guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+            guard appUser.cloudDrivePort > 0 else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
             }
             
-            guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
+            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
             }
             let uploadURL = cloudBaseURL.appendingPathComponent("process-zip").absoluteString
@@ -2673,11 +2673,11 @@ final class HproseInstance: ObservableObject {
             }
             
             // Get cloud drive port - no fallback, must be configured
-            guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+            guard appUser.cloudDrivePort > 0 else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
             }
             
-            guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
+            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
             }
             let statusURL = cloudBaseURL.appendingPathComponent("process-zip/status/\(jobId)")
@@ -2848,11 +2848,11 @@ final class HproseInstance: ObservableObject {
             }
             
             // Get cloud drive port - no fallback, must be configured
-            guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+            guard appUser.cloudDrivePort > 0 else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
             }
             
-            guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
+            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
             }
             let convertVideoURL = cloudBaseURL.appendingPathComponent("convert-video").absoluteString
@@ -3225,11 +3225,11 @@ final class HproseInstance: ObservableObject {
             }
             
             // Get cloud drive port - no fallback, must be configured
-            guard let cloudPort = HproseInstance.shared.appUser.cloudDrivePort, cloudPort > 0 else {
+            guard HproseInstance.shared.appUser.cloudDrivePort > 0 else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
             }
             
-            guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
+            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
             }
             let statusURL = cloudBaseURL.appendingPathComponent("process-zip/status/\(jobId)")
@@ -4105,12 +4105,12 @@ final class HproseInstance: ObservableObject {
         }
         
         // Get cloud drive port - must be configured
-        guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
+        guard appUser.cloudDrivePort > 0 else {
             print("ERROR: Cloud drive port not configured for video job polling")
             return
         }
         
-        guard let baseURL = URL(string: "http://\(host):\(cloudPort)") else {
+        guard let baseURL = URL(string: "http://\(host):\(appUser.cloudDrivePort)") else {
             print("ERROR: Failed to construct cloud drive URL")
             return
         }
@@ -4248,7 +4248,7 @@ final class HproseInstance: ObservableObject {
         alias: String?,
         profile: String,
         hostId: String? = nil,
-        cloudDrivePort: Int? = nil
+        cloudDrivePort: Int = 0
     ) async throws -> Bool {
         var hosts: [String]? = nil
         if let hostId = hostId, !hostId.isEmpty {
@@ -4287,9 +4287,9 @@ final class HproseInstance: ObservableObject {
         alias: String? = nil,
         profile: String? = nil,
         hostId: String? = nil,
-        cloudDrivePort: Int? = nil
+        cloudDrivePort: Int = 0
     ) async throws -> Bool {
-        print("DEBUG: updateUserCore called with - alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort?.description ?? "nil")")
+        print("DEBUG: updateUserCore called with - alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort)")
         
         let updatedUser = User(mid: appUser.mid, name: alias, password: password, profile: profile, cloudDrivePort: cloudDrivePort)
         if let hostId = hostId, !hostId.isEmpty {
@@ -4329,9 +4329,9 @@ final class HproseInstance: ObservableObject {
                     if let hostId = hostId, !hostId.isEmpty {
                         self.appUser.hostIds = [hostId]
                     }
-                    // CRITICAL: Update cloudDrivePort (including nil to clear it)
+                    // CRITICAL: Update cloudDrivePort
                     self.appUser.cloudDrivePort = cloudDrivePort
-                    print("DEBUG: updateUserCore - updated in-memory appUser, cloudDrivePort: \(cloudDrivePort?.description ?? "nil")")
+                    print("DEBUG: updateUserCore - updated in-memory appUser, cloudDrivePort: \(cloudDrivePort)")
                 }
                 
                 // Clear user cache to ensure fresh data is loaded

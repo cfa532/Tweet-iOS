@@ -11,7 +11,7 @@ import PhotosUI
 @available(iOS 16.0, *)
 struct RegistrationView: View {
     @Environment(\.dismiss) private var dismiss
-    var onSubmit: (String, String?, String?, String?, String?, Int?) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort
+    var onSubmit: (String, String?, String?, String?, String?, Int) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort
     var onSubmissionStateChange: ((Bool) -> Void)? = nil // Callback for submission state
     var onRegistrationFailure: ((String) -> Void)? = nil // Callback for registration failure
 
@@ -38,7 +38,7 @@ struct RegistrationView: View {
         case username, password, confirmPassword, alias, profile, hostId, cloudDrivePort
     }
 
-    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int?) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onRegistrationFailure: ((String) -> Void)? = nil) {
+    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onRegistrationFailure: ((String) -> Void)? = nil) {
         self.onSubmit = onSubmit
         self.onSubmissionStateChange = onSubmissionStateChange
         self.onRegistrationFailure = onRegistrationFailure
@@ -313,7 +313,7 @@ struct RegistrationView: View {
                     alias.isEmpty ? nil : alias,
                     profile.isEmpty ? nil : profile,
                     hostId,
-                    Int(cloudDrivePort)
+                    Int(cloudDrivePort) ?? 0
                 )
                 
                 // Reset submission state after completion
