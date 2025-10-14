@@ -63,6 +63,10 @@ class TweetUploadManager {
     /// Schedule a tweet upload with persistence and retry
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
         Task.detached(priority: .background) {
+            // Start progress tracking on main thread
+            await MainActor.run {
+                UploadProgressManager.shared.startUpload(type: "tweet")
+            }
             await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
         }
     }
@@ -70,6 +74,10 @@ class TweetUploadManager {
     /// Schedule a chat message upload
     func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
         Task.detached(priority: .background) {
+            // Start progress tracking on main thread
+            await MainActor.run {
+                UploadProgressManager.shared.startUpload(type: "chat")
+            }
             var mutableMessage = message
             await self.uploadChatMessageWithPersistenceAndRetry(message: &mutableMessage, itemData: itemData)
         }
@@ -82,6 +90,10 @@ class TweetUploadManager {
         itemData: [PendingTweetUpload.ItemData]
     ) {
         Task.detached(priority: .background) {
+            // Start progress tracking on main thread
+            await MainActor.run {
+                UploadProgressManager.shared.startUpload(type: "comment")
+            }
             do {
                 guard let hproseInstance = self.hproseInstance else { return }
                 
@@ -313,7 +325,7 @@ class TweetUploadManager {
 // MARK: - Private Upload Implementation
 extension TweetUploadManager {
     
-    private func uploadTweetWithPersistenceAndRetry(
+    func uploadTweetWithPersistenceAndRetry(
         tweet: Tweet,
         itemData: [PendingTweetUpload.ItemData],
         retryCount: Int = 0,
@@ -321,18 +333,41 @@ extension TweetUploadManager {
     ) async {
         print("DEBUG: [uploadTweetWithPersistenceAndRetry] Starting upload with retry count: \(retryCount)")
         
-        guard let hproseInstance = hproseInstance else { return }
+        guard let hproseInstance = hproseInstance else {
+            await MainActor.run {
+                UploadProgressManager.shared.failUpload(message: "System error")
+            }
+            return
+        }
         
         // Save pending upload to disk
         let pendingUpload = PendingTweetUpload(tweet: tweet, itemData: itemData, retryCount: retryCount, videoJobId: videoJobId)
         await savePendingUpload(pendingUpload)
         
         do {
+            // Update progress: uploading attachments
+            await MainActor.run {
+                UploadProgressManager.shared.updateProgress(
+                    stage: .uploadingAttachments,
+                    message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                    progress: 0.2
+                )
+            }
+            
             // Upload attachments first
             let (uploadedAttachments, _) = try await uploadAttachments(itemData: itemData)
             
             // Update tweet with uploaded attachments
             tweet.attachments = uploadedAttachments
+            
+            // Update progress: submitting tweet
+            await MainActor.run {
+                UploadProgressManager.shared.updateProgress(
+                    stage: .submittingTweet,
+                    message: NSLocalizedString("Submitting tweet...", comment: "Upload stage"),
+                    progress: 0.9
+                )
+            }
             
             // Upload the tweet
             if let uploadedTweet = try await hproseInstance.uploadTweet(tweet) {
@@ -346,6 +381,9 @@ extension TweetUploadManager {
                         object: nil,
                         userInfo: ["tweet": uploadedTweet]
                     )
+                    
+                    // Complete progress
+                    UploadProgressManager.shared.completeUpload()
                 }
             } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
@@ -361,6 +399,8 @@ extension TweetUploadManager {
                 let userFriendlyMessage = NSLocalizedString("Failed to upload tweet. Please try again.", comment: "Tweet upload failed error")
                 
                 await MainActor.run {
+                    UploadProgressManager.shared.failUpload(message: userFriendlyMessage)
+                    
                     if !hproseInstance.isAppInitializing {
                         NotificationCenter.default.post(
                             name: .backgroundUploadFailed,
@@ -373,6 +413,15 @@ extension TweetUploadManager {
                 await removePendingUpload()
             } else {
                 print("DEBUG: [Error handling] Scheduling background retry \(retryCount + 1)")
+                
+                // Don't fail the progress UI on retry
+                await MainActor.run {
+                    UploadProgressManager.shared.updateProgress(
+                        stage: .uploadingAttachments,
+                        message: NSLocalizedString("Retrying upload...", comment: "Upload stage"),
+                        progress: 0.1
+                    )
+                }
                 
                 let delay = UInt64(retryCount + 1) * 2_000_000_000
                 Task.detached(priority: .background) {

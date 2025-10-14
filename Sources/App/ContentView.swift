@@ -5,6 +5,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var hproseInstance = HproseInstance.shared
     @StateObject private var chatSessionManager = ChatSessionManager.shared
+    @StateObject private var uploadProgressManager = UploadProgressManager.shared
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var selectedTab = 0
     @State private var showComposeSheet = false
@@ -15,6 +16,8 @@ struct ContentView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .success
+    @State private var pendingUpload: TweetUploadManager.PendingTweetUpload? = nil
+    @State private var showPendingUploadDialog = false
     
     var body: some View {
         let _ = NSLog("DEBUG: [ContentView] ContentView body is being rendered")
@@ -199,8 +202,115 @@ struct ContentView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
         )
+        .overlay(
+            // Upload progress overlay
+            UploadProgressOverlay(progressManager: uploadProgressManager)
+        )
+        .overlay(
+            // Pending upload dialog
+            Group {
+                if showPendingUploadDialog, let upload = pendingUpload {
+                    ZStack {
+                        Color.black.opacity(0.4)
+                            .edgesIgnoringSafeArea(.all)
+                            .onTapGesture {
+                                // Prevent dismissal by tapping background
+                            }
+                        
+                        PendingUploadDialog(
+                            pendingUpload: upload,
+                            onRetry: {
+                                showPendingUploadDialog = false
+                                retryPendingUpload(upload)
+                            },
+                            onCancel: {
+                                showPendingUploadDialog = false
+                                cancelPendingUpload()
+                            }
+                        )
+                    }
+                    .transition(.opacity)
+                    .zIndex(2000)
+                }
+            }
+        )
+        .onAppear {
+            checkForPendingUpload()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            // Check for pending uploads when app returns to foreground
+            checkForPendingUpload()
+        }
         .environmentObject(hproseInstance)
         .environmentObject(themeManager)
+    }
+    
+    // MARK: - Pending Upload Handling
+    
+    private func checkForPendingUpload() {
+        // Don't check if dialog is already showing or if actively uploading
+        guard !showPendingUploadDialog && !uploadProgressManager.isUploading else {
+            return
+        }
+        
+        Task {
+            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
+            
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                return
+            }
+            
+            do {
+                let data = try Data(contentsOf: fileURL)
+                let upload = try JSONDecoder().decode(TweetUploadManager.PendingTweetUpload.self, from: data)
+                
+                // Check if the pending upload is not too old (e.g., within 24 hours)
+                let maxAge: TimeInterval = 24 * 60 * 60 // 24 hours
+                if Date().timeIntervalSince(upload.timestamp) < maxAge {
+                    await MainActor.run {
+                        self.pendingUpload = upload
+                        self.showPendingUploadDialog = true
+                    }
+                } else {
+                    // Too old, remove it
+                    try? FileManager.default.removeItem(at: fileURL)
+                }
+            } catch {
+                print("DEBUG: Failed to load pending upload: \(error)")
+            }
+        }
+    }
+    
+    private func retryPendingUpload(_ upload: TweetUploadManager.PendingTweetUpload) {
+        Task {
+            // Retry the upload using the upload manager
+            await hproseInstance.uploadManager.uploadTweetWithPersistenceAndRetry(
+                tweet: upload.tweet,
+                itemData: upload.itemData,
+                retryCount: upload.retryCount,
+                videoJobId: upload.videoJobId
+            )
+        }
+    }
+    
+    private func cancelPendingUpload() {
+        Task {
+            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
+            try? FileManager.default.removeItem(at: fileURL)
+            
+            await MainActor.run {
+                self.pendingUpload = nil
+                self.showPendingUploadDialog = false
+                
+                self.toastMessage = NSLocalizedString("Upload discarded", comment: "Upload cancelled message")
+                self.toastType = .error
+                self.showToast = true
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    withAnimation { self.showToast = false }
+                }
+            }
+        }
     }
 }
 
