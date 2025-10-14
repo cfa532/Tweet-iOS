@@ -106,9 +106,11 @@ struct AvatarFullScreenView: View {
     }
     
     private func loadAvatarImageIfNeeded(url: URL) {
-        // Create a MimeiFileType for the avatar using the URL's lastPathComponent as mid
+        // IMPORTANT: Use user's avatar MimeiId as cache key (stable identifier)
+        // NOT the URL which can change when baseUrl changes
+        let cacheKey = user.avatar ?? url.lastPathComponent
         let avatarAttachment = MimeiFileType(
-            mid: url.lastPathComponent,
+            mid: cacheKey,
             mediaType: .image
         )
         

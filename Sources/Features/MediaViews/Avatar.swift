@@ -78,10 +78,11 @@ struct Avatar: View {
     private func loadAvatar(from urlString: String) {
         guard !isLoading else { return }
         
-        // Use the filename from URL as the cache key - this is simpler and matches user's expectation
-        let cacheKey = URL(string: urlString)?.lastPathComponent ?? urlString
+        // IMPORTANT: Use user's avatar MimeiId as the cache key (stable identifier)
+        // NOT the URL which can change when baseUrl changes
+        let cacheKey = user.avatar ?? (URL(string: urlString)?.lastPathComponent ?? urlString)
         
-        // Create a MimeiFileType with the filename as mid so existing cache logic works
+        // Create a MimeiFileType with the user's avatar MimeiId so caching works correctly
         let avatarAttachment = MimeiFileType(
             mid: cacheKey,
             mediaType: .image
@@ -95,13 +96,13 @@ struct Avatar: View {
             return
         }
         
-        // Load from network if not cached, with timeout
+        // Load from network if not cached, with timeout and throttling
         isLoading = true
         Task {
-            // Create the load task
+            // Create the load task using throttled avatar loading
             let loadTask = Task { () -> UIImage? in
                 if let url = URL(string: urlString),
-                   let image = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment, baseUrl: baseUrl) {
+                   let image = await ImageCacheManager.shared.loadAndCacheAvatar(from: url, for: avatarAttachment, baseUrl: baseUrl) {
                     return image
                 }
                 return nil

@@ -101,7 +101,18 @@ class MemoryCapManager {
     @MainActor
     @objc private func handleMemoryWarning() {
         logger.warning("System memory warning received")
-        forceMemoryCleanup()
+        
+        // Check memory usage before cleanup (don't cleanup at low usage)
+        let memoryUsageMB = currentMemoryUsage / (1024 * 1024)
+        logger.info("Current memory usage: \(memoryUsageMB)MB")
+        
+        // Only cleanup if usage exceeds 1.4GB (preventive cleanup threshold)
+        if memoryUsageMB > 1400 {
+            logger.warning("Memory usage exceeds 1.4GB, performing cleanup")
+            forceMemoryCleanup()
+        } else {
+            logger.info("Memory usage under 1.4GB, ignoring system warning (likely false alarm)")
+        }
     }
     
     @MainActor
@@ -250,3 +261,4 @@ extension MemoryCapManager {
         return "\(formatBytes(stats.currentUsage)) / \(formatBytes(stats.limit)) (\(Int(stats.percentage * 100))%)"
     }
 }
+

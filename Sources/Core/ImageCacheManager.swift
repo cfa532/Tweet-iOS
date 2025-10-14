@@ -22,6 +22,12 @@ class ImageCacheManager: @unchecked Sendable {
     private var ongoingRequests: [String: Task<UIImage?, Never>] = [:]
     private let requestsQueue = DispatchQueue(label: "com.tweet.imagecache.requests", attributes: .concurrent)
     
+    // Avatar loading throttling
+    private let maxConcurrentAvatarLoads = 4 // Limit concurrent avatar network requests
+    private var activeAvatarLoads: [String: Task<UIImage?, Never>] = [:]
+    private var pendingAvatarRequests: [(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL, continuation: CheckedContinuation<UIImage?, Never>)] = []
+    private let avatarQueue = DispatchQueue(label: "com.tweet.imagecache.avatars", attributes: .concurrent)
+    
     private init() {
         // Get the cache directory
         let cachesDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -185,9 +191,15 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     private func getCacheKey(for attachment: MimeiFileType, baseUrl: URL) -> String {
+        // ALWAYS use mid as the cache key (stable identifier)
+        // If mid is somehow empty, this is a programming error that should be fixed at the source
         if !attachment.mid.isEmpty {
             return attachment.mid
         }
+        
+        // Fallback: This should never happen in production
+        // If it does, log a warning so we can fix the root cause
+        print("WARNING: [ImageCacheManager] MimeiFileType has empty mid! Using URL fallback. This should be fixed.")
         if let url = attachment.getUrl(baseUrl) {
             return url.lastPathComponent
         }
@@ -400,5 +412,110 @@ class ImageCacheManager: @unchecked Sendable {
         }
         
         return result
+    }
+    
+    // MARK: - Avatar Loading with Throttling
+    
+    /// Load avatar with concurrency throttling to prevent network congestion
+    func loadAndCacheAvatar(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
+        let cacheKey = getCacheKey(for: attachment, baseUrl: baseUrl)
+        
+        // Check memory cache first (fast path)
+        if let cached = getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            return cached
+        }
+        
+        // Check if already loading this avatar
+        let existingTask: Task<UIImage?, Never>? = avatarQueue.sync {
+            return activeAvatarLoads[cacheKey]
+        }
+        
+        if let existingTask = existingTask {
+            print("DEBUG: [ImageCacheManager] Avatar already loading, waiting: \(cacheKey)")
+            return await existingTask.value
+        }
+        
+        // Check if we can start loading immediately
+        let canStartImmediately = avatarQueue.sync {
+            return activeAvatarLoads.count < maxConcurrentAvatarLoads
+        }
+        
+        if canStartImmediately {
+            return await startAvatarLoad(cacheKey: cacheKey, url: url, attachment: attachment, baseUrl: baseUrl)
+        } else {
+            // Queue the request
+            return await withCheckedContinuation { continuation in
+                avatarQueue.async(flags: .barrier) {
+                    self.pendingAvatarRequests.append((cacheKey: cacheKey, url: url, attachment: attachment, baseUrl: baseUrl, continuation: continuation))
+                    print("DEBUG: [ImageCacheManager] Avatar queued (\(self.pendingAvatarRequests.count) pending): \(cacheKey)")
+                }
+            }
+        }
+    }
+    
+    private func startAvatarLoad(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
+        let task = Task<UIImage?, Never> {
+            do {
+                // Create URLRequest with timeout
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 10.0
+                request.cachePolicy = .returnCacheDataElseLoad
+                
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                // Check if response is valid
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    print("DEBUG: [ImageCacheManager] Invalid response for avatar at \(url)")
+                    return nil
+                }
+                
+                // Cache the compressed version
+                cacheImageData(data, for: attachment, baseUrl: baseUrl)
+                
+                // Return the compressed image
+                return getCompressedImage(for: attachment, baseUrl: baseUrl)
+            } catch {
+                print("DEBUG: [ImageCacheManager] Error loading avatar from \(url): \(error.localizedDescription)")
+                return nil
+            }
+        }
+        
+        // Register active load
+        avatarQueue.async(flags: .barrier) {
+            self.activeAvatarLoads[cacheKey] = task
+        }
+        
+        // Wait for result
+        let result = await task.value
+        
+        // Unregister and process next
+        avatarQueue.async(flags: .barrier) {
+            self.activeAvatarLoads.removeValue(forKey: cacheKey)
+            self.processNextPendingAvatar()
+        }
+        
+        return result
+    }
+    
+    private func processNextPendingAvatar() {
+        guard activeAvatarLoads.count < maxConcurrentAvatarLoads,
+              !pendingAvatarRequests.isEmpty else {
+            return
+        }
+        
+        let nextRequest = pendingAvatarRequests.removeFirst()
+        print("DEBUG: [ImageCacheManager] Processing queued avatar (\(pendingAvatarRequests.count) remaining): \(nextRequest.cacheKey)")
+        
+        // Start loading the next avatar
+        Task {
+            let result = await startAvatarLoad(
+                cacheKey: nextRequest.cacheKey,
+                url: nextRequest.url,
+                attachment: nextRequest.attachment,
+                baseUrl: nextRequest.baseUrl
+            )
+            nextRequest.continuation.resume(returning: result)
+        }
     }
 }

@@ -545,15 +545,15 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func handleMemoryWarning() {
-        // Check if memory usage exceeds 1GB before taking action
+        // Check if memory usage exceeds 1.4GB before taking action
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
         
         print("DEBUG: [GlobalImageLoadManager] Memory warning - current usage: \(memoryUsageMB)MB")
         
-        // Only take action if memory usage exceeds 1GB
-        if memoryUsageMB > 1024 {
-            print("DEBUG: [GlobalImageLoadManager] Memory usage exceeds 1GB, performing cleanup")
+        // Only take action if memory usage exceeds 1.4GB (preventive cleanup threshold)
+        if memoryUsageMB > 1400 {
+            print("DEBUG: [GlobalImageLoadManager] Memory usage exceeds 1.4GB, performing cleanup")
             
             // Cancel all low priority requests
             cancelLoads(priority: .low)
@@ -565,7 +565,7 @@ class GlobalImageLoadManager: ObservableObject {
             // Force garbage collection
             updateStatistics()
         } else {
-            print("DEBUG: [GlobalImageLoadManager] Memory usage under 1GB, no action needed")
+            print("DEBUG: [GlobalImageLoadManager] Memory usage under 1.4GB, no action needed")
         }
     }
     

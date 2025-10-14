@@ -836,7 +836,9 @@ class SharedAssetCache: ObservableObject {
     
     /// Preload video for immediate display (high priority)
     func preloadVideo(for url: URL, tweetId: String? = nil) {
-        let cacheKey = url.absoluteString
+        // Use mediaID as cache key (stable identifier), not URL which can change
+        guard let mediaID = extractMediaID(from: url) else { return }
+        let cacheKey = tweetId ?? mediaID
         
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
@@ -854,7 +856,9 @@ class SharedAssetCache: ObservableObject {
     
     /// Preload asset only (for background loading - lower priority)
     func preloadAsset(for url: URL, tweetId: String? = nil) {
-        let cacheKey = url.absoluteString
+        // Use mediaID as cache key (stable identifier), not URL which can change
+        guard let mediaID = extractMediaID(from: url) else { return }
+        let cacheKey = tweetId ?? mediaID
         
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
@@ -872,9 +876,10 @@ class SharedAssetCache: ObservableObject {
     
     /// Cancel preload for specific URL
     func cancelPreload(for url: URL) {
-        let cacheKey = url.absoluteString
-        preloadTasks[cacheKey]?.cancel()
-        preloadTasks.removeValue(forKey: cacheKey)
+        // Use mediaID as cache key (stable identifier), not URL which can change
+        guard let mediaID = extractMediaID(from: url) else { return }
+        preloadTasks[mediaID]?.cancel()
+        preloadTasks.removeValue(forKey: mediaID)
     }
     
     /// Preload multiple videos with priority management
@@ -1008,26 +1013,26 @@ class SharedAssetCache: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                print("DEBUG: [SharedAssetCache] System memory warning received - performing aggressive cleanup")
+                print("DEBUG: [SharedAssetCache] System memory warning received")
                 self?.handleMemoryWarning()
             }
         }
     }
     
     private func handleMemoryWarning() {
-        // Check if memory usage exceeds 1GB before taking action
+        // Check if memory usage exceeds 1.4GB before taking action
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
         
         print("DEBUG: [SharedAssetCache] Memory warning - current usage: \(memoryUsageMB)MB")
         
-        // Only release cache if memory usage exceeds 1GB
-        if memoryUsageMB > 1024 {
-            print("DEBUG: [SharedAssetCache] Memory usage exceeds 1GB, releasing 30% of cache")
+        // Only release cache if memory usage exceeds 1.4GB (preventive cleanup threshold)
+        if memoryUsageMB > 1400 {
+            print("DEBUG: [SharedAssetCache] Memory usage exceeds 1.4GB, releasing 30% of cache")
             // Release 30% of cache (less aggressive)
             releasePartialCache(percentage: 30)
         } else {
-            print("DEBUG: [SharedAssetCache] Memory usage under 1GB, no action needed")
+            print("DEBUG: [SharedAssetCache] Memory usage under 1.4GB, no action needed")
         }
         
         // Don't cancel ongoing loadings - let them complete for better UX
