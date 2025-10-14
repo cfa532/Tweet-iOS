@@ -15,6 +15,7 @@
 
 // MARK: - Upload Progress
 "Preparing upload..." = "アップロードを準備中...";
+"Preparing attachments..." = "添付ファイルを準備中...";
 "Converting video..." = "動画を変換中...";
 "Uploading attachments..." = "添付ファイルをアップロード中...";
 "Submitting tweet..." = "ツイートを送信中...";
@@ -37,6 +38,7 @@
 "Video processing completed but no ID returned" = "動画処理は完了しましたがIDが返されませんでした";
 "Video processing failed" = "動画処理に失敗しました";
 "Video processing timed out" = "動画処理がタイムアウトしました";
+"Failed to prepare attachments" = "添付ファイルの準備に失敗しました";
 "Failed to post tweet" = "ツイートの投稿に失敗しました";
 "Unknown video status" = "不明な動画ステータス";
 

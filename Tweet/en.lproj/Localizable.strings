@@ -15,6 +15,7 @@
 
 // MARK: - Upload Progress
 "Preparing upload..." = "Preparing upload...";
+"Preparing attachments..." = "Preparing attachments...";
 "Converting video..." = "Converting video...";
 "Uploading attachments..." = "Uploading attachments...";
 "Submitting tweet..." = "Submitting tweet...";
@@ -37,6 +38,7 @@
 "Video processing completed but no ID returned" = "Video processing completed but no ID returned";
 "Video processing failed" = "Video processing failed";
 "Video processing timed out" = "Video processing timed out";
+"Failed to prepare attachments" = "Failed to prepare attachments";
 "Failed to post tweet" = "Failed to post tweet";
 "Unknown video status" = "Unknown video status";
 

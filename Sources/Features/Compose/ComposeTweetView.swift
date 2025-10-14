@@ -65,6 +65,9 @@ struct ComposeTweetView: View {
                         let selectedVideos = viewModel.selectedVideos
                         let isPrivate = viewModel.isPrivate
                         
+                        // Show upload dialog IMMEDIATELY before any heavy work
+                        UploadProgressManager.shared.startUpload(type: "tweet")
+                        
                         // Send notification for toast on presenting screen and dismiss immediately
                         NotificationCenter.default.post(
                             name: .tweetSubmitted,
@@ -228,6 +231,16 @@ struct ComposeTweetView: View {
         let itemData: [HproseInstance.PendingTweetUpload.ItemData]
         
         do {
+            // Show "Preparing..." in dialog while loading media data
+            await MainActor.run {
+                UploadProgressManager.shared.updateProgress(
+                    stage: .preparing,
+                    message: NSLocalizedString("Preparing attachments...", comment: "Preparing attachments"),
+                    progress: 0.1,
+                    detail: ""
+                )
+            }
+            
             itemData = try await MediaUploadHelper.prepareItemData(
                 selectedItems: selectedItems,
                 selectedImages: selectedImages,
@@ -235,6 +248,11 @@ struct ComposeTweetView: View {
             )
         } catch {
             print("DEBUG: Error preparing item data: \(error)")
+            await MainActor.run {
+                UploadProgressManager.shared.failUpload(
+                    message: NSLocalizedString("Failed to prepare attachments", comment: "Failed to prepare attachments")
+                )
+            }
             return
         }
         

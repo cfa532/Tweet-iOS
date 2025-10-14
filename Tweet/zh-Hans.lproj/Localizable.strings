@@ -15,6 +15,7 @@
 
 // MARK: - Upload Progress
 "Preparing upload..." = "正在准备上传...";
+"Preparing attachments..." = "正在准备附件...";
 "Converting video..." = "正在转换视频...";
 "Uploading attachments..." = "正在上传附件...";
 "Submitting tweet..." = "正在提交推文...";
@@ -37,6 +38,7 @@
 "Video processing completed but no ID returned" = "视频处理完成但未返回ID";
 "Video processing failed" = "视频处理失败";
 "Video processing timed out" = "视频处理超时";
+"Failed to prepare attachments" = "准备附件失败";
 "Failed to post tweet" = "发布推文失败";
 "Unknown video status" = "未知视频状态";
 

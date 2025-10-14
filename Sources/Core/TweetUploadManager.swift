@@ -63,10 +63,8 @@ class TweetUploadManager {
     /// Schedule a tweet upload with persistence and retry
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
         Task.detached(priority: .background) {
-            // Start progress tracking on main thread
-            await MainActor.run {
-                UploadProgressManager.shared.startUpload(type: "tweet")
-            }
+            // Note: Upload dialog is already shown by the caller (ComposeTweetView)
+            // before prepareItemData, so we don't call startUpload here
             await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
         }
     }
