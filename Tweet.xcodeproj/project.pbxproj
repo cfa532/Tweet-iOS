@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E3D452B1D03C4C09827F92B7 /* UploadProgressManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */; };
+		A0F8F09D30F34289B896499E /* UploadProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8FB6E35582340A0B369D1A1 /* UploadProgressOverlay.swift */; };
+		4BA4BBE5140F4B81A9A2E76D /* PendingUploadDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A1A /* TweetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A1D /* ContentView.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A25 /* HomeViewModel.swift */; };
@@ -127,6 +130,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = UploadProgressManager.swift; sourceTree = "<group>"; };
+		F8FB6E35582340A0B369D1A1 /* UploadProgressOverlay.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = UploadProgressOverlay.swift; sourceTree = "<group>"; };
+		9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PendingUploadDialog.swift; sourceTree = "<group>"; };
 		16C65942A958AA33DC9832F5 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1A1A1A1A1A1A1A1A1A1A01 /* Tweet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tweet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TweetApp.swift; path = Sources/App/TweetApp.swift; sourceTree = SOURCE_ROOT; };
@@ -334,6 +340,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */,
 				466E00932E7023460068D968 /* MemoryWarningManager.swift */,
 				468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */,
 				468F19EE2E5FEA850085BFE5 /* VideoLoadingManager.swift */,
@@ -515,6 +522,8 @@
 		469A994E2DEBF89B00954049 /* MediaViews */ = {
 			isa = PBXGroup;
 			children = (
+				9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */,
+				F8FB6E35582340A0B369D1A1 /* UploadProgressOverlay.swift */,
 				468384A02DFE9EAB0079ECC5 /* MediaBrowserView.swift */,
 				46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */,
 				46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */,
@@ -708,6 +717,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E3D452B1D03C4C09827F92B7 /* UploadProgressManager.swift in Sources */,
+				A0F8F09D30F34289B896499E /* UploadProgressOverlay.swift in Sources */,
+				4BA4BBE5140F4B81A9A2E76D /* PendingUploadDialog.swift in Sources */,
 				46B03D972E4C44E2000E08DF /* DebounceButtonWrapper.swift in Sources */,
 				7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */,
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,

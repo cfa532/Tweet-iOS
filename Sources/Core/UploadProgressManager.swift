@@ -46,9 +46,11 @@ class UploadProgressManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
-            if self.isUploading {
-                self.wasBackgrounded = true
-                print("⚠️ [UploadProgress] App backgrounded during upload")
+            Task { @MainActor in
+                if self.isUploading {
+                    self.wasBackgrounded = true
+                    print("⚠️ [UploadProgress] App backgrounded during upload")
+                }
             }
         }
         
@@ -59,14 +61,16 @@ class UploadProgressManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
-            if self.wasBackgrounded {
-                print("⚠️ [UploadProgress] App foregrounded after upload interruption")
-                // Check if upload is still active
-                if self.isUploading {
-                    // Upload may have failed, notify user
-                    self.handleBackgroundInterruption()
+            Task { @MainActor in
+                if self.wasBackgrounded {
+                    print("⚠️ [UploadProgress] App foregrounded after upload interruption")
+                    // Check if upload is still active
+                    if self.isUploading {
+                        // Upload may have failed, notify user
+                        self.handleBackgroundInterruption()
+                    }
+                    self.wasBackgrounded = false
                 }
-                self.wasBackgrounded = false
             }
         }
     }
@@ -81,7 +85,10 @@ class UploadProgressManager: ObservableObject {
         uploadStartTime = Date()
         wasBackgrounded = false
         
-        print("📤 [UploadProgress] Started \(type) upload")
+        // Prevent screen from auto-locking during upload
+        UIApplication.shared.isIdleTimerDisabled = true
+        
+        print("📤 [UploadProgress] Started \(type) upload (idle timer disabled)")
     }
     
     func updateProgress(stage: UploadStage, message: String, progress: Double = 0.0, detail: String = "") {
@@ -98,13 +105,16 @@ class UploadProgressManager: ObservableObject {
         stageMessage = NSLocalizedString("Upload completed", comment: "Upload stage")
         progress = 1.0
         
+        // Re-enable auto-lock
+        UIApplication.shared.isIdleTimerDisabled = false
+        
         if let startTime = uploadStartTime {
             let duration = Date().timeIntervalSince(startTime)
-            print("✅ [UploadProgress] Upload completed in \(String(format: "%.1f", duration))s")
+            print("✅ [UploadProgress] Upload completed in \(String(format: "%.1f", duration))s (idle timer re-enabled)")
         }
         
         // Reset after a short delay
-        Task {
+        Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
             self.isUploading = false
             self.uploadType = ""
@@ -118,10 +128,13 @@ class UploadProgressManager: ObservableObject {
         stageMessage = message
         progress = 0.0
         
-        print("❌ [UploadProgress] Upload failed: \(message)")
+        // Re-enable auto-lock
+        UIApplication.shared.isIdleTimerDisabled = false
+        
+        print("❌ [UploadProgress] Upload failed: \(message) (idle timer re-enabled)")
         
         // Keep failed state visible longer
-        Task {
+        Task { @MainActor in
             try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
             self.isUploading = false
             self.uploadType = ""

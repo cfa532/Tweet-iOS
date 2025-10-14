@@ -243,8 +243,9 @@ final class HproseInstance: ObservableObject {
             // Check for domain updates
             await self.checkAndUpdateDomain()
             
-            // Recover any pending uploads (function handles errors internally)
-            await self.recoverPendingUploads()
+            // NOTE: Pending upload recovery is now handled by ContentView's dialog system
+            // This gives users control over retry/discard instead of automatic retry
+            // await self.recoverPendingUploads()  // Disabled - now using dialog-based recovery
         }
     }
     
@@ -350,10 +351,7 @@ final class HproseInstance: ObservableObject {
                         // For guest users, fetch the alphaId user from backend now that we have proper IP
                         await fetchAlphaIdUserForGuest()
                     }
-                    // Step 6: Clean up any problematic pending uploads that might cause startup issues
-                    await cleanupProblematicPendingUploads()
-                    
-                    // Step 7: Schedule background tasks
+                    // Step 6: Schedule background tasks
                     scheduleBackgroundTasks()
                     return
                 }
@@ -2289,38 +2287,30 @@ final class HproseInstance: ObservableObject {
                 appUser: appUser
             )
             
-            progressCallback?("HLS uploaded, waiting for processing...", 70)
+            print("✅ [HLS Upload] Uploaded to server, job ID: \(jobId)")
+            progressCallback?("Video uploaded to server", 100)
             
-            // Poll for processing completion
-            let cid = try await pollProcessZipStatus(
-                jobId: jobId,
-                appUser: appUser,
-                progressCallback: progressCallback
-            )
+            // OPTIMIZATION: Return immediately with job ID instead of waiting for processing
+            // The polling will happen in the background via TweetUploadManager
             
-            progressCallback?("HLS processing completed", 90)
-            
-            print("DEBUG: Received CID from processing: \(cid)")
-            
-            // Create result with the CID we received and the correct aspect ratio
+            // Create placeholder result with job ID (CID will be filled in later)
             let mimeiFileType = MimeiFileType(
-                mid: cid, 
+                mid: jobId,  // Temporarily use jobId as mid, will be replaced with CID after processing
                 mediaType: .hls_video,
-                size: Int64(data.count), // Use original video data size
+                size: Int64(data.count),
                 fileName: fileName,
-                timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970), // Use current time as Date object (will be encoded as Unix timestamp in milliseconds)
+                timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
                 aspectRatio: videoAspectRatio,
                 url: nil
             )
-            let result: (MimeiFileType?, String?) = (mimeiFileType, cid)
             
             // Clean up temp files
             try? FileManager.default.removeItem(at: tempDir)
             try? FileManager.default.removeItem(at: compressedURL)
             
-            progressCallback?("HLS conversion completed", 100)
-            
-            return result
+            // Return (placeholder MimeiFileType, jobId)
+            // The jobId will be used for background polling
+            return (mimeiFileType, jobId)
         }
         
         /// Check if cloud drive service is available at clouddriveport
@@ -3242,7 +3232,7 @@ final class HproseInstance: ObservableObject {
             guard let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)") else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
             }
-            let statusURL = cloudBaseURL.appendingPathComponent("convert-video/status/\(jobId)")
+            let statusURL = cloudBaseURL.appendingPathComponent("process-zip/status/\(jobId)")
             print("DEBUG: Polling status at: \(statusURL)")
             
             let config = URLSessionConfiguration.default
@@ -3936,7 +3926,7 @@ final class HproseInstance: ObservableObject {
     private func checkVideoJobStatus(jobId: String, baseURL: URL?) async -> VideoConversionStatus? {
         guard let baseURL = baseURL else { return nil }
         
-        let statusURL = baseURL.appendingPathComponent("convert-video/status/\(jobId)")
+        let statusURL = baseURL.appendingPathComponent("process-zip/status/\(jobId)")
         print("DEBUG: Checking video job status at: \(statusURL)")
         
         let config = URLSessionConfiguration.default
@@ -4188,143 +4178,13 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - Recovery Methods
     
-    /// Clean up any problematic pending uploads that might cause startup issues
-    private func cleanupProblematicPendingUploads() async {
-        // Delegate to upload manager
-        await uploadManager.cleanupProblematicPendingUploads()
-    }
+    // REMOVED: cleanupProblematicPendingUploads(), recoverPendingUploads(), recoverPendingUploads_old()
+    // Pending upload recovery is now handled by ContentView's dialog system
     
-    func recoverPendingUploads() async {
-        // Delegate to upload manager
-        await uploadManager.recoverPendingUploads()
-    }
+    // The old recoverPendingUploads_old function code removed (was 130+ lines)
+    // All retry logic is preserved in uploadTweetWithPersistenceAndRetry()
+    // New system: User sees dialog with retry/discard options instead of auto-retry
     
-    // Deprecated - keeping for compatibility but delegating to uploadManager
-    private func recoverPendingUploads_old() async {
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-        
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            print("DEBUG: No pending upload file found")
-            return
-        }
-        
-        do {
-            let data = try Data(contentsOf: fileURL)
-            let pendingUpload = try JSONDecoder().decode(PendingTweetUpload.self, from: data)
-            
-            // Check if the pending upload is not too old (e.g., within 24 hours)
-            let maxAge: TimeInterval = 24 * 60 * 60 // 24 hours
-            if Date().timeIntervalSince(pendingUpload.timestamp) < maxAge {
-                print("DEBUG: Found valid pending upload from \(pendingUpload.timestamp), attempting recovery...")
-                print("Recovering pending upload from \(pendingUpload.timestamp)")
-                
-                // Check if we have video job IDs to check first
-                if let videoJobId = pendingUpload.videoJobId {
-                    print("DEBUG: Found video job ID: \(videoJobId), checking status...")
-                    
-                    // Get base URL for status checking - ensure writableUrl is resolved
-                    _ = try? await appUser.resolveWritableUrl()
-                    let originalBaseURL = appUser.writableUrl?.deletingLastPathComponent()
-                    
-                    // Get host - must succeed
-                    guard let host = originalBaseURL?.host else {
-                        print("ERROR: No host available for video job status check")
-                        try? FileManager.default.removeItem(at: fileURL)
-                        return
-                    }
-                    
-                    // Get cloud drive port - must be configured
-                    guard let cloudPort = appUser.cloudDrivePort, cloudPort > 0 else {
-                        print("ERROR: Cloud drive port not configured for video job status check")
-                        try? FileManager.default.removeItem(at: fileURL)
-                        return
-                    }
-                    
-                    guard let baseURL = URL(string: "http://\(host):\(cloudPort)") else {
-                        print("ERROR: Failed to construct cloud drive URL")
-                        try? FileManager.default.removeItem(at: fileURL)
-                        return
-                    }
-                    
-                    if let status = await checkVideoJobStatus(jobId: videoJobId, baseURL: baseURL) {
-                        switch status.status {
-                        case "completed":
-                            print("DEBUG: Video job completed while app was backgrounded, CID: \(status.cid ?? "unknown")")
-                            // Job completed - we need to create MimeiFileType with the CID
-                            // and continue with tweet upload
-                            await handleCompletedVideoJob(pendingUpload: pendingUpload, cid: status.cid)
-                            return
-                            
-                        case "failed":
-                            print("DEBUG: Video job failed: \(status.message ?? "Unknown error")")
-                            // Job failed - fall through to re-upload
-                            
-                        case "uploading", "processing":
-                            print("DEBUG: Video job still in progress, resuming polling...")
-                            // Job still in progress - resume polling
-                            await resumeVideoJobPolling(pendingUpload: pendingUpload, jobId: videoJobId)
-                            return
-                            
-                        default:
-                            print("DEBUG: Unknown video job status: \(status.status)")
-                            // Unknown status - fall through to re-upload
-                        }
-                    } else {
-                        print("DEBUG: Could not check video job status, job may have expired")
-                        // Job not found or error - fall through to re-upload
-                    }
-                }
-                
-                // Increment retry count for the next attempt
-                let newRetryCount = pendingUpload.retryCount + 1
-                let maxBackgroundRetries = 2
-                
-                print("DEBUG: Background retry attempt \(newRetryCount)/\(maxBackgroundRetries)")
-                
-                // If this will be the final attempt, the upload function will show the error
-                if newRetryCount > maxBackgroundRetries {
-                    print("DEBUG: Max retries exceeded (\(pendingUpload.retryCount) attempts made), removing pending upload without retrying")
-                    try? FileManager.default.removeItem(at: fileURL)
-                    return
-                }
-                
-                // Show toast message for retry attempt
-                await MainActor.run {
-                    let retryMessage = String(format: NSLocalizedString("Upload failed, retrying... (attempt %d of %d)", comment: "Background upload retry message"), newRetryCount, maxBackgroundRetries)
-                    NotificationCenter.default.post(
-                        name: .backgroundUploadRetrying,
-                        object: nil,
-                        userInfo: ["message": retryMessage]
-                    )
-                }
-                
-                // Add delay before background retry (exponential backoff)
-                let delay = UInt64(newRetryCount) * 2_000_000_000 // 2, 4 seconds
-                print("DEBUG: Background retry delay: \(delay / 1_000_000_000) seconds")
-                try? await Task.sleep(nanoseconds: delay)
-                
-                await uploadTweetWithPersistenceAndRetry(
-                    tweet: pendingUpload.tweet,
-                    itemData: pendingUpload.itemData,
-                    retryCount: newRetryCount,
-                    videoJobId: pendingUpload.videoJobId
-                )
-            } else {
-                // Remove old pending upload
-                try? FileManager.default.removeItem(at: fileURL)
-                print("Removed old pending upload from \(pendingUpload.timestamp)")
-            }
-        } catch {
-            print("DEBUG: Failed to recover pending upload: \(error)")
-            // Remove corrupted file to prevent future issues
-            do {
-                try FileManager.default.removeItem(at: fileURL)
-                print("DEBUG: Removed corrupted pending upload file")
-            } catch {
-                print("DEBUG: Failed to remove corrupted pending upload file: \(error)")
-            }
-        }
-    }
     
     func scheduleCommentUpload(
         comment: Tweet,

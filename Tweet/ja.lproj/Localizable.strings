@@ -13,6 +13,47 @@
 "Followings" = "フォロー中";
 "Recommendation" = "おすすめ";
 
+// MARK: - Upload Progress
+"Preparing upload..." = "アップロードを準備中...";
+"Converting video..." = "動画を変換中...";
+"Uploading attachments..." = "添付ファイルをアップロード中...";
+"Submitting tweet..." = "ツイートを送信中...";
+"Retrying upload..." = "アップロードを再試行中...";
+"Upload completed" = "アップロード完了";
+"Posting Tweet" = "ツイートを投稿中";
+"Posting Comment" = "コメントを投稿中";
+"Sending Message" = "メッセージを送信中";
+"Uploading" = "アップロード中";
+"Please keep the app open until upload completes" = "アップロードが完了するまでアプリを開いたままにしてください";
+"Video uploaded to server" = "動画をサーバーにアップロード完了";
+"Checking video status..." = "動画ステータスを確認中...";
+"Processing on server..." = "サーバーで処理中...";
+"Your tweet will be posted when ready" = "準備が整い次第ツイートが投稿されます";
+"Uploading %@ %d/%d..." = "%@ %d/%d をアップロード中...";
+"Processing video %d/%d" = "動画を処理中 %d/%d";
+"Uploading image %d/%d" = "画像をアップロード中 %d/%d";
+"Tweet posted successfully" = "ツイートが正常に投稿されました";
+"Failed to check video status" = "動画ステータスの確認に失敗しました";
+"Video processing completed but no ID returned" = "動画処理は完了しましたがIDが返されませんでした";
+"Video processing failed" = "動画処理に失敗しました";
+"Video processing timed out" = "動画処理がタイムアウトしました";
+"Failed to post tweet" = "ツイートの投稿に失敗しました";
+"Unknown video status" = "不明な動画ステータス";
+
+// MARK: - Pending Upload Dialog
+"Upload Interrupted" = "アップロードが中断されました";
+"Your upload was interrupted, possibly because the app was closed. Would you like to retry the upload or discard it?" = "アプリが閉じられたため、アップロードが中断されました。アップロードを再試行しますか、それとも破棄しますか？";
+"Your upload was interrupted and %d retry attempts have failed. Would you like to try again or discard it?" = "アップロードが中断され、%d回の再試行が失敗しました。もう一度試しますか、それとも破棄しますか？";
+"Type:" = "種類：";
+"Date:" = "日付：";
+"Attachments:" = "添付ファイル：";
+"Content:" = "内容：";
+"Comment" = "コメント";
+"Tweet" = "ツイート";
+"Retry Upload" = "アップロードを再試行";
+"Discard" = "破棄";
+"Upload discarded" = "アップロードを破棄しました";
+
 // MARK: - Login Screen
 "Welcome to dTweet" = "dTweetへようこそ";
 "Username" = "ユーザー名";

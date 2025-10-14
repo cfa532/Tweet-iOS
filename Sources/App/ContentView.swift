@@ -283,7 +283,17 @@ struct ContentView: View {
     
     private func retryPendingUpload(_ upload: TweetUploadManager.PendingTweetUpload) {
         Task {
+            // Determine upload type
+            let uploadType = upload.tweet.originalTweetId != nil ? "comment" : "tweet"
+            
+            // Start progress tracking (shows dialog in foreground)
+            await MainActor.run {
+                UploadProgressManager.shared.startUpload(type: uploadType)
+            }
+            
             // Retry the upload using the upload manager
+            // If there's an existing video job ID, it will check status and poll
+            // If not, it will re-upload attachments in foreground (with dialog visible)
             await hproseInstance.uploadManager.uploadTweetWithPersistenceAndRetry(
                 tweet: upload.tweet,
                 itemData: upload.itemData,

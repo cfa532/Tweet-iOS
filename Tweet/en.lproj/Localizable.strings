@@ -13,6 +13,47 @@
 "Followings" = "Followings";
 "Recommendation" = "Recommendation";
 
+// MARK: - Upload Progress
+"Preparing upload..." = "Preparing upload...";
+"Converting video..." = "Converting video...";
+"Uploading attachments..." = "Uploading attachments...";
+"Submitting tweet..." = "Submitting tweet...";
+"Retrying upload..." = "Retrying upload...";
+"Upload completed" = "Upload completed";
+"Posting Tweet" = "Posting Tweet";
+"Posting Comment" = "Posting Comment";
+"Sending Message" = "Sending Message";
+"Uploading" = "Uploading";
+"Please keep the app open until upload completes" = "Please keep the app open until upload completes";
+"Video uploaded to server" = "Video uploaded to server";
+"Checking video status..." = "Checking video status...";
+"Processing on server..." = "Processing on server...";
+"Your tweet will be posted when ready" = "Your tweet will be posted when ready";
+"Uploading %@ %d/%d..." = "Uploading %@ %d/%d...";
+"Processing video %d/%d" = "Processing video %d/%d";
+"Uploading image %d/%d" = "Uploading image %d/%d";
+"Tweet posted successfully" = "Tweet posted successfully";
+"Failed to check video status" = "Failed to check video status";
+"Video processing completed but no ID returned" = "Video processing completed but no ID returned";
+"Video processing failed" = "Video processing failed";
+"Video processing timed out" = "Video processing timed out";
+"Failed to post tweet" = "Failed to post tweet";
+"Unknown video status" = "Unknown video status";
+
+// MARK: - Pending Upload Dialog
+"Upload Interrupted" = "Upload Interrupted";
+"Your upload was interrupted, possibly because the app was closed. Would you like to retry the upload or discard it?" = "Your upload was interrupted, possibly because the app was closed. Would you like to retry the upload or discard it?";
+"Your upload was interrupted and %d retry attempts have failed. Would you like to try again or discard it?" = "Your upload was interrupted and %d retry attempts have failed. Would you like to try again or discard it?";
+"Type:" = "Type:";
+"Date:" = "Date:";
+"Attachments:" = "Attachments:";
+"Content:" = "Content:";
+"Comment" = "Comment";
+"Tweet" = "Tweet";
+"Retry Upload" = "Retry Upload";
+"Discard" = "Discard";
+"Upload discarded" = "Upload discarded";
+
 // MARK: - Login Screen
 "Welcome to dTweet" = "Welcome to dTweet";
 "Username" = "Username";

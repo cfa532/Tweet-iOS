@@ -59,22 +59,6 @@ struct UploadProgressOverlay: View {
                         }
                     }
                     
-                    // Warning message
-                    if progressManager.currentStage == .convertingVideo || 
-                       progressManager.currentStage == .uploadingAttachments {
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.orange)
-                            
-                            Text(NSLocalizedString("Please keep the app open until upload completes", comment: "Upload warning"))
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        }
-                        .padding(12)
-                        .background(Color.orange.opacity(0.1))
-                        .cornerRadius(8)
-                    }
-                    
                     // Error message
                     if progressManager.currentStage == .failed {
                         HStack(spacing: 8) {
