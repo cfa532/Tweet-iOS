@@ -15,3 +15,4 @@ build/Logs/Build/LogStoreManifest.plist
 *.plist
 build/Logs/Build/LogStoreManifest.plist
 /build/Logs
+/DerivedData

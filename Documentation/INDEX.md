@@ -32,7 +32,7 @@
 ### Build & Development
 | Document | Description | Status |
 |----------|-------------|--------|
-| [**DEBUG_BUILD_INSTRUCTIONS.md**](./DEBUG_BUILD_INSTRUCTIONS.md) | How to build debug/release versions | ✅ Current |
+| [**DEBUG_BUILD_INSTRUCTIONS.md**](./DEBUG_BUILD_INSTRUCTIONS.md) | How to build debug/release versions, capture console logs, test background behavior | ✅ Current |
 | [**PERMISSION_LOCALIZATION_GUIDE.md**](./PERMISSION_LOCALIZATION_GUIDE.md) | Localization setup for permissions | ✅ Current |
 
 ---
@@ -118,6 +118,12 @@ All main documents should include:
 ---
 
 ## 🔄 Recent Updates
+
+### October 17, 2025
+- ✅ Fixed LocalHTTPServer background recovery issue (videos black after background)
+- ✅ Fixed MuteState startup race condition (videos unmuted for ~1 second at startup)
+- ✅ Added comprehensive DEBUG_BUILD_INSTRUCTIONS.md with console log capture
+- ✅ Improved app lifecycle management for video infrastructure
 
 ### October 14, 2025
 - ✅ Upload dialog now appears immediately when user taps Publish
