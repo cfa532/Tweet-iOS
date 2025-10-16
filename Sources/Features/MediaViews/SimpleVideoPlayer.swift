@@ -153,6 +153,7 @@ struct SimpleVideoPlayer: View {
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var videoCompletionObserver: NSObjectProtocol?
     @State private var videoErrorObserver: NSObjectProtocol?
+    @State private var readyCheckTask: Task<Void, Never>? // Delayed ready check task
     @State private var timeObserver: Any?
     @State private var timeObserverPlayer: AVPlayer?
     @State private var representableId: Int = 0 // Force VideoPlayerRepresentable recreation
@@ -1242,8 +1243,42 @@ struct SimpleVideoPlayer: View {
             self.handleError(strategy: .loadFailure)
         }
         
-        // Note: KVO observers are not available in SwiftUI structs
-        // Player status monitoring is handled through notification observers and periodic checks
+        // Schedule a delayed check for player readiness
+        // This handles the case where player becomes ready after initial configuration
+        // More efficient than continuous KVO observers
+        scheduleReadyCheck(for: player)
+    }
+    
+    private func scheduleReadyCheck(for player: AVPlayer) {
+        // Only schedule for MediaCell mode (fullscreen handles autoplay differently)
+        guard mode == .mediaCell else { return }
+        
+        // Cancel any existing check
+        readyCheckTask?.cancel()
+        
+        // Schedule a check after a short delay
+        readyCheckTask = Task { @MainActor in
+            // Wait for player to potentially become ready
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            
+            guard !Task.isCancelled else { return }
+            
+            // Check if player is ready with buffered data
+            guard let item = player.currentItem,
+                  item.status == .readyToPlay,
+                  !item.loadedTimeRanges.isEmpty else {
+                NSLog("DEBUG: [VIDEO READY CHECK] Player not ready yet for \(self.mid)")
+                return
+            }
+            
+            // Check all autoplay conditions
+            let shouldAutoPlay = self.currentAutoPlay && self.isVisible && self.shouldLoadVideo
+            
+            if shouldAutoPlay && player.rate == 0 {
+                NSLog("DEBUG: [VIDEO READY CHECK] Player ready, triggering autoplay for \(self.mid)")
+                player.play()
+            }
+        }
     }
     
     private func removePlayerObservers() {
@@ -1257,6 +1292,10 @@ struct SimpleVideoPlayer: View {
             NotificationCenter.default.removeObserver(observer)
             videoErrorObserver = nil
         }
+        
+        // Cancel any pending ready check
+        readyCheckTask?.cancel()
+        readyCheckTask = nil
         
         playerItem = nil
     }
