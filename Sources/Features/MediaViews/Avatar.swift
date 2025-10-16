@@ -101,9 +101,17 @@ struct Avatar: View {
         Task {
             // Create the load task using throttled avatar loading
             let loadTask = Task { () -> UIImage? in
-                if let url = URL(string: urlString),
-                   let image = await ImageCacheManager.shared.loadAndCacheAvatar(from: url, for: avatarAttachment, baseUrl: baseUrl) {
-                    return image
+                if let url = URL(string: urlString) {
+                    // This call may wait for an existing request for the same avatar
+                    // When it returns, the image should be in cache (if successful)
+                    let _ = await ImageCacheManager.shared.loadAndCacheAvatar(from: url, for: avatarAttachment, baseUrl: baseUrl)
+                    
+                    // CRITICAL: Re-check cache after network request completes
+                    // This ensures all Avatar views get the image, even if they were waiting
+                    // for a shared network request that another view initiated
+                    if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
+                        return cached
+                    }
                 }
                 return nil
             }
