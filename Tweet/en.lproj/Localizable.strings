@@ -14,7 +14,7 @@
 "Recommendation" = "Recommendation";
 
 // MARK: - Upload Progress
-"Preparing upload..." = "Preparing upload...";
+"Preparing upload..." = "Preparing upload... Don't close the app";
 "Preparing attachments..." = "Preparing attachments...";
 "Converting video..." = "Converting video...";
 "Uploading attachments..." = "Uploading attachments...";

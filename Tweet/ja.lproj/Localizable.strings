@@ -14,7 +14,7 @@
 "Recommendation" = "おすすめ";
 
 // MARK: - Upload Progress
-"Preparing upload..." = "アップロードを準備中...";
+"Preparing upload..." = "アップロードを準備中...アプリを閉じないでください";
 "Preparing attachments..." = "添付ファイルを準備中...";
 "Converting video..." = "動画を変換中...";
 "Uploading attachments..." = "添付ファイルをアップロード中...";

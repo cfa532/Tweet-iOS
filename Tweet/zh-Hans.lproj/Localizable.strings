@@ -14,7 +14,7 @@
 "Recommendation" = "推荐";
 
 // MARK: - Upload Progress
-"Preparing upload..." = "正在准备上传...";
+"Preparing upload..." = "正在准备上传...请勿关闭应用";
 "Preparing attachments..." = "正在准备附件...";
 "Converting video..." = "正在转换视频...";
 "Uploading attachments..." = "正在上传附件...";
