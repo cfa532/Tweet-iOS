@@ -690,9 +690,16 @@ final class HproseInstance: ObservableObject {
         let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
         
         // If we have a valid cached user that hasn't expired, return it
-        if cachedUser.username != nil && !cachedUser.hasExpired {
+        // BUT: If baseUrl is nil (cleared after loading from disk cache), we need to re-resolve IP
+        if cachedUser.username != nil && !cachedUser.hasExpired && cachedUser.baseUrl != nil {
             print("DEBUG: [fetchUser] Using cached user for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(cachedUser.hasExpired)")
             return cachedUser
+        }
+        
+        // If cached user has nil baseUrl (loaded from disk), re-resolve IP even if cache hasn't expired
+        if cachedUser.username != nil && cachedUser.baseUrl == nil {
+            print("DEBUG: [fetchUser] Cached user has nil baseUrl, re-resolving IP for userId: \(userId)")
+            // Fall through to updateUserFromServer to resolve IP
         }
         
         print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(cachedUser.hasExpired)")
@@ -768,21 +775,15 @@ final class HproseInstance: ObservableObject {
         let user = User.getInstance(mid: userId)
         
         return try await retryOperation(maxRetries: 3) {
-            // Handle baseUrl resolution
-            if baseUrl.isEmpty {
-                print("DEBUG: [updateUserFromServer] baseUrl is empty, getting provider IP for userId: \(userId)")
-                guard let providerIP = try await self.getProviderIP(userId) else {
-                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
-                }
-                print("DEBUG: [updateUserFromServer] Setting baseUrl to provider IP: \(providerIP) for userId: \(userId)")
-                await MainActor.run {
-                    user.baseUrl = URL(string: "http://\(providerIP)")!
-                }
-            } else {
-                print("DEBUG: [updateUserFromServer] Setting baseUrl to provided URL: \(baseUrl) for userId: \(userId)")
-                await MainActor.run {
-                    user.baseUrl = URL(string: baseUrl)!
-                }
+            // Always re-resolve IP address from provider to handle cases where the node's IP has changed
+            // Even if we have a cached baseUrl, the hostId might now resolve to a different IP
+            print("DEBUG: [updateUserFromServer] Re-resolving provider IP for userId: \(userId)")
+            guard let providerIP = try await self.getProviderIP(userId) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
+            }
+            print("DEBUG: [updateUserFromServer] Setting baseUrl to provider IP: \(providerIP) for userId: \(userId)")
+            await MainActor.run {
+                user.baseUrl = URL(string: "http://\(providerIP)")!
             }
             
             // Perform the actual server communication
@@ -4363,7 +4364,7 @@ final class HproseInstance: ObservableObject {
         _ = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
     }
     
-    private func getProviderIP(_ mid: String) async throws -> String? {
+    func getProviderIP(_ mid: String) async throws -> String? {
         let params = [
             "aid": appId,
             "ver": "last",

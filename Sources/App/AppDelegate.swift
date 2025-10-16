@@ -160,6 +160,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Restart LocalHTTPServer (it was stopped when app went to background)
         LocalHTTPServer.shared.start()
         
+        // Proactively refresh appUser's IP address when returning from background
+        // This ensures we don't use stale IPs if the server changed while app was suspended
+        Task {
+            await refreshAppUserIP()
+        }
+        
         // Check how long app was in background
         if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
@@ -181,6 +187,55 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
         
         // Foreground handling is now done by SimpleVideoPlayer's notification observers
+    }
+    
+    /// Refresh appUser's IP address when app returns from background
+    /// This prevents using stale IPs if the server moved while app was suspended
+    private func refreshAppUserIP() async {
+        let appUser = HproseInstance.shared.appUser
+        
+        // Only refresh for logged-in users
+        guard !appUser.isGuest else {
+            print("[AppDelegate] Skipping IP refresh for guest user")
+            return
+        }
+        
+        // Get fresh IP from server
+        do {
+            print("[AppDelegate] Refreshing appUser IP address...")
+            let hproseInstance = HproseInstance.shared
+            
+            // Get current provider IP
+            guard let freshIP = try await hproseInstance.getProviderIP(appUser.mid) else {
+                print("[AppDelegate] Failed to get provider IP for appUser")
+                return
+            }
+            
+            let oldIP = appUser.baseUrl?.host ?? "nil"
+            let newIP = freshIP
+            
+            // Update appUser's baseUrl if IP has changed
+            await MainActor.run {
+                appUser.baseUrl = URL(string: "http://\(freshIP)")
+                
+                if oldIP != newIP {
+                    print("[AppDelegate] ✅ AppUser IP updated: \(oldIP) → \(newIP)")
+                } else {
+                    print("[AppDelegate] ✅ AppUser IP unchanged: \(newIP)")
+                }
+            }
+            
+            // Also update the HproseInstance base URL if this is the primary user
+            if HproseInstance.baseUrl.host != freshIP {
+                HproseInstance.baseUrl = URL(string: "http://\(freshIP)")!
+                hproseInstance.client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
+                print("[AppDelegate] Updated HproseInstance baseUrl to: \(freshIP)")
+            }
+            
+        } catch {
+            print("[AppDelegate] ⚠️ Failed to refresh appUser IP: \(error)")
+            // Non-fatal - we'll continue with cached IP and retry on next API call
+        }
     }
     
     private func restartVideoInfrastructure() async {

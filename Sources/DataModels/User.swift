@@ -283,6 +283,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         // Try to decode the full user object from cache.
         if let userData = cdUser.userData,
            let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
+            // baseUrl and writableUrl are not persisted to Core Data
+            // They will be nil and resolved fresh on first use
             updateUserInstance(with: decodedUser)
         }
         return getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
@@ -302,8 +304,15 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.lastLogin = user.lastLogin
             instance.cloudDrivePort = user.cloudDrivePort
             instance.hostIds = user.hostIds
-            instance.baseUrl = user.baseUrl
-            instance.writableUrl = user.writableUrl
+            
+            // Only update baseUrl/writableUrl if the new value is non-nil
+            // This preserves memory-cached IPs when loading from disk (where IPs are not persisted)
+            if let newBaseUrl = user.baseUrl {
+                instance.baseUrl = newBaseUrl
+            }
+            if let newWritableUrl = user.writableUrl {
+                instance.writableUrl = newWritableUrl
+            }
             
             instance.tweetCount = user.tweetCount
             instance.followingCount = user.followingCount
@@ -322,8 +331,15 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.lastLogin = user.lastLogin
                 instance.cloudDrivePort = user.cloudDrivePort
                 instance.hostIds = user.hostIds
-                instance.baseUrl = user.baseUrl
-                instance.writableUrl = user.writableUrl
+                
+                // Only update baseUrl/writableUrl if the new value is non-nil
+                // This preserves memory-cached IPs when loading from disk (where IPs are not persisted)
+                if let newBaseUrl = user.baseUrl {
+                    instance.baseUrl = newBaseUrl
+                }
+                if let newWritableUrl = user.writableUrl {
+                    instance.writableUrl = newWritableUrl
+                }
                 
                 instance.tweetCount = user.tweetCount
                 instance.followingCount = user.followingCount
@@ -384,8 +400,10 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         
         try container.encode(mid, forKey: .mid)
-        try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
-        try container.encodeIfPresent(writableUrl, forKey: .writableUrl)
+        // Don't encode baseUrl/writableUrl - IP addresses should be resolved fresh each session
+        // to handle cases where server IPs have changed
+        // try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
+        // try container.encodeIfPresent(writableUrl, forKey: .writableUrl)
         try container.encodeIfPresent(name, forKey: .name)
         try container.encodeIfPresent(username, forKey: .username)
         try container.encodeIfPresent(password, forKey: .password)
