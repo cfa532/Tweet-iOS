@@ -184,8 +184,8 @@ extension TweetCacheManager {
                         do {
                             let tweet = try Tweet.from(cdTweet: cdTweet)
                             
-                            // Populate author from cached User data if available
-                            tweet.author = self.fetchUser(mid: tweet.authorId)
+                            // NOTE: Author will be lazy-loaded by the view when needed
+                            // Removed synchronous author population to avoid blocking
                             
                             // Filter out tweets with invalid timestamps
                             if tweet.timestamp.timeIntervalSince1970 <= 0 {
@@ -223,8 +223,9 @@ extension TweetCacheManager {
                 if let cdTweet = try? self.context.fetch(request).first {
                     do {
                         let tweet = try Tweet.from(cdTweet: cdTweet)
-                        // Populate author from cached User data if available
-                        tweet.author = self.fetchUser(mid: tweet.authorId)
+                        // NOTE: Author will be lazy-loaded by the view when needed
+                        // Removed synchronous author population to avoid blocking
+                        
                         // Then update the cache time in a separate operation
                         cdTweet.timeCached = Date()
                         try? self.context.save()
@@ -444,45 +445,52 @@ extension Tweet {
 // MARK: - User Caching
 /// Might need to update baseUrl of cached user, which might be outdated.
 extension TweetCacheManager {
-    func fetchUser(mid: String) -> User {
-        var user: User?
-        context.performAndWait {
-            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-            request.predicate = NSPredicate(format: "mid == %@", mid)
-            
-            if let cdUser = try? context.fetch(request).first {
-                user = User.from(cdUser: cdUser)
+    func fetchUser(mid: String) async -> User {
+        return await withCheckedContinuation { continuation in
+            context.perform {
+                let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                request.predicate = NSPredicate(format: "mid == %@", mid)
+                
+                if let cdUser = try? self.context.fetch(request).first {
+                    let user = User.from(cdUser: cdUser)
+                    continuation.resume(returning: user)
+                } else {
+                    continuation.resume(returning: User.getInstance(mid: mid))
+                }
             }
         }
-        return user ?? User.getInstance(mid: mid)
     }
     
     /// Internal method used by User.hasExpired computed property
     /// Checks if a user's cache has expired (30 minutes)
-    func hasExpired(mid: String) -> Bool {
-        var hasExpired = true
-        context.performAndWait {
-            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-            request.predicate = NSPredicate(format: "mid == %@", mid)
-            if let cdUser = try? context.fetch(request).first {
-                hasExpired = cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -1800 // 30 minutes
+    func hasExpired(mid: String) async -> Bool {
+        return await withCheckedContinuation { continuation in
+            context.perform {
+                let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                request.predicate = NSPredicate(format: "mid == %@", mid)
+                if let cdUser = try? self.context.fetch(request).first {
+                    let hasExpired = cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -1800 // 30 minutes
+                    continuation.resume(returning: hasExpired)
+                } else {
+                    // If no cached user found, hasExpired is true
+                    continuation.resume(returning: true)
+                }
             }
-            // If no cached user found, hasExpired remains true
         }
-        return hasExpired
     }
 
     func saveUser(_ user: User) {
-        context.performAndWait {
+        // Use async perform to avoid blocking the main thread
+        context.perform {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
             request.predicate = NSPredicate(format: "mid == %@", user.mid)
-            let cdUser = (try? context.fetch(request).first) ?? CDUser(context: context)
+            let cdUser = (try? self.context.fetch(request).first) ?? CDUser(context: self.context)
             cdUser.mid = user.mid
             cdUser.timeCached = Date()
             if let userData = try? JSONEncoder().encode(user) {
                 cdUser.userData = userData
             }
-            try? context.save()
+            try? self.context.save()
         }
     }
 

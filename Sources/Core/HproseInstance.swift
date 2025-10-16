@@ -27,7 +27,9 @@ final class HproseInstance: ObservableObject {
         get { 
             // Refresh appUser from server if expired (every 30 minutes) - but not for guest users
             // fetchUser will handle invalid users (nil username) automatically
-            if !_appUser.isGuest && (_appUser.hasExpired || _appUser.username == nil) {
+            // Note: hasExpired check removed from synchronous getter to prevent blocking
+            // Cache expiry is now handled in fetchUser() which is called async
+            if !_appUser.isGuest && _appUser.username == nil {
                 Task {
                     do {
                         if let refreshedUser = try await fetchUser(_appUser.mid, baseUrl: _appUser.baseUrl?.absoluteString ?? "") {
@@ -193,12 +195,15 @@ final class HproseInstance: ObservableObject {
     
     /// Initialize app user with cached or default values
     func initializeAppUser() async {
+        // Get user ID from preferences or use guest ID
+        let userId = await MainActor.run {
+            preferenceHelper?.getUserId() ?? Constants.GUEST_ID
+        }
+        
+        // Try to load cached user first (async, non-blocking)
+        let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+        
         await MainActor.run {
-            // Get user ID from preferences or use guest ID
-            let userId = preferenceHelper?.getUserId() ?? Constants.GUEST_ID
-            
-            // Try to load cached user first, then fall back to new instance
-            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
             _appUser = cachedUser
             
             // Set base URL from preferences or use default
@@ -683,16 +688,19 @@ final class HproseInstance: ObservableObject {
         // Step 0: Check if userId is blacklisted
         if blackList.isBlacklisted(userId) {
             print("DEBUG: [fetchUser] userId \(userId) is blacklisted, returning cached user only")
-            return TweetCacheManager.shared.fetchUser(mid: userId)
+            return await TweetCacheManager.shared.fetchUser(mid: userId)
         }
         
-        // Step 1: Check user cache in Core Data first
-        let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+        // Step 1: Check user cache in Core Data first (async, non-blocking)
+        let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+        
+        // Check if cached user has expired (async, non-blocking)
+        let hasExpired = await cachedUser.hasExpired()
         
         // If we have a valid cached user that hasn't expired, return it
         // BUT: If baseUrl is nil (cleared after loading from disk cache), we need to re-resolve IP
-        if cachedUser.username != nil && !cachedUser.hasExpired && cachedUser.baseUrl != nil {
-            print("DEBUG: [fetchUser] Using cached user for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(cachedUser.hasExpired)")
+        if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil {
+            print("DEBUG: [fetchUser] Using cached user for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
             return cachedUser
         }
         
@@ -702,7 +710,7 @@ final class HproseInstance: ObservableObject {
             // Fall through to updateUserFromServer to resolve IP
         }
         
-        print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(cachedUser.hasExpired)")
+        print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
         
         // If current object is invalid (nil username), return cached value and update in background
         if cachedUser.username == nil {
@@ -722,7 +730,7 @@ final class HproseInstance: ObservableObject {
         // If app is not initialized, only return cached users
         if !isInitializationComplete {
             print("DEBUG: [fetchUser] App not initialized, returning cached user only for userId: \(userId)")
-            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+            let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
             return cachedUser
         }
         
@@ -763,7 +771,7 @@ final class HproseInstance: ObservableObject {
         // If another update is in progress, wait for it and return cached result
         if !shouldProceed {
             print("DEBUG: [updateUserFromServer] Update already in progress for userId: \(userId), returning cached user")
-            return TweetCacheManager.shared.fetchUser(mid: userId)
+            return await TweetCacheManager.shared.fetchUser(mid: userId)
         }
         
         defer {
