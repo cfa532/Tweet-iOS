@@ -488,7 +488,10 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = item {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                    tweet.author = try await fetchUser(tweet.authorId)
+                    let author = try await fetchUser(tweet.authorId)
+                    await MainActor.run {
+                        tweet.author = author  // Set on main thread since author is @Published
+                    }
                     
                     // Skip private tweets in feed
                     if tweet.isPrivate == true {
@@ -587,8 +590,11 @@ final class HproseInstance: ObservableObject {
         for item in tweetsData {
             if let tweetDict = item {
                 do {
-                    let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                    tweet.author = user
+                    let tweet = try await MainActor.run { 
+                        let tweet = try Tweet.from(dict: tweetDict)
+                        tweet.author = user  // Set on main thread since author is @Published
+                        return tweet
+                    }
                     print("DEBUG: [fetchUserTweets] Set tweet.author: userId=\(user.mid), name=\(user.name ?? "nil"), username=\(user.username ?? "nil"), tweetId=\(tweet.mid)")
                     
                     // Only show private tweets if the current user is the author
@@ -644,7 +650,11 @@ final class HproseInstance: ObservableObject {
         if let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] {
             do {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                tweet.author = try? await fetchUser(authorId)
+                if let author = try? await fetchUser(authorId) {
+                    await MainActor.run {
+                        tweet.author = author  // Set on main thread since author is @Published
+                    }
+                }
                 
                 // Update cached data for main feed
                 TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
@@ -1225,7 +1235,11 @@ final class HproseInstance: ObservableObject {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: item) }
                     if (tweet.author == nil) {
-                        tweet.author = try? await fetchUser(tweet.authorId)
+                        if let author = try? await fetchUser(tweet.authorId) {
+                            await MainActor.run {
+                                tweet.author = author  // Set on main thread since author is @Published
+                            }
+                        }
                     }
                     // Don't cache tweets from bookmarks/favorites - only cache from main feed
                     tweetsWithAuthors.append(tweet)
@@ -4240,7 +4254,11 @@ final class HproseInstance: ObservableObject {
         for dict in response {
             if let tweetDict = dict["tweet"] as? [String: Any] {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                tweet.author = try? await fetchUser(tweet.authorId)
+                if let author = try? await fetchUser(tweet.authorId) {
+                    await MainActor.run {
+                        tweet.author = author  // Set on main thread since author is @Published
+                    }
+                }
                 let timePinned = dict["timestamp"]
                 result.append([
                     "tweet": tweet,

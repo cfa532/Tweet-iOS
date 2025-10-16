@@ -63,6 +63,15 @@ struct Avatar: View {
                         loadAvatar(from: avatarUrl)
                     }
                 }
+                .onChange(of: user.avatar) { _, newAvatar in
+                    // CRITICAL: Also observe avatar changes directly
+                    // This ensures views update when user.avatar loads
+                    if newAvatar != nil && cachedImage == nil && !isLoading {
+                        if let avatarUrl = user.avatarUrl {
+                            loadAvatar(from: avatarUrl)
+                        }
+                    }
+                }
             } else {
                 Image("manyone")
                     .resizable()
@@ -72,7 +81,7 @@ struct Avatar: View {
                     .clipShape(Circle())
             }
         }
-        .id(user.mid) // Force view update when user changes
+        .id("\(user.mid)_\(user.avatar ?? "nil")") // Force view update when user or avatar changes
     }
     
     private func loadAvatar(from urlString: String) {

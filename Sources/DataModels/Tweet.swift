@@ -79,7 +79,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     var downloadable: Bool?
 
     // Display only properties
-    var author: User?
+    @Published var author: User?
     
     // User interaction flags
     @Published var favorites: [Bool]? // [favorite, bookmark, retweeted]

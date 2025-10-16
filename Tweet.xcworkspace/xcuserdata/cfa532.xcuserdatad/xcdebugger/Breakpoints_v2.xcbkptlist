@@ -36,20 +36,6 @@
             landmarkType = "7">
             <Locations>
                <Location
-                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 1c2982e3a902fe34"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(1) suspend resume partial function for Tweet.HproseInstance.getUserTweetsByType(user: Tweet.User, type: Tweet.UserContentType, pageNumber: Swift.UInt, pageSize: Swift.UInt) async throws -&gt; Swift.Array&lt;Swift.Optional&lt;Tweet.Tweet&gt;&gt;"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "1246"
-                  endingLineNumber = "1246">
-               </Location>
-               <Location
                   uuid = "551DC321-0532-4F40-8260-739FD0549B7A - dab187e9955cbab6"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
@@ -78,20 +64,6 @@
                   endingLineNumber = "1246">
                </Location>
                <Location
-                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 727d8e92e09c4789"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(6) suspend resume partial function for Tweet.HproseInstance.getUserTweetsByType(user: Tweet.User, type: Tweet.UserContentType, pageNumber: Swift.UInt, pageSize: Swift.UInt) async throws -&gt; Swift.Array&lt;Swift.Optional&lt;Tweet.Tweet&gt;&gt;"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "1246"
-                  endingLineNumber = "1246">
-               </Location>
-               <Location
                   uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 6f81901dd281204a"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
@@ -106,11 +78,11 @@
                   endingLineNumber = "1246">
                </Location>
                <Location
-                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - f56beed94cbfa9"
+                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 2a09951b3edbeccc"
                   shouldBeEnabled = "Yes"
                   ignoreCount = "0"
                   continueAfterRunningActions = "No"
-                  symbolName = "closure #3 (Swift.Optional&lt;Tweet.Tweet&gt;) -&gt; Swift.Optional&lt;Tweet.Tweet&gt; in Tweet.HproseInstance.getUserTweetsByType(user: Tweet.User, type: Tweet.UserContentType, pageNumber: Swift.UInt, pageSize: Swift.UInt) async throws -&gt; Swift.Array&lt;Swift.Optional&lt;Tweet.Tweet&gt;&gt;"
+                  symbolName = "(9) suspend resume partial function for Tweet.HproseInstance.getUserTweetsByType(user: Tweet.User, type: Tweet.UserContentType, pageNumber: Swift.UInt, pageSize: Swift.UInt) async throws -&gt; Swift.Array&lt;Swift.Optional&lt;Tweet.Tweet&gt;&gt;"
                   moduleName = "Tweet.debug.dylib"
                   usesParentBreakpointCondition = "Yes"
                   urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
@@ -118,20 +90,6 @@
                   endingColumnNumber = "9223372036854775807"
                   startingLineNumber = "1246"
                   endingLineNumber = "1246">
-               </Location>
-               <Location
-                  uuid = "551DC321-0532-4F40-8260-739FD0549B7A - 63eca9e4079eca90"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "closure #2 (Swift.Optional&lt;Tweet.Tweet&gt;, Swift.Optional&lt;Tweet.Tweet&gt;) -&gt; Swift.Bool in Tweet.HproseInstance.getUserTweetsByType(user: Tweet.User, type: Tweet.UserContentType, pageNumber: Swift.UInt, pageSize: Swift.UInt) async throws -&gt; Swift.Array&lt;Swift.Optional&lt;Tweet.Tweet&gt;&gt;"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "1247"
-                  endingLineNumber = "1247">
                </Location>
             </Locations>
          </BreakpointContent>

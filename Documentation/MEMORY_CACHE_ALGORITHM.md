@@ -59,38 +59,53 @@ class Tweet: Identifiable, Codable, ObservableObject {
 
 ## Cache Management Algorithm
 
-### Dual-Cache Strategy
+### Unified Cache Strategy with Privacy Handling
 
-The system maintains two separate caches:
+The system uses a unified cache with special handling for private tweets:
 
 1. **Main Feed Cache** (`uid: "main_feed"`)
    - Used by `FollowingTweetView`
    - Contains tweets from user's following feed
-   - Separate from profile browsing
+   - **Also contains appUser's public tweets** (unified cache)
+   - NOT used for other users' profile browsing
 
-2. **User Profile Cache** (`uid: appUser.mid`)
-   - Used by `ProfileView` (only for appUser's profile)
-   - Contains tweets from appUser's profile
-   - Not used for other users' profiles
+2. **Profile Private Cache** (`uid: appUser.mid`)
+   - Used by `ProfileView` for appUser's private tweets only
+   - Contains ONLY private tweets
+   - Profile view merges both caches to show all tweets
 
 ### Cache Update Policy
 
+**For Main Feed Tweets:**
 ```swift
 func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
     // Always update in main_feed cache
     saveTweet(tweet, userId: "main_feed")
     
-    // Also update in appUser's profile cache if the tweet belongs to the appUser
-    if tweet.authorId == appUserId {
+    // If tweet is by appUser and is private, also save to profile cache
+    if tweet.authorId == appUserId && tweet.isPrivate == true {
         saveTweet(tweet, userId: appUserId)
     }
 }
 ```
 
+**For Profile Tweets:**
+```swift
+// Cache strategy:
+// - Public tweets → "main_feed" cache (unified, appear in feed anyway)
+// - Private tweets → appUser.mid cache only (profile-only visibility)
+if tweet.isPrivate == true {
+    saveTweet(tweet, userId: appUser.mid)  // Profile only
+} else {
+    saveTweet(tweet, userId: "main_feed")  // Unified cache
+}
+```
+
 **Benefits:**
-- ✅ **Consistency**: Updates reflected in both caches
-- ✅ **Efficiency**: Only caches appUser's own tweets in profile cache
-- ✅ **Separation**: Main feed and profile data are isolated
+- ✅ **No Duplication**: Public tweets stored once in "main_feed"
+- ✅ **Privacy**: Private tweets isolated to profile cache
+- ✅ **Efficiency**: Reduced disk usage (no duplicate public tweets)
+- ✅ **Consistency**: Main feed and profile show same public tweets
 
 ## Complete Data Flow
 

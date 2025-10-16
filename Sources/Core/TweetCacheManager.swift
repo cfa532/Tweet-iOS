@@ -279,15 +279,17 @@ extension TweetCacheManager {
         }
     }
 
-    /// Update a tweet in both main_feed cache and appUser's profile cache if the tweet belongs to the appUser
-    /// This ensures that tweet updates (like count changes) are reflected in both caches
+    /// Update a tweet using unified cache strategy:
+    /// - AppUser's public tweets → "main_feed" cache (appear in feed and profile)
+    /// - AppUser's private tweets → appUser.mid cache only (profile-only visibility)
+    /// - Other users' tweets → "main_feed" cache
     func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
-        // Always update in main_feed cache
-        saveTweet(tweet, userId: "main_feed")
-        
-        // Also update in appUser's profile cache if the tweet belongs to the appUser
-        if tweet.authorId == appUserId {
+        if tweet.authorId == appUserId && tweet.isPrivate == true {
+            // AppUser's private tweet - save only to profile cache
             saveTweet(tweet, userId: appUserId)
+        } else {
+            // Public tweet (any user) or other users' tweets - save to main_feed
+            saveTweet(tweet, userId: "main_feed")
         }
     }
 

@@ -84,6 +84,15 @@ struct TweetItemView: View, Equatable {
             tweet.isVisible = true
             // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
+            
+            // Load author if not already loaded
+            if tweet.author == nil {
+                if let author = try? await hproseInstance.fetchUser(tweet.authorId) {
+                    await MainActor.run {
+                        tweet.author = author
+                    }
+                }
+            }
         }
         .onAppear {
             // Defer original tweet loading to reduce async operations during scrolling
@@ -131,29 +140,42 @@ struct TweetItemView: View, Equatable {
             if let originalTweet = originalTweet {
                 // This is a retweet
                 if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
-                    if let user = originalTweet.author {
-                        if isInProfile {
-                            // Check if this is the same user as the profile being viewed
-                            if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
-                                // Same user - scroll to top (handled by onAvatarTapInProfile)
-                                Avatar(user: user)
-                                    .onTapGesture {
-                                        onAvatarTapInProfile?(user)
+                    // Use Group to force re-evaluation when originalTweet.author changes (@Published)
+                    Group {
+                        if let user = originalTweet.author {
+                            if isInProfile {
+                                // Check if this is the same user as the profile being viewed
+                                if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
+                                    // Same user - scroll to top (handled by onAvatarTapInProfile)
+                                    Avatar(user: user)
+                                        .onTapGesture {
+                                            onAvatarTapInProfile?(user)
+                                        }
+                                } else {
+                                    // Different user - navigate to their profile
+                                    NavigationLink(value: user) {
+                                        Avatar(user: user)
                                     }
+                                    .buttonStyle(PlainButtonStyle())
+                                }
                             } else {
-                                // Different user - navigate to their profile
-                                NavigationLink(value: user) {
+                                Button {
+                                    onAvatarTap?(user)
+                                } label: {
                                     Avatar(user: user)
                                 }
                                 .buttonStyle(PlainButtonStyle())
                             }
                         } else {
-                            Button {
-                                onAvatarTap?(user)
-                            } label: {
-                                Avatar(user: user)
-                            }
-                            .buttonStyle(PlainButtonStyle())
+                            // Show placeholder while author loads
+                            Circle()
+                                .fill(Color.gray.opacity(0.3))
+                                .frame(width: 40, height: 40)
+                                .overlay(
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                        .tint(.white)
+                                )
                         }
                     }
                     
@@ -183,17 +205,30 @@ struct TweetItemView: View, Equatable {
                     }
                 } else {
                     // Show retweet with content and embedded original tweet
-                    if let user = tweet.author {
-                        if isInProfile {
-                            Avatar(user: user)
-                                .onTapGesture {
-                                    onAvatarTapInProfile?(user)
-                                }
-                        } else {
-                            NavigationLink(value: user) {
+                    // Use Group to force re-evaluation when tweet.author changes (@Published)
+                    Group {
+                        if let user = tweet.author {
+                            if isInProfile {
                                 Avatar(user: user)
+                                    .onTapGesture {
+                                        onAvatarTapInProfile?(user)
+                                    }
+                            } else {
+                                NavigationLink(value: user) {
+                                    Avatar(user: user)
+                                }
+                                .buttonStyle(PlainButtonStyle())
                             }
-                            .buttonStyle(PlainButtonStyle())
+                        } else {
+                            // Show placeholder while author loads
+                            Circle()
+                                .fill(Color.gray.opacity(0.3))
+                                .frame(width: 40, height: 40)
+                                .overlay(
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                        .tint(.white)
+                                )
                         }
                     }
                     
@@ -224,17 +259,30 @@ struct TweetItemView: View, Equatable {
                 }
             } else {
                 // Regular tweet
-                if let user = tweet.author {
-                    if isInProfile {
-                        Avatar(user: user)
-                            .onTapGesture {
-                                onAvatarTapInProfile?(user)
-                            }
-                    } else {
-                        NavigationLink(value: user) {
+                // Use Group to force re-evaluation when tweet.author changes (@Published)
+                Group {
+                    if let user = tweet.author {
+                        if isInProfile {
                             Avatar(user: user)
+                                .onTapGesture {
+                                    onAvatarTapInProfile?(user)
+                                }
+                        } else {
+                            NavigationLink(value: user) {
+                                Avatar(user: user)
+                            }
+                            .buttonStyle(PlainButtonStyle())
                         }
-                        .buttonStyle(PlainButtonStyle())
+                    } else {
+                        // Show placeholder while author loads
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 40, height: 40)
+                            .overlay(
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .tint(.white)
+                            )
                     }
                 }
                 VStack(alignment: .leading) {
@@ -318,8 +366,15 @@ struct EmbeddedTweetView: View, Equatable {
     
     private var embeddedContent: some View {
         HStack(alignment: .top, spacing: 8) {
-            if let user = tweet.author {
-                Avatar(user: user)
+            // Use Group to force re-evaluation when tweet.author changes (@Published)
+            Group {
+                if let user = tweet.author {
+                    Avatar(user: user)
+                } else {
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 40, height: 40)
+                }
             }
             VStack(alignment: .leading) {
                 HStack {
