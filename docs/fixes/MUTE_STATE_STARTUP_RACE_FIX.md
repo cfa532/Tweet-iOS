@@ -237,7 +237,7 @@ DEBUG: [MUTE STATE] Refreshed from preferences: true
 
 ## Related Issues
 
-- **MediaCell Mute State Fix** (Documentation/archive/fixes/MEDIACELL_MUTE_STATE_FIX.md)
+- **MediaCell Mute State Fix** (docs/archive/fixes/MEDIACELL_MUTE_STATE_FIX.md)
   - That fix addressed race conditions in player creation
   - This fix addresses race condition in MuteState initialization
   - Both fixes work together for complete solution

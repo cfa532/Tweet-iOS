@@ -30,7 +30,7 @@
 ## 2. Archive Structure Created
 
 ```
-Documentation/
+docs/
 ├── archive/
 │   ├── sessions/              # Session summaries
 │   ├── fixes/                 # Historical bug fixes

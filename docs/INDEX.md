@@ -1,6 +1,6 @@
 # Tweet-iOS Documentation Index
 
-**Last Updated:** October 14, 2025
+**Last Updated:** October 17, 2025
 
 ---
 
@@ -76,20 +76,20 @@ Historical documentation preserved for reference.
 ## 🚀 Quick Links
 
 ### For New Developers
-1. Start with [ARCHITECTURE.md](./ARCHITECTURE.md) - Understand the app structure
-2. Read [FEATURES.md](./FEATURES.md) - Know what the app does
-3. Check [DEBUG_BUILD_INSTRUCTIONS.md](./DEBUG_BUILD_INSTRUCTIONS.md) - Set up your environment
+1. Start with [ARCHITECTURE.md](ARCHITECTURE.md) - Understand the app structure
+2. Read [FEATURES.md](FEATURES.md) - Know what the app does
+3. Check [DEBUG_BUILD_INSTRUCTIONS.md](DEBUG_BUILD_INSTRUCTIONS.md) - Set up your environment
 
 ### For Feature Development
-- **Upload Features:** [UPLOAD_SYSTEM.md](./UPLOAD_SYSTEM.md)
-- **Video Features:** [VIDEO_SYSTEM.md](./VIDEO_SYSTEM.md)
-- **Chat Features:** [CHAT_AND_SEARCH_FEATURES.md](./CHAT_AND_SEARCH_FEATURES.md)
-- **Comment Features:** [CommentSystemREADME.md](./CommentSystemREADME.md)
+- **Upload Features:** [UPLOAD_SYSTEM.md](UPLOAD_SYSTEM.md)
+- **Video Features:** [VIDEO_SYSTEM.md](VIDEO_SYSTEM.md)
+- **Chat Features:** [CHAT_AND_SEARCH_FEATURES.md](CHAT_AND_SEARCH_FEATURES.md)
+- **Comment Features:** [CommentSystemREADME.md](CommentSystemREADME.md)
 
 ### For Troubleshooting
-- **Upload Issues:** [UPLOAD_SYSTEM.md](./UPLOAD_SYSTEM.md) → Error Handling section
-- **Video Issues:** [VIDEO_SYSTEM.md](./VIDEO_SYSTEM.md) → Known Issues section
-- **Network Issues:** [NETWORK_RESILIENCE.md](./NETWORK_RESILIENCE.md)
+- **Upload Issues:** [UPLOAD_SYSTEM.md](UPLOAD_SYSTEM.md) → Error Handling section
+- **Video Issues:** [VIDEO_SYSTEM.md](VIDEO_SYSTEM.md) → Known Issues section
+- **Network Issues:** [NETWORK_RESILIENCE.md](NETWORK_RESILIENCE.md)
 
 ---
 
@@ -146,7 +146,7 @@ All main documents should include:
 ## 📝 Contributing to Documentation
 
 ### Adding New Documentation
-1. Create file in `/Documentation/`
+1. Create file in `/docs/`
 2. Use appropriate naming convention
 3. Add entry to this INDEX.md
 4. Include standard sections
@@ -157,7 +157,7 @@ All main documents should include:
 3. Update status label if needed
 
 ### Archiving Old Documentation
-1. Move to appropriate `/Documentation/archive/` subdirectory
+1. Move to appropriate `/docs/archive/` subdirectory
 2. Update INDEX.md to reflect archive location
 3. Optionally consolidate into main documentation
 

@@ -63,7 +63,7 @@ When the app goes to background for an extended period (>5 minutes), videos woul
 - Enhanced `VideoStateCache.getCachedState()` - Validate before returning
 - Enhanced `handleDidBecomeActive()` - Validate and force reload invalid players
 
-### 5. `Documentation/BACKGROUND_VIDEO_RECOVERY_FIX.md`
+### 5. `docs/BACKGROUND_VIDEO_RECOVERY_FIX.md`
 **New file** - Comprehensive documentation of the fix including:
 - Problem description
 - Root cause analysis

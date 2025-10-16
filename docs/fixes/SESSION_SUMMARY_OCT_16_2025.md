@@ -288,14 +288,14 @@ Background Wake:
    - `Sources/App/AppDelegate.swift`
 
 6. **Documentation:**
-   - `Documentation/MEMORY_CACHE_ALGORITHM.md`
-   - `Documentation/fixes/USER_IP_REFRESH_FINAL.md`
-   - `Documentation/fixes/PROGRESSIVE_VIDEO_IP_CACHING_FIX.md`
-   - `Documentation/fixes/AVATAR_SYNCHRONIZATION_FIX.md`
-   - `Documentation/fixes/MAIN_THREAD_BLOCKING_FIX.md`
-   - `Documentation/fixes/TWEET_AUTHOR_UPDATE_FIX.md`
-   - `Documentation/fixes/UNIFIED_CACHE_STRATEGY.md`
-   - `Documentation/fixes/SESSION_SUMMARY_OCT_16_2025.md`
+   - `docs/MEMORY_CACHE_ALGORITHM.md`
+   - `docs/fixes/USER_IP_REFRESH_FINAL.md`
+   - `docs/fixes/PROGRESSIVE_VIDEO_IP_CACHING_FIX.md`
+   - `docs/fixes/AVATAR_SYNCHRONIZATION_FIX.md`
+   - `docs/fixes/MAIN_THREAD_BLOCKING_FIX.md`
+   - `docs/fixes/TWEET_AUTHOR_UPDATE_FIX.md`
+   - `docs/fixes/UNIFIED_CACHE_STRATEGY.md`
+   - `docs/fixes/SESSION_SUMMARY_OCT_16_2025.md`
 
 ## Migration Notes
 

@@ -85,6 +85,6 @@ You can now test the refactoring to ensure everything works correctly. The `Medi
 
 1. `Sources/Core/HproseInstance.swift` - Added delegation methods
 2. `Sources/Core/TweetUploadManager.swift` - Created new file
-3. `Documentation/REFACTORING_COMPLETE_SUMMARY.md` - Created
-4. `Documentation/REFACTORING_STATUS.md` - This file
+3. `docs/REFACTORING_COMPLETE_SUMMARY.md` - Created
+4. `docs/REFACTORING_STATUS.md` - This file
 

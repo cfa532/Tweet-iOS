@@ -101,7 +101,7 @@ Successfully split `HproseInstance.swift` into two files to improve code organiz
 1. ✅ `Sources/Core/HproseInstance.swift` - Refactored with delegation
 2. ✅ `Sources/Core/TweetUploadManager.swift` - Created new file
 3. ✅ `Tweet.xcodeproj/project.pbxproj` - Added new file to project
-4. ✅ `Documentation/REFACTORING_COMPLETE.md` - This file
+4. ✅ `docs/REFACTORING_COMPLETE.md` - This file
 
 ## Build Status
 

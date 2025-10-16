@@ -282,7 +282,7 @@ Privacy Level:
    - Lines 72-80: Save public tweets to "main_feed"
    - Lines 105-111: Cache new tweets with privacy handling
 
-3. **`/Documentation/MEMORY_CACHE_ALGORITHM.md`**
+3. **`/docs/MEMORY_CACHE_ALGORITHM.md`**
    - Updated cache strategy documentation
 
 ## Migration Impact

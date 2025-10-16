@@ -153,16 +153,16 @@ These optimizations provide:
 
 ## Documentation
 
-📚 **[Complete Documentation Index](Documentation/INDEX.md)**
+📚 **[Complete Documentation Index](docs/INDEX.md)**
 
 ### Quick Links
-- **Architecture**: [Architecture Overview](Documentation/ARCHITECTURE.md) | [Features](Documentation/FEATURES.md)
-- **Video System**: [Video Architecture](Documentation/VIDEO_SYSTEM_ARCHITECTURE.md) | [Video Caching](Documentation/VIDEO_CACHING_SYSTEM.md)
-- **Features**: [Comment System](Documentation/CommentSystemREADME.md) | [Chat & Search](Documentation/CHAT_AND_SEARCH_FEATURES.md)
-- **Performance**: [Video Performance](Documentation/VIDEO_PERFORMANCE_OPTIMIZATION.md)
-- **Development**: [Debug Build](Documentation/DEBUG_BUILD_INSTRUCTIONS.md) | [Localization](Documentation/PERMISSION_LOCALIZATION_GUIDE.md)
+- **Architecture**: [Architecture Overview](docs/ARCHITECTURE.md) | [Features](docs/FEATURES.md)
+- **Video System**: [Video System](docs/VIDEO_SYSTEM.md) | [Video Playback Algorithm](docs/VideoPlaybackAlgorithm.md)
+- **Features**: [Comment System](docs/CommentSystemREADME.md) | [Chat & Search](docs/CHAT_AND_SEARCH_FEATURES.md)
+- **Upload System**: [Upload System](docs/UPLOAD_SYSTEM.md) | [Memory Management](docs/MEMORY_MANAGEMENT.md)
+- **Development**: [Debug Build](docs/DEBUG_BUILD_INSTRUCTIONS.md) | [Localization](docs/PERMISSION_LOCALIZATION_GUIDE.md)
 
-All technical documentation is organized in the [Documentation](Documentation/) folder. Start with the [INDEX.md](Documentation/INDEX.md) for a complete overview.
+All technical documentation is organized in the [docs](docs/) folder. Start with the [INDEX.md](docs/INDEX.md) for a complete overview.
 
 ## Development
 

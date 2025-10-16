@@ -278,7 +278,7 @@ As part of this session, also fixed image loading issues:
 2. `Sources/CachingPlayerItem/LocalHTTPServer.swift` - Progressive video proxying + byte-range caching
 3. `Sources/Core/ImageCacheManager.swift` - Timeout + request deduplication
 4. `Sources/Core/GlobalImageLoadManager.swift` - Network timeouts
-5. `Documentation/VIDEO_SYSTEM_ARCHITECTURE.md` - Updated documentation
+5. `docs/VIDEO_SYSTEM_ARCHITECTURE.md` - Updated documentation
 
 ## Performance Characteristics
 
