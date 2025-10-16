@@ -441,7 +441,24 @@ extension Tweet {
         if let tweetData = cdTweet.tweetData {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .millisecondsSince1970
-            return try decoder.decode(Tweet.self, from: tweetData)
+            let tweet = try decoder.decode(Tweet.self, from: tweetData)
+            
+            // CRITICAL: Replace decoded author with singleton instance
+            // When decoding, a new User instance is created, but we need to use the singleton
+            if let decodedAuthor = tweet.author {
+                // Get the singleton instance
+                let authorSingleton = User.getInstance(mid: decodedAuthor.mid)
+                
+                // Update singleton with decoded data (preserves existing baseUrl if present)
+                User.updateUserInstance(with: decodedAuthor)
+                
+                // Replace tweet's author with the singleton
+                tweet.author = authorSingleton
+                
+                NSLog("DEBUG: [Tweet.from(cdTweet)] Tweet \(tweet.mid) using author singleton for user \(authorSingleton.mid), baseUrl: \(authorSingleton.baseUrl?.absoluteString ?? "NIL")")
+            }
+            
+            return tweet
         }
         
         throw NSError(domain: "TweetCacheManager", code: -1, 
