@@ -25,6 +25,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Initialize memory warning manager
         _ = MemoryWarningManager.shared
         
+        // Start LocalHTTPServer early to ensure it's ready before videos load
+        LocalHTTPServer.shared.start()
+        print("[AppDelegate] LocalHTTPServer started on app launch")
+        
         // Request notification permissions
         Task {
             await requestNotificationPermission()
@@ -145,20 +149,17 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppDidEnterBackground() {
         print("[AppDelegate] App did enter background")
         
-        // Stop LocalHTTPServer and release the port to free system resources
-        LocalHTTPServer.shared.stop()
-        
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
+        
+        // DON'T stop LocalHTTPServer - iOS keeps network listeners alive for short backgrounds
+        // Only stop for long backgrounds (>5 min) to avoid race conditions and port changes
         
         // Background handling is now done by SimpleVideoPlayer's notification observers
     }
     
     @objc private func handleAppWillEnterForeground() {
         print("[AppDelegate] App will enter foreground")
-        
-        // Restart LocalHTTPServer (it was stopped when app went to background)
-        LocalHTTPServer.shared.start()
         
         // Proactively refresh appUser's IP address when returning from background
         // This ensures we don't use stale IPs if the server changed while app was suspended
@@ -171,19 +172,23 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
             print("[AppDelegate] App was in background for \(timeInBackground) seconds")
             
-            // If app was in background for more than 5 minutes, reset connection pool
-            // and clear video player caches to force fresh initialization
+            // If app was in background for more than 5 minutes, iOS may have suspended the server
+            // Restart video infrastructure to ensure clean state
             if timeInBackground > 300 { // 5 minutes
-                print("[AppDelegate] Long background period detected, resetting connection pool")
+                print("[AppDelegate] Long background period detected, restarting video infrastructure")
                 
-                // Reset connection pool to recover from long background suspension
-                LocalHTTPServer.shared.resetConnectionPool()
-                
-                // Restart video infrastructure
                 Task {
                     await restartVideoInfrastructure()
                 }
+            } else {
+                // For short backgrounds, just ensure server is running
+                // This handles edge cases where iOS might have suspended it
+                LocalHTTPServer.shared.start()
+                print("[AppDelegate] Short background period, ensured LocalHTTPServer is running")
             }
+        } else {
+            // No background timestamp - just ensure server is running
+            LocalHTTPServer.shared.start()
         }
         
         // Foreground handling is now done by SimpleVideoPlayer's notification observers
@@ -241,18 +246,24 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func restartVideoInfrastructure() async {
         print("[AppDelegate] Restarting video infrastructure after long background")
         
-        // Reset LocalHTTPServer connection pool
-        LocalHTTPServer.shared.resetConnectionPool()
-        
-        // Restart the server
-        LocalHTTPServer.shared.stop()
-        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-        LocalHTTPServer.shared.start()
-        
-        // Clear video player caches to force fresh initialization
+        // CRITICAL: Clear ALL video players FIRST to release their URLs
+        // This prevents players from trying to use old port numbers after server restart
         await MainActor.run {
             SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
         }
+        
+        // Reset LocalHTTPServer connection pool
+        LocalHTTPServer.shared.resetConnectionPool()
+        
+        // Stop the server completely and wait for cleanup
+        LocalHTTPServer.shared.stop()
+        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds - give iOS time to release port
+        
+        // Restart the server (may bind to different port)
+        LocalHTTPServer.shared.start()
+        
+        // Wait for server to finish starting
+        try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
         
         print("[AppDelegate] Video infrastructure restart complete")
     }

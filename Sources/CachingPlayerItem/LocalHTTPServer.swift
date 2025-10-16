@@ -56,9 +56,23 @@ public class LocalHTTPServer: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self = self else { return }
             
-            // Don't start if already running, starting, or stopping
-            if self.isRunning || self.isStarting || self.isStopping {
-                NSLog("DEBUG: [LocalHTTPServer] Already running/starting/stopping, skipping duplicate start")
+            // If currently stopping, wait for it to finish
+            if self.isStopping {
+                NSLog("DEBUG: [LocalHTTPServer] Waiting for stop to complete before starting...")
+                // Wait on the same queue - stop() will finish and set isStopping=false
+                var waitCount = 0
+                while self.isStopping && waitCount < 10 {
+                    Thread.sleep(forTimeInterval: 0.1)
+                    waitCount += 1
+                }
+                if self.isStopping {
+                    NSLog("DEBUG: [LocalHTTPServer] Stop didn't complete in time, forcing start anyway")
+                }
+            }
+            
+            // Don't start if already running or starting
+            if self.isRunning || self.isStarting {
+                NSLog("DEBUG: [LocalHTTPServer] Already running/starting, skipping duplicate start")
                 return
             }
             
@@ -133,6 +147,14 @@ public class LocalHTTPServer: @unchecked Sendable {
             NSLog("DEBUG: [LocalHTTPServer] Already running on port \(port)")
             isRunning = true
             return
+        }
+        
+        // Extra check: if listener exists but not ready, cancel it first
+        if listener != nil {
+            NSLog("DEBUG: [LocalHTTPServer] Found stale listener, cleaning up before restart")
+            listener?.cancel()
+            listener = nil
+            isRunning = false
         }
         
         isStarting = true
