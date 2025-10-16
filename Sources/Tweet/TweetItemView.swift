@@ -167,15 +167,10 @@ struct TweetItemView: View, Equatable {
                                 .buttonStyle(PlainButtonStyle())
                             }
                         } else {
-                            // Show placeholder while author loads
+                            // Show placeholder while author loads (same size as Avatar default: 40)
                             Circle()
                                 .fill(Color.gray.opacity(0.3))
                                 .frame(width: 40, height: 40)
-                                .overlay(
-                                    ProgressView()
-                                        .scaleEffect(0.6)
-                                        .tint(.white)
-                                )
                         }
                     }
                     
@@ -220,15 +215,10 @@ struct TweetItemView: View, Equatable {
                                 .buttonStyle(PlainButtonStyle())
                             }
                         } else {
-                            // Show placeholder while author loads
+                            // Show placeholder while author loads (same size as Avatar default: 40)
                             Circle()
                                 .fill(Color.gray.opacity(0.3))
                                 .frame(width: 40, height: 40)
-                                .overlay(
-                                    ProgressView()
-                                        .scaleEffect(0.6)
-                                        .tint(.white)
-                                )
                         }
                     }
                     
@@ -371,6 +361,7 @@ struct EmbeddedTweetView: View, Equatable {
                 if let user = tweet.author {
                     Avatar(user: user)
                 } else {
+                    // Placeholder (same size as Avatar default: 40)
                     Circle()
                         .fill(Color.gray.opacity(0.3))
                         .frame(width: 40, height: 40)

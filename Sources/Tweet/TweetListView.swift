@@ -36,6 +36,7 @@ struct TweetListView<RowView: View>: View {
     @State private var deletedTweetIds = Set<String>()
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
+    @State private var scrollAnchorId: String? = nil  // Track scroll position
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -183,8 +184,6 @@ struct TweetListView<RowView: View>: View {
 
     // MARK: - Methods
     func performInitialLoad() async {
-        isLoading = true
-        initialLoadComplete = false
         currentPage = 0
         let page: UInt = 0
 
@@ -194,15 +193,22 @@ struct TweetListView<RowView: View>: View {
             let validCachedTweets = tweetsFromCache.compactMap { $0 }
             
             await MainActor.run {
-                tweets.mergeTweets(validCachedTweets)
-                
-                // Update VideoLoadingManager with new tweet list
-                let tweetIds = tweets.map { $0.mid }
-                videoLoadingManager.updateTweetList(tweetIds)
-                
-                // Mark as loaded immediately after cache load for instant UX
-                isLoading = false
-                initialLoadComplete = true
+                if !validCachedTweets.isEmpty {
+                    // If we have cached content, show it immediately without loading spinner
+                    tweets.mergeTweets(validCachedTweets)
+                    
+                    // Update VideoLoadingManager with new tweet list
+                    let tweetIds = tweets.map { $0.mid }
+                    videoLoadingManager.updateTweetList(tweetIds)
+                    
+                    // Mark as loaded immediately after cache load for instant UX
+                    isLoading = false
+                    initialLoadComplete = true
+                } else {
+                    // No cached content - show loading spinner
+                    isLoading = true
+                    initialLoadComplete = false
+                }
             }
             
             // Step 2: Load from server in background to get the most up-to-date data
@@ -382,11 +388,23 @@ struct TweetListView<RowView: View>: View {
             let hasValidTweet = !validServerTweets.isEmpty
             
             await MainActor.run {
+                // Capture scroll position before updating content
+                if !tweets.isEmpty {
+                    // Save the first visible tweet to maintain scroll position
+                    scrollAnchorId = tweets.first?.mid
+                }
+                
                 // Update tweets with server data (existing mergeTweets already preserves cached tweets for failed IDs)
                 if hasValidTweet {
                     if page == 0 {
-                        // For first page, replace all tweets with server data
-                        tweets = validServerTweets
+                        // For first page, MERGE instead of replace to prevent scroll jumps
+                        // Only replace if we have NO cached content
+                        if tweets.isEmpty {
+                            tweets = validServerTweets
+                        } else {
+                            // Merge server data with cached data to maintain scroll position
+                            tweets.mergeTweets(validServerTweets)
+                        }
                     } else {
                         // For subsequent pages, merge server data
                         tweets.mergeTweets(validServerTweets)
@@ -403,6 +421,11 @@ struct TweetListView<RowView: View>: View {
                     // All tweets are nil but we got a full page, continue to next page
                     currentPage = page
                     // Don't call loadMoreTweets recursively here, let the normal flow continue
+                }
+                
+                // Clear scroll anchor after a brief delay to allow layout to settle
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    scrollAnchorId = nil
                 }
             }
             
@@ -489,6 +512,7 @@ struct TweetListContentView<RowView: View>: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
+                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             } else if initialLoadComplete && tweets.compactMap({ $0 }).isEmpty {
                 // Show empty state when loading is complete but no tweets
                 VStack(spacing: 16) {
