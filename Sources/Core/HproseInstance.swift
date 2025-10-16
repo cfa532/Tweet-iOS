@@ -740,8 +740,26 @@ final class HproseInstance: ObservableObject {
         // If app is not initialized, only return cached users
         if !isInitializationComplete {
             print("DEBUG: [fetchUser] App not initialized, returning cached user only for userId: \(userId)")
-            let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
             return cachedUser
+        }
+        
+        // If app is initialized and cached user has nil baseUrl, resolve it
+        if cachedUser.username != nil && cachedUser.baseUrl == nil {
+            print("DEBUG: [fetchUser] App initialized, resolving baseUrl for userId: \(userId)")
+            do {
+                guard let providerIP = try await self.getProviderIP(userId) else {
+                    print("DEBUG: [fetchUser] Failed to get provider IP for userId: \(userId)")
+                    return cachedUser
+                }
+                await MainActor.run {
+                    cachedUser.baseUrl = URL(string: "http://\(providerIP)")
+                    print("DEBUG: [fetchUser] ✅ Resolved baseUrl for userId: \(userId) to \(providerIP)")
+                }
+                return cachedUser
+            } catch {
+                print("DEBUG: [fetchUser] Error resolving baseUrl for userId: \(userId): \(error)")
+                return cachedUser
+            }
         }
         
         // Step 2: Fetch from server with retry logic. No instance available in memory or cache.

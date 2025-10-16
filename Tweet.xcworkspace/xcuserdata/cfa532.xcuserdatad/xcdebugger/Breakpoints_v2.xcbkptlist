@@ -48,7 +48,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4250"
             endingLineNumber = "4250"
-            landmarkName = "getPinnedTweets(user:)"
+            landmarkName = "togglePinnedTweet(tweetId:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -64,7 +64,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4389"
             endingLineNumber = "4389"
-            landmarkName = "setUserAvatar(user:avatar:)"
+            landmarkName = "updateUserCore(password:alias:profile:hostId:cloudDrivePort:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -80,7 +80,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4390"
             endingLineNumber = "4390"
-            landmarkName = "setUserAvatar(user:avatar:)"
+            landmarkName = "updateUserCore(password:alias:profile:hostId:cloudDrivePort:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

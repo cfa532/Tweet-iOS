@@ -85,8 +85,9 @@ struct TweetItemView: View, Equatable {
             // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
             
-            // Load author if not already loaded
-            if tweet.author == nil {
+            // Load author if not already loaded OR if author has no baseUrl
+            // After init completes, fetchUser will resolve the baseUrl
+            if tweet.author == nil || tweet.author?.baseUrl == nil {
                 if let author = try? await hproseInstance.fetchUser(tweet.authorId) {
                     await MainActor.run {
                         tweet.author = author
