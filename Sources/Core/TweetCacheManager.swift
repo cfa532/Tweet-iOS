@@ -441,7 +441,29 @@ extension Tweet {
         if let tweetData = cdTweet.tweetData {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .millisecondsSince1970
-            return try decoder.decode(Tweet.self, from: tweetData)
+            let tweet = try decoder.decode(Tweet.self, from: tweetData)
+            
+            // CRITICAL: If tweet has an author from cache, trigger baseUrl resolution in background
+            // The author was persisted without baseUrl (excluded from encoding), so baseUrl is nil
+            if let author = tweet.author, author.baseUrl == nil {
+                NSLog("DEBUG: [TweetCacheManager] ⚠️ Tweet loaded with author missing baseUrl, triggering resolution for userId: \(author.mid), username: \(author.username ?? "nil")")
+                Task {
+                    do {
+                        guard let providerIP = try await HproseInstance.shared.getProviderIP(author.mid) else {
+                            NSLog("DEBUG: [TweetCacheManager] ❌ Failed to get provider IP for userId: \(author.mid)")
+                            return
+                        }
+                        await MainActor.run {
+                            author.baseUrl = URL(string: "http://\(providerIP)")
+                            NSLog("DEBUG: [TweetCacheManager] ✅ Resolved baseUrl for userId: \(author.mid) to \(providerIP)")
+                        }
+                    } catch {
+                        NSLog("DEBUG: [TweetCacheManager] ❌ Error resolving baseUrl for userId: \(author.mid): \(error)")
+                    }
+                }
+            }
+            
+            return tweet
         }
         
         throw NSError(domain: "TweetCacheManager", code: -1, 

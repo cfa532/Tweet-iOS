@@ -452,6 +452,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             // Use user's baseUrl if available, otherwise fallback to HproseInstance.baseUrl
             // This ensures avatarUrl is available even when user.baseUrl is temporarily nil (e.g., after cache load)
             let effectiveBaseUrl = baseUrl ?? HproseInstance.baseUrl
+            
+            // Log when user doesn't have their own baseUrl
+            if baseUrl == nil {
+                NSLog("DEBUG: [User.avatarUrl] ⚠️ User '\(username ?? mid)' has nil baseUrl, using fallback: \(effectiveBaseUrl.absoluteString)")
+            }
+            
             return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(effectiveBaseUrl)/ipfs/\(avatar)" :  "\(effectiveBaseUrl)/mm/\(avatar)"
         }
         return nil
