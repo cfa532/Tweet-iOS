@@ -155,8 +155,9 @@ struct TweetListView<RowView: View>: View {
                         if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
                             if notification.name == .tweetDeleted {
                                 // For tweet deletion, handle directly in TweetListView
-                                tweets.removeAll { $0.id == tweetId }
+                                tweets.removeAll { $0.mid == tweetId }
                                 TweetCacheManager.shared.deleteTweet(mid: tweetId)
+                                print("DEBUG: [TweetListView] Removed deleted tweet \(tweetId) from list")
                             } else {
                                 // For other notifications (like privacy changes), call the custom handler
                                 // Find the actual tweet in the list and pass it to the handler

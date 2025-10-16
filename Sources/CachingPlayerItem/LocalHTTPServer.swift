@@ -151,11 +151,13 @@ public class LocalHTTPServer: @unchecked Sendable {
             NSLog("DEBUG: [LocalHTTPServer] Starting port search from default port: 8080")
         }
         
-        // Try to find an available port, starting from saved/default port
+        // Try to find an available port, starting from saved/default port with randomization
         let maxAttempts = 20
         
         for attempt in 0..<maxAttempts {
-            let tryPort = startPort + UInt16(attempt)
+            // Add randomization: startPort + random(1-900) + attempt
+            let randomOffset = UInt16.random(in: 1...900)
+            let tryPort = startPort + randomOffset + UInt16(attempt)
             
             // Skip invalid ports
             guard tryPort <= 65535 else {

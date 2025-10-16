@@ -362,8 +362,14 @@ extension TweetCacheManager {
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", mid)
-            if let cdTweet = try? context.fetch(request).first {
-                context.delete(cdTweet)
+            // Delete ALL instances of this tweet (might be in multiple caches)
+            if let cdTweets = try? context.fetch(request) {
+                for cdTweet in cdTweets {
+                    context.delete(cdTweet)
+                }
+                if !cdTweets.isEmpty {
+                    print("DEBUG: [TweetCacheManager] Deleted \(cdTweets.count) cache entries for tweet: \(mid)")
+                }
                 try? context.save()
             }
         }
