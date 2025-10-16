@@ -9,7 +9,7 @@ import SwiftUI
 // MARK: - Global Mute State
 class MuteState: ObservableObject {
     static let shared = MuteState()
-    @Published var isMuted: Bool = false { // Default to unmuted
+    @Published var isMuted: Bool = true { // Default to muted (matches PreferenceHelper default)
         didSet {
             Task { @MainActor in
                 // Save to preferences whenever the mute state changes
@@ -40,8 +40,20 @@ class MuteState: ObservableObject {
     
     @objc private func userDefaultsDidChange() {
         // Check for changes to the speakerMuted key
-        // If the key was removed (reset to default), default to unmuted
-        let newMuteState = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
+        // CRITICAL: Always try preferenceHelper first, but fall back to direct UserDefaults read
+        let newMuteState: Bool
+        if let helper = HproseInstance.shared.preferenceHelper {
+            newMuteState = helper.getSpeakerMute()
+        } else {
+            // Fallback: Read directly from UserDefaults
+            // IMPORTANT: Match PreferenceHelper's default logic (default to muted if not set)
+            if UserDefaults.standard.object(forKey: "speakerMuted") == nil {
+                newMuteState = true  // Default to muted
+            } else {
+                newMuteState = UserDefaults.standard.bool(forKey: "speakerMuted")
+            }
+        }
+        
         if self.isMuted != newMuteState {
             DispatchQueue.main.async {
                 self.isMuted = newMuteState
@@ -52,9 +64,26 @@ class MuteState: ObservableObject {
     
     func refreshFromPreferences() {
         // Read the current preference and update the published property
-        let savedMuteState = HproseInstance.shared.preferenceHelper?.getSpeakerMute() ?? false
+        // CRITICAL: Always try preferenceHelper first, but fall back to direct UserDefaults read
+        // This ensures we get the correct mute state even if preferenceHelper isn't ready yet
+        let savedMuteState: Bool
+        if let helper = HproseInstance.shared.preferenceHelper {
+            savedMuteState = helper.getSpeakerMute()
+        } else {
+            // Fallback: Read directly from UserDefaults if preferenceHelper not ready
+            // This prevents race condition during app startup where videos play unmuted
+            // IMPORTANT: Match PreferenceHelper's default logic (default to muted if not set)
+            if UserDefaults.standard.object(forKey: "speakerMuted") == nil {
+                savedMuteState = true  // Default to muted
+            } else {
+                savedMuteState = UserDefaults.standard.bool(forKey: "speakerMuted")
+            }
+            print("DEBUG: [MUTE STATE] PreferenceHelper not ready, reading directly from UserDefaults: \(savedMuteState)")
+        }
+        
         if self.isMuted != savedMuteState {
             self.isMuted = savedMuteState
+            print("DEBUG: [MUTE STATE] Refreshed from preferences: \(savedMuteState)")
         }
     }
     

@@ -25,6 +25,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Initialize memory warning manager
         _ = MemoryWarningManager.shared
         
+        // CRITICAL: Initialize MuteState early to ensure it's ready before videos load
+        // This prevents race condition where videos play unmuted at app startup
+        _ = MuteState.shared
+        print("[AppDelegate] MuteState initialized early")
+        
         // Start LocalHTTPServer early to ensure it's ready before videos load
         LocalHTTPServer.shared.start()
         print("[AppDelegate] LocalHTTPServer started on app launch")
