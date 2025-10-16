@@ -701,12 +701,8 @@ final class HproseInstance: ObservableObject {
             return await TweetCacheManager.shared.fetchUser(mid: userId)
         }
         
-        print("DEBUG: [fetchUser] ➡️ ENTRY - userId: \(userId)")
-        
         // Step 1: Check user cache in Core Data first (async, non-blocking)
         let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
-        
-        print("DEBUG: [fetchUser] 📦 Retrieved from cache - userId: \(userId), username: \(cachedUser.username ?? "NIL"), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "NIL")")
         
         // Check if cached user has expired (async, non-blocking)
         let hasExpired = await cachedUser.hasExpired()
@@ -718,25 +714,10 @@ final class HproseInstance: ObservableObject {
             return cachedUser
         }
         
-        // CRITICAL: If cached user has nil baseUrl (loaded from disk), resolve IP immediately
-        // This must happen even during initial load, otherwise avatars fail to load
+        // If cached user has nil baseUrl (loaded from disk), re-resolve IP even if cache hasn't expired
         if cachedUser.username != nil && cachedUser.baseUrl == nil {
-            print("DEBUG: [fetchUser] Cached user has nil baseUrl, resolving IP immediately for userId: \(userId)")
-            // Resolve IP synchronously to ensure baseUrl is set before returning
-            do {
-                guard let providerIP = try await self.getProviderIP(userId) else {
-                    print("DEBUG: [fetchUser] Failed to get provider IP for userId: \(userId)")
-                    return cachedUser  // Return user with nil baseUrl rather than failing
-                }
-                await MainActor.run {
-                    cachedUser.baseUrl = URL(string: "http://\(providerIP)")
-                    print("DEBUG: [fetchUser] Resolved baseUrl for userId: \(userId) to \(providerIP)")
-                }
-                return cachedUser  // Return user with newly resolved baseUrl
-            } catch {
-                print("DEBUG: [fetchUser] Error resolving baseUrl for userId: \(userId): \(error)")
-                return cachedUser  // Return user with nil baseUrl rather than failing
-            }
+            print("DEBUG: [fetchUser] Cached user has nil baseUrl, re-resolving IP for userId: \(userId)")
+            // Fall through to updateUserFromServer to resolve IP
         }
         
         print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
