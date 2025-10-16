@@ -86,7 +86,7 @@ final class HproseInstance: ObservableObject {
     // MARK: - BlackList Management
     private let blackList = BlackList.shared
     
-    private lazy var client: HproseClient = {
+    lazy var client: HproseClient = {
         let client = HproseHttpClient()
         client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
         client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString

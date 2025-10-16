@@ -364,10 +364,17 @@ class SharedAssetCache: ObservableObject {
                     self.cachingPlayerItems[mediaID] = cachingPlayerItem
                 }
             } else {
-                // For progressive videos, use plain AVURLAsset (matching AVPlayer branch)
-                asset = AVURLAsset(url: resolvedURL)
-                print("DEBUG: [SHARED ASSET CACHE] Created plain AVURLAsset for progressive video")
-                print("DEBUG: [SHARED ASSET CACHE]   URL: \(resolvedURL.absoluteString)")
+                // For progressive videos, use LocalHTTPServer for IP-independent caching
+                LocalHTTPServer.shared.start()
+                
+                // Register with LocalHTTPServer (handles mediaID-based caching and IP changes)
+                let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: resolvedURL)
+                
+                asset = AVURLAsset(url: localURL)
+                print("DEBUG: [SHARED ASSET CACHE] Created AVURLAsset with LocalHTTPServer for progressive video")
+                print("DEBUG: [SHARED ASSET CACHE]   MediaID: \(mediaID)")
+                print("DEBUG: [SHARED ASSET CACHE]   Local URL: \(localURL.absoluteString)")
+                print("DEBUG: [SHARED ASSET CACHE]   Real URL: \(resolvedURL.absoluteString)")
             }
             
             // Cache the asset
@@ -637,11 +644,19 @@ class SharedAssetCache: ObservableObject {
             NSLog("DEBUG: [SHARED ASSET CACHE] Created fresh HLS player item for singleton for mediaID: \(extractedMediaID)")
             return cachingPlayerItem
         } else {
-            // Create fresh progressive video player item (matching AVPlayer branch)
-            let asset = AVURLAsset(url: url)
+            // Create fresh progressive video player item using LocalHTTPServer for IP-independent caching
+            LocalHTTPServer.shared.start()
+            
+            // Register with LocalHTTPServer (handles mediaID-based caching and IP changes)
+            let localURL = LocalHTTPServer.shared.registerAndGetURL(for: extractedMediaID, realURL: url)
+            
+            let asset = AVURLAsset(url: localURL)
             let playerItem = AVPlayerItem(asset: asset)
             
-            NSLog("DEBUG: [SHARED ASSET CACHE] Created fresh progressive player item for singleton for mediaID: \(extractedMediaID)")
+            NSLog("DEBUG: [SHARED ASSET CACHE] Created fresh progressive player item for singleton with LocalHTTPServer")
+            NSLog("DEBUG: [SHARED ASSET CACHE]   MediaID: \(extractedMediaID)")
+            NSLog("DEBUG: [SHARED ASSET CACHE]   Local URL: \(localURL.absoluteString)")
+            NSLog("DEBUG: [SHARED ASSET CACHE]   Real URL: \(url.absoluteString)")
             return playerItem
         }
     }
