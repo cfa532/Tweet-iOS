@@ -161,6 +161,7 @@ These optimizations provide:
 - **Features**: [Comment System](docs/CommentSystemREADME.md) | [Chat & Search](docs/CHAT_AND_SEARCH_FEATURES.md)
 - **Upload System**: [Upload System](docs/UPLOAD_SYSTEM.md) | [Memory Management](docs/MEMORY_MANAGEMENT.md)
 - **Development**: [Debug Build](docs/DEBUG_BUILD_INSTRUCTIONS.md) | [Localization](docs/PERMISSION_LOCALIZATION_GUIDE.md)
+- **Recent Fixes**: [Background Black Screen](docs/fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md) | [Mute State](docs/fixes/VIDEO_MUTE_STATE_FIX.md) | [Oct 17 Summary](docs/fixes/SESSION_SUMMARY_OCT_17_2025.md)
 
 All technical documentation is organized in the [docs](docs/) folder. Start with the [INDEX.md](docs/INDEX.md) for a complete overview.
 

@@ -35,6 +35,14 @@
 | [**DEBUG_BUILD_INSTRUCTIONS.md**](./DEBUG_BUILD_INSTRUCTIONS.md) | How to build debug/release versions, capture console logs, test background behavior | ✅ Current |
 | [**PERMISSION_LOCALIZATION_GUIDE.md**](./PERMISSION_LOCALIZATION_GUIDE.md) | Localization setup for permissions | ✅ Current |
 
+### Recent Critical Fixes
+| Document | Description | Date |
+|----------|-------------|------|
+| [**fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md**](./fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md) | Fix for black screens after background on real devices | Oct 17, 2025 |
+| [**fixes/VIDEO_MUTE_STATE_FIX.md**](./fixes/VIDEO_MUTE_STATE_FIX.md) | Fix for videos playing unmuted on app startup | Oct 17, 2025 |
+| [**fixes/SESSION_SUMMARY_OCT_17_2025.md**](./fixes/SESSION_SUMMARY_OCT_17_2025.md) | Complete session summary with all fixes and testing | Oct 17, 2025 |
+| [**fixes/SESSION_SUMMARY_OCT_16_2025.md**](./fixes/SESSION_SUMMARY_OCT_16_2025.md) | Previous session fixes | Oct 16, 2025 |
+
 ---
 
 ## 📦 Archive
@@ -120,10 +128,18 @@ All main documents should include:
 ## 🔄 Recent Updates
 
 ### October 17, 2025
-- ✅ Fixed LocalHTTPServer background recovery issue (videos black after background)
-- ✅ Fixed MuteState startup race condition (videos unmuted for ~1 second at startup)
-- ✅ Added comprehensive DEBUG_BUILD_INSTRUCTIONS.md with console log capture
-- ✅ Improved app lifecycle management for video infrastructure
+- ✅ **CRITICAL**: Fixed black screen after background (both short and long periods)
+  - Added `LocalHTTPServer.startAndWait()` for synchronous server startup
+  - Use `DispatchSemaphore` to block until server restart completes
+  - Smart recovery: Check `isRunning` before restart
+  - Clear all asset caches, not just player cache
+- ✅ **CRITICAL**: Fixed videos unmuted on startup
+  - Mute-at-inception pattern: `player.isMuted = true` immediately after creation
+  - Mode-based unmuting in `configurePlayer()`
+- ✅ Verified all fixes on real iPhone device in Release mode
+- 📄 Added [fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md](./fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md)
+- 📄 Added [fixes/VIDEO_MUTE_STATE_FIX.md](./fixes/VIDEO_MUTE_STATE_FIX.md)
+- 📄 Added [fixes/SESSION_SUMMARY_OCT_17_2025.md](./fixes/SESSION_SUMMARY_OCT_17_2025.md)
 
 ### October 14, 2025
 - ✅ Upload dialog now appears immediately when user taps Publish
