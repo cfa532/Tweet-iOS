@@ -792,19 +792,12 @@ public class LocalHTTPServer: @unchecked Sendable {
             if let range = Range(match.range, in: modified) {
                 let fullURL = String(modified[range])
                 
-                // Extract just the filename (last path component)
+                // Extract FULL path (keep everything after scheme://host:port)
                 if let url = URL(string: fullURL) {
-                    let filename = url.lastPathComponent
-                    // Check if there's a parent folder (like "720p/playlist.m3u8")
-                    let pathComponents = url.pathComponents
-                    if pathComponents.count >= 2 {
-                        // Keep last 2 components (e.g., "720p" and "playlist.m3u8")
-                        let relativePath = pathComponents.suffix(2).joined(separator: "/")
-                        modified.replaceSubrange(range, with: relativePath)
-                    } else {
-                        // Just the filename
-                        modified.replaceSubrange(range, with: filename)
-                    }
+                    // Just use the path component (removes scheme, host, port)
+                    // e.g., "http://server:8081/ipfs/QmHash/720p/playlist.m3u8" -> "/ipfs/QmHash/720p/playlist.m3u8"
+                    let relativePath = url.path
+                    modified.replaceSubrange(range, with: relativePath)
                 }
             }
         }
@@ -828,30 +821,42 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
-        // Rewrite relative .m3u8 URLs (sub-playlists)
-        // Pattern matches lines like "720p/playlist.m3u8"
+        // Rewrite .m3u8 URLs (sub-playlists) - handles both relative and absolute paths
+        // Pattern matches lines like "720p/playlist.m3u8" or "/ipfs/QmHash/720p/playlist.m3u8"
         let playlistPattern = "^([^#\\n\\r]+\\.m3u8)$"
         if let playlistRegex = try? NSRegularExpression(pattern: playlistPattern, options: [.anchorsMatchLines]) {
             let matches = playlistRegex.matches(in: modified, options: [], range: NSRange(location: 0, length: modified.count))
             for match in matches.reversed() {
                 if let range = Range(match.range, in: modified) {
-                    let relativeName = String(modified[range])
-                    // Construct: http://127.0.0.1:port/mediaID/playlistDirectory/relativeName
-                    let localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(playlistDirectory)/\(relativeName)"
+                    let pathString = String(modified[range])
+                    let localhostURL: String
+                    if pathString.hasPrefix("/") {
+                        // Absolute path: /ipfs/QmHash/720p/playlist.m3u8 -> http://127.0.0.1:port/mediaID/ipfs/QmHash/720p/playlist.m3u8
+                        localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(pathString)"
+                    } else {
+                        // Relative path: 720p/playlist.m3u8 -> http://127.0.0.1:port/mediaID/playlistDirectory/720p/playlist.m3u8
+                        localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(playlistDirectory)/\(pathString)"
+                    }
                     modified.replaceSubrange(range, with: localhostURL)
                 }
             }
         }
         
-        // Rewrite relative .ts URLs (segments)
+        // Rewrite .ts URLs (segments) - handles both relative and absolute paths
         let segmentPattern = "^([^#\\n\\r]+\\.ts)$"
         if let segmentRegex = try? NSRegularExpression(pattern: segmentPattern, options: [.anchorsMatchLines]) {
             let matches = segmentRegex.matches(in: modified, options: [], range: NSRange(location: 0, length: modified.count))
             for match in matches.reversed() {
                 if let range = Range(match.range, in: modified) {
-                    let relativeName = String(modified[range])
-                    // Construct: http://127.0.0.1:port/mediaID/playlistDirectory/relativeName
-                    let localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(playlistDirectory)/\(relativeName)"
+                    let pathString = String(modified[range])
+                    let localhostURL: String
+                    if pathString.hasPrefix("/") {
+                        // Absolute path: /ipfs/QmHash/segment000.ts -> http://127.0.0.1:port/mediaID/ipfs/QmHash/segment000.ts
+                        localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(pathString)"
+                    } else {
+                        // Relative path: segment000.ts -> http://127.0.0.1:port/mediaID/playlistDirectory/segment000.ts
+                        localhostURL = "http://127.0.0.1:\(port)/\(mediaID)\(playlistDirectory)/\(pathString)"
+                    }
                     modified.replaceSubrange(range, with: localhostURL)
                 }
             }
