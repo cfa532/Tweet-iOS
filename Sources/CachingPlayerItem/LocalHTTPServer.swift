@@ -252,6 +252,8 @@ public class LocalHTTPServer: @unchecked Sendable {
                 listener.stateUpdateHandler = { [weak self] state in
                     guard let self = self else { return }
                     switch state {
+                    case .setup:
+                        NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) setting up...")
                     case .ready:
                         self.isRunning = true
                         bindingSucceeded = true

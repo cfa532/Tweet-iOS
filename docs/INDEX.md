@@ -38,9 +38,10 @@
 ### Recent Critical Fixes
 | Document | Description | Date |
 |----------|-------------|------|
-| [**fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md**](./fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md) | Fix for black screens after background on real devices | Oct 17, 2025 |
+| [**fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md**](./fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md) | **FINAL FIX**: Port-independent HLS playlist caching for reliable background recovery | Oct 17, 2025 |
+| [**fixes/SESSION_SUMMARY_OCT_17_2025.md**](./fixes/SESSION_SUMMARY_OCT_17_2025.md) | Complete session summary with all fixes, testing, and log access guide | Oct 17, 2025 |
+| [**fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md**](./fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md) | Initial fix attempts for black screens after background | Oct 17, 2025 |
 | [**fixes/VIDEO_MUTE_STATE_FIX.md**](./fixes/VIDEO_MUTE_STATE_FIX.md) | Fix for videos playing unmuted on app startup | Oct 17, 2025 |
-| [**fixes/SESSION_SUMMARY_OCT_17_2025.md**](./fixes/SESSION_SUMMARY_OCT_17_2025.md) | Complete session summary with all fixes and testing | Oct 17, 2025 |
 | [**fixes/SESSION_SUMMARY_OCT_16_2025.md**](./fixes/SESSION_SUMMARY_OCT_16_2025.md) | Previous session fixes | Oct 16, 2025 |
 
 ---
@@ -128,18 +129,21 @@ All main documents should include:
 ## 🔄 Recent Updates
 
 ### October 17, 2025
-- ✅ **CRITICAL**: Fixed black screen after background (both short and long periods)
-  - Added `LocalHTTPServer.startAndWait()` for synchronous server startup
-  - Use `DispatchSemaphore` to block until server restart completes
-  - Smart recovery: Check `isRunning` before restart
-  - Clear all asset caches, not just player cache
+- ✅ **CRITICAL RESOLVED**: Port-Independent Playlist Caching
+  - **Root cause identified**: Cached HLS playlists contained full URLs with port numbers
+  - **Solution**: Cache playlists with absolute paths only (no scheme/host/port)
+  - **Implementation**: Strip URLs to paths when caching, inject current port when serving
+  - **Result**: Videos work reliably after backgrounding regardless of server port
+  - **Files**: `LocalHTTPServer.swift` (stripPlaylistToRelativePaths, rewritePlaylistURLs)
 - ✅ **CRITICAL**: Fixed videos unmuted on startup
   - Mute-at-inception pattern: `player.isMuted = true` immediately after creation
   - Mode-based unmuting in `configurePlayer()`
 - ✅ Verified all fixes on real iPhone device in Release mode
-- 📄 Added [fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md](./fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md)
-- 📄 Added [fixes/VIDEO_MUTE_STATE_FIX.md](./fixes/VIDEO_MUTE_STATE_FIX.md)
+- 📘 **Log Access Documentation**: Updated with correct `idevicesyslog` usage
+- 📄 Added [fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md](./fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md)
 - 📄 Added [fixes/SESSION_SUMMARY_OCT_17_2025.md](./fixes/SESSION_SUMMARY_OCT_17_2025.md)
+- 📄 Updated [fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md](./fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md)
+- 📄 Updated [fixes/VIDEO_MUTE_STATE_FIX.md](./fixes/VIDEO_MUTE_STATE_FIX.md)
 
 ### October 14, 2025
 - ✅ Upload dialog now appears immediately when user taps Publish

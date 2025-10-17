@@ -3,6 +3,38 @@
 **Date**: October 17, 2025  
 **Purpose**: Guide for building and capturing logs from iOS Simulator and Real Devices
 
+---
+
+## 🚀 Quick Reference: Accessing Logs
+
+### Real Device (Most Common)
+```bash
+# Install tool first (one time only)
+brew install libimobiledevice
+
+# Get device UDID
+xcrun devicectl list devices
+
+# Stream logs
+idevicesyslog -u DEVICE_UDID 2>&1 | grep -i "tweet"
+
+# Filter for specific components
+idevicesyslog -u DEVICE_UDID 2>&1 | grep -i "tweet" | grep -iE "DEBUG|ERROR|localhttpserver"
+```
+
+### Simulator
+```bash
+# Get simulator UDID
+xcrun simctl list devices | grep Booted
+
+# Stream logs
+xcrun simctl spawn SIMULATOR_UDID log stream --predicate 'process == "Tweet"' --level debug
+```
+
+**See full details below in "Accessing Logs" section.**
+
+---
+
 ## Building the App
 
 ### For iOS Simulator (Debug Mode)
