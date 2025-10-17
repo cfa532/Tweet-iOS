@@ -1141,17 +1141,28 @@ class SharedAssetCache: ObservableObject {
         // Players will be recreated on demand with fresh video layers
         for (_, player) in playerCache {
             player.pause()
+            player.replaceCurrentItem(with: nil) // CRITICAL: Detach the item to invalidate layer
         }
         playerCache.removeAll()
         
         // Clear CachingPlayerItem instances - they hold references to old players
         cachingPlayerItems.removeAll()
         
-        // Keep assets - they're still valid and can be reused
+        // CRITICAL: Also clear assets - they can have stale video layers after backgrounding
+        assetCache.removeAll()
+        
+        // Clear loading tasks to force fresh loads
+        loadingTasks.removeAll()
+        preloadTasks.removeAll()
+        
+        // CRITICAL: Clear disk cache status so videos will reload fresh from network
+        diskCacheStatus.removeAll()
+        
         // Keep resourceLoaderDelegates - they're needed for HLS playback
         // Keep cacheTimestamps - they track cache expiration
+        // Keep HLS disk cache - playlists now use relative paths (port-independent!)
         
-        print("DEBUG: [SharedAssetCache] Background recovery complete - cleared \(playerCountBefore) players, kept \(assetCountBefore) assets")
+        NSLog("DEBUG: [SharedAssetCache] Background recovery - cleared \(playerCountBefore) players, \(assetCountBefore) assets, disk cache status (HLS cache kept - port-independent)")
     }
     
     // MARK: - Cache Persistence Methods

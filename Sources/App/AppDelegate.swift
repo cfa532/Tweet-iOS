@@ -178,31 +178,18 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
             NSLog("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background")
             
-            // CRITICAL: Restart server infrastructure after ANY background
-            // iOS suspends network listeners - just clearing cache doesn't work
-            NSLog("🔄 [AppDelegate] Restarting video infrastructure...")
-            
-            // Mark infrastructure as not ready - videos will wait
-            AppDelegate.isVideoInfrastructureReady = false
-            
-            // Do restart in background - NO BLOCKING on main thread
-            DispatchQueue.global(qos: .userInitiated).async {
-                // Clear cache on main thread (UI operation)
-                DispatchQueue.main.sync {
-                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                    NSLog("🗑️ [AppDelegate] Cleared video players")
-                }
-                
-                LocalHTTPServer.shared.stop()
-                Thread.sleep(forTimeInterval: 0.3) // Wait for port release
-                NSLog("⏹️ [AppDelegate] Stopped server")
-                
+            // CRITICAL: Check if server is still running, restart if needed
+            if LocalHTTPServer.shared.isRunning {
+                NSLog("🔄 [AppDelegate] Server still running, clearing cache only")
+                SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                VideoStateCache.shared.clearAllCache()
+                NSLog("✅ [AppDelegate] Cache cleared, videos will reload")
+            } else {
+                NSLog("⚠️ [AppDelegate] Server was killed by OS, restarting...")
+                SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                VideoStateCache.shared.clearAllCache()
                 LocalHTTPServer.shared.startAndWait()
-                NSLog("✅ [AppDelegate] Server restarted and ready")
-                
-                // Mark infrastructure as ready - videos can now load
-                AppDelegate.isVideoInfrastructureReady = true
-                NSLog("✅ [AppDelegate] Video infrastructure ready, videos can load")
+                NSLog("✅ [AppDelegate] Server restarted and cache cleared")
             }
         } else {
             NSLog("⚠️ [AppDelegate] No background timestamp, starting server")

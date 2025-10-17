@@ -701,23 +701,32 @@ public class LocalHTTPServer: @unchecked Sendable {
                 return
             }
             
-            // Cache the original data (trust HTTP 200 status, ignore incorrect content-type headers)
-            try? data.write(to: URL(fileURLWithPath: cachePath))
-            NSLog("DEBUG: [LocalHTTPServer] Cached to: \(cachePath) (size: \(data.count) bytes)")
-            
-            // For playlists, rewrite URLs to point to localhost
+            // For playlists, strip to relative paths before caching (port-independent!)
+            var dataToCache = data
             var finalData = data
             if cachePath.hasSuffix(".m3u8"), let playlistString = String(data: data, encoding: .utf8) {
                 // CRITICAL: Extract actual mediaID (the Qm... hash folder)
                 let pathComponents = cachePath.components(separatedBy: "/")
                 let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
                 
-                let modifiedPlaylist = self.rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: url)
+                // Strip URLs to relative paths for caching (remove scheme/host/port)
+                let relativePlaylist = self.stripPlaylistToRelativePaths(playlistString, baseURL: url)
+                if let relativeData = relativePlaylist.data(using: .utf8) {
+                    dataToCache = relativeData
+                    NSLog("DEBUG: [LocalHTTPServer] Stripped playlist to relative paths for caching")
+                }
+                
+                // Rewrite with current port for serving
+                let modifiedPlaylist = self.rewritePlaylistURLs(relativePlaylist, mediaID: mediaID, baseURL: url)
                 if let modifiedData = modifiedPlaylist.data(using: .utf8) {
                     finalData = modifiedData
                     NSLog("DEBUG: [LocalHTTPServer] Rewrote playlist URLs for localhost")
                 }
             }
+            
+            // Cache the relative-path version (port-independent!)
+            try? dataToCache.write(to: URL(fileURLWithPath: cachePath))
+            NSLog("DEBUG: [LocalHTTPServer] Cached to: \(cachePath) (size: \(dataToCache.count) bytes)")
             
             // Serve it
             let mimeType = self.getMimeType(for: cachePath)
@@ -764,6 +773,43 @@ public class LocalHTTPServer: @unchecked Sendable {
             NSLog("ERROR: [LocalHTTPServer] Failed to read file: \(error)")
             sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
         }
+    }
+    
+    /// Strip playlist URLs to relative paths only (remove scheme/host/port) for port-independent caching
+    private func stripPlaylistToRelativePaths(_ playlistString: String, baseURL: URL) -> String {
+        var modified = playlistString
+        
+        // Pattern to match full URLs: http://anything or https://anything
+        let urlPattern = "(https?://[^\\s]+\\.(m3u8|ts))"
+        guard let urlRegex = try? NSRegularExpression(pattern: urlPattern, options: []) else {
+            return playlistString
+        }
+        
+        let matches = urlRegex.matches(in: modified, options: [], range: NSRange(location: 0, length: modified.count))
+        
+        // Replace matches in reverse order to maintain string indices
+        for match in matches.reversed() {
+            if let range = Range(match.range, in: modified) {
+                let fullURL = String(modified[range])
+                
+                // Extract just the filename (last path component)
+                if let url = URL(string: fullURL) {
+                    let filename = url.lastPathComponent
+                    // Check if there's a parent folder (like "720p/playlist.m3u8")
+                    let pathComponents = url.pathComponents
+                    if pathComponents.count >= 2 {
+                        // Keep last 2 components (e.g., "720p" and "playlist.m3u8")
+                        let relativePath = pathComponents.suffix(2).joined(separator: "/")
+                        modified.replaceSubrange(range, with: relativePath)
+                    } else {
+                        // Just the filename
+                        modified.replaceSubrange(range, with: filename)
+                    }
+                }
+            }
+        }
+        
+        return modified
     }
     
     private func rewritePlaylistURLs(_ playlistString: String, mediaID: String, baseURL: URL) -> String {

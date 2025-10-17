@@ -816,7 +816,6 @@ struct SimpleVideoPlayer: View {
     }
     
     private func setupPlayer() {
-        
         // SPECIAL CASE: For TweetDetail mode, use singleton DetailVideoManager
         if mode == .tweetDetail {
             
