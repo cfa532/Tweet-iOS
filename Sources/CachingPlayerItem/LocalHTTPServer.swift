@@ -263,8 +263,19 @@ public class LocalHTTPServer: @unchecked Sendable {
                         self.isRunning = false
                         bindingSucceeded = false
                         semaphore.signal()
-                        NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) failed: \(error)")
-                    default:
+                        
+                        // Detect port conflict
+                        let errorDesc = error.localizedDescription.lowercased()
+                        if errorDesc.contains("address already in use") || errorDesc.contains("address in use") || errorDesc.contains("eaddrinuse") {
+                            NSLog("DEBUG: [LocalHTTPServer] ❌ Port \(tryPort) ALREADY IN USE (another app instance?)")
+                        } else {
+                            NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) failed: \(error)")
+                        }
+                    case .waiting(let error):
+                        NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) waiting: \(error)")
+                    case .cancelled:
+                        NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) cancelled")
+                    @unknown default:
                         break
                     }
                 }

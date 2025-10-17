@@ -7,7 +7,7 @@ import ffmpegkit
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
-    private var isRestartingVideoInfrastructure = false
+    static var isVideoInfrastructureReady = true // Public flag for videos to check
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Configure FFmpegKit to suppress verbose logs (only show errors)
@@ -153,7 +153,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppDidEnterBackground() {
-        print("[AppDelegate] App did enter background")
+        NSLog("🌙🌙🌙 [AppDelegate] ===== DID ENTER BACKGROUND =====")
         
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
@@ -165,7 +165,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppWillEnterForeground() {
-        print("[AppDelegate] App will enter foreground")
+        NSLog("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND =====")
         
         // Proactively refresh appUser's IP address when returning from background
         // This ensures we don't use stale IPs if the server changed while app was suspended
@@ -176,33 +176,36 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Check how long app was in background
         if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
-            print("[AppDelegate] App was in background for \(timeInBackground) seconds")
+            NSLog("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background")
             
-            // Check if LocalHTTPServer is still running
-            if LocalHTTPServer.shared.isRunning {
-                // Server still alive - just clear video players for fresh connections
-                print("[AppDelegate] LocalHTTPServer still running, clearing video players")
-                Task { @MainActor in
+            // CRITICAL: Restart server infrastructure after ANY background
+            // iOS suspends network listeners - just clearing cache doesn't work
+            NSLog("🔄 [AppDelegate] Restarting video infrastructure...")
+            
+            // Mark infrastructure as not ready - videos will wait
+            AppDelegate.isVideoInfrastructureReady = false
+            
+            // Do restart in background - NO BLOCKING on main thread
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Clear cache on main thread (UI operation)
+                DispatchQueue.main.sync {
                     SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                    NSLog("🗑️ [AppDelegate] Cleared video players")
                 }
-            } else {
-                // Server was killed - restart infrastructure BLOCKING main thread
-                print("[AppDelegate] LocalHTTPServer not running, restarting infrastructure SYNCHRONOUSLY")
-                isRestartingVideoInfrastructure = true
                 
-                // Use DispatchSemaphore to block until restart completes
-                let semaphore = DispatchSemaphore(value: 0)
-                Task {
-                    await restartVideoInfrastructure()
-                    semaphore.signal()
-                }
-                // BLOCK here until restart completes
-                _ = semaphore.wait(timeout: .now() + .seconds(10))
-                isRestartingVideoInfrastructure = false
-                print("[AppDelegate] Video infrastructure restart completed, videos can now load")
+                LocalHTTPServer.shared.stop()
+                Thread.sleep(forTimeInterval: 0.3) // Wait for port release
+                NSLog("⏹️ [AppDelegate] Stopped server")
+                
+                LocalHTTPServer.shared.startAndWait()
+                NSLog("✅ [AppDelegate] Server restarted and ready")
+                
+                // Mark infrastructure as ready - videos can now load
+                AppDelegate.isVideoInfrastructureReady = true
+                NSLog("✅ [AppDelegate] Video infrastructure ready, videos can load")
             }
         } else {
-            // No background timestamp - just ensure server is running
+            NSLog("⚠️ [AppDelegate] No background timestamp, starting server")
             LocalHTTPServer.shared.start()
         }
         

@@ -1,31 +1,16 @@
 # Debug Build Instructions
 
 **Date**: October 17, 2025  
-**Purpose**: Guide for building and debugging the Tweet iOS app with console logs
+**Purpose**: Guide for building and capturing logs from iOS Simulator and Real Devices
 
-## Overview
+## Building the App
 
-This document provides step-by-step instructions for:
-1. Building the app in Debug mode
-2. Installing on iOS Simulator
-3. Capturing console logs
-4. Testing background/foreground behavior
-
-## Prerequisites
-
-- Xcode installed
-- iOS Simulator available
-- Terminal access
-
-## Step 1: Build in Debug Mode
-
-### Using Terminal (Recommended)
+### For iOS Simulator (Debug Mode)
 
 ```bash
-# Navigate to project directory
 cd /Users/cfa532/Documents/GitHub/Tweet-iOS
 
-# Build in Debug mode with derived data path
+# Build Debug version for simulator
 xcodebuild -workspace Tweet.xcworkspace \
   -scheme Tweet \
   -configuration Debug \
@@ -33,230 +18,164 @@ xcodebuild -workspace Tweet.xcworkspace \
   -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
   -derivedDataPath ./DerivedData \
   build
+
+# Install on simulator
+xcrun simctl install SIMULATOR_UDID ./DerivedData/Build/Products/Debug-iphonesimulator/Tweet.app
 ```
 
-### Key Differences from Release Mode
-
-- **Debug mode**: Includes NSLog statements and debug symbols
-- **Release mode**: Strips debug info, no console logs visible
-- **DerivedDataPath**: Ensures we know where the built app is located
-
-## Step 2: Boot iOS Simulator
+### For Real iOS Device (Release Mode)
 
 ```bash
-# List available simulators
-xcrun simctl list devices | grep -A 5 "iPhone"
+cd /Users/cfa532/Documents/GitHub/Tweet-iOS
 
-# Boot a specific simulator (replace with actual UDID)
-xcrun simctl boot 03E452D8-16BB-4188-A609-1C61565EB550
+# Get device UDID
+xcrun devicectl list devices
 
-# Open Simulator app
-open -a Simulator
+# Build Release version for device
+xcodebuild -workspace Tweet.xcworkspace \
+  -scheme Tweet \
+  -configuration Release \
+  -sdk iphoneos \
+  -destination 'platform=iOS,id=DEVICE_UDID' \
+  -derivedDataPath ./DerivedData \
+  build
+
+# Install on device
+xcrun devicectl device install app \
+  --device DEVICE_UDID \
+  ./DerivedData/Build/Products/Release-iphoneos/Tweet.app
 ```
 
-## Step 3: Install the Debug Build
+## Capturing Logs
+
+### From iOS Simulator
+
+#### Method 1: Launch with Console Output
 
 ```bash
-# Install the built app
-xcrun simctl install 03E452D8-16BB-4188-A609-1C61565EB550 \
-  /Users/cfa532/Documents/GitHub/Tweet-iOS/DerivedData/Build/Products/Debug-iphonesimulator/Tweet.app
+# Launch and see logs immediately
+xcrun simctl launch --console SIMULATOR_UDID com.example.Tweet
 ```
 
-## Step 4: Capture Console Logs
-
-### Method 1: Launch with Console Output (Recommended)
+#### Method 2: Log Stream
 
 ```bash
-# Launch app with console output
-xcrun simctl launch --console 03E452D8-16BB-4188-A609-1C61565EB550 com.example.Tweet
+# Start log stream
+log stream --predicate 'processImagePath contains "Tweet"' --level debug &
+
+# Launch app
+xcrun simctl launch SIMULATOR_UDID com.example.Tweet
 ```
 
-This method shows logs in real-time and is perfect for debugging startup issues.
+### From Real iOS Device
 
-### Method 2: Background Log Stream
+#### Using idevicesyslog (Recommended)
 
+**Install libimobiledevice first:**
 ```bash
-# Start log stream in background
-log stream --predicate 'processImagePath contains "Tweet"' --level debug --style compact &
-
-# Launch app normally
-xcrun simctl launch 03E452D8-16BB-4188-A609-1C61565EB550 com.example.Tweet
+brew install libimobiledevice
 ```
 
-### Method 3: Console App
-
-1. Open **Console** app on macOS
-2. Select your iOS Simulator in the sidebar
-3. View real-time logs
-
-## Step 5: Test Background/Foreground Behavior
-
-### Simulate Background
-
+**Stream logs from device:**
 ```bash
-# Send app to background
-xcrun simctl device 03E452D8-16BB-4188-A609-1C61565EB550 press home
+# Get device UDID
+system_profiler SPUSBDataType 2>&1 | grep -A 10 "iPhone\|iPad" | grep "Serial Number"
+# Or
+xcrun devicectl list devices
+
+# Stream all logs
+idevicesyslog -u DEVICE_UDID
+
+# Stream filtered logs
+idevicesyslog -u DEVICE_UDID 2>&1 | grep -i "tweet"
+
+# Stream specific components
+idevicesyslog -u DEVICE_UDID 2>&1 | grep -i "tweet" | grep -iE "localhttpserver|appdelegate|background"
+
+# Save to file
+idevicesyslog -u DEVICE_UDID 2>&1 | grep -i "tweet" | tee ~/Desktop/tweet_logs.txt
 ```
 
-### Return to Foreground
-
+**Example: Capture background/foreground cycle:**
 ```bash
-# Bring app back to foreground
-xcrun simctl launch 03E452D8-16BB-4188-A609-1C61565EB550 com.example.Tweet
+# Start logging
+idevicesyslog -u 00008110-001230222230401E 2>&1 | grep -i "tweet" | grep -iE "background|foreground|server|port" &
+
+# Perform your test (background app, wait, return)
+
+# Stop logging
+killall idevicesyslog
 ```
 
-## Expected Debug Logs
+## Important Notes
 
-### App Startup
+### NSLog vs print
 
+- **NSLog**: Always appears in device/simulator logs (both Debug and Release)
+- **print**: May be stripped in Release builds, use NSLog for critical debugging
+
+### Release Mode Logging
+
+Release builds **DO** include `NSLog` statements. You will see:
 ```
-DEBUG: [AppDelegate] MuteState initialized early
-DEBUG: [AppDelegate] LocalHTTPServer started on app launch
-DEBUG: [LocalHTTPServer] ✅ Successfully bound to port 18355
-DEBUG: [MUTE STATE] Mute state changed to: true
-```
-
-### Video Loading
-
-```
-DEBUG: [SHARED ASSET CACHE] Found valid cached playlist at: .../master.m3u8
-DEBUG: [LocalHTTPServer] Served cached playlist with rewritten URLs
-DEBUG: [CachingPlayerItem] Using LocalHTTPServer URL: http://127.0.0.1:18355/...
+Tweet(Foundation)[PID] <Notice>: [LocalHTTPServer] Server started
+Tweet[PID] <Debug>: [AppDelegate] App entering foreground
 ```
 
-### Background/Foreground
+### Simulator vs Real Device
 
+- **Simulator**: Faster, easier to reset, but may not show real device issues
+- **Real Device**: Required for testing background behavior, network, and Release-mode race conditions
+
+## Quick Reference
+
+### Get Simulator UDID
+```bash
+xcrun simctl list devices | grep "iPhone"
 ```
-[AppDelegate] App did enter background
-[AppDelegate] App will enter foreground
-[AppDelegate] Short background period, ensured LocalHTTPServer is running
+
+### Get Real Device UDID
+```bash
+xcrun devicectl list devices
+# Or
+system_profiler SPUSBDataType | grep -A 10 "iPhone" | grep "Serial Number"
+```
+
+### Launch App
+```bash
+# Simulator
+xcrun simctl launch SIMULATOR_UDID com.example.Tweet
+
+# Real Device (must be unlocked)
+xcrun devicectl device process launch --device DEVICE_UDID com.example.Tweet
+```
+
+### Simulate Background (Simulator Only)
+```bash
+xcrun simctl device SIMULATOR_UDID press home
+```
+
+### Stop All Simulators
+```bash
+xcrun simctl shutdown all
 ```
 
 ## Troubleshooting
 
-### Build Issues
+### No logs appear from real device
 
-**Problem**: Build fails with "Unable to find a device"
-```bash
-# Solution: Use exact simulator UDID
-xcrun simctl list devices | grep "iPhone 16 Pro"
-# Copy the UDID from output and use it
-```
+1. Ensure `libimobiledevice` is installed: `brew install libimobiledevice`
+2. Check device is connected: `xcrun devicectl list devices`
+3. Unlock the device
+4. Trust the computer (Settings → General → Device Management)
 
-**Problem**: Build succeeds but no logs appear
-```bash
-# Solution: Ensure Debug mode
-xcodebuild -configuration Debug ...
-```
+### Build fails
 
-### Simulator Issues
+- Clean derived data: `rm -rf ./DerivedData`
+- Clean build: Add `clean` before `build` in xcodebuild command
 
-**Problem**: Simulator won't boot
-```bash
-# Solution: Reset simulator
-xcrun simctl shutdown 03E452D8-16BB-4188-A609-1C61565EB550
-xcrun simctl erase 03E452D8-16BB-4188-A609-1C61565EB550
-xcrun simctl boot 03E452D8-16BB-4188-A609-1C61565EB550
-```
+### App won't install
 
-**Problem**: App won't install
-```bash
-# Solution: Check bundle identifier
-# Verify the app bundle exists
-ls -la /Users/cfa532/Documents/GitHub/Tweet-iOS/DerivedData/Build/Products/Debug-iphonesimulator/Tweet.app
-```
-
-### Log Issues
-
-**Problem**: No logs appear
-```bash
-# Solution: Try different log methods
-# Method 1: Direct launch with console
-xcrun simctl launch --console 03E452D8-16BB-4188-A609-1C61565EB550 com.example.Tweet
-
-# Method 2: Check if app is running
-xcrun simctl list | grep Tweet
-```
-
-## Testing Specific Features
-
-### Test MuteState Fix
-
-1. Launch app and check for:
-```
-DEBUG: [MUTE STATE] Mute state changed to: true
-```
-2. Videos should be muted from first frame
-
-### Test LocalHTTPServer Fix
-
-1. Launch app and check for:
-```
-DEBUG: [LocalHTTPServer] ✅ Successfully bound to port 18355
-```
-2. Go to background for 5 seconds, return
-3. Check for:
-```
-[AppDelegate] Short background period, ensured LocalHTTPServer is running
-DEBUG: [LocalHTTPServer] Already running/starting/stopping, skipping duplicate start
-```
-
-### Test Long Background Recovery
-
-1. Go to background for 6+ minutes
-2. Return to foreground
-3. Check for:
-```
-[AppDelegate] Long background period detected, restarting video infrastructure
-DEBUG: [SHARED ASSET CACHE] Clearing video players for background recovery
-```
-
-## Performance Notes
-
-- **Debug builds** are larger and slower than Release builds
-- **Console logs** add overhead - disable in production
-- **Simulator** performance may differ from real device
-- **DerivedData** can be deleted to force clean builds
-
-## Clean Build
-
-```bash
-# Clean derived data for fresh build
-rm -rf /Users/cfa532/Documents/GitHub/Tweet-iOS/DerivedData
-
-# Rebuild
-xcodebuild -workspace Tweet.xcworkspace \
-  -scheme Tweet \
-  -configuration Debug \
-  -sdk iphonesimulator \
-  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
-  -derivedDataPath ./DerivedData \
-  build
-```
-
-## Quick Commands Reference
-
-```bash
-# Build and install in one command
-xcodebuild -workspace Tweet.xcworkspace -scheme Tweet -configuration Debug -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 16 Pro' -derivedDataPath ./DerivedData build && xcrun simctl install 03E452D8-16BB-4188-A609-1C61565EB550 ./DerivedData/Build/Products/Debug-iphonesimulator/Tweet.app && xcrun simctl launch --console 03E452D8-16BB-4188-A609-1C61565EB550 com.example.Tweet
-
-# Stop all simulators
-xcrun simctl shutdown all
-
-# List running simulators
-xcrun simctl list devices | grep "Booted"
-```
-
-## Related Documentation
-
-- [LocalHTTPServer Background Fix](fixes/LOCAL_HTTP_SERVER_BACKGROUND_FIX.md)
-- [MuteState Startup Race Fix](fixes/MUTE_STATE_STARTUP_RACE_FIX.md)
-- [Architecture Overview](ARCHITECTURE.md)
-- [Video System Documentation](VIDEO_SYSTEM.md)
-
-## Notes
-
-- Always use Debug mode for development and testing
-- Console logs are essential for debugging timing issues
-- Background/foreground testing requires simulator commands
-- Keep simulator UDID handy for repeated testing
+- Check bundle identifier matches
+- Ensure device is unlocked
+- Check code signing in Xcode project settings
