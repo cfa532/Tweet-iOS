@@ -11,7 +11,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "LocalHTTPServer", qos: .userInitiated)
     private var preferenceHelper: PreferenceHelper?
     private var isStarting = false  // Track if server is currently starting
-    private var isRunning = false   // Track if server is running
+    public private(set) var isRunning = false   // Track if server is running (public read)
     private var isStopping = false  // Track if server is currently stopping
     
     // Connection pool for efficient HTTP requests
@@ -49,6 +49,54 @@ public class LocalHTTPServer: @unchecked Sendable {
             let savedPort = helper.getLocalHTTPServerPort()
             self.port = savedPort
             NSLog("DEBUG: [LocalHTTPServer] Loaded saved port from preferences: \(savedPort)")
+        }
+    }
+    
+    /// Start the server synchronously and WAIT until it's ready
+    /// Use this for app launch and background recovery to ensure server is ready before videos load
+    public func startAndWait() {
+        print("[LocalHTTPServer] startAndWait() called")
+        
+        // If already running, return immediately
+        if isRunning {
+            print("[LocalHTTPServer] Already running on port \(port)")
+            return
+        }
+        
+        let semaphore = DispatchSemaphore(value: 0)
+        var didStart = false
+        
+        queue.async { [weak self] in
+            guard let self = self else {
+                semaphore.signal()
+                return
+            }
+            
+            // Wait for any stop operation
+            while self.isStopping {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            
+            if self.isRunning {
+                didStart = true
+                semaphore.signal()
+                return
+            }
+            
+            self.startServer()
+            didStart = self.isRunning
+            semaphore.signal()
+        }
+        
+        // Wait up to 5 seconds for server to start
+        let result = semaphore.wait(timeout: .now() + .seconds(5))
+        
+        if result == .timedOut {
+            print("[LocalHTTPServer] ❌ startAndWait() TIMEOUT after 5s!")
+        } else if didStart {
+            print("[LocalHTTPServer] ✅ startAndWait() SUCCESS - Server ready on port \(port)")
+        } else {
+            print("[LocalHTTPServer] ❌ startAndWait() FAILED - Server not running")
         }
     }
     

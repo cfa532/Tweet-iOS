@@ -177,19 +177,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
             print("[AppDelegate] App was in background for \(timeInBackground) seconds")
             
-            // If app was in background for more than 5 minutes, iOS may have suspended the server
-            // Restart video infrastructure to ensure clean state
-            if timeInBackground > 300 { // 5 minutes
-                print("[AppDelegate] Long background period detected, restarting video infrastructure")
-                
+            // Check if LocalHTTPServer is still running
+            if LocalHTTPServer.shared.isRunning {
+                // Server still alive - just clear video players for fresh connections
+                print("[AppDelegate] LocalHTTPServer still running, clearing video players")
+                Task { @MainActor in
+                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                }
+            } else {
+                // Server was killed - restart infrastructure synchronously
+                print("[AppDelegate] LocalHTTPServer not running, restarting infrastructure")
                 Task {
                     await restartVideoInfrastructure()
                 }
-            } else {
-                // For short backgrounds, just ensure server is running
-                // This handles edge cases where iOS might have suspended it
-                LocalHTTPServer.shared.start()
-                print("[AppDelegate] Short background period, ensured LocalHTTPServer is running")
             }
         } else {
             // No background timestamp - just ensure server is running
@@ -264,11 +264,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         LocalHTTPServer.shared.stop()
         try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds - give iOS time to release port
         
-        // Restart the server (may bind to different port)
-        LocalHTTPServer.shared.start()
-        
-        // Wait for server to finish starting
-        try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+        // Restart the server SYNCHRONOUSLY - wait until ready
+        LocalHTTPServer.shared.startAndWait()
         
         print("[AppDelegate] Video infrastructure restart complete")
     }

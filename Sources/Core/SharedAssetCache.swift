@@ -535,6 +535,9 @@ class SharedAssetCache: ObservableObject {
             let playerItem = AVPlayerItem(asset: asset)
             let player = AVPlayer(playerItem: playerItem)
             
+            // CRITICAL: Mute player at creation - will be unmuted by mode if needed
+            player.isMuted = true
+            
             // Disable automatic waiting
             player.automaticallyWaitsToMinimizeStalling = false
             
@@ -591,6 +594,9 @@ class SharedAssetCache: ObservableObject {
         
         // Create player with CachingPlayerItem
         let player = AVPlayer(playerItem: cachingPlayerItem)
+        
+        // CRITICAL: Mute player at creation - will be unmuted by mode if needed
+        player.isMuted = true
         
         // Optimize buffering for HLS playback
         player.automaticallyWaitsToMinimizeStalling = false
