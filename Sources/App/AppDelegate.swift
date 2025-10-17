@@ -7,6 +7,7 @@ import ffmpegkit
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
+    private var isRestartingVideoInfrastructure = false
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Configure FFmpegKit to suppress verbose logs (only show errors)
@@ -185,11 +186,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
                 }
             } else {
-                // Server was killed - restart infrastructure synchronously
-                print("[AppDelegate] LocalHTTPServer not running, restarting infrastructure")
+                // Server was killed - restart infrastructure BLOCKING main thread
+                print("[AppDelegate] LocalHTTPServer not running, restarting infrastructure SYNCHRONOUSLY")
+                isRestartingVideoInfrastructure = true
+                
+                // Use DispatchSemaphore to block until restart completes
+                let semaphore = DispatchSemaphore(value: 0)
                 Task {
                     await restartVideoInfrastructure()
+                    semaphore.signal()
                 }
+                // BLOCK here until restart completes
+                _ = semaphore.wait(timeout: .now() + .seconds(10))
+                isRestartingVideoInfrastructure = false
+                print("[AppDelegate] Video infrastructure restart completed, videos can now load")
             }
         } else {
             // No background timestamp - just ensure server is running
