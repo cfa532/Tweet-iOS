@@ -1049,13 +1049,18 @@ struct SimpleVideoPlayer: View {
             cachedState.player.isMuted = false
         }
         
+        // Check if player is actually changing
+        let playerChanged = self.player !== cachedState.player
+        
         // Restore the cached player (AFTER setting mute state)
         self.player = cachedState.player
         
-        // CRITICAL: Increment representableId to force VideoPlayer layer recreation
-        // This fixes black screen issues when scrolling in MediaCell
-        if mode == .mediaCell {
+        // Only increment representableId if the player actually changed (different player object)
+        // This avoids unnecessary layer recreation and black flashes during normal scrolling
+        // For the same player, SwiftUI will reuse the existing UIViewRepresentable without recreation
+        if playerChanged && mode == .mediaCell {
             self.representableId += 1
+            print("DEBUG: [VIDEO CACHE] Player changed, incremented representableId to \(representableId)")
         }
         
         // Ensure the player is also cached in SharedAssetCache for consistency
