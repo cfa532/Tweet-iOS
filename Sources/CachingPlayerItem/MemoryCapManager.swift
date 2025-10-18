@@ -131,7 +131,11 @@ class MemoryCapManager {
         updateMemoryUsage()
         
         let percentage = memoryUsagePercentage
-        logger.debug("Memory usage: \(percentage * 100, privacy: .public)% (\(self.formatBytes(self.currentMemoryUsage)))")
+        
+        // Only log when memory usage is 60% or higher
+        if percentage >= 0.6 {
+            logger.debug("Memory usage: \(percentage * 100, privacy: .public)% (\(self.formatBytes(self.currentMemoryUsage)))")
+        }
         
         if percentage >= criticalThreshold {
             logger.error("CRITICAL: Memory usage at \(percentage * 100, privacy: .public)% - forcing immediate cleanup")

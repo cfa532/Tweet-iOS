@@ -9,6 +9,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
     static var isVideoInfrastructureReady = true // Public flag for videos to check
     
+    // Loading overlay window for server restart
+    private var loadingWindow: UIWindow?
+    
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Configure FFmpegKit to suppress verbose logs (only show errors)
         // AV_LOG_ERROR = 16 - only show fatal errors, suppress INFO/WARNING/DEBUG
@@ -178,18 +181,49 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
             NSLog("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background")
             
-            // CRITICAL: Check if server is still running, restart if needed
-            if LocalHTTPServer.shared.isRunning {
-                NSLog("🔄 [AppDelegate] Server still running, clearing cache only")
-                SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                VideoStateCache.shared.clearAllCache()
-                NSLog("✅ [AppDelegate] Cache cleared, videos will reload")
+            // CRITICAL: Use DURATION-based recovery, not isRunning check
+            // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
+            if timeInBackground > 300 {  // 5 minutes
+                // LONG background - ALWAYS do full restart with BLOCKING
+                // Even if isRunning=true, the listener may be suspended and unresponsive
+                NSLog("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - forcing full restart")
+                
+                // Show loading indicator and wait for it to render
+                showLoadingOverlay()
+                Thread.sleep(forTimeInterval: 0.1) // Give UI time to render
+                
+                // Restart infrastructure - this is synchronous and blocks until complete
+                restartVideoInfrastructure()
+                
+                // Hide loading indicator
+                hideLoadingOverlay()
+                
+                NSLog("✅ [AppDelegate] Server fully restarted - videos ready")
             } else {
-                NSLog("⚠️ [AppDelegate] Server was killed by OS, restarting...")
-                SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                VideoStateCache.shared.clearAllCache()
-                LocalHTTPServer.shared.startAndWait()
-                NSLog("✅ [AppDelegate] Server restarted and cache cleared")
+                // SHORT background (<5min) - just clear players, server should be responsive
+                NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - clearing players only")
+                
+                // Check if server is still running
+                if LocalHTTPServer.shared.isRunning {
+                    // Server still alive - just clear video players for fresh connections
+                    // DON'T clear VideoStateCache - videos will resume from where they left off
+                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                    NSLog("✅ [AppDelegate] Players cleared, server still running")
+                } else {
+                    // Server was killed even in short background - restart it
+                    NSLog("⚠️ [AppDelegate] Server killed in short background, restarting...")
+                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                    // DON'T clear VideoStateCache - preserve playback position for smooth resume
+                    
+                    // Show brief spinner for server restart
+                    showLoadingOverlay()
+                    Thread.sleep(forTimeInterval: 0.05)
+                    
+                    LocalHTTPServer.shared.startAndWait()
+                    
+                    hideLoadingOverlay()
+                    NSLog("✅ [AppDelegate] Server restarted")
+                }
             }
         } else {
             NSLog("⚠️ [AppDelegate] No background timestamp, starting server")
@@ -248,21 +282,23 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
     
-    private func restartVideoInfrastructure() async {
+    private func restartVideoInfrastructure() {
         print("[AppDelegate] Restarting video infrastructure after long background")
         
         // CRITICAL: Clear ALL video players FIRST to release their URLs
         // This prevents players from trying to use old port numbers after server restart
-        await MainActor.run {
-            SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-        }
+        // Note: We're already on main thread (called from willEnterForeground), so just call directly
+        SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+        
+        // DON'T clear VideoStateCache - it stores playback position/state
+        // Preserving it allows videos to resume from where they left off after reload
         
         // Reset LocalHTTPServer connection pool
         LocalHTTPServer.shared.resetConnectionPool()
         
         // Stop the server completely and wait for cleanup
         LocalHTTPServer.shared.stop()
-        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds - give iOS time to release port
+        Thread.sleep(forTimeInterval: 0.5) // BLOCKING sleep - ensure port is released
         
         // Restart the server SYNCHRONOUSLY - wait until ready
         LocalHTTPServer.shared.startAndWait()
@@ -280,6 +316,54 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("[AppDelegate] Notification permission granted: \(granted)")
         } catch {
             print("[AppDelegate] Error requesting notification permission: \(error)")
+        }
+    }
+    
+    // MARK: - Loading Overlay
+    
+    private func showLoadingOverlay() {
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            return
+        }
+        
+        // Create loading view
+        let loadingView = LoadingOverlayView()
+        let hostingController = UIHostingController(rootView: loadingView)
+        hostingController.view.backgroundColor = .clear
+        
+        // Create window
+        let window = UIWindow(windowScene: windowScene)
+        window.rootViewController = hostingController
+        window.windowLevel = .alert + 1
+        window.backgroundColor = .clear
+        window.makeKeyAndVisible()
+        
+        loadingWindow = window
+    }
+    
+    private func hideLoadingOverlay() {
+        UIView.animate(withDuration: 0.2, animations: {
+            self.loadingWindow?.alpha = 0
+        }) { _ in
+            self.loadingWindow?.isHidden = true
+            self.loadingWindow = nil
+        }
+    }
+}
+
+// MARK: - Loading Overlay View
+
+private struct LoadingOverlayView: View {
+    var body: some View {
+        ZStack {
+            // Semi-transparent background
+            Color.black.opacity(0.3)
+                .edgesIgnoringSafeArea(.all)
+            
+            // Just a spinner
+            ProgressView()
+                .scaleEffect(1.5)
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
         }
     }
 } 

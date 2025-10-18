@@ -208,26 +208,29 @@ public class LocalHTTPServer: @unchecked Sendable {
         isStarting = true
         defer { isStarting = false }
         
-        let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
-        
         // Load saved port from preferences as starting point
-        let startPort: UInt16
+        let savedPort: UInt16
         if let helper = preferenceHelper {
-            startPort = helper.getLocalHTTPServerPort()
-            NSLog("DEBUG: [LocalHTTPServer] Starting port search from saved port: \(startPort)")
+            savedPort = helper.getLocalHTTPServerPort()
+            NSLog("DEBUG: [LocalHTTPServer] Will try saved port first: \(savedPort)")
         } else {
-            startPort = 8080
-            NSLog("DEBUG: [LocalHTTPServer] Starting port search from default port: 8080")
+            savedPort = 8080
+            NSLog("DEBUG: [LocalHTTPServer] Will try default port first: 8080")
         }
         
-        // Try to find an available port, starting from saved/default port with randomization
+        // FAST PATH: Try saved port first (most common case - should succeed immediately)
+        if tryBindToPort(savedPort) {
+            return
+        }
+        
+        NSLog("DEBUG: [LocalHTTPServer] Saved port \(savedPort) unavailable, searching for alternative...")
+        
+        // SLOW PATH: Saved port in use, search for available port
         let maxAttempts = 20
         
         for attempt in 0..<maxAttempts {
-            // Add randomization: startPort + random(1-900) + attempt
-            let randomOffset = UInt16.random(in: 1...900)
-            let tryPort = startPort + randomOffset + UInt16(attempt)
+            // Sequential search starting from saved port
+            let tryPort = savedPort + UInt16(attempt) + 1
             
             // Skip invalid ports
             guard tryPort <= 65535 else {
@@ -235,90 +238,92 @@ public class LocalHTTPServer: @unchecked Sendable {
                 break
             }
             
-            // Try to create and start listener directly (don't test separately to avoid port release issues)
-            do {
-                let listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: tryPort))
-                
-                // Use a semaphore to wait for binding result
-                let semaphore = DispatchSemaphore(value: 0)
-                var bindingSucceeded = false
-                
-                // CRITICAL: Use a separate queue for this listener to avoid deadlock
-                let listenerQueue = DispatchQueue(label: "LocalHTTPServer.listener.\(tryPort)", qos: .userInitiated)
-                
-                // CRITICAL: Update port BEFORE starting listener so URLs use correct port
-                self.port = tryPort
-                
-                listener.stateUpdateHandler = { [weak self] state in
-                    guard let self = self else { return }
-                    switch state {
-                    case .setup:
-                        NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) setting up...")
-                    case .ready:
-                        self.isRunning = true
-                        bindingSucceeded = true
-                        semaphore.signal()
-                        NSLog("DEBUG: [LocalHTTPServer] ✅ Successfully bound to port \(tryPort)")
-                        // Save successful port to preferences
-                        self.preferenceHelper?.setLocalHTTPServerPort(tryPort)
-                    case .failed(let error):
-                        self.isRunning = false
-                        bindingSucceeded = false
-                        semaphore.signal()
-                        
-                        // Detect port conflict
-                        let errorDesc = error.localizedDescription.lowercased()
-                        if errorDesc.contains("address already in use") || errorDesc.contains("address in use") || errorDesc.contains("eaddrinuse") {
-                            NSLog("DEBUG: [LocalHTTPServer] ❌ Port \(tryPort) ALREADY IN USE (another app instance?)")
-                        } else {
-                            NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) failed: \(error)")
-                        }
-                    case .waiting(let error):
-                        NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) waiting: \(error)")
-                    case .cancelled:
-                        NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) cancelled")
-                    @unknown default:
-                        break
-                    }
-                }
-                
-                listener.newConnectionHandler = { [weak self] connection in
-                    self?.handleConnection(connection)
-                }
-                
-                NSLog("DEBUG: [LocalHTTPServer] Attempting to bind to port \(tryPort)...")
-                // Start on separate queue to avoid deadlock
-                listener.start(queue: listenerQueue)
-                
-                // Wait up to 500ms for binding to succeed or fail
-                let result = semaphore.wait(timeout: .now() + .milliseconds(500))
-                
-                if result == .timedOut {
-                    NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) binding timed out, trying next port...")
-                    listener.cancel()
-                    self.port = startPort
-                    continue
-                }
-                
-                if bindingSucceeded {
-                    // Store the listener
-                    self.listener = listener
-                    NSLog("DEBUG: [LocalHTTPServer] Server started successfully on port \(tryPort)")
-                    return
-                } else {
-                    // Binding failed, try next port
-                    listener.cancel()
-                    self.port = startPort
-                    continue
-                }
-                
-            } catch {
-                NSLog("DEBUG: [LocalHTTPServer] Failed to create listener on port \(tryPort): \(error.localizedDescription)")
-                continue
+            if tryBindToPort(tryPort) {
+                return
             }
         }
         
-        NSLog("DEBUG: [LocalHTTPServer] ❌ Failed to find available port after \(maxAttempts) attempts starting from port \(startPort)")
+        NSLog("DEBUG: [LocalHTTPServer] ❌ Failed to find available port after \(maxAttempts) attempts starting from port \(savedPort)")
+    }
+    
+    /// Try to bind to a specific port - returns true if successful
+    private func tryBindToPort(_ tryPort: UInt16) -> Bool {
+        let parameters = NWParameters.tcp
+        parameters.allowLocalEndpointReuse = true
+        
+        do {
+            let listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: tryPort))
+            
+            // Use a semaphore to wait for binding result
+            let semaphore = DispatchSemaphore(value: 0)
+            var bindingSucceeded = false
+            
+            // CRITICAL: Use a separate queue for this listener to avoid deadlock
+            let listenerQueue = DispatchQueue(label: "LocalHTTPServer.listener.\(tryPort)", qos: .userInitiated)
+            
+            // CRITICAL: Update port BEFORE starting listener so URLs use correct port
+            self.port = tryPort
+            
+            listener.stateUpdateHandler = { [weak self] state in
+                guard let self = self else { return }
+                switch state {
+                case .setup:
+                    break // Silent
+                case .ready:
+                    self.isRunning = true
+                    bindingSucceeded = true
+                    semaphore.signal()
+                    NSLog("DEBUG: [LocalHTTPServer] ✅ Successfully bound to port \(tryPort)")
+                    // Save successful port to preferences
+                    self.preferenceHelper?.setLocalHTTPServerPort(tryPort)
+                case .failed(let error):
+                    self.isRunning = false
+                    bindingSucceeded = false
+                    semaphore.signal()
+                    
+                    // Only log if it's not a simple "port in use" error
+                    let errorDesc = error.localizedDescription.lowercased()
+                    if !errorDesc.contains("address already in use") && !errorDesc.contains("address in use") && !errorDesc.contains("eaddrinuse") {
+                        NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) failed: \(error)")
+                    }
+                case .waiting(let error):
+                    NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) waiting: \(error)")
+                case .cancelled:
+                    break // Silent
+                @unknown default:
+                    break
+                }
+            }
+            
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.handleConnection(connection)
+            }
+            
+            // Start on separate queue to avoid deadlock
+            listener.start(queue: listenerQueue)
+            
+            // Wait up to 200ms for binding to succeed or fail (faster than before)
+            let result = semaphore.wait(timeout: .now() + .milliseconds(200))
+            
+            if result == .timedOut {
+                listener.cancel()
+                return false
+            }
+            
+            if bindingSucceeded {
+                // Store the listener
+                self.listener = listener
+                NSLog("DEBUG: [LocalHTTPServer] Server started successfully on port \(tryPort)")
+                return true
+            } else {
+                // Binding failed
+                listener.cancel()
+                return false
+            }
+            
+        } catch {
+            return false
+        }
     }
     
     // REMOVED: isPortAvailable() function - no longer needed
