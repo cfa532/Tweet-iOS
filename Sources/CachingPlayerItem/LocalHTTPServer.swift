@@ -421,17 +421,59 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
         
-        // Get real URL for this media
+        // CRITICAL: Check cache FIRST before requiring real URL
+        // This allows cached content to be served during app startup before baseUrl is resolved
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let mediaDir = cacheDir.appendingPathComponent(mediaID)
+        let potentialCachePath = mediaDir.appendingPathComponent(relativePath.hasPrefix("/") ? String(relativePath.dropFirst()) : relativePath)
+        
+        if FileManager.default.fileExists(atPath: potentialCachePath.path) {
+            // CACHE HIT - serve immediately without needing real URL
+            NSLog("DEBUG: [LocalHTTPServer] Found cached file at: \(potentialCachePath.path)")
+            
+            if relativePath.hasSuffix(".m3u8") {
+                // For playlists, rewrite URLs to localhost
+                if let data = try? Data(contentsOf: potentialCachePath),
+                   let playlistString = String(data: data, encoding: .utf8) {
+                    NSLog("DEBUG: [LocalHTTPServer] Read cached playlist, size: \(data.count) bytes")
+                    // Reconstruct a baseURL from the relative path for proper URL rewriting
+                    // Example: /master.m3u8 -> http://placeholder/ipfs/mediaID/master.m3u8
+                    let reconstructedBaseURL = URL(string: "http://placeholder/ipfs/\(mediaID)\(relativePath)")!
+                    let modifiedPlaylist = rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: reconstructedBaseURL)
+                    if let modifiedData = modifiedPlaylist.data(using: .utf8) {
+                        let headers: [String: String] = [
+                            "Content-Type": "application/vnd.apple.mpegurl",
+                            "Content-Length": "\(modifiedData.count)",
+                            "Accept-Ranges": "bytes"
+                        ]
+                        sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
+                        NSLog("DEBUG: [LocalHTTPServer] Served cached playlist (no realURL needed)")
+                        completion()
+                        return
+                    } else {
+                        NSLog("DEBUG: [LocalHTTPServer] Failed to convert modified playlist to data")
+                    }
+                } else {
+                    NSLog("DEBUG: [LocalHTTPServer] Failed to read or decode cached playlist")
+                }
+            }
+            
+            // For segments and other files, serve directly
+            NSLog("DEBUG: [LocalHTTPServer] Serving cached file directly: \(relativePath)")
+            serveFile(path: potentialCachePath.path, connection: connection, method: method)
+            completion()
+            return
+        }
+        
+        // CACHE MISS - need real URL to fetch from network
         guard let realURL = mediaRealURLs[mediaID] else {
-            NSLog("DEBUG: [LocalHTTPServer] No real URL found for mediaID: \(mediaID)")
+            NSLog("DEBUG: [LocalHTTPServer] No real URL found for mediaID: \(mediaID), and no cache available")
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             completion()
             return
         }
         
         // Construct full real URL for this specific file
-        // CRITICAL: Strip query params (like ?dig=XXXX) - they're only for AVPlayer cache-busting
-        // Remote server might not handle them correctly
         guard var components = URLComponents(url: realURL, resolvingAgainstBaseURL: false) else {
             NSLog("DEBUG: [LocalHTTPServer] Failed to parse URL components")
             sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
@@ -442,8 +484,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Replace path with requested file
         components.path = relativePath
         
-        // CRITICAL: Remove query params - remote server should ignore them but might not!
-        let hadQuery = components.query != nil
+        // Remove query params
         components.query = nil
         
         guard let fullRealURL = components.url else {
@@ -451,12 +492,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
             completion()
             return
-        }
-        
-        if hadQuery {
-            // Removed repetitive URL resolution logs
-        } else {
-            // Removed repetitive URL resolution logs
         }
         
         // Check if this is a playlist (.m3u8), segment (.ts), or progressive video

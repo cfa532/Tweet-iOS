@@ -208,7 +208,49 @@ struct MediaCell: View, Equatable {
                     EmptyView()
                 }
             } else {
-                EmptyView()
+                // BaseUrl not available yet - show cached content immediately
+                if (attachment.type == .video || attachment.type == .hls_video) && shouldLoadVideo {
+                    // For videos, check if there's cached playlist
+                    let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+                    let playlistPath = cacheDir.appendingPathComponent(attachment.mid).appendingPathComponent("master.m3u8")
+                    let hasCachedPlaylist = FileManager.default.fileExists(atPath: playlistPath.path)
+                    
+                    if hasCachedPlaylist {
+                        // We have cached video - use localhost URL (LocalHTTPServer will serve from cache)
+                        let placeholderUrl = URL(string: "http://127.0.0.1:8080/\(attachment.mid)/master.m3u8")!
+                        videoPlayerView(url: placeholderUrl)
+                    } else {
+                        // No cached content - show loading while waiting for baseUrl
+                        Color.gray.opacity(0.2)
+                            .aspectRatio(contentMode: .fill)
+                            .overlay(
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            )
+                    }
+                } else if attachment.type == .image {
+                    // For images, check if there's cached content and show it immediately
+                    if let cachedImage = imageCache.getCachedCompressedImage(forMid: attachment.mid) {
+                        Image(uiImage: cachedImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .clipped()
+                            .onTapGesture {
+                                handleTap()
+                            }
+                    } else {
+                        // No cached image - show loading while waiting for baseUrl
+                        Color.gray.opacity(0.2)
+                            .aspectRatio(contentMode: .fill)
+                            .overlay(
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .gray))
+                            )
+                    }
+                } else {
+                    // For other types, just show loading
+                    ProgressView()
+                }
             }
         }
         .onAppear {

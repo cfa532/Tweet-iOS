@@ -224,7 +224,59 @@ struct DetailMediaCell: View {
                     Color.gray.opacity(0.2)
                 }
             } else {
-                Color.gray.opacity(0.2)
+                // BaseUrl not available yet - show cached content immediately
+                let aspectRatio = CGFloat(attachment.aspectRatio ?? 1.0)
+                
+                if attachment.type == .video || attachment.type == .hls_video {
+                    // For videos, check if there's cached playlist
+                    let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+                    let playlistPath = cacheDir.appendingPathComponent(attachment.mid).appendingPathComponent("master.m3u8")
+                    let hasCachedPlaylist = FileManager.default.fileExists(atPath: playlistPath.path)
+                    
+                    if shouldLoadVideo && hasCachedPlaylist {
+                        // We have cached video - use localhost URL (LocalHTTPServer will serve from cache)
+                        let placeholderUrl = URL(string: "http://127.0.0.1:8080/\(attachment.mid)/master.m3u8")!
+                        SimpleVideoPlayer(
+                            url: placeholderUrl,
+                            mid: attachment.mid,
+                            parentTweetId: parentTweet.mid,
+                            isVisible: true,
+                            mediaType: attachment.type,
+                            autoPlay: true,
+                            onVideoFinished: {
+                                print("DEBUG: [TweetDetailView] Video finished for \(attachment.mid)")
+                            },
+                            videoAspectRatio: aspectRatio,
+                            showNativeControls: true,
+                            isMuted: false,
+                            mode: .tweetDetail
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .aspectRatio(aspectRatio, contentMode: .fit)
+                        .clipped()
+                    } else {
+                        // No cached content - show loading while waiting for baseUrl
+                        Color.gray.opacity(0.2)
+                            .aspectRatio(aspectRatio, contentMode: .fit)
+                            .overlay(ProgressView())
+                    }
+                } else if attachment.type == .image {
+                    // For images, check if there's cached content and show it immediately
+                    if let cachedImage = ImageCacheManager.shared.getCachedCompressedImage(forMid: attachment.mid) {
+                        Image(uiImage: cachedImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .clipped()
+                    } else {
+                        // No cached image - show loading while waiting for baseUrl
+                        Color.gray.opacity(0.2)
+                            .aspectRatio(aspectRatio, contentMode: .fit)
+                            .overlay(ProgressView())
+                    }
+                } else {
+                    // For other types, show loading
+                    Color.gray.opacity(0.2)
+                }
             }
         }
         .onAppear {
