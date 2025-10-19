@@ -204,7 +204,10 @@ final class HproseInstance: ObservableObject {
         let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
         
         await MainActor.run {
-            _appUser = cachedUser
+            // CRITICAL: Update the singleton instance instead of replacing _appUser
+            // This ensures all references to this user get the cached data
+            User.updateUserInstance(with: cachedUser)
+            _appUser = User.getInstance(mid: userId)
             
             // Set base URL from preferences or use default
 //            _appUser.baseUrl = nil
@@ -297,8 +300,13 @@ final class HproseInstance: ObservableObject {
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     
                     // Update appUser's baseUrl to IP address as well
+                    // CRITICAL: Update the singleton instance so all references get the updated baseUrl
+                    // This will trigger .userBaseUrlUpdated notification, which SimpleVideoPlayer observes
                     await MainActor.run {
                         _appUser.baseUrl = HproseInstance.baseUrl
+                        // Also update the singleton for this user
+                        let singleton = User.getInstance(mid: _appUser.mid)
+                        singleton.baseUrl = HproseInstance.baseUrl
                     }
                     print("DEBUG: [initAppEntry] Updated appUser baseUrl to IP: \(firstIp)")
                     
@@ -324,11 +332,13 @@ final class HproseInstance: ObservableObject {
                                 user.followingList = followings
                                 user.userBlackList = blackList
                                 
-                                // CRITICAL: Update _appUser.baseUrl immediately and synchronously
-                                // so that fetchUser calls with default parameter use the IP-based URL
-                                _appUser.baseUrl = HproseInstance.baseUrl
+                                // CRITICAL: Update the singleton instance instead of replacing _appUser
+                                // This ensures that all tweet authors pointing to this user get the updated baseUrl
+                                // This will trigger .userBaseUrlUpdated notification, which SimpleVideoPlayer observes
+                                User.updateUserInstance(with: user)
                                 
-                                self.appUser = user
+                                // Also ensure _appUser points to the singleton
+                                _appUser = User.getInstance(mid: user.mid)
                                 
                                 // Print detailed app user content after successful login
                                 self.printAppUserContent("After successful login")
@@ -737,15 +747,26 @@ final class HproseInstance: ObservableObject {
             return cachedUser
         }
         
-        // If app is not initialized, only return cached users
-        if !isInitializationComplete {
-            print("DEBUG: [fetchUser] App not initialized, returning cached user only for userId: \(userId)")
-            return cachedUser
-        }
-        
-        // If app is initialized and cached user has nil baseUrl, resolve it
+        // CRITICAL: If cached user has nil baseUrl, ALWAYS resolve it (even if app not initialized)
+        // This prevents videos from using domain URLs that timeout
         if cachedUser.username != nil && cachedUser.baseUrl == nil {
-            print("DEBUG: [fetchUser] App initialized, resolving baseUrl for userId: \(userId)")
+            print("DEBUG: [fetchUser] User has nil baseUrl, resolving IP for userId: \(userId)")
+            
+            // SPECIAL CASE: If this is the appUser, use appUser's baseUrl directly
+            if userId == appUser.mid {
+                if let appUserBaseUrl = appUser.baseUrl {
+                    await MainActor.run {
+                        cachedUser.baseUrl = appUserBaseUrl
+                        print("DEBUG: [fetchUser] ✅ Using appUser's baseUrl for userId: \(userId) -> \(appUserBaseUrl.absoluteString)")
+                    }
+                    return cachedUser
+                } else {
+                    print("DEBUG: [fetchUser] AppUser also has nil baseUrl, returning cached user for userId: \(userId)")
+                    return cachedUser
+                }
+            }
+            
+            // For other users, resolve provider IP
             do {
                 guard let providerIP = try await self.getProviderIP(userId) else {
                     print("DEBUG: [fetchUser] Failed to get provider IP for userId: \(userId)")
@@ -760,6 +781,12 @@ final class HproseInstance: ObservableObject {
                 print("DEBUG: [fetchUser] Error resolving baseUrl for userId: \(userId): \(error)")
                 return cachedUser
             }
+        }
+        
+        // If app is not initialized, return cached users (with valid baseUrl from above)
+        if !isInitializationComplete {
+            print("DEBUG: [fetchUser] App not initialized, returning cached user for userId: \(userId)")
+            return cachedUser
         }
         
         // Step 2: Fetch from server with retry logic. No instance available in memory or cache.

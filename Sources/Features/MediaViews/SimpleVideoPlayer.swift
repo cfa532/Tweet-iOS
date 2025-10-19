@@ -8,6 +8,7 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import Combine
 
 // MARK: - Video Player Mode
 enum Mode {
@@ -158,6 +159,7 @@ struct SimpleVideoPlayer: View {
     @State private var timeObserverPlayer: AVPlayer?
     @State private var representableId: Int = 0 // Force VideoPlayerRepresentable recreation
     @State private var viewConfigTimestamp: TimeInterval = 0 // Timestamp when view was last configured
+    @State private var baseUrlObserver: AnyCancellable? // Observer for user baseUrl changes
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -289,7 +291,66 @@ struct SimpleVideoPlayer: View {
     
     // MARK: - Lifecycle Handlers
     
+    /// Set up observer for user baseUrl changes to update player with IP-based URL
+    private func setupBaseUrlObserver() {
+        // Observe user baseUrl changes to update the player's URL without recreating the view
+        baseUrlObserver = NotificationCenter.default.publisher(for: .userBaseUrlUpdated)
+            .sink { [url, mid, mediaType, mode] notification in
+                guard let player = self.player else { return }
+                
+                // Check if this notification is relevant to our video
+                if let userMid = notification.object as? String {
+                    // For now, recreate the player item for all baseUrl changes
+                    // This is safer than trying to match the user, since URL construction is complex
+                    print("DEBUG: [VIDEO BASEURL OBSERVER] User \(userMid) baseUrl updated, updating player for \(mid)")
+                    
+                    // Save current playback state
+                    let currentTime = player.currentTime()
+                    let wasPlaying = player.rate > 0
+                    
+                    // Recreate the player with the updated URL (MediaCell will reconstruct with author's new baseUrl)
+                    Task.detached(priority: .userInitiated) {
+                        do {
+                            // Get new player with updated URL (SharedAssetCache will use the new baseUrl)
+                            let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
+                            
+                            // Apply mode-specific mute state
+                            if mode == .mediaCell {
+                                let muteState = await MainActor.run { MuteState.shared.isMuted }
+                                newPlayer.isMuted = muteState
+                            } else {
+                                newPlayer.isMuted = false
+                            }
+                            
+                            await MainActor.run {
+                                // Replace the player item without changing the player reference
+                                // This avoids view recreation and black flash
+                                if let newItem = newPlayer.currentItem {
+                                    player.replaceCurrentItem(with: newItem)
+                                    
+                                    // Restore playback position
+                                    player.seek(to: currentTime)
+                                    
+                                    // Resume playback if it was playing
+                                    if wasPlaying {
+                                        player.play()
+                                    }
+                                    
+                                    print("DEBUG: [VIDEO BASEURL OBSERVER] ✅ Updated player item for \(mid) without recreation")
+                                }
+                            }
+                        } catch {
+                            print("DEBUG: [VIDEO BASEURL OBSERVER] ❌ Failed to update player: \(error)")
+                        }
+                    }
+                }
+            }
+    }
+    
     private func handleOnAppear() {
+        
+        // Set up baseUrl observer for user changes
+        setupBaseUrlObserver()
         
         // Handle idle timer for fullscreen modes
         if mode == .mediaBrowser {
@@ -340,6 +401,10 @@ struct SimpleVideoPlayer: View {
         
         // Remove observers to prevent memory leaks
         removePlayerObservers()
+        
+        // Clean up baseUrl observer
+        baseUrlObserver?.cancel()
+        baseUrlObserver = nil
 
         // Cache the current video state
         if let player = player {

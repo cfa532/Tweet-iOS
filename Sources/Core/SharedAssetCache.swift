@@ -600,8 +600,8 @@ class SharedAssetCache: ObservableObject {
         
         // Optimize buffering for HLS playback
         player.automaticallyWaitsToMinimizeStalling = false
-        cachingPlayerItem.preferredForwardBufferDuration = 2.0  // Buffer 2 seconds ahead
-        cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        cachingPlayerItem.preferredForwardBufferDuration = 10.0  // Buffer 10 seconds ahead to prevent stalls
+        cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Don't buffer when paused to avoid connection overload
         
         // Cache the player using cacheKey
         let cacheKey = tweetId ?? mediaID

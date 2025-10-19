@@ -16,7 +16,11 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     // Connection pool for efficient HTTP requests
     private var _connectionPool: URLSession?
+    private let connectionPoolLock = NSLock()
     private var connectionPool: URLSession {
+        connectionPoolLock.lock()
+        defer { connectionPoolLock.unlock() }
+        
         if let pool = _connectionPool {
             return pool
         }
@@ -156,9 +160,11 @@ public class LocalHTTPServer: @unchecked Sendable {
             guard let self = self else { return }
             NSLog("DEBUG: [LocalHTTPServer] Resetting connection pool for background recovery")
             
-            // Invalidate existing session
+            // Thread-safe reset with lock
+            self.connectionPoolLock.lock()
             self._connectionPool?.invalidateAndCancel()
             self._connectionPool = nil
+            self.connectionPoolLock.unlock()
             
             // Next access will create a new session
             NSLog("DEBUG: [LocalHTTPServer] Connection pool reset complete")
@@ -569,6 +575,13 @@ public class LocalHTTPServer: @unchecked Sendable {
             request.setValue(range, forHTTPHeaderField: "Range")
         }
         
+        // CRITICAL: Block network requests until app initialized
+        guard HproseInstance.shared.isAppInitialized else {
+            NSLog("DEBUG: [LocalHTTPServer] App not initialized, refusing network request")
+            self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
+            return
+        }
+        
         // Fetch from real server
         let task = connectionPool.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
@@ -680,6 +693,13 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String) {
+        // CRITICAL: Block network requests until app initialized
+        guard HproseInstance.shared.isAppInitialized else {
+            NSLog("DEBUG: [LocalHTTPServer] App not initialized, refusing network request")
+            self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
+            return
+        }
+        
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
             guard let self = self else { return }
             

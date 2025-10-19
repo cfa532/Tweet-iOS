@@ -456,6 +456,14 @@ extension Tweet {
                 tweet.author = authorSingleton
                 
                 NSLog("DEBUG: [Tweet.from(cdTweet)] Tweet \(tweet.mid) using author singleton for user \(authorSingleton.mid), baseUrl: \(authorSingleton.baseUrl?.absoluteString ?? "NIL")")
+                
+            // Trigger fetchUser if baseUrl is nil to resolve IP
+            // SKIP appUser - app initialization will handle it
+            if authorSingleton.baseUrl == nil && authorSingleton.mid != HproseInstance.shared.appUser.mid {
+                Task {
+                    _ = try? await HproseInstance.shared.fetchUser(authorSingleton.mid)
+                }
+            }
             }
             
             return tweet
