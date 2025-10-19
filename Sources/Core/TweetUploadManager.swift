@@ -106,9 +106,67 @@ class TweetUploadManager {
                 }
                 
                 // Upload attachments (same as tweet upload)
-                let (uploadedAttachments, _) = try await self.uploadAttachments(itemData: itemData)
+                let (uploadedAttachments, jobIdMap) = try await self.uploadAttachments(itemData: itemData)
                 
-                // Set comment attachments
+                // If we got any video job IDs, handle the same way as tweet uploads
+                if !jobIdMap.isEmpty {
+                    print("✅ [Comment Upload] Got \(jobIdMap.count) video job ID(s). Closing dialog and polling in background...")
+                    
+                    // Update itemData with job IDs for polling
+                    var updatedItemData = itemData
+                    for (index, item) in updatedItemData.enumerated() {
+                        if index < uploadedAttachments.count {
+                            let attachment = uploadedAttachments[index]
+                            let jobId = jobIdMap[item.identifier]
+                            
+                            updatedItemData[index] = PendingTweetUpload.ItemData(
+                                identifier: item.identifier,
+                                typeIdentifier: item.typeIdentifier,
+                                data: item.data,
+                                fileName: item.fileName,
+                                noResample: item.noResample,
+                                videoJobId: jobId,
+                                cid: attachment.mid,
+                                aspectRatio: attachment.aspectRatio,
+                                fileSize: attachment.size,
+                                mediaType: attachment.type.rawValue
+                            )
+                        }
+                    }
+                    
+                    // Close the dialog with message about server processing
+                    await MainActor.run {
+                        UploadProgressManager.shared.updateProgress(
+                            stage: .completed,
+                            message: NSLocalizedString("Processing on server...", comment: "Upload stage"),
+                            progress: 1.0,
+                            detail: NSLocalizedString("Your comment will be posted when ready", comment: "Background processing")
+                        )
+                    }
+                    
+                    // Small delay to show message
+                    try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 seconds
+                    
+                    await MainActor.run {
+                        UploadProgressManager.shared.completeUpload()
+                    }
+                    
+                    // Start background polling for video jobs (same as tweets)
+                    Task.detached(priority: .background) {
+                        await self.pollVideoJobsAndSubmitComment(
+                            comment: comment,
+                            to: tweet,
+                            itemData: updatedItemData,
+                            uploadedAttachments: uploadedAttachments
+                        )
+                    }
+                    
+                    return
+                }
+                
+                // No video jobs - images only, close dialog and submit comment in background
+                print("✅ [Comment Upload] All image attachments uploaded. Closing dialog and submitting comment in background...")
+                
                 comment.attachments = uploadedAttachments
                 
                 // Show completion message
@@ -124,7 +182,7 @@ class TweetUploadManager {
                 // Small delay to show message
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
                 
-                // Close dialog BEFORE waiting for server response (same as tweet upload)
+                // Close dialog
                 await MainActor.run {
                     UploadProgressManager.shared.completeUpload()
                 }
@@ -133,7 +191,7 @@ class TweetUploadManager {
                 Task.detached(priority: .background) {
                     guard let hproseInstance = self.hproseInstance else { return }
                     
-                    print("📝 [Background Submit] Submitting comment with attachments...")
+                    print("📝 [Background Submit] Submitting comment with image attachments...")
                     
                     do {
                         if let newComment = try await hproseInstance.addComment(comment, to: tweet) {
@@ -724,6 +782,191 @@ extension TweetUploadManager {
                 print("❌ [Submit] Max retries reached, giving up")
                 await showFailureToast(message: NSLocalizedString("Failed to post tweet", comment: "Error"))
                 await removePendingUpload()
+            }
+        }
+    }
+    
+    /// Poll video jobs and submit comment (reuses tweet polling logic)
+    private func pollVideoJobsAndSubmitComment(
+        comment: Tweet,
+        to parentTweet: Tweet,
+        itemData: [PendingTweetUpload.ItemData],
+        uploadedAttachments: [MimeiFileType]
+    ) async {
+        // Extract all job IDs from itemData
+        let jobItems = itemData.filter { $0.videoJobId != nil }
+        guard !jobItems.isEmpty else {
+            print("⚠️ [Comment Poll] No job IDs to poll")
+            return
+        }
+        
+        print("🔄 [Comment Poll] Starting background polling for \(jobItems.count) video job(s)")
+        
+        guard let hproseInstance = hproseInstance else {
+            print("❌ [Comment Poll] HproseInstance not available")
+            return
+        }
+        
+        // Get base URL for polling
+        guard let baseURL = try? await hproseInstance.appUser.resolveWritableUrl(),
+              let host = baseURL.host,
+              hproseInstance.appUser.cloudDrivePort > 0,
+              let pollURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
+            print("❌ [Comment Poll] Cannot construct polling URL")
+            await showFailureToast(message: NSLocalizedString("Failed to check video status", comment: "Error"))
+            return
+        }
+        
+        // Track completed job CIDs
+        var completedCIDs: [String: String] = [:] // jobId -> CID
+        var completedCount = 0
+        let totalJobs = jobItems.count
+        
+        // Poll until all complete or failed
+        var pollAttempts = 0
+        let maxPollAttempts = 120 // 10 minutes (5 second intervals)
+        
+        while pollAttempts < maxPollAttempts && completedCount < totalJobs {
+            pollAttempts += 1
+            
+            // Check status of all pending jobs
+            for jobItem in jobItems {
+                guard let jobId = jobItem.videoJobId else { continue }
+                
+                // Skip already completed jobs
+                if completedCIDs[jobId] != nil {
+                    continue
+                }
+                
+                if let status = await checkVideoJobStatus(jobId: jobId, baseURL: pollURL) {
+                    switch status.status {
+                    case "completed":
+                        if let cid = status.cid, !cid.isEmpty {
+                            completedCIDs[jobId] = cid
+                            completedCount += 1
+                            print("✅ [Comment Poll] Job \(completedCount)/\(totalJobs) complete! Job: \(jobId), CID: \(cid)")
+                        } else {
+                            print("❌ [Comment Poll] Job completed but no CID returned")
+                            await showFailureToast(message: NSLocalizedString("Video processing completed but no ID returned", comment: "Error"))
+                            return
+                        }
+                        
+                    case "failed":
+                        print("❌ [Comment Poll] Job failed: \(status.message ?? "Unknown error")")
+                        await showFailureToast(message: NSLocalizedString("Video processing failed", comment: "Error"))
+                        return
+                        
+                    case "uploading", "processing":
+                        // Still processing, continue polling
+                        continue
+                        
+                    default:
+                        print("⚠️ [Comment Poll] Unknown status for job \(jobId): \(status.status)")
+                        continue
+                    }
+                }
+            }
+            
+            // Check if all jobs completed
+            if completedCount == totalJobs {
+                print("✅ [Comment Poll] ALL \(totalJobs) video jobs completed!")
+                // Submit comment with all completed videos
+                await submitCommentWithCompletedJobs(
+                    comment: comment,
+                    to: parentTweet,
+                    itemData: itemData,
+                    completedCIDs: completedCIDs
+                )
+                return
+            }
+            
+            // Wait before next poll
+            print("⏳ [Comment Poll] \(completedCount)/\(totalJobs) jobs complete, polling... (\(pollAttempts)/\(maxPollAttempts))")
+            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+        }
+        
+        // Timeout
+        print("❌ [Comment Poll] Polling timeout after \(maxPollAttempts) attempts (\(completedCount)/\(totalJobs) completed)")
+        await showFailureToast(message: NSLocalizedString("Video processing timed out", comment: "Error"))
+    }
+    
+    /// Submit comment once ALL video jobs are complete (with retry)
+    private func submitCommentWithCompletedJobs(
+        comment: Tweet,
+        to parentTweet: Tweet,
+        itemData: [PendingTweetUpload.ItemData],
+        completedCIDs: [String: String],
+        retryCount: Int = 0
+    ) async {
+        guard let hproseInstance = hproseInstance else { return }
+        
+        print("📝 [Comment Submit] Submitting comment with \(completedCIDs.count) completed video job(s), retry: \(retryCount)")
+        
+        // Build final attachments using completed job CIDs
+        var finalAttachments: [MimeiFileType] = []
+        
+        for (index, item) in itemData.enumerated() {
+            if let jobId = item.videoJobId {
+                // This is a video - use the completed CID from server
+                if let completedCID = completedCIDs[jobId] {
+                    let attachment = MimeiFileType(
+                        mid: completedCID,
+                        mediaType: .hls_video,
+                        size: item.fileSize ?? Int64(item.data.count),
+                        fileName: item.fileName,
+                        timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
+                        aspectRatio: item.aspectRatio,
+                        url: nil
+                    )
+                    finalAttachments.append(attachment)
+                    print("✅ [Comment Submit] Added video attachment \(index + 1): CID: \(completedCID)")
+                }
+            } else if let storedCID = item.cid {
+                // This is an image - use the stored CID
+                let mediaType = MediaType.fromString(item.mediaType ?? "Image")
+                let attachment = MimeiFileType(
+                    mid: storedCID,
+                    mediaType: mediaType,
+                    size: item.fileSize ?? Int64(item.data.count),
+                    fileName: item.fileName,
+                    timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
+                    aspectRatio: item.aspectRatio,
+                    url: nil
+                )
+                finalAttachments.append(attachment)
+                print("✅ [Comment Submit] Added image attachment \(index + 1): CID: \(storedCID)")
+            }
+        }
+        
+        comment.attachments = finalAttachments
+        
+        // Submit the comment
+        do {
+            if let newComment = try await hproseInstance.addComment(comment, to: parentTweet) {
+                print("✅ [Comment Submit] Comment posted successfully with \(finalAttachments.count) attachments!")
+                print("[TweetUploadManager] New comment mid: \(newComment.mid)")
+                print("[TweetUploadManager] Parent tweet mid: \(parentTweet.mid)")
+                // Success notification is posted by addComment()
+            } else {
+                throw NSError(domain: "CommentUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to post comment"])
+            }
+        } catch {
+            print("❌ [Comment Submit] Failed to post comment (attempt \(retryCount + 1)): \(error)")
+            
+            let maxRetries = 2
+            if retryCount < maxRetries {
+                print("🔄 [Comment Submit] Retrying... (\(retryCount + 1)/\(maxRetries))")
+                try? await Task.sleep(nanoseconds: UInt64(retryCount + 1) * 2_000_000_000) // Exponential backoff
+                await submitCommentWithCompletedJobs(
+                    comment: comment,
+                    to: parentTweet,
+                    itemData: itemData,
+                    completedCIDs: completedCIDs,
+                    retryCount: retryCount + 1
+                )
+            } else {
+                print("❌ [Comment Submit] Max retries reached")
+                await showFailureToast(message: NSLocalizedString("Failed to post comment after retries", comment: "Error"))
             }
         }
     }
