@@ -182,12 +182,6 @@ struct CommentComposeView: View {
                         let selectedImages = selectedImages
                         let selectedVideos = selectedVideos
                         
-                        // Send notification for toast on presenting screen and dismiss immediately
-                        NotificationCenter.default.post(
-                            name: .tweetSubmitted,
-                            object: nil,
-                            userInfo: ["message": NSLocalizedString("Comment submitted", comment: "Comment submitted message")]
-                        )
                         dismiss()
                         
                         // Submit comment in background after dismissing using captured data

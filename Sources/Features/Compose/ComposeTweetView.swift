@@ -68,12 +68,6 @@ struct ComposeTweetView: View {
                         // Show upload dialog IMMEDIATELY before any heavy work
                         UploadProgressManager.shared.startUpload(type: "tweet")
                         
-                        // Send notification for toast on presenting screen and dismiss immediately
-                        NotificationCenter.default.post(
-                            name: .tweetSubmitted,
-                            object: nil,
-                            userInfo: ["message": NSLocalizedString("Tweet submitted", comment: "Tweet submitted message")]
-                        )
                         viewModel.clearForm()
                         dismiss()
                         

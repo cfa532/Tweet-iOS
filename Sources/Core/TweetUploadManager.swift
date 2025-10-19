@@ -92,19 +92,69 @@ class TweetUploadManager {
             await MainActor.run {
                 UploadProgressManager.shared.startUpload(type: "comment")
             }
+            
             do {
                 guard let hproseInstance = self.hproseInstance else { return }
                 
-                let comment = comment
-                var uploadedAttachments: [MimeiFileType] = []
+                // Update progress: uploading attachments
+                await MainActor.run {
+                    UploadProgressManager.shared.updateProgress(
+                        stage: .uploadingAttachments,
+                        message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                        progress: 0.2
+                    )
+                }
                 
-                let itemPairs = itemData.chunked(into: 2)
-                for (pairIndex, pair) in itemPairs.enumerated() {
+                // Upload attachments (same as tweet upload)
+                let (uploadedAttachments, _) = try await self.uploadAttachments(itemData: itemData)
+                
+                // Set comment attachments
+                comment.attachments = uploadedAttachments
+                
+                // Show completion message
+                await MainActor.run {
+                    UploadProgressManager.shared.updateProgress(
+                        stage: .completed,
+                        message: NSLocalizedString("Submitting comment...", comment: "Upload stage"),
+                        progress: 1.0,
+                        detail: ""
+                    )
+                }
+                
+                // Small delay to show message
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                
+                // Close dialog BEFORE waiting for server response (same as tweet upload)
+                await MainActor.run {
+                    UploadProgressManager.shared.completeUpload()
+                }
+                
+                // Submit comment in background (non-blocking)
+                Task.detached(priority: .background) {
+                    guard let hproseInstance = self.hproseInstance else { return }
+                    
+                    print("📝 [Background Submit] Submitting comment with attachments...")
+                    
                     do {
-                        let pairAttachments = try await self.uploadItemPair(pair)
-                        uploadedAttachments.append(contentsOf: pairAttachments)
+                        if let newComment = try await hproseInstance.addComment(comment, to: tweet) {
+                            print("✅ [Background Submit] Comment posted successfully!")
+                            print("[TweetUploadManager] New comment mid: \(newComment.mid)")
+                            print("[TweetUploadManager] Parent tweet mid: \(tweet.mid)")
+                            // Success notification is posted by addComment()
+                        } else {
+                            let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to post comment", comment: "Comment error")])
+                            await MainActor.run {
+                                if !hproseInstance.isAppInitializing {
+                                    NotificationCenter.default.post(
+                                        name: .backgroundUploadFailed,
+                                        object: nil,
+                                        userInfo: ["error": error]
+                                    )
+                                }
+                            }
+                        }
                     } catch {
-                        print("Error uploading pair \(pairIndex + 1): \(error)")
+                        print("❌ [Background Submit] Failed to post comment: \(error)")
                         await MainActor.run {
                             if !hproseInstance.isAppInitializing {
                                 NotificationCenter.default.post(
@@ -112,63 +162,22 @@ class TweetUploadManager {
                                     object: nil,
                                     userInfo: ["error": error]
                                 )
-                            } else {
-                                print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
                             }
-                        }
-                        return
-                    }
-                }
-                
-                if itemData.count != uploadedAttachments.count {
-                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload attachment", comment: "Attachment upload error")])
-                    await MainActor.run {
-                        if !hproseInstance.isAppInitializing {
-                            NotificationCenter.default.post(
-                                name: .backgroundUploadFailed,
-                                object: nil,
-                                userInfo: ["error": error]
-                            )
-                        } else {
-                            print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
-                        }
-                    }
-                    return
-                }
-                
-                comment.attachments = uploadedAttachments
-                
-                if let newComment = try await hproseInstance.addComment(comment, to: tweet) {
-                    await MainActor.run {
-                        print("[TweetUploadManager] Comment upload completed successfully")
-                        print("[TweetUploadManager] New comment mid: \(newComment.mid)")
-                        print("[TweetUploadManager] Parent tweet mid: \(tweet.mid)")
-                    }
-                } else {
-                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to post comment", comment: "Comment error")])
-                    await MainActor.run {
-                        if !hproseInstance.isAppInitializing {
-                            NotificationCenter.default.post(
-                                name: .backgroundUploadFailed,
-                                object: nil,
-                                userInfo: ["error": error]
-                            )
-                        } else {
-                            print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
                         }
                     }
                 }
             } catch {
+                print("❌ [Comment Upload] Failed to upload attachments: \(error)")
                 await MainActor.run {
+                    UploadProgressManager.shared.failUpload(message: error.localizedDescription)
+                    
                     guard let hproseInstance = self.hproseInstance else { return }
                     if !hproseInstance.isAppInitializing {
                         NotificationCenter.default.post(
                             name: .backgroundUploadFailed,
                             object: nil,
-                            userInfo: ["error": error.localizedDescription]
+                            userInfo: ["error": error]
                         )
-                    } else {
-                        print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
                     }
                 }
             }
