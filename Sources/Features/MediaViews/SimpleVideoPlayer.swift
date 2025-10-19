@@ -1370,33 +1370,37 @@ struct SimpleVideoPlayer: View {
     private func handleVideoFinished() {
         print("DEBUG: [SimpleVideoPlayer] Video finished playing for \(mid)")
         
-        // For MediaCell mode, pause immediately then rewind (don't auto-restart)
+        // For MediaCell mode, rewind immediately then pause (don't auto-restart)
         if mode == .mediaCell {
-            print("DEBUG: [SimpleVideoPlayer] MediaCell mode - pausing and rewinding to beginning for \(mid)")
-            player?.pause()
-            // Ensure mute state is correct (respect global mute state)
-            player?.isMuted = MuteState.shared.isMuted
-            playbackState = .finished
-            player?.seek(to: .zero)
-            onVideoFinished?()
+            print("DEBUG: [SimpleVideoPlayer] MediaCell mode - rewinding to beginning for \(mid)")
+            // Rewind immediately with completion handler
+            player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [mid] finished in
+                guard finished else { return }
+                // Pause after rewind completes
+                self.player?.pause()
+                // Ensure mute state is correct (respect global mute state)
+                self.player?.isMuted = MuteState.shared.isMuted
+                self.playbackState = .finished
+                print("DEBUG: [SimpleVideoPlayer] MediaCell rewound to beginning and paused for \(mid)")
+                self.onVideoFinished?()
+            }
             return
         }
         
-        // For fullscreen/detail modes, rewind and auto-restart
-        player?.seek(to: .zero) { finished in
+        // For fullscreen/detail modes, rewind immediately and optionally auto-restart
+        player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [mid, disableAutoRestart] finished in
             guard finished else { return }
             
-            if !self.disableAutoRestart {
-                print("DEBUG: [SimpleVideoPlayer] Auto-restarting video for \(self.mid)")
+            if !disableAutoRestart {
+                print("DEBUG: [SimpleVideoPlayer] Auto-restarting video for \(mid)")
                 self.player?.play()
                 self.playbackState = .playing
             } else {
-                print("DEBUG: [SimpleVideoPlayer] Video ready to replay for \(self.mid)")
+                print("DEBUG: [SimpleVideoPlayer] Video ready to replay for \(mid)")
                 self.playbackState = .finished
             }
+            self.onVideoFinished?()
         }
-        
-        onVideoFinished?()
     }
     
     private func restoreCachedVideoState() {

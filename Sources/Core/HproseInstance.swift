@@ -750,6 +750,27 @@ final class HproseInstance: ObservableObject {
         if cachedUser.username != nil && cachedUser.baseUrl == nil {
             print("DEBUG: [fetchUser] User has nil baseUrl, resolving IP for userId: \(userId)")
             
+            // Check if another task is already resolving this user's baseUrl
+            let shouldResolve = baseUrlResolutionQueue.sync {
+                if ongoingBaseUrlResolutions.contains(userId) {
+                    return false
+                }
+                ongoingBaseUrlResolutions.insert(userId)
+                return true
+            }
+            
+            if !shouldResolve {
+                print("DEBUG: [fetchUser] Another task is already resolving baseUrl for userId: \(userId), returning cached user")
+                return cachedUser
+            }
+            
+            // Ensure cleanup happens even if we return early
+            defer {
+                _ = baseUrlResolutionQueue.sync {
+                    ongoingBaseUrlResolutions.remove(userId)
+                }
+            }
+            
             // SPECIAL CASE: If this is the appUser, use appUser's baseUrl directly
             if userId == appUser.mid {
                 if let appUserBaseUrl = appUser.baseUrl {
@@ -765,15 +786,20 @@ final class HproseInstance: ObservableObject {
             }
             
             // For other users, resolve provider IP
+            print("DEBUG: [fetchUser] About to call getProviderIP with userId: \(userId), cachedUser.mid: \(cachedUser.mid)")
             do {
                 guard let providerIP = try await self.getProviderIP(userId) else {
                     print("DEBUG: [fetchUser] Failed to get provider IP for userId: \(userId)")
                     return cachedUser
                 }
+                
+                // CRITICAL: Update the singleton instance on main thread
+                // Set the baseUrl directly on the cached user (which is the singleton)
                 await MainActor.run {
                     cachedUser.baseUrl = URL(string: "http://\(providerIP)")
                     print("DEBUG: [fetchUser] ✅ Resolved baseUrl for userId: \(userId) to \(providerIP)")
                 }
+                
                 return cachedUser
             } catch {
                 print("DEBUG: [fetchUser] Error resolving baseUrl for userId: \(userId): \(error)")
@@ -806,6 +832,10 @@ final class HproseInstance: ObservableObject {
     // Track ongoing user updates to prevent concurrent calls for the same user
     private var ongoingUserUpdates: Set<String> = []
     private let userUpdateQueue = DispatchQueue(label: "user.update.queue")
+    
+    // Track ongoing baseUrl resolutions to prevent concurrent calls for the same user
+    private var ongoingBaseUrlResolutions: Set<String> = []
+    private let baseUrlResolutionQueue = DispatchQueue(label: "baseurl.resolution.queue")
     
     /// Updates user from server with baseUrl resolution and retry logic
     func updateUserFromServer(
@@ -4434,11 +4464,15 @@ final class HproseInstance: ObservableObject {
     }
     
     func getProviderIP(_ mid: String) async throws -> String? {
+        print("DEBUG: [getProviderIP] Called with mid: \(mid), mid length: \(mid.count)")
+        
         let params = [
             "aid": appId,
             "ver": "last",
             "mid": mid
         ]
+        
+        print("DEBUG: [getProviderIP] Params dict: \(params)")
         
         return try await retryOperation(maxRetries: 3) {
             guard let response = self.client.invoke("runMApp", withArgs: ["get_provider_ip", params]) else {
