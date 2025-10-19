@@ -208,6 +208,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     // Server still alive - just clear video players for fresh connections
                     // DON'T clear VideoStateCache - videos will resume from where they left off
                     SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                    
+                    // CRITICAL: Reset connection pool to close stale connections
+                    // Without this, we get "Connection reset by peer" errors causing video blinking
+                    NSLog("DEBUG: [AppDelegate] Resetting connection pool for short background recovery")
+                    LocalHTTPServer.shared.resetConnectionPool()
+                    
                     NSLog("✅ [AppDelegate] Players cleared, server still running")
                 } else {
                     // Server was killed even in short background - restart it
