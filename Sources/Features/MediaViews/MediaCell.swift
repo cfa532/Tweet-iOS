@@ -74,7 +74,7 @@ struct MediaCell: View, Equatable {
     
     private var baseUrl: URL {
         // Use author's baseUrl if available, otherwise use localhost as placeholder for cached content
-        return parentTweet.author?.baseUrl ?? URL(string: Constants.LOCALHOST_PLACEHOLDER)!
+        return parentTweet.author?.baseUrl ?? URL(string: "http://127.0.0.1")!
     }
     
     private var isVideoAttachment: Bool {

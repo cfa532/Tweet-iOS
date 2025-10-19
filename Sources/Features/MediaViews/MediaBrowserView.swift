@@ -31,7 +31,7 @@ struct MediaBrowserView: View {
 
     private var baseUrl: URL {
         // Use author's baseUrl if available, otherwise use localhost as placeholder for cached content
-        return tweet.author?.baseUrl ?? URL(string: Constants.LOCALHOST_PLACEHOLDER)!
+        return tweet.author?.baseUrl ?? URL(string: "http://127.0.0.1")!
     }
 
     init(tweet: Tweet, initialIndex: Int) {
