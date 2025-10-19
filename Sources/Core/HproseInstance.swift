@@ -176,7 +176,7 @@ final class HproseInstance: ObservableObject {
         self.preferenceHelper = PreferenceHelper()
         
         // Step 2: Initialize app user with default values
-        await initializeAppUser()
+//        await initializeAppUser()
         
         // Step 3: Try to initialize app entry and update user if successful
         do {
@@ -208,9 +208,6 @@ final class HproseInstance: ObservableObject {
             // This ensures all references to this user get the cached data
             User.updateUserInstance(with: cachedUser)
             _appUser = User.getInstance(mid: userId)
-            
-            // Set base URL from preferences or use default
-//            _appUser.baseUrl = nil
             
             // Set following list
             _appUser.followingList = Gadget.getAlphaIds()
@@ -299,20 +296,6 @@ final class HproseInstance: ObservableObject {
                     HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     
-                    // Update appUser's baseUrl to IP address as well
-                    // CRITICAL: Update the singleton instance so all references get the updated baseUrl
-                    await MainActor.run {
-                        let singleton = User.getInstance(mid: _appUser.mid)
-                        singleton.baseUrl = HproseInstance.baseUrl
-                        _appUser = singleton
-                    }
-                    print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(firstIp)")
-                    
-                    // App is now initialized since appUser has IP address
-                    await MainActor.run {
-                        isInitializationComplete = true
-                    }
-                    
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
                         print("provider ip:  \(providerIp)")
                         // Try to fetch user (retry logic is now built into fetchUser method)
@@ -341,9 +324,13 @@ final class HproseInstance: ObservableObject {
                                 // Print detailed app user content after successful login
                                 self.printAppUserContent("After successful login")
                                 
+                                // App is now initialized since appUser has IP address
+                                isInitializationComplete = true
+                                
                                 // Notify FollowingsTweetView to refresh for logged-in user
                                 NotificationCenter.default.post(name: .appUserReady, object: nil)
                             }
+                            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(providerIp)")
                         } else {
                             print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
                             let user = User.getInstance(mid: Constants.GUEST_ID)
@@ -351,7 +338,11 @@ final class HproseInstance: ObservableObject {
                                 user.baseUrl = HproseInstance.baseUrl
                                 user.followingList = Gadget.getAlphaIds()
                                 _appUser = user
+                                
+                                // App is now initialized since appUser has IP address
+                                isInitializationComplete = true
                             }
+                            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(firstIp)")
                         }
                     } else {
                         let user = User.getInstance(mid: Constants.GUEST_ID)
@@ -359,7 +350,11 @@ final class HproseInstance: ObservableObject {
                             user.baseUrl = HproseInstance.baseUrl
                             user.followingList = Gadget.getAlphaIds()
                             _appUser = user
+                            
+                            // App is now initialized since appUser has IP address
+                            isInitializationComplete = true
                         }
+                        print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(firstIp)")
                         
                         // For guest users, fetch the alphaId user from backend now that we have proper IP
                         await fetchAlphaIdUserForGuest()
