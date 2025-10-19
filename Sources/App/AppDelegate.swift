@@ -310,6 +310,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         LocalHTTPServer.shared.startAndWait()
         
         print("[AppDelegate] Video infrastructure restart complete")
+        
+        // Notify views that infrastructure is ready and they should reload media
+        NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+        print("[AppDelegate] Posted videoInfrastructureRestarted notification to trigger media reload")
     }
     
     // MARK: - Notification Permission

@@ -248,6 +248,32 @@ struct MediaCell: View, Equatable {
             }
         }
         
+        .onReceive(NotificationCenter.default.publisher(for: .cacheCleared)) { _ in
+            // Cache was cleared - reload media if visible
+            print("DEBUG: [MediaCell] Cache cleared notification received for \(attachment.mid)")
+            
+            if attachment.type == .image && isVisible {
+                // Clear current image and reload
+                image = nil
+                loadImage()
+                print("DEBUG: [MediaCell] Reloading image after cache clear for \(attachment.mid)")
+            }
+            // Videos will reload automatically when SimpleVideoPlayer receives the notification
+        }
+        
+        .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in
+            // Video infrastructure restarted after background - reload media if visible
+            print("DEBUG: [MediaCell] Video infrastructure restarted notification received for \(attachment.mid)")
+            
+            if attachment.type == .image && isVisible {
+                // Clear current image and reload (in case it was served via LocalHTTPServer)
+                image = nil
+                loadImage()
+                print("DEBUG: [MediaCell] Reloading image after infrastructure restart for \(attachment.mid)")
+            }
+            // Videos will reload automatically when SimpleVideoPlayer receives the notification
+        }
+        
         .fullScreenCover(isPresented: $showFullScreen) {
             MediaBrowserView(
                 tweet: parentTweet,
