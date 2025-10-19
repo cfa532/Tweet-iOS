@@ -175,10 +175,10 @@ final class HproseInstance: ObservableObject {
         // Step 1: Initialize preference helper first
         self.preferenceHelper = PreferenceHelper()
         
-        // Step 2: Initialize app user with default values
-//        await initializeAppUser()
+        // Step 2: Initialize app user (now handled by TweetApp.AppState.initialize())
+        // await initializeAppUser()
         
-        // Step 3: Try to initialize app entry and update user if successful
+        // Step 3: Try to initialize app entry and update user if successful (baseUrl will be set once here)
         do {
             try await initAppEntry()
         } catch {
