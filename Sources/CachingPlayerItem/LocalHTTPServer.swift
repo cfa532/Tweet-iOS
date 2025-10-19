@@ -413,6 +413,14 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // Removed repetitive request log
         
+        // Check if mediaID is blacklisted before attempting fetch
+        if BlackList.shared.isBlacklisted(mediaID) {
+            NSLog("DEBUG: [LocalHTTPServer] MediaID \(mediaID) is blacklisted, returning 404")
+            sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+            completion()
+            return
+        }
+        
         // Get real URL for this media
         guard let realURL = mediaRealURLs[mediaID] else {
             NSLog("DEBUG: [LocalHTTPServer] No real URL found for mediaID: \(mediaID)")
@@ -588,16 +596,33 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             if let error = error {
                 NSLog("DEBUG: [LocalHTTPServer] Progressive fetch error: \(error.localizedDescription)")
+                
+                // Record failure for this mediaID (attachment mid)
+                if !mediaID.isEmpty {
+                    BlackList.shared.recordFailure(mediaID)
+                    NSLog("DEBUG: [LocalHTTPServer] Recorded progressive fetch failure for mediaID: \(mediaID)")
+                }
+                
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
             }
             
             guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                // Record failure for error status
+                if !mediaID.isEmpty {
+                    BlackList.shared.recordFailure(mediaID)
+                }
+                
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
             }
             
             guard let data = data else {
+                // Record failure for empty data
+                if !mediaID.isEmpty {
+                    BlackList.shared.recordFailure(mediaID)
+                }
+                
                 self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
                 return
             }
@@ -605,6 +630,11 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Cache this byte range for future requests (skip tiny probe requests)
             if !isProbeRequest, let start = rangeStart, data.count >= 1024 {
                 self.cacheProgressiveRange(mediaID: mediaID, start: start, end: rangeEnd, data: data)
+            }
+            
+            // Record successful fetch for this mediaID
+            if !mediaID.isEmpty {
+                BlackList.shared.recordSuccess(mediaID)
             }
             
             // Build response headers with FIXED Content-Type
@@ -703,8 +733,19 @@ public class LocalHTTPServer: @unchecked Sendable {
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
             guard let self = self else { return }
             
+            // Extract mediaID from cachePath for BlackList tracking
+            let pathComponents = cachePath.components(separatedBy: "/")
+            let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
+            
             if let error = error {
                 NSLog("DEBUG: [LocalHTTPServer] Fetch error: \(error.localizedDescription)")
+                
+                // Record failure for this mediaID (attachment mid)
+                if !mediaID.isEmpty {
+                    BlackList.shared.recordFailure(mediaID)
+                    NSLog("DEBUG: [LocalHTTPServer] Recorded fetch failure for mediaID: \(mediaID)")
+                }
+                
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
             }
@@ -712,30 +753,44 @@ public class LocalHTTPServer: @unchecked Sendable {
             // CRITICAL: Validate HTTP response status
             guard let httpResponse = response as? HTTPURLResponse else {
                 NSLog("DEBUG: [LocalHTTPServer] Invalid HTTP response")
+                
+                // Record failure for invalid response
+                if !mediaID.isEmpty {
+                    BlackList.shared.recordFailure(mediaID)
+                }
+                
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
             }
             
             guard (200...299).contains(httpResponse.statusCode) else {
                 NSLog("DEBUG: [LocalHTTPServer] Server returned error status: \(httpResponse.statusCode)")
+                
+                // Record failure for error status
+                if !mediaID.isEmpty {
+                    BlackList.shared.recordFailure(mediaID)
+                }
+                
                 self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: [:], body: nil)
                 return
             }
             
             guard let data = data, !data.isEmpty else {
                 NSLog("DEBUG: [LocalHTTPServer] Empty data received")
+                
+                // Record failure for empty data
+                if !mediaID.isEmpty {
+                    BlackList.shared.recordFailure(mediaID)
+                }
+                
                 self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
                 return
             }
             
-            // For playlists, strip to relative paths before caching (port-independent!)
+            // For playlists, strip to relative paths for caching (port-independent!)
             var dataToCache = data
             var finalData = data
             if cachePath.hasSuffix(".m3u8"), let playlistString = String(data: data, encoding: .utf8) {
-                // CRITICAL: Extract actual mediaID (the Qm... hash folder)
-                let pathComponents = cachePath.components(separatedBy: "/")
-                let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
-                
                 // Strip URLs to relative paths for caching (remove scheme/host/port)
                 let relativePlaylist = self.stripPlaylistToRelativePaths(playlistString, baseURL: url)
                 if let relativeData = relativePlaylist.data(using: .utf8) {
@@ -754,6 +809,11 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Cache the relative-path version (port-independent!)
             try? dataToCache.write(to: URL(fileURLWithPath: cachePath))
             NSLog("DEBUG: [LocalHTTPServer] Cached to: \(cachePath) (size: \(dataToCache.count) bytes)")
+            
+            // Record successful fetch for this mediaID
+            if !mediaID.isEmpty {
+                BlackList.shared.recordSuccess(mediaID)
+            }
             
             // Serve it
             let mimeType = self.getMimeType(for: cachePath)
