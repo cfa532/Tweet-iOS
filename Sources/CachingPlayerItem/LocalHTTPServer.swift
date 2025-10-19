@@ -618,14 +618,60 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func readCachedProgressiveRange(mediaID: String, start: Int64, end: Int64?) -> Data? {
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let mediaDir = cacheDir.appendingPathComponent(mediaID).appendingPathComponent("ranges")
-        let rangeFileName = "r_\(start)_\(end?.description ?? "end")"
-        let cachePath = mediaDir.appendingPathComponent(rangeFileName)
         
-        guard FileManager.default.fileExists(atPath: cachePath.path) else {
+        // OPTIMIZATION: First try exact match for instant cache hits
+        let exactFileName = "r_\(start)_\(end?.description ?? "end")"
+        let exactCachePath = mediaDir.appendingPathComponent(exactFileName)
+        if FileManager.default.fileExists(atPath: exactCachePath.path),
+           let exactData = try? Data(contentsOf: exactCachePath) {
+            return exactData
+        }
+        
+        // FALLBACK: Search for overlapping cached ranges
+        // This handles cases where AVPlayer requests different byte ranges on replay
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: mediaDir.path) else {
             return nil
         }
         
-        return try? Data(contentsOf: cachePath)
+        let requestedEnd = end ?? Int64.max
+        
+        // Look for a cached range that fully contains the requested range
+        for filename in files {
+            guard filename.hasPrefix("r_") else { continue }
+            
+            // Parse cached range: "r_0_65535" → start: 0, end: 65535
+            let parts = filename.dropFirst(2).components(separatedBy: "_")
+            guard parts.count == 2,
+                  let cachedStart = Int64(parts[0]) else { continue }
+            
+            let cachedEnd: Int64
+            if parts[1] == "end" {
+                cachedEnd = Int64.max
+            } else if let parsedEnd = Int64(parts[1]) {
+                cachedEnd = parsedEnd
+            } else {
+                continue
+            }
+            
+            // Check if cached range fully contains requested range
+            if cachedStart <= start && cachedEnd >= requestedEnd {
+                let cachePath = mediaDir.appendingPathComponent(filename)
+                guard let fullData = try? Data(contentsOf: cachePath) else { continue }
+                
+                // Extract the requested portion from the cached data
+                let offset = Int(start - cachedStart)
+                let length = Int(requestedEnd - start + 1)
+                
+                guard offset >= 0 && offset < fullData.count else { continue }
+                let endIndex = min(offset + length, fullData.count)
+                
+                let extractedData = fullData.subdata(in: offset..<endIndex)
+                NSLog("DEBUG: [LocalHTTPServer] Cache HIT via overlap: requested \(start)-\(requestedEnd), found in cached \(cachedStart)-\(cachedEnd)")
+                return extractedData
+            }
+        }
+        
+        return nil
     }
     
     private func cacheProgressiveRange(mediaID: String, start: Int64, end: Int64?, data: Data) {
