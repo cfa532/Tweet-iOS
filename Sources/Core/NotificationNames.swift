@@ -73,12 +73,6 @@ extension Notification.Name {
     /// Posted when the app becomes active (returns from background)
     static let appDidBecomeActive = Notification.Name("AppDidBecomeActive")
     
-    // MARK: - Cache Related
-    /// Posted when all cache is cleared (manual or on signout) to trigger media reload
-    static let cacheCleared = Notification.Name("CacheCleared")
-    /// Posted when video infrastructure is restarted after background recovery
-    static let videoInfrastructureRestarted = Notification.Name("VideoInfrastructureRestarted")
-    
     // MARK: - Video Related
     /// Posted to stop all videos in the tweet list when entering full screen
     static let stopAllVideos = Notification.Name("StopAllVideos")

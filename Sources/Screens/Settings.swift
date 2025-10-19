@@ -99,10 +99,6 @@ struct SettingsView: View {
             await MainActor.run {
                 isCleaningCache = false
                 showCacheCleanedAlert = true
-                
-                // Notify all views that cache was cleared so they can reload media
-                NotificationCenter.default.post(name: .cacheCleared, object: nil)
-                print("DEBUG: [Settings] Posted cacheCleared notification to trigger media reload")
             }
         }
     }

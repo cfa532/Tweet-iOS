@@ -223,8 +223,6 @@ struct SimpleVideoPlayer: View {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in handleWillEnterForeground() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in handleDidBecomeActive() }
-            .onReceive(NotificationCenter.default.publisher(for: .cacheCleared)) { _ in handleCacheCleared() }
-            .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
             .onTapGesture { handleTap() }
             .onLongPressGesture(minimumDuration: 0.5) { handleLongPress() } onPressingChanged: { pressing in handlePressingChanged(pressing: pressing) }
     }
@@ -640,70 +638,6 @@ struct SimpleVideoPlayer: View {
         if loadingState.hasFailed {
             print("DEBUG: [VIDEO APP ACTIVE] Resetting error state for \(mid)")
             loadingState = .idle
-        }
-    }
-    
-    private func handleCacheCleared() {
-        // Cache was manually cleared - force complete reload if visible
-        print("DEBUG: [VIDEO CACHE CLEARED] Cache cleared notification received for \(mid)")
-        
-        // Clear current player completely
-        if let player = player {
-            player.pause()
-            player.replaceCurrentItem(with: nil)
-        }
-        self.player = nil
-        
-        // Reset all state
-        loadingState = .idle
-        playbackState = .notStarted
-        isPlayerDetached = false
-        
-        // Clear from SharedAssetCache
-        SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? mid)
-        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
-        
-        // Clear from VideoStateCache
-        VideoStateCache.shared.clearCache(for: mid)
-        
-        print("DEBUG: [VIDEO CACHE CLEARED] Cleared all caches and state for \(mid)")
-        
-        // Force reload if visible and should load
-        if isVisible && shouldLoadVideo {
-            print("DEBUG: [VIDEO CACHE CLEARED] Forcing reload for visible video \(mid)")
-            setupPlayer()
-        }
-    }
-    
-    private func handleVideoInfrastructureRestarted() {
-        // Video infrastructure (LocalHTTPServer) restarted after background - force reload
-        print("DEBUG: [VIDEO INFRASTRUCTURE RESTART] Infrastructure restarted notification received for \(mid)")
-        
-        // Clear current player completely since URLs may have changed (port changes)
-        if let player = player {
-            player.pause()
-            player.replaceCurrentItem(with: nil)
-        }
-        self.player = nil
-        
-        // Reset state but keep position info if available in VideoStateCache
-        loadingState = .idle
-        isPlayerDetached = false
-        
-        // Clear from SharedAssetCache (assets may have stale URLs)
-        SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? mid)
-        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? mid)
-        
-        print("DEBUG: [VIDEO INFRASTRUCTURE RESTART] Cleared player and asset cache for \(mid)")
-        
-        // Force reload if visible and should load
-        if isVisible && shouldLoadVideo {
-            print("DEBUG: [VIDEO INFRASTRUCTURE RESTART] Forcing reload for visible video \(mid)")
-            setupPlayer()
-        } else if mode == .tweetDetail {
-            // For detail mode, always reload even if not technically visible (singleton needs restoration)
-            print("DEBUG: [VIDEO INFRASTRUCTURE RESTART] Forcing reload for tweetDetail mode video \(mid)")
-            setupPlayer()
         }
     }
     

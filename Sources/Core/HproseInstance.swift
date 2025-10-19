@@ -201,13 +201,11 @@ final class HproseInstance: ObservableObject {
         }
         
         // Try to load cached user first (async, non-blocking)
-        // Note: fetchUser always returns a User instance (creates fresh one if not cached)
         let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
         
         await MainActor.run {
             // CRITICAL: Update the singleton instance instead of replacing _appUser
             // This ensures all references to this user get the cached data
-            // fetchUser returns a fresh instance if no cache exists, which is safe to use
             User.updateUserInstance(with: cachedUser)
             _appUser = User.getInstance(mid: userId)
             
