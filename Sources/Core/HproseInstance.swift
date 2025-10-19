@@ -703,7 +703,13 @@ final class HproseInstance: ObservableObject {
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
-        // Step 0: Check if userId is blacklisted
+        // Step 0: Never make network calls for GUEST_ID (broken tweets with null user)
+        if userId == Constants.GUEST_ID {
+            print("DEBUG: [fetchUser] Skipping GUEST_ID, returning guest user instance")
+            return User.getInstance(mid: Constants.GUEST_ID)
+        }
+        
+        // Step 1: Check if userId is blacklisted
         if blackList.isBlacklisted(userId) {
             print("DEBUG: [fetchUser] userId \(userId) is blacklisted, returning cached user only")
             return await TweetCacheManager.shared.fetchUser(mid: userId)
@@ -812,6 +818,12 @@ final class HproseInstance: ObservableObject {
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
+        // Never update GUEST_ID from server
+        if userId == Constants.GUEST_ID {
+            print("DEBUG: [updateUserFromServer] Skipping GUEST_ID, returning guest instance")
+            return User.getInstance(mid: Constants.GUEST_ID)
+        }
+        
         // Check if we're already updating this user
         let shouldProceed = userUpdateQueue.sync {
             if ongoingUserUpdates.contains(userId) {
@@ -4434,6 +4446,12 @@ final class HproseInstance: ObservableObject {
     }
     
     func getProviderIP(_ mid: String) async throws -> String? {
+        // Safety check: never try to get provider IP for GUEST_ID
+        if mid == Constants.GUEST_ID {
+            print("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot get provider IP for GUEST_ID"])
+        }
+        
         let params = [
             "aid": appId,
             "ver": "last",

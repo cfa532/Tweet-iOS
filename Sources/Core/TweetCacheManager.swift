@@ -459,7 +459,10 @@ extension Tweet {
                 
             // Trigger fetchUser if baseUrl is nil to resolve IP
             // SKIP appUser - app initialization will handle it
-            if authorSingleton.baseUrl == nil && authorSingleton.mid != HproseInstance.shared.appUser.mid {
+            // SKIP GUEST_ID - broken tweets with null user should not trigger network calls
+            if authorSingleton.baseUrl == nil 
+                && authorSingleton.mid != HproseInstance.shared.appUser.mid 
+                && !authorSingleton.isGuest {
                 Task {
                     _ = try? await HproseInstance.shared.fetchUser(authorSingleton.mid)
                 }
