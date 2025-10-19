@@ -205,7 +205,19 @@ class DetailVideoManager: NSObject, ObservableObject {
     
     // MARK: - App Lifecycle Handling
     
+    private var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
+    
     private func setupAppLifecycleNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleAppDidEnterBackground()
+            }
+        }
+        
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
@@ -227,6 +239,23 @@ class DetailVideoManager: NSObject, ObservableObject {
         }
     }
     
+    private func handleAppDidEnterBackground() {
+        guard let player = currentPlayer else { return }
+        
+        print("DEBUG: [DetailVideoManager] App entering background, saving state")
+        
+        // Save current playback state
+        let wasPlaying = player.rate > 0
+        let currentTime = player.currentTime()
+        savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
+        
+        // Pause the player to prevent black screen
+        player.pause()
+        isPlaying = false
+        
+        print("DEBUG: [DetailVideoManager] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
+    }
+    
     private func handleAppWillEnterForeground() {
         refreshVideoLayer()
     }
@@ -237,28 +266,65 @@ class DetailVideoManager: NSObject, ObservableObject {
     }
     
     private func refreshVideoLayer() {
-        guard let player = currentPlayer else { return }
+        guard let player = currentPlayer else {
+            print("DEBUG: [DetailVideoManager] No player to refresh")
+            return
+        }
+        
+        // Check if player is still valid (has a current item)
+        guard player.currentItem != nil else {
+            print("DEBUG: [DetailVideoManager] Player has no current item - needs recreation")
+            // Player was cleared by background recovery, need to recreate
+            // Clear our reference so it can be recreated when view appears
+            currentPlayer = nil
+            currentVideoMid = nil
+            isPlaying = false
+            savedPlaybackState = nil
+            return
+        }
         
         print("DEBUG: [DetailVideoManager] Refreshing video layer after background/foreground transition")
         
-        // Store current state
-        let wasPlaying = isPlaying
-        let currentTime = player.currentTime()
+        // Use saved state if available, otherwise use current state
+        let wasPlaying: Bool
+        let seekTime: CMTime
+        
+        if let savedState = savedPlaybackState {
+            wasPlaying = savedState.wasPlaying
+            seekTime = savedState.time
+            print("DEBUG: [DetailVideoManager] Using saved state - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
+            savedPlaybackState = nil // Clear after using
+        } else {
+            wasPlaying = isPlaying
+            seekTime = player.currentTime()
+            print("DEBUG: [DetailVideoManager] No saved state, using current - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
+        }
         
         // Pause first to ensure clean state
         player.pause()
         
         // Force a seek with zero tolerance to refresh the video layer
         // This triggers the AVPlayerLayer to redraw its contents
-        player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+        player.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
             if finished {
                 print("DEBUG: [DetailVideoManager] Seek completed after layer refresh")
                 if wasPlaying {
                     // Resume playback if it was playing before
+                    print("DEBUG: [DetailVideoManager] Resuming playback")
                     player.play()
                     Task { @MainActor [weak self] in
                         self?.isPlaying = true
                     }
+                } else {
+                    print("DEBUG: [DetailVideoManager] Not resuming playback (was paused)")
+                }
+            } else {
+                print("DEBUG: [DetailVideoManager] Seek failed after layer refresh - clearing invalid player")
+                // Seek failed, player is invalid, clear it
+                Task { @MainActor [weak self] in
+                    self?.currentPlayer = nil
+                    self?.currentVideoMid = nil
+                    self?.isPlaying = false
                 }
             }
         }

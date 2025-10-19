@@ -604,7 +604,8 @@ struct SimpleVideoPlayer: View {
         }
         
         // If still no player, force reload by calling setupPlayer
-        if player == nil && shouldLoadVideo && !isPlayerDetached && isVisible {
+        // For tweetDetail mode, always try to recreate even if not visible (singleton needs restoration)
+        if player == nil && shouldLoadVideo && !isPlayerDetached && (isVisible || mode == .tweetDetail) {
             print("DEBUG: [VIDEO APP ACTIVE] No valid player found, forcing reload for \(mid)")
             setupPlayer()
         }
