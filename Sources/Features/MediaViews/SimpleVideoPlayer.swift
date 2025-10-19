@@ -1376,8 +1376,12 @@ struct SimpleVideoPlayer: View {
             player?.pause()
             // Ensure mute state is correct (respect global mute state)
             player?.isMuted = MuteState.shared.isMuted
-            playbackState = .finished
-            player?.seek(to: .zero)
+            // Seek to beginning first, then set state
+            player?.seek(to: .zero) { finished in
+                if finished {
+                    self.playbackState = .finished
+                }
+            }
             onVideoFinished?()
             return
         }
