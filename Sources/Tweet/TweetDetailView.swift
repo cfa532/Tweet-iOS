@@ -224,26 +224,7 @@ struct DetailMediaCell: View {
                     Color.gray.opacity(0.2)
                 }
             } else {
-                // BaseUrl not available yet - check if we can show cached images
-                let aspectRatio = CGFloat(attachment.aspectRatio ?? 1.0)
-                
-                if attachment.type == .image {
-                    // For images, check if there's cached content and show it immediately
-                    if let cachedImage = ImageCacheManager.shared.getCachedCompressedImage(forMid: attachment.mid) {
-                        Image(uiImage: cachedImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .clipped()
-                    } else {
-                        // No cached image - show loading while waiting for baseUrl
-                        Color.gray.opacity(0.2)
-                            .aspectRatio(aspectRatio, contentMode: .fit)
-                            .overlay(ProgressView())
-                    }
-                } else {
-                    // For other types, show loading
-                    Color.gray.opacity(0.2)
-                }
+                Color.gray.opacity(0.2)
             }
         }
         .onAppear {

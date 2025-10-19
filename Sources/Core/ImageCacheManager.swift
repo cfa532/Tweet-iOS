@@ -231,29 +231,6 @@ class ImageCacheManager: @unchecked Sendable {
         return nil
     }
     
-    /// Get cached compressed image by mid alone (for when baseUrl is not yet available)
-    func getCachedCompressedImage(forMid mid: String) -> UIImage? {
-        guard !mid.isEmpty else { return nil }
-        
-        let cacheKey = "\(mid)_compressed"
-        
-        // Check memory cache first
-        if let cachedImage = cache.object(forKey: cacheKey as NSString) {
-            return cachedImage
-        }
-        
-        // Check disk cache
-        let fileURL = getCompressedCacheFileURL(for: mid)
-        if let data = try? Data(contentsOf: fileURL),
-           let image = UIImage(data: data) {
-            // Add to memory cache
-            cache.setObject(image, forKey: cacheKey as NSString)
-            return image
-        }
-        
-        return nil
-    }
-    
     func cacheImageData(_ data: Data, for attachment: MimeiFileType, baseUrl: URL) {
         let key = getCacheKey(for: attachment, baseUrl: baseUrl)
         

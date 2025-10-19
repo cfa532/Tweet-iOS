@@ -208,30 +208,7 @@ struct MediaCell: View, Equatable {
                     EmptyView()
                 }
             } else {
-                // BaseUrl not available yet - check if we can show cached images
-                if attachment.type == .image {
-                    // For images, check if there's cached content and show it immediately
-                    if let cachedImage = imageCache.getCachedCompressedImage(forMid: attachment.mid) {
-                        Image(uiImage: cachedImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .clipped()
-                            .onTapGesture {
-                                handleTap()
-                            }
-                    } else {
-                        // No cached image - show loading while waiting for baseUrl
-                        Color.gray.opacity(0.2)
-                            .aspectRatio(contentMode: .fill)
-                            .overlay(
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .gray))
-                            )
-                    }
-                } else {
-                    // For other types, just show loading
-                    ProgressView()
-                }
+                EmptyView()
             }
         }
         .onAppear {
