@@ -72,8 +72,9 @@ struct MediaCell: View, Equatable {
         return attachments[attachmentIndex]
     }
     
-    private var baseUrl: URL? {
-        return parentTweet.author?.baseUrl
+    private var baseUrl: URL {
+        // Use author's baseUrl if available, otherwise use localhost as placeholder for cached content
+        return parentTweet.author?.baseUrl ?? URL(string: "http://127.0.0.1")!
     }
     
     private var isVideoAttachment: Bool {
@@ -82,7 +83,7 @@ struct MediaCell: View, Equatable {
     
     var body: some View {
         Group {
-            if let validBaseUrl = baseUrl, let url = attachment.getUrl(validBaseUrl) {
+            if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
                     
@@ -127,7 +128,7 @@ struct MediaCell: View, Equatable {
                                     // FIRST: Clear all caches immediately
                                     print("DEBUG: [VIDEO RELOAD] Long press load triggered for \(attachment.mid)")
                                     
-                                    if let validBaseUrl = baseUrl, let url = attachment.getUrl(validBaseUrl) {
+                                    if let url = attachment.getUrl(baseUrl) {
                                         // Clear player cache
                                         SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? attachment.mid)
                                         
@@ -162,7 +163,7 @@ struct MediaCell: View, Equatable {
                             }
                     } else if isLoading {
                         // Show cached placeholder while loading original image
-                        if let validBaseUrl = baseUrl, let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: validBaseUrl) {
+                        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
                             Image(uiImage: cachedImage)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
@@ -189,7 +190,7 @@ struct MediaCell: View, Equatable {
                         }
                     } else {
                         // Show cached placeholder if available, otherwise gray background
-                        if let validBaseUrl = baseUrl, let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: validBaseUrl) {
+                        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
                             Image(uiImage: cachedImage)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
@@ -208,49 +209,7 @@ struct MediaCell: View, Equatable {
                     EmptyView()
                 }
             } else {
-                // BaseUrl not available yet - show cached content immediately
-                if (attachment.type == .video || attachment.type == .hls_video) && shouldLoadVideo {
-                    // For videos, check if there's cached playlist
-                    let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-                    let playlistPath = cacheDir.appendingPathComponent(attachment.mid).appendingPathComponent("master.m3u8")
-                    let hasCachedPlaylist = FileManager.default.fileExists(atPath: playlistPath.path)
-                    
-                    if hasCachedPlaylist {
-                        // We have cached video - use localhost URL (LocalHTTPServer will serve from cache)
-                        let placeholderUrl = URL(string: "http://127.0.0.1:8080/\(attachment.mid)/master.m3u8")!
-                        videoPlayerView(url: placeholderUrl)
-                    } else {
-                        // No cached content - show loading while waiting for baseUrl
-                        Color.gray.opacity(0.2)
-                            .aspectRatio(contentMode: .fill)
-                            .overlay(
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            )
-                    }
-                } else if attachment.type == .image {
-                    // For images, check if there's cached content and show it immediately
-                    if let cachedImage = imageCache.getCachedCompressedImage(forMid: attachment.mid) {
-                        Image(uiImage: cachedImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .clipped()
-                            .onTapGesture {
-                                handleTap()
-                            }
-                    } else {
-                        // No cached image - show loading while waiting for baseUrl
-                        Color.gray.opacity(0.2)
-                            .aspectRatio(contentMode: .fill)
-                            .overlay(
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .gray))
-                            )
-                    }
-                } else {
-                    // For other types, just show loading
-                    ProgressView()
-                }
+                EmptyView()
             }
         }
         .onAppear {
@@ -273,9 +232,7 @@ struct MediaCell: View, Equatable {
             cancelPreloadTask()
             
             // Cancel any pending image loads to prevent memory leaks
-            if let validBaseUrl = baseUrl {
-                GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(validBaseUrl.absoluteString)")
-            }
+            GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(baseUrl.absoluteString)")
         }
         .onChange(of: isVisible) { _, newValue in
             // Handle visibility changes - image loading is now handled in onAppear
@@ -345,10 +302,10 @@ struct MediaCell: View, Equatable {
     }
     
     private func loadImage() {
-        guard let validBaseUrl = baseUrl, let url = attachment.getUrl(validBaseUrl) else { return }
+        guard let url = attachment.getUrl(baseUrl) else { return }
         
         // First, try to get cached image immediately
-        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: validBaseUrl) {
+        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
             self.image = cachedImage
             return
         }
@@ -358,10 +315,10 @@ struct MediaCell: View, Equatable {
         
         // Use normal priority for grid images (they're visible but not as critical as detail view)
         GlobalImageLoadManager.shared.loadImageNormalPriority(
-            id: "\(attachment.mid)_\(validBaseUrl.absoluteString)",
+            id: "\(attachment.mid)_\(baseUrl.absoluteString)",
             url: url,
             attachment: attachment,
-            baseUrl: validBaseUrl
+            baseUrl: baseUrl
         ) { loadedImage in
             self.image = loadedImage
             self.isLoading = false
@@ -438,7 +395,7 @@ struct MediaCell: View, Equatable {
         // Clear all caches and force reload by toggling shouldLoadVideo
         print("DEBUG: [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
         
-        if let validBaseUrl = baseUrl, let url = attachment.getUrl(validBaseUrl) {
+        if let url = attachment.getUrl(baseUrl) {
             // Clear player cache
             SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? attachment.mid)
             
