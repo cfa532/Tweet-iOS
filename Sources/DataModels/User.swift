@@ -2,10 +2,6 @@ import Foundation
 import Combine
 import hprose
 
-extension Notification.Name {
-    static let userBaseUrlUpdated = Notification.Name("userBaseUrlUpdated")
-}
-
 class User: ObservableObject, Codable, Identifiable, Hashable {
     // MARK: - Singleton Dictionary
     private static var userInstances: [MimeiId: User] = [:]
@@ -312,13 +308,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             // Only update baseUrl/writableUrl if the new value is non-nil
             // This preserves memory-cached IPs when loading from disk (where IPs are not persisted)
             if let newBaseUrl = user.baseUrl {
-                let oldBaseUrl = instance.baseUrl
                 instance.baseUrl = newBaseUrl
-                
-                // Notify observers if baseUrl changed
-                if oldBaseUrl != newBaseUrl {
-                    NotificationCenter.default.post(name: .userBaseUrlUpdated, object: instance.mid)
-                }
             }
             if let newWritableUrl = user.writableUrl {
                 instance.writableUrl = newWritableUrl
@@ -345,13 +335,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 // Only update baseUrl/writableUrl if the new value is non-nil
                 // This preserves memory-cached IPs when loading from disk (where IPs are not persisted)
                 if let newBaseUrl = user.baseUrl {
-                    let oldBaseUrl = instance.baseUrl
                     instance.baseUrl = newBaseUrl
-                    
-                    // Notify observers if baseUrl changed
-                    if oldBaseUrl != newBaseUrl {
-                        NotificationCenter.default.post(name: .userBaseUrlUpdated, object: instance.mid)
-                    }
                 }
                 if let newWritableUrl = user.writableUrl {
                     instance.writableUrl = newWritableUrl

@@ -142,13 +142,13 @@ struct DetailMediaCell: View {
         return attachments[attachmentIndex]
     }
     
-    private var baseUrl: URL {
-        return parentTweet.author?.baseUrl ?? HproseInstance.baseUrl
+    private var baseUrl: URL? {
+        return parentTweet.author?.baseUrl
     }
     
     var body: some View {
         Group {
-            if let url = attachment.getUrl(baseUrl) {
+            if let validBaseUrl = baseUrl, let url = attachment.getUrl(validBaseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
                     // Show video with SimpleVideoPlayer in tweetDetail mode (shares player with grid, bypasses VideoManager)
@@ -188,7 +188,7 @@ struct DetailMediaCell: View {
                                 .clipped()
                         } else if loading {
                             // Show cached placeholder while loading original image
-                            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                            if let validBaseUrl = baseUrl, let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: validBaseUrl) {
                                 Image(uiImage: cachedImage)
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
@@ -210,7 +210,7 @@ struct DetailMediaCell: View {
                             }
                         } else {
                             // Show cached placeholder if available, otherwise gray background
-                            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                            if let validBaseUrl = baseUrl, let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: validBaseUrl) {
                                 Image(uiImage: cachedImage)
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
@@ -239,13 +239,13 @@ struct DetailMediaCell: View {
     }
     
     private func loadImage() {
-        guard let url = attachment.getUrl(baseUrl) else { return }
+        guard let validBaseUrl = baseUrl, let url = attachment.getUrl(validBaseUrl) else { return }
         
-        let loadId = "\(attachment.mid)_\(baseUrl.absoluteString)"
+        let loadId = "\(attachment.mid)_\(validBaseUrl.absoluteString)"
         print("DEBUG: [TweetDetailView] loadImage called for \(loadId)")
         
         // First, try to get cached image immediately
-        if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: validBaseUrl) {
             print("DEBUG: [TweetDetailView] Found cached image for \(loadId)")
             self.image = cachedImage
             return
@@ -260,7 +260,7 @@ struct DetailMediaCell: View {
             id: loadId,
             url: url,
             attachment: attachment,
-            baseUrl: baseUrl
+            baseUrl: validBaseUrl
         ) { loadedImage in
             print("DEBUG: [TweetDetailView] Load completed for \(loadId), success: \(loadedImage != nil)")
             self.image = loadedImage

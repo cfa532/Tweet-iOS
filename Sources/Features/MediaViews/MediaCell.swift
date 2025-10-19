@@ -72,8 +72,8 @@ struct MediaCell: View, Equatable {
         return attachments[attachmentIndex]
     }
     
-    private var baseUrl: URL {
-        return parentTweet.author?.baseUrl ?? HproseInstance.baseUrl
+    private var baseUrl: URL? {
+        return parentTweet.author?.baseUrl
     }
     
     private var isVideoAttachment: Bool {
@@ -82,7 +82,7 @@ struct MediaCell: View, Equatable {
     
     var body: some View {
         Group {
-            if let url = attachment.getUrl(baseUrl) {
+            if let validBaseUrl = baseUrl, let url = attachment.getUrl(validBaseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
                     
@@ -127,7 +127,7 @@ struct MediaCell: View, Equatable {
                                     // FIRST: Clear all caches immediately
                                     print("DEBUG: [VIDEO RELOAD] Long press load triggered for \(attachment.mid)")
                                     
-                                    if let url = attachment.getUrl(baseUrl) {
+                                    if let validBaseUrl = baseUrl, let url = attachment.getUrl(validBaseUrl) {
                                         // Clear player cache
                                         SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? attachment.mid)
                                         
@@ -162,7 +162,7 @@ struct MediaCell: View, Equatable {
                             }
                     } else if isLoading {
                         // Show cached placeholder while loading original image
-                        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                        if let validBaseUrl = baseUrl, let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: validBaseUrl) {
                             Image(uiImage: cachedImage)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
@@ -189,7 +189,7 @@ struct MediaCell: View, Equatable {
                         }
                     } else {
                         // Show cached placeholder if available, otherwise gray background
-                        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                        if let validBaseUrl = baseUrl, let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: validBaseUrl) {
                             Image(uiImage: cachedImage)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
@@ -231,7 +231,9 @@ struct MediaCell: View, Equatable {
             cancelPreloadTask()
             
             // Cancel any pending image loads to prevent memory leaks
-            GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(baseUrl.absoluteString)")
+            if let validBaseUrl = baseUrl {
+                GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(validBaseUrl.absoluteString)")
+            }
         }
         .onChange(of: isVisible) { _, newValue in
             // Handle visibility changes - image loading is now handled in onAppear
@@ -301,10 +303,10 @@ struct MediaCell: View, Equatable {
     }
     
     private func loadImage() {
-        guard let url = attachment.getUrl(baseUrl) else { return }
+        guard let validBaseUrl = baseUrl, let url = attachment.getUrl(validBaseUrl) else { return }
         
         // First, try to get cached image immediately
-        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: validBaseUrl) {
             self.image = cachedImage
             return
         }
@@ -314,10 +316,10 @@ struct MediaCell: View, Equatable {
         
         // Use normal priority for grid images (they're visible but not as critical as detail view)
         GlobalImageLoadManager.shared.loadImageNormalPriority(
-            id: "\(attachment.mid)_\(baseUrl.absoluteString)",
+            id: "\(attachment.mid)_\(validBaseUrl.absoluteString)",
             url: url,
             attachment: attachment,
-            baseUrl: baseUrl
+            baseUrl: validBaseUrl
         ) { loadedImage in
             self.image = loadedImage
             self.isLoading = false
@@ -394,7 +396,7 @@ struct MediaCell: View, Equatable {
         // Clear all caches and force reload by toggling shouldLoadVideo
         print("DEBUG: [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
         
-        if let url = attachment.getUrl(baseUrl) {
+        if let validBaseUrl = baseUrl, let url = attachment.getUrl(validBaseUrl) {
             // Clear player cache
             SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? attachment.mid)
             

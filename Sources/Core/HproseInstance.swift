@@ -301,14 +301,12 @@ final class HproseInstance: ObservableObject {
                     
                     // Update appUser's baseUrl to IP address as well
                     // CRITICAL: Update the singleton instance so all references get the updated baseUrl
-                    // This will trigger .userBaseUrlUpdated notification, which SimpleVideoPlayer observes
                     await MainActor.run {
-                        _appUser.baseUrl = HproseInstance.baseUrl
-                        // Also update the singleton for this user
                         let singleton = User.getInstance(mid: _appUser.mid)
                         singleton.baseUrl = HproseInstance.baseUrl
+                        _appUser = singleton
                     }
-                    print("DEBUG: [initAppEntry] Updated appUser baseUrl to IP: \(firstIp)")
+                    print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(firstIp)")
                     
                     // App is now initialized since appUser has IP address
                     await MainActor.run {

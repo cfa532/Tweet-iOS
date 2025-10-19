@@ -29,8 +29,8 @@ struct MediaBrowserView: View {
         return tweet.attachments ?? []
     }
 
-    private var baseUrl: URL {
-        return tweet.author?.baseUrl ?? HproseInstance.baseUrl
+    private var baseUrl: URL? {
+        return tweet.author?.baseUrl
     }
 
     init(tweet: Tweet, initialIndex: Int) {
@@ -42,24 +42,33 @@ struct MediaBrowserView: View {
     }
 
     var body: some View {
-        MediaBrowserContentView(
-            attachments: attachments,
-            currentIndex: $currentIndex,
-            previousIndex: $previousIndex,
-            showControls: $showControls,
-            dragOffset: $dragOffset,
-            isDragging: $isDragging,
-            isVisible: $isVisible,
-            baseUrl: baseUrl,
-            imageStates: $imageStates,
-            isImageZoomed: $isImageZoomed,
-            dismiss: { dismiss() },
-            startControlsTimer: startControlsTimer,
-            resetControlsTimer: resetControlsTimer,
-            loadImageIfNeededClosure: { attachment, index in
-                loadImageIfNeeded(for: attachment, at: index)
+        if let validBaseUrl = baseUrl {
+            MediaBrowserContentView(
+                attachments: attachments,
+                currentIndex: $currentIndex,
+                previousIndex: $previousIndex,
+                showControls: $showControls,
+                dragOffset: $dragOffset,
+                isDragging: $isDragging,
+                isVisible: $isVisible,
+                baseUrl: validBaseUrl,
+                imageStates: $imageStates,
+                isImageZoomed: $isImageZoomed,
+                dismiss: { dismiss() },
+                startControlsTimer: startControlsTimer,
+                resetControlsTimer: resetControlsTimer,
+                loadImageIfNeededClosure: { attachment, index in
+                    loadImageIfNeeded(for: attachment, at: index)
+                }
+            )
+        } else {
+            // Show loading while waiting for baseUrl to be resolved
+            ZStack {
+                Color.black.ignoresSafeArea()
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
             }
-        )
+        }
     }
     
     // MARK: - MediaBrowserContentView
@@ -262,11 +271,16 @@ struct MediaBrowserView: View {
     }
     
     private func loadImageIfNeeded(for attachment: MimeiFileType, at index: Int) {
-        let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
+        guard let validBaseUrl = baseUrl else { 
+            print("DEBUG: [MediaBrowserView] No baseUrl for attachment, skipping load")
+            return
+        }
+        
+        let loadId = "browser_\(index)_\(attachment.mid)_\(validBaseUrl.absoluteString)"
         print("DEBUG: [MediaBrowserView] loadImageIfNeeded called for \(loadId)")
         
         // First, try to get compressed image immediately
-        if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: validBaseUrl) {
             print("DEBUG: [MediaBrowserView] Found cached image for \(loadId)")
             imageStates[index] = .loaded(compressedImage)
             return
@@ -277,7 +291,7 @@ struct MediaBrowserView: View {
         imageStates[index] = .loading
         
         // Load and cache compressed image
-        guard let url = attachment.getUrl(baseUrl) else { 
+        guard let url = attachment.getUrl(validBaseUrl) else { 
             print("DEBUG: [MediaBrowserView] No URL for \(loadId)")
             imageStates[index] = .error
             return 
@@ -288,7 +302,7 @@ struct MediaBrowserView: View {
             id: loadId,
             url: url,
             attachment: attachment,
-            baseUrl: baseUrl
+            baseUrl: validBaseUrl
         ) { compressedImage in
             print("DEBUG: [MediaBrowserView] Load completed for \(loadId), success: \(compressedImage != nil)")
             if let compressedImage = compressedImage {
@@ -304,7 +318,8 @@ struct MediaBrowserView: View {
 
     
     private func getCachedPlaceholder(for attachment: MimeiFileType) -> UIImage? {
-        return ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl)
+        guard let validBaseUrl = baseUrl else { return nil }
+        return ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: validBaseUrl)
     }
     
     private static func cleanupImageStates(attachments: [MimeiFileType], imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {
