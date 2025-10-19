@@ -11,6 +11,9 @@ enum Constants {
     static let MAX_TWEET_SIZE = 28000
     static let MIMEI_ID_LENGTH = 27
     
+    // Localhost Configuration
+    static let LOCAL_HOST = "http://127.0.0.1"
+    
     // Cache Configuration
     static let MAX_ASSET_CACHE_SIZE = 30 // Maximum number of cached assets
     static let MAX_PLAYER_CACHE_SIZE = 25 // Maximum number of cached players
