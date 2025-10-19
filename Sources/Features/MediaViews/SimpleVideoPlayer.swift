@@ -1370,33 +1370,39 @@ struct SimpleVideoPlayer: View {
     private func handleVideoFinished() {
         print("DEBUG: [SimpleVideoPlayer] Video finished playing for \(mid)")
         
-        // For MediaCell mode, pause immediately then rewind (don't auto-restart)
+        // For MediaCell mode, pause immediately then rewind after delay (don't auto-restart)
         if mode == .mediaCell {
             print("DEBUG: [SimpleVideoPlayer] MediaCell mode - pausing and rewinding to beginning for \(mid)")
             player?.pause()
             // Ensure mute state is correct (respect global mute state)
             player?.isMuted = MuteState.shared.isMuted
-            // Seek to beginning first, then set state
-            player?.seek(to: .zero) { finished in
-                if finished {
-                    self.playbackState = .finished
+            // Delay 0.5s before rewinding to make it noticeable
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                self.player?.seek(to: .zero) { finished in
+                    if finished {
+                        self.playbackState = .finished
+                    }
                 }
             }
             onVideoFinished?()
             return
         }
         
-        // For fullscreen/detail modes, rewind and auto-restart
-        player?.seek(to: .zero) { finished in
-            guard finished else { return }
-            
-            if !self.disableAutoRestart {
-                print("DEBUG: [SimpleVideoPlayer] Auto-restarting video for \(self.mid)")
-                self.player?.play()
-                self.playbackState = .playing
-            } else {
-                print("DEBUG: [SimpleVideoPlayer] Video ready to replay for \(self.mid)")
-                self.playbackState = .finished
+        // For fullscreen/detail modes, delay then rewind and auto-restart
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            self.player?.seek(to: .zero) { finished in
+                guard finished else { return }
+                
+                if !self.disableAutoRestart {
+                    print("DEBUG: [SimpleVideoPlayer] Auto-restarting video for \(self.mid)")
+                    self.player?.play()
+                    self.playbackState = .playing
+                } else {
+                    print("DEBUG: [SimpleVideoPlayer] Video ready to replay for \(self.mid)")
+                    self.playbackState = .finished
+                }
             }
         }
         
