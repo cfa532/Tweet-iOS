@@ -756,6 +756,27 @@ final class HproseInstance: ObservableObject {
         if cachedUser.username != nil && cachedUser.baseUrl == nil {
             print("DEBUG: [fetchUser] User has nil baseUrl, resolving IP for userId: \(userId)")
             
+            // Check if another task is already resolving this user's baseUrl
+            let shouldResolve = baseUrlResolutionQueue.sync {
+                if ongoingBaseUrlResolutions.contains(userId) {
+                    return false
+                }
+                ongoingBaseUrlResolutions.insert(userId)
+                return true
+            }
+            
+            if !shouldResolve {
+                print("DEBUG: [fetchUser] Another task is already resolving baseUrl for userId: \(userId), returning cached user")
+                return cachedUser
+            }
+            
+            // Ensure cleanup happens even if we return early
+            defer {
+                _ = baseUrlResolutionQueue.sync {
+                    ongoingBaseUrlResolutions.remove(userId)
+                }
+            }
+            
             // SPECIAL CASE: If this is the appUser, use appUser's baseUrl directly
             if userId == appUser.mid {
                 if let appUserBaseUrl = appUser.baseUrl {
@@ -812,6 +833,10 @@ final class HproseInstance: ObservableObject {
     // Track ongoing user updates to prevent concurrent calls for the same user
     private var ongoingUserUpdates: Set<String> = []
     private let userUpdateQueue = DispatchQueue(label: "user.update.queue")
+    
+    // Track ongoing baseUrl resolutions to prevent concurrent calls for the same user
+    private var ongoingBaseUrlResolutions: Set<String> = []
+    private let baseUrlResolutionQueue = DispatchQueue(label: "baseurl.resolution.queue")
     
     /// Updates user from server with baseUrl resolution and retry logic
     func updateUserFromServer(
@@ -4460,11 +4485,11 @@ final class HproseInstance: ObservableObject {
         
         return try await retryOperation(maxRetries: 3) {
             guard let response = self.client.invoke("runMApp", withArgs: ["get_provider_ip", params]) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for get_provider_ip"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for get_provider_ip: \(mid)"])
             }
             
             guard let ipAddress = response as? String else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format for get_provider_ip"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format for get_provider_ip: \(mid)"])
             }
             
             return ipAddress

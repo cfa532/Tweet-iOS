@@ -457,25 +457,20 @@ extension Tweet {
                 
                 NSLog("DEBUG: [Tweet.from(cdTweet)] Tweet \(tweet.mid) using author singleton for user \(authorSingleton.mid), baseUrl: \(authorSingleton.baseUrl?.absoluteString ?? "NIL")")
                 
-            // Trigger fetchUser if baseUrl is nil to resolve IP
-            // SKIP appUser - app initialization will handle it
-            // SKIP GUEST_ID - broken tweets with null user should not trigger network calls
-            if authorSingleton.baseUrl == nil 
-                && authorSingleton.mid != HproseInstance.shared.appUser.mid 
-                && !authorSingleton.isGuest {
-                Task {
-                    _ = try? await HproseInstance.shared.fetchUser(authorSingleton.mid)
+                // Trigger fetchUser if baseUrl is nil to resolve IP
+                // SKIP appUser - app initialization will handle it
+                if authorSingleton.baseUrl == nil
+                    && authorSingleton.mid != HproseInstance.shared.appUser.mid {
+                    Task {
+                        _ = try? await HproseInstance.shared.fetchUser(authorSingleton.mid)
+                    }
                 }
             }
-            }
-            
             return tweet
         }
-        
-        throw NSError(domain: "TweetCacheManager", code: -1, 
-                     userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])
+        throw NSError(domain: "TweetCacheManager", code: -1,
+                      userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])
     }
-    
 }
 
 // MARK: - User Caching
