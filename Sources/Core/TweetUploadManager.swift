@@ -93,9 +93,7 @@ class TweetUploadManager {
                 UploadProgressManager.shared.startUpload(type: "comment")
             }
             
-            do {
-                guard let hproseInstance = self.hproseInstance else { return }
-                
+            do {                
                 // Update progress: uploading attachments
                 await MainActor.run {
                     UploadProgressManager.shared.updateProgress(
