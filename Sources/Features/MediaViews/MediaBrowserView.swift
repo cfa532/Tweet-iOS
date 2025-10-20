@@ -272,7 +272,8 @@ struct MediaBrowserView: View {
                 mid: attachment.mid,
                 tweetId: currentTweet.mid,
                 videoIndex: index,
-                mediaType: attachment.type
+                mediaType: attachment.type,
+                aspectRatio: attachment.aspectRatio
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
@@ -686,6 +687,7 @@ struct SingletonVideoPlayerView: View {
     let tweetId: String
     let videoIndex: Int
     let mediaType: MediaType
+    let aspectRatio: Float?
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
     
@@ -693,7 +695,7 @@ struct SingletonVideoPlayerView: View {
         GeometryReader { geometry in
             if let player = manager.singletonPlayer, manager.currentVideoMid == mid {
                 // Show player
-                SimplerAVPlayerViewController(player: player)
+                SimplerAVPlayerViewController(player: player, aspectRatio: aspectRatio)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 // Loading placeholder
@@ -711,6 +713,7 @@ struct SingletonVideoPlayerView: View {
 // MARK: - Simple AVPlayerViewController Wrapper
 private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     let player: AVPlayer
+    let aspectRatio: Float?
     
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -733,11 +736,17 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         controller.videoGravity = .resizeAspect
         controller.view.backgroundColor = .black
         
+        // Rotate landscape videos (aspectRatio > 1) by -90 degrees
+        if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
+            print("DEBUG: [SingletonVideoPlayer] Landscape video detected (aspectRatio: \(aspectRatio)), rotating -90 degrees")
+            controller.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
+        }
+        
         // Setup observer to auto-play when ready
         setupPlayerItemObserver(player: player, context: context)
         
         // Observe currentItem changes to set up observer for new items
-        context.coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { [weak controller] player, _ in
+        context.coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { player, _ in
             print("DEBUG: [SingletonVideoPlayer] Player currentItem changed, setting up new observer")
             setupPlayerItemObserver(player: player, context: context)
         }
@@ -773,6 +782,19 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     }
     
     func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        // Update rotation based on aspect ratio
+        if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
+            if uiViewController.view.transform == .identity {
+                print("DEBUG: [SingletonVideoPlayer] Applying rotation on update (aspectRatio: \(aspectRatio))")
+                uiViewController.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
+            }
+        } else {
+            if uiViewController.view.transform != .identity {
+                print("DEBUG: [SingletonVideoPlayer] Removing rotation on update")
+                uiViewController.view.transform = .identity
+            }
+        }
+        
         if uiViewController.player !== player {
             uiViewController.player = player
             

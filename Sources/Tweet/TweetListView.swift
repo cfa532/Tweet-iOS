@@ -269,7 +269,7 @@ struct TweetListView<RowView: View>: View {
         .onAppear {
             // Set up fullscreen video search function for auto-advance
             // Each TweetListView overwrites the previous one's function
-            print("DEBUG: [TweetListView] Registering video search function - title: \(title ?? "untitled"), tweets count: \(tweets.count)")
+            print("DEBUG: [TweetListView] Registering video search function - title: \(title), tweets count: \(tweets.count)")
             FullScreenVideoManager.shared.setVideoSearchFunction(
                 findNextVideoInList,
                 onNavigate: { tweet, videoIndex, sourceTweetId in
