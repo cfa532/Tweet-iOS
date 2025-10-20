@@ -73,8 +73,13 @@ struct MediaCell: View, Equatable {
     }
     
     private var baseUrl: URL {
-        // Use author's baseUrl if available, otherwise use localhost as placeholder for cached content
-        return parentTweet.author?.baseUrl ?? URL(string: Constants.LOCAL_HOST)!
+        // Use author's baseUrl if available, otherwise use LocalHTTPServer URL for cached content
+        if let authorBaseUrl = parentTweet.author?.baseUrl {
+            return authorBaseUrl
+        }
+        // Use LocalHTTPServer's actual port for cached content loading
+        let port = LocalHTTPServer.shared.port
+        return URL(string: "\(Constants.LOCAL_HOST):\(port)")!
     }
     
     private var isVideoAttachment: Bool {

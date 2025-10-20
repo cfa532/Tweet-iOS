@@ -529,6 +529,9 @@ class SharedAssetCache: ObservableObject {
             
             // Register real URL and get localhost proxy URL
             let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
+            NSLog("🔗 [PROGRESSIVE VIDEO] Original URL: \(url.absoluteString)")
+            NSLog("🔗 [PROGRESSIVE VIDEO] LocalHTTPServer proxy URL: \(localURL.absoluteString)")
+            NSLog("🔗 [PROGRESSIVE VIDEO] Real URL registered: \(cleanURL.absoluteString)")
             
             // Create AVPlayer with localhost URL (LocalHTTPServer fixes Content-Type)
             let asset = AVURLAsset(url: localURL)
