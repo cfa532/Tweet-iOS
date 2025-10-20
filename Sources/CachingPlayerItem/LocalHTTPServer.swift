@@ -428,6 +428,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         let potentialCachePath = mediaDir.appendingPathComponent(relativePath.hasPrefix("/") ? String(relativePath.dropFirst()) : relativePath)
         
         if FileManager.default.fileExists(atPath: potentialCachePath.path) {
+            NSLog("DEBUG: [LocalHTTPServer] Serving cached file: \(relativePath) for mediaID: \(mediaID)")
             // CACHE HIT - serve immediately without needing real URL
             NSLog("DEBUG: [LocalHTTPServer] Found cached file at: \(potentialCachePath.path)")
             
@@ -616,19 +617,19 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         // CACHE MISS - fetch from real server
+        // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
+        guard HproseInstance.shared.isAppInitialized else {
+            NSLog("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
+            self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
+            return
+        }
+        
         var request = URLRequest(url: fullRealURL)
         request.httpMethod = method
         request.timeoutInterval = 30
         
         if let range = rangeHeader {
             request.setValue(range, forHTTPHeaderField: "Range")
-        }
-        
-        // CRITICAL: Block network requests until app initialized
-        guard HproseInstance.shared.isAppInitialized else {
-            NSLog("DEBUG: [LocalHTTPServer] App not initialized, refusing network request")
-            self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
-            return
         }
         
         // Fetch from real server
@@ -767,9 +768,9 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String) {
-        // CRITICAL: Block network requests until app initialized
+        // CRITICAL: Block NEW network requests until app initialized
         guard HproseInstance.shared.isAppInitialized else {
-            NSLog("DEBUG: [LocalHTTPServer] App not initialized, refusing network request")
+            NSLog("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
             return
         }
