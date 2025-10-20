@@ -686,8 +686,8 @@ struct SimpleVideoPlayer: View {
                                 }
                             }
                     } else {
-                        // MediaCell: Use native SwiftUI VideoPlayer
-                        VideoPlayer(player: player)
+                        // MediaCell: Use custom AVPlayerLayer wrapper (no controls, respects mute state)
+                        AVPlayerLayerView(player: player)
                             .id(uniqueViewId) // Hash of tweet+video+state for unique identity
                             .onTapGesture {
                                 if let onVideoTap = onVideoTap {
@@ -901,9 +901,10 @@ struct SimpleVideoPlayer: View {
                     if await MainActor.run(body: { self.mode }) == .mediaCell {
                         let muteState = await MainActor.run { MuteState.shared.isMuted }
                         newPlayer.isMuted = muteState
+                        NSLog("🔇 [PLAYER MUTE] Applied global mute state for MediaCell - isMuted: \(muteState) for \(mid)")
                     } else {
                         newPlayer.isMuted = false
-                        NSLog("DEBUG: [VIDEO SETUP] Unmuted immediately after player creation for fullscreen/detail")
+                        NSLog("🔊 [PLAYER MUTE] Unmuted for fullscreen/detail mode - isMuted: false for \(mid)")
                     }
                     
                     await MainActor.run {
@@ -964,8 +965,10 @@ struct SimpleVideoPlayer: View {
                     // Double-check and reapply mute state for safety
                     if self.mode == .mediaCell {
                         newPlayer.isMuted = MuteState.shared.isMuted
+                        NSLog("🔇 [PLAYER MUTE] Re-applied mute state on MainActor for MediaCell - isMuted: \(MuteState.shared.isMuted) for \(mid)")
                     } else {
                         newPlayer.isMuted = false
+                        NSLog("🔊 [PLAYER MUTE] Re-applied unmute on MainActor for fullscreen/detail - isMuted: false for \(mid)")
                     }
                     self.configurePlayer(newPlayer)
                 }
@@ -1134,9 +1137,11 @@ struct SimpleVideoPlayer: View {
         if mode == .mediaCell {
             // MediaCell: Apply global mute state
             player.isMuted = MuteState.shared.isMuted
+            NSLog("🔇 [PLAYER MUTE] configurePlayer() - MediaCell mode, isMuted: \(MuteState.shared.isMuted) for \(mid)")
         } else {
             // Fullscreen/Detail: Always unmute
             player.isMuted = false
+            NSLog("🔊 [PLAYER MUTE] configurePlayer() - Fullscreen/Detail mode, isMuted: false for \(mid)")
         }
         
         // Setup time observer only if not already set up for this player
@@ -1281,6 +1286,7 @@ struct SimpleVideoPlayer: View {
             
             if shouldAutoPlay && player.rate == 0 {
                 NSLog("DEBUG: [VIDEO READY CHECK] Player ready, triggering autoplay for \(self.mid)")
+                NSLog("🔇 [PLAYER MUTE] About to play - current isMuted: \(player.isMuted) for \(self.mid)")
                 player.play()
             }
         }
@@ -1806,3 +1812,35 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                 
             }
         }
+
+// MARK: - AVPlayerLayer Wrapper for MediaCell
+struct AVPlayerLayerView: UIViewRepresentable {
+    let player: AVPlayer
+    
+    func makeUIView(context: Context) -> UIView {
+        let view = PlayerView()
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = .resizeAspectFill
+        view.backgroundColor = .black
+        return view
+    }
+    
+    func updateUIView(_ uiView: UIView, context: Context) {
+        guard let playerView = uiView as? PlayerView else { return }
+        
+        // Update player if changed
+        if playerView.playerLayer.player !== player {
+            playerView.playerLayer.player = player
+        }
+    }
+    
+    class PlayerView: UIView {
+        override class var layerClass: AnyClass {
+            return AVPlayerLayer.self
+        }
+        
+        var playerLayer: AVPlayerLayer {
+            return layer as! AVPlayerLayer
+        }
+    }
+}

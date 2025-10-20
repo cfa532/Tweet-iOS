@@ -589,6 +589,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Validate cached data size
             if cachedData.count >= 1024 {
                 // CACHE HIT - serve from cache instantly
+                let rangeStr = rangeEnd != nil ? "\(start)-\(rangeEnd!)" : "\(start)-end"
+                NSLog("🎯 [PROGRESSIVE CACHE HIT] mediaID: \(mediaID), range: \(rangeStr), size: \(cachedData.count) bytes")
+                
                 var headers: [String: String] = [
                     "Content-Type": "video/mp4",
                     "Content-Length": "\(cachedData.count)",
@@ -604,9 +607,12 @@ public class LocalHTTPServer: @unchecked Sendable {
                 return
             } else {
                 // Delete corrupted cache
-                NSLog("DEBUG: [LocalHTTPServer] Deleting corrupted cache: \(cachedData.count) bytes")
+                NSLog("⚠️ [PROGRESSIVE CACHE] Deleting corrupted cache: \(cachedData.count) bytes for mediaID: \(mediaID)")
                 deleteCachedProgressiveRange(mediaID: mediaID, start: start, end: rangeEnd)
             }
+        } else if !isProbeRequest, let start = rangeStart {
+            let rangeStr = rangeEnd != nil ? "\(start)-\(rangeEnd!)" : "\(start)-end"
+            NSLog("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr) - will fetch from network")
         }
         
         // CACHE MISS - fetch from real server
@@ -664,6 +670,8 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             // Cache this byte range for future requests (skip tiny probe requests)
             if !isProbeRequest, let start = rangeStart, data.count >= 1024 {
+                let rangeStr = rangeEnd != nil ? "\(start)-\(rangeEnd!)" : "\(start)-end"
+                NSLog("💾 [PROGRESSIVE CACHE WRITE] mediaID: \(mediaID), range: \(rangeStr), size: \(data.count) bytes")
                 self.cacheProgressiveRange(mediaID: mediaID, start: start, end: rangeEnd, data: data)
             }
             
@@ -718,8 +726,9 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         do {
             try data.write(to: cachePath)
+            NSLog("✅ [PROGRESSIVE CACHE SAVED] mediaID: \(mediaID), file: \(rangeFileName), path: \(cachePath.path)")
         } catch {
-            // Silently fail - caching is optional
+            NSLog("❌ [PROGRESSIVE CACHE ERROR] Failed to save mediaID: \(mediaID), error: \(error)")
         }
     }
     

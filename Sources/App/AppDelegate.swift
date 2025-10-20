@@ -152,15 +152,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         if let resignActiveDate = UserDefaults.standard.object(forKey: "lastResignActiveTimestamp") as? Date,
            let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
             
-            // If resignActive was more recent than background, this is likely screen lock recovery
+            // If resignActive was more recent than background, this is screen lock recovery
             if resignActiveDate > backgroundDate {
-                let timeSinceResignActive = Date().timeIntervalSince(resignActiveDate)
-                print("[AppDelegate] Screen lock recovery detected - was locked for \(Int(timeSinceResignActive))s")
-                
-                // CRITICAL: On battery power (not connected to USB), iOS aggressively suspends
-                // the NWListener when screen locks, even for short periods.
-                // We must ALWAYS restart the server on screen unlock to ensure videos work.
-                print("[AppDelegate] Screen unlock - restarting video infrastructure for reliability")
+                print("[AppDelegate] Screen lock recovery detected - restarting video infrastructure")
                 
                 // Clear players first
                 SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
@@ -169,7 +163,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 showLoadingOverlay()
                 Thread.sleep(forTimeInterval: 0.05)
                 
-                // Restart video infrastructure - this ensures NWListener is responsive
+                // Restart video infrastructure - ensures NWListener is responsive after screen lock
                 restartVideoInfrastructure()
                 
                 hideLoadingOverlay()

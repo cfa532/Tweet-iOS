@@ -597,6 +597,8 @@ class SharedAssetCache: ObservableObject {
         
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
         player.isMuted = true
+        NSLog("🔇 [PLAYER MUTE] Created player for \(mediaID) - isMuted: true (default)")
+
         
         // Optimize buffering for HLS playback
         player.automaticallyWaitsToMinimizeStalling = false
