@@ -12,8 +12,11 @@ import Photos
 struct MediaBrowserView: View {
     let tweet: Tweet
     let initialIndex: Int
+    let sourceTweetId: String? // The tweet ID where user tapped (could be retweet)
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
+    @State private var currentTweet: Tweet // Allow changing tweet for auto-advance
+    @State private var currentSourceTweetId: String // Track position in visible feed
     @State private var showVideoPlayer = false
     @State private var play = false
     @State private var isVisible = true
@@ -26,23 +29,26 @@ struct MediaBrowserView: View {
     @State private var previousIndex: Int = -1 // Track previous index for video management
     @State private var isImageZoomed = false // Track if current image is zoomed
     private var attachments: [MimeiFileType] {
-        return tweet.attachments ?? []
+        return currentTweet.attachments ?? []
     }
 
     private var baseUrl: URL {
         // Use author's baseUrl if available, otherwise use appUser's baseUrl
         // If both are nil, use real IP from HproseInstance (resolved at app start)
-        return tweet.author?.baseUrl 
+        return currentTweet.author?.baseUrl 
             ?? HproseInstance.shared.appUser.baseUrl 
             ?? HproseInstance.baseUrl
     }
 
-    init(tweet: Tweet, initialIndex: Int) {
+    init(tweet: Tweet, initialIndex: Int, sourceTweetId: String? = nil) {
         self.tweet = tweet
         self.initialIndex = initialIndex
+        self.sourceTweetId = sourceTweetId
         self._currentIndex = State(initialValue: initialIndex)
+        self._currentTweet = State(initialValue: tweet)
+        self._currentSourceTweetId = State(initialValue: sourceTweetId ?? tweet.mid)
         self._previousIndex = State(initialValue: initialIndex)
-        print("MediaBrowserView init - attachments count: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
+        print("MediaBrowserView init - tweet: \(tweet.mid), sourceTweet: \(sourceTweetId ?? tweet.mid), attachments: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
     }
 
     var body: some View {
@@ -57,6 +63,8 @@ struct MediaBrowserView: View {
                 baseUrl: baseUrl,
                 imageStates: $imageStates,
                 isImageZoomed: $isImageZoomed,
+                currentTweet: currentTweet,
+                currentSourceTweetId: currentSourceTweetId,
                 dismiss: { dismiss() },
                 startControlsTimer: startControlsTimer,
                 resetControlsTimer: resetControlsTimer,
@@ -64,6 +72,49 @@ struct MediaBrowserView: View {
                     loadImageIfNeeded(for: attachment, at: index)
                 }
             )
+            .onAppear {
+                setupFullScreenManager()
+            }
+            .onDisappear {
+                FullScreenVideoManager.shared.clearSingletonPlayer()
+            }
+    }
+    
+    private func setupFullScreenManager() {
+        // Set up navigation callback for auto-advance
+        FullScreenVideoManager.shared.onNavigateToNextVideo = { [self] nextTweet, videoIndex, nextSourceTweetId in
+            print("DEBUG: [MediaBrowserView] Navigating to tweet: \(nextTweet.mid), videoIndex: \(videoIndex), sourceTweetId: \(nextSourceTweetId)")
+            
+            // Load the next video immediately
+            if let attachments = nextTweet.attachments,
+               videoIndex < attachments.count {
+                let attachment = attachments[videoIndex]
+                let baseUrl = nextTweet.author?.baseUrl 
+                    ?? HproseInstance.shared.appUser.baseUrl 
+                    ?? HproseInstance.baseUrl
+                
+                if let url = attachment.getUrl(baseUrl) {
+                    print("DEBUG: [MediaBrowserView] Loading next video: \(url)")
+                    FullScreenVideoManager.shared.loadVideo(
+                        url: url,
+                        mid: attachment.mid,
+                        tweetId: nextTweet.mid,
+                        sourceTweetId: nextSourceTweetId,
+                        videoIndex: videoIndex,
+                        mediaType: attachment.type
+                    )
+                }
+            }
+            
+            // Update UI state with animation
+            withAnimation(.easeInOut(duration: 0.3)) {
+                self.currentTweet = nextTweet
+                self.currentIndex = videoIndex
+                self.previousIndex = videoIndex
+                self.currentSourceTweetId = nextSourceTweetId
+                self.imageStates = [:]
+            }
+        }
     }
     
     // MARK: - MediaBrowserContentView
@@ -78,6 +129,8 @@ struct MediaBrowserView: View {
         let baseUrl: URL
         @Binding var imageStates: [Int: ImageState]
         @Binding var isImageZoomed: Bool
+        let currentTweet: Tweet
+        let currentSourceTweetId: String
         let dismiss: () -> Void
         let startControlsTimer: () -> Void
         let resetControlsTimer: () -> Void
@@ -214,26 +267,42 @@ struct MediaBrowserView: View {
         private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
             let shouldAutoPlay = index == currentIndex
             
-            return SimpleVideoPlayer(
+            return SingletonVideoPlayerView(
                 url: url,
                 mid: attachment.mid,
-                parentTweetId: nil, // Not needed for fullscreen
-                isVisible: true,
-                mediaType: attachment.type,
-                autoPlay: shouldAutoPlay,
-                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-                showNativeControls: true,
-                isMuted: false, // Unmuted in fullscreen
-                onVideoTap: {
-                    // Handle video tap if needed
-                },
-                mode: .mediaBrowser // Use mediaBrowser mode to share state with MediaCell
+                tweetId: currentTweet.mid,
+                videoIndex: index,
+                mediaType: attachment.type
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .onChange(of: currentIndex) { _, newIndex in
                 print("DEBUG: [MediaBrowserView] TabView index changed to \(newIndex)")
-                // The SimpleVideoPlayer will handle play/pause based on isVisible and autoPlay
+                
+                // Load new video when user swipes
+                if newIndex == index && isVideoAttachment(attachment) {
+                    FullScreenVideoManager.shared.loadVideo(
+                        url: url,
+                        mid: attachment.mid,
+                        tweetId: currentTweet.mid,
+                        sourceTweetId: currentSourceTweetId,
+                        videoIndex: index,
+                        mediaType: attachment.type
+                    )
+                }
+            }
+            .onAppear {
+                // Load video when it appears
+                if shouldAutoPlay && isVideoAttachment(attachment) {
+                    FullScreenVideoManager.shared.loadVideo(
+                        url: url,
+                        mid: attachment.mid,
+                        tweetId: currentTweet.mid,
+                        sourceTweetId: currentSourceTweetId,
+                        videoIndex: index,
+                        mediaType: attachment.type
+                    )
+                }
             }
         }
         
@@ -605,6 +674,126 @@ struct ImageViewWithPlaceholder: View {
                 isImageZoomed = scale > 1.0
             } else {
                 isImageZoomed = false
+            }
+        }
+    }
+}
+
+// MARK: - Singleton Video Player View
+struct SingletonVideoPlayerView: View {
+    let url: URL
+    let mid: String
+    let tweetId: String
+    let videoIndex: Int
+    let mediaType: MediaType
+    
+    @ObservedObject private var manager = FullScreenVideoManager.shared
+    
+    var body: some View {
+        GeometryReader { geometry in
+            if let player = manager.singletonPlayer, manager.currentVideoMid == mid {
+                // Show player
+                SimplerAVPlayerViewController(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Loading placeholder
+                ZStack {
+                    Color.black
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.5)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Simple AVPlayerViewController Wrapper
+private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
+    let player: AVPlayer
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    class Coordinator: NSObject {
+        var statusObserver: NSKeyValueObservation?
+        var currentItemObserver: NSKeyValueObservation?
+        
+        deinit {
+            statusObserver?.invalidate()
+            currentItemObserver?.invalidate()
+        }
+    }
+    
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.showsPlaybackControls = true
+        controller.videoGravity = .resizeAspect
+        controller.view.backgroundColor = .black
+        
+        // Setup observer to auto-play when ready
+        setupPlayerItemObserver(player: player, context: context)
+        
+        // Observe currentItem changes to set up observer for new items
+        context.coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { [weak controller] player, _ in
+            print("DEBUG: [SingletonVideoPlayer] Player currentItem changed, setting up new observer")
+            setupPlayerItemObserver(player: player, context: context)
+        }
+        
+        return controller
+    }
+    
+    private func setupPlayerItemObserver(player: AVPlayer, context: Context) {
+        context.coordinator.statusObserver?.invalidate()
+        
+        if let playerItem = player.currentItem {
+            if playerItem.status == .readyToPlay {
+                print("DEBUG: [SingletonVideoPlayer] Player already ready, playing immediately")
+                DispatchQueue.main.async {
+                    player.play()
+                }
+            } else {
+                print("DEBUG: [SingletonVideoPlayer] Player not ready yet, setting up observer")
+                context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
+                    if item.status == .readyToPlay {
+                        print("DEBUG: [SingletonVideoPlayer] Player became ready, playing now")
+                        DispatchQueue.main.async {
+                            player.play()
+                        }
+                        context.coordinator.statusObserver?.invalidate()
+                        context.coordinator.statusObserver = nil
+                    } else if item.status == .failed {
+                        print("ERROR: [SingletonVideoPlayer] Player item failed")
+                    }
+                }
+            }
+        }
+    }
+    
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        if uiViewController.player !== player {
+            uiViewController.player = player
+            
+            // Setup observer for new player
+            context.coordinator.statusObserver?.invalidate()
+            if let playerItem = player.currentItem {
+                if playerItem.status == .readyToPlay {
+                    print("DEBUG: [SingletonVideoPlayer] Player ready on update, playing")
+                    player.play()
+                } else {
+                    context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
+                        if item.status == .readyToPlay {
+                            print("DEBUG: [SingletonVideoPlayer] Player ready after update, playing")
+                            DispatchQueue.main.async {
+                                player.play()
+                            }
+                            context.coordinator.statusObserver?.invalidate()
+                            context.coordinator.statusObserver = nil
+                        }
+                    }
+                }
             }
         }
     }

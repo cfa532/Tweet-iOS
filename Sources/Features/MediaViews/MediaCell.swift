@@ -38,6 +38,7 @@ struct MediaCell: View, Equatable {
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
+    let visibleTweetId: String? // The ID of the visible tweet in feed (for retweets)
     
     @State private var image: UIImage?
     @State private var isLoading = false
@@ -51,10 +52,11 @@ struct MediaCell: View, Equatable {
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, visibleTweetId: String? = nil) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
+        self.visibleTweetId = visibleTweetId
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
         self.showMuteButton = showMuteButton
@@ -254,7 +256,8 @@ struct MediaCell: View, Equatable {
         .fullScreenCover(isPresented: $showFullScreen) {
             MediaBrowserView(
                 tweet: parentTweet,
-                initialIndex: attachmentIndex
+                initialIndex: attachmentIndex,
+                sourceTweetId: visibleTweetId ?? parentTweet.mid // Use visibleTweetId if available
             )
         }
         .onChange(of: showFullScreen) { _, newValue in

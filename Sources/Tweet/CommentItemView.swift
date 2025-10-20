@@ -69,7 +69,7 @@ struct CommentItemView: View {
                 }
                 .padding(.top, -8)
                 
-                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible)
+                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible, visibleTweetId: comment.mid)
                 .padding(.top, -12)
                 
                 TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)

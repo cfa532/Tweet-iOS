@@ -11,6 +11,7 @@ import AVKit
 struct MediaGridView: View {
     let parentTweet: Tweet
     let attachments: [MimeiFileType]
+    let visibleTweetId: String? // The ID of the visible tweet in feed (for retweets)
     let maxImages: Int = 4
     @State private var shouldLoadVideo = true
     @State private var videoLoadTimer: Timer?
@@ -22,9 +23,10 @@ struct MediaGridView: View {
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
     private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32)
     
-    init(parentTweet: Tweet, attachments: [MimeiFileType]) {
+    init(parentTweet: Tweet, attachments: [MimeiFileType], visibleTweetId: String? = nil) {
         self.parentTweet = parentTweet
         self.attachments = attachments
+        self.visibleTweetId = visibleTweetId
     }
     
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
@@ -90,7 +92,8 @@ struct MediaGridView: View {
                         aspectRatio: Float(gridAspectRatio),
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
-                        videoManager: videoManager
+                        videoManager: videoManager,
+                        visibleTweetId: visibleTweetId
                     )
                     .frame(width: actualWidth, height: gridHeight)
                     .clipped()
@@ -115,7 +118,8 @@ struct MediaGridView: View {
                                     aspectRatio: Float((actualWidth/2 - 1) / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -132,7 +136,8 @@ struct MediaGridView: View {
                                     aspectRatio: Float(actualWidth / (gridHeight/2 - 1)),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -150,7 +155,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -162,7 +168,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -175,7 +182,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -187,7 +195,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -219,7 +228,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth * 0.618 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -254,7 +264,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth, height: gridHeight * 0.618 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -288,7 +299,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -319,7 +331,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -359,7 +372,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -394,7 +408,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .clipped().contentShape(Rectangle())

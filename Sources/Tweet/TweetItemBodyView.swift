@@ -17,6 +17,7 @@ struct TweetItemBodyView: View {
     @ObservedObject var tweet: Tweet
     var enableTap: Bool = false
     var isVisible: Bool = true
+    var visibleTweetId: String? = nil // The ID of the visible tweet in feed (for retweets)
     @State private var isExpanded = false
     @State private var showLoginSheet = false
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -58,7 +59,7 @@ struct TweetItemBodyView: View {
                 let aspect = MediaGridViewModel.aspectRatio(for: attachments)
                 let gridHeight = max(10, Self.cachedGridWidth / aspect)
                 
-                MediaGridView(parentTweet: tweet, attachments: attachments)
+                MediaGridView(parentTweet: tweet, attachments: attachments, visibleTweetId: visibleTweetId ?? tweet.mid)
                     .frame(maxWidth: .infinity)
                     .frame(height: gridHeight) // Fixed height to prevent shifts
                     .clipped()

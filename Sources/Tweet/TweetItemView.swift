@@ -35,7 +35,8 @@ struct TweetItemView: View, Equatable {
             if let attachments = tweet.attachments, !attachments.isEmpty {
                 MediaGridView(
                     parentTweet: tweet,
-                    attachments: attachments
+                    attachments: attachments,
+                    visibleTweetId: tweet.mid
                 )
                 .padding(.top, 8)
             }
@@ -70,13 +71,15 @@ struct TweetItemView: View, Equatable {
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
                 tweet: tweet,
-                initialIndex: selectedMediaIndex
+                initialIndex: selectedMediaIndex,
+                sourceTweetId: tweet.mid // Pass visible tweet ID for feed navigation
             )
         }
         .fullScreenCover(isPresented: $showEmbeddedBrowser) {
             MediaBrowserView(
                 tweet: originalTweet ?? tweet,
-                initialIndex: selectedEmbeddedMediaIndex
+                initialIndex: selectedEmbeddedMediaIndex,
+                sourceTweetId: tweet.mid // Pass visible tweet ID (the retweet)
             )
         }
         .task {
@@ -193,7 +196,7 @@ struct TweetItemView: View, Equatable {
                                 .padding(.top, -8)
                         }
                         
-                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
+                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, visibleTweetId: tweet.mid)
                             .padding(.top, -12)
                         
                         TweetActionButtonsView(tweet: originalTweet)
@@ -229,7 +232,7 @@ struct TweetItemView: View, Equatable {
                             TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
                         }
                         .padding(.top, -8)
-                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
                             .padding(.top, -12)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
@@ -282,7 +285,7 @@ struct TweetItemView: View, Equatable {
                         TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
                     }
                     .padding(.top, -8)
-                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
                         .padding(.top, -12)
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
@@ -375,7 +378,7 @@ struct EmbeddedTweetView: View, Equatable {
                 }
                 .padding(.top, 0)
                 
-                TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
                 .padding(.top, 0)
             }
         }
