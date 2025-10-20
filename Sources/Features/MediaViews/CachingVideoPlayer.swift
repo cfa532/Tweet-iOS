@@ -28,9 +28,6 @@ struct CachingVideoPlayer: View {
     @State private var loadFailed = false
     @State private var videoCompletionObserver: NSObjectProtocol?
     
-    // Observe global mute state for chat videos (like MediaCell)
-    @ObservedObject private var muteState = MuteState.shared
-    
     init(
         url: URL,
         mid: String,
@@ -108,11 +105,6 @@ struct CachingVideoPlayer: View {
                 player?.pause()
             }
         }
-        .onChange(of: muteState.isMuted) { _, newMuteState in
-            // Sync chat videos with global mute state (like MediaCell)
-            player?.isMuted = newMuteState
-            print("DEBUG: [CachingVideoPlayer] Synced with global mute state: \(newMuteState) for \(mid)")
-        }
     }
     
     private func setupPlayer() {
@@ -128,9 +120,8 @@ struct CachingVideoPlayer: View {
                     // Store references
                     self.player = newPlayer
                     
-                    // Configure player - sync with global mute state (like MediaCell)
-                    newPlayer.isMuted = muteState.isMuted
-                    print("DEBUG: [CachingVideoPlayer] Initial mute state: \(muteState.isMuted) for \(mid)")
+                    // Configure player
+                    newPlayer.isMuted = isMuted
                     
                     // Set up delegate for CachingPlayerItem if it exists
                     if let cachingPlayerItem = newPlayer.currentItem as? CachingPlayerItem {
