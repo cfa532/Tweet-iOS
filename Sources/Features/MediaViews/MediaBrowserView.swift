@@ -30,13 +30,11 @@ struct MediaBrowserView: View {
     }
 
     private var baseUrl: URL {
-        // Use author's baseUrl if available, otherwise use LocalHTTPServer URL for cached content
-        if let authorBaseUrl = tweet.author?.baseUrl {
-            return authorBaseUrl
-        }
-        // Use LocalHTTPServer's actual port for cached content loading
-        let port = LocalHTTPServer.shared.port
-        return URL(string: "\(Constants.LOCAL_HOST):\(port)")!
+        // Use author's baseUrl if available, otherwise use appUser's baseUrl
+        // If both are nil, use real IP from HproseInstance (resolved at app start)
+        return tweet.author?.baseUrl 
+            ?? HproseInstance.shared.appUser.baseUrl 
+            ?? HproseInstance.baseUrl
     }
 
     init(tweet: Tweet, initialIndex: Int) {
@@ -49,14 +47,14 @@ struct MediaBrowserView: View {
 
     var body: some View {
         MediaBrowserContentView(
-            attachments: attachments,
-            currentIndex: $currentIndex,
-            previousIndex: $previousIndex,
-            showControls: $showControls,
-            dragOffset: $dragOffset,
-            isDragging: $isDragging,
-            isVisible: $isVisible,
-            baseUrl: baseUrl,
+                attachments: attachments,
+                currentIndex: $currentIndex,
+                previousIndex: $previousIndex,
+                showControls: $showControls,
+                dragOffset: $dragOffset,
+                isDragging: $isDragging,
+                isVisible: $isVisible,
+                baseUrl: baseUrl,
                 imageStates: $imageStates,
                 isImageZoomed: $isImageZoomed,
                 dismiss: { dismiss() },

@@ -143,13 +143,11 @@ struct DetailMediaCell: View {
     }
     
     private var baseUrl: URL {
-        // Use author's baseUrl if available, otherwise use LocalHTTPServer URL for cached content
-        if let authorBaseUrl = parentTweet.author?.baseUrl {
-            return authorBaseUrl
-        }
-        // Use LocalHTTPServer's actual port for cached content loading
-        let port = LocalHTTPServer.shared.port
-        return URL(string: "\(Constants.LOCAL_HOST):\(port)")!
+        // Use author's baseUrl if available, otherwise use appUser's baseUrl
+        // If both are nil, use real IP from HproseInstance (resolved at app start)
+        return parentTweet.author?.baseUrl 
+            ?? HproseInstance.shared.appUser.baseUrl 
+            ?? HproseInstance.baseUrl
     }
     
     var body: some View {
