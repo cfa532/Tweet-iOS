@@ -128,6 +128,17 @@ All main documents should include:
 
 ## 🔄 Recent Updates
 
+### October 20, 2025
+- ✅ **BlackList Persistence Enhancement**
+  - **Change**: BlackList now survives cache clearing and app reinstallation
+  - **Storage Strategy**: UserDefaults (primary) + iCloud Key-Value Store (backup)
+  - **Load Priority**: UserDefaults first, fallback to iCloud if missing
+  - **Save Strategy**: Write to UserDefaults immediately, mirror to iCloud in background
+  - **Zero Config**: Works automatically, no user action required
+  - **Files**: `BlackList.swift`
+- 📄 Updated [FEATURES.md](./FEATURES.md) - BlackList description
+- 📄 Updated [NETWORK_RESILIENCE.md](./NETWORK_RESILIENCE.md) - Added BlackList system section
+
 ### October 17, 2025
 - ✅ **CRITICAL RESOLVED**: Port-Independent Playlist Caching
   - **Root cause identified**: Cached HLS playlists contained full URLs with port numbers

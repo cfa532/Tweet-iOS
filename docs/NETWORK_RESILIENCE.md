@@ -30,6 +30,85 @@ The Tweet-iOS app is designed to work seamlessly in challenging network environm
    - Background restoration
    - Memory-efficient management
 
+5. **BlackList** (`BlackList`)
+   - Failed resource tracking
+   - Automatic blacklisting after 14+ failures over 1+ week
+   - Prevents repeated attempts to load broken content
+   - Persistence: UserDefaults (primary) + iCloud (backup)
+   - Survives cache clearing and app reinstallation
+
+## 🚫 BlackList System
+
+### Purpose
+
+The BlackList system tracks media resources (images, videos) that repeatedly fail to load and automatically blacklists them after persistent failures. This prevents the app from wasting time and bandwidth on broken content.
+
+### Tracking Mechanism
+
+**Candidate List:**
+- First failure: Resource added to candidates
+- Subsequent failures: Failure count incremented
+- Success: Resource removed from candidates
+
+**Blacklist:**
+- Resources promoted to blacklist after **14+ failures** over **1+ week**
+- Once blacklisted, resource is never attempted again
+- Permanent until app reinstallation (if iCloud unavailable)
+
+### Implementation
+
+```swift
+// Recording failures
+BlackList.shared.recordFailure("QmXXXXX...")
+
+// Recording success (removes from candidates)
+BlackList.shared.recordSuccess("QmXXXXX...")
+
+// Checking before loading
+if BlackList.shared.isBlacklisted(mediaID) {
+    // Skip loading, show placeholder
+    return
+}
+```
+
+### Persistence Strategy
+
+**Primary Storage:** UserDefaults
+- Fast, local, immediate reads/writes
+- Source of truth for runtime behavior
+- Survives cache clearing but NOT reinstallation
+
+**Backup Storage:** iCloud Key-Value Store
+- Best-effort sync across devices
+- Survives app reinstallation
+- Graceful degradation if iCloud unavailable
+- No user configuration required
+
+**Load Order:**
+1. Read from UserDefaults (authoritative)
+2. If missing, fallback to iCloud
+3. If both empty, start fresh
+
+**Save Order:**
+1. Write to UserDefaults first (immediate)
+2. Mirror to iCloud (background sync)
+
+### Benefits
+
+- ✅ **Bandwidth Savings**: Stops retrying broken resources
+- ✅ **Performance**: No wasted time on dead content
+- ✅ **User Experience**: Faster loading, fewer errors
+- ✅ **Server-Friendly**: Reduces load on IPFS gateways
+- ✅ **Persistent**: Survives cache clears and reinstallation
+- ✅ **Zero Config**: Works automatically, no user action required
+
+### Monitoring
+
+```swift
+let (candidates, blacklisted) = BlackList.shared.getStats()
+print("BlackList: \(candidates) candidates, \(blacklisted) blacklisted")
+```
+
 ## 🔄 Cache-First Loading Strategy
 
 ### TweetListView Implementation

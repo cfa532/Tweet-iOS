@@ -337,9 +337,12 @@ See: [Network Resilience Documentation](./NETWORK_RESILIENCE.md)
 - Cache cleanup coordination
 
 **BlackList** (`Sources/Core/BlackList.swift`)
-- Blocked user management
-- Content filtering
-- Sync with backend
+- Failed media resource tracking
+- Automatic blacklisting after 14+ failures over 1+ week
+- Prevents repeated attempts to load broken content
+- Persists via UserDefaults (primary) + iCloud (backup)
+- Survives cache clearing and app reinstallation
+- Zero user intervention required
 
 ## UI Components & Utilities
 
