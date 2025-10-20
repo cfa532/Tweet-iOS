@@ -220,6 +220,7 @@ struct SimpleVideoPlayer: View {
             .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
             .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
             .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
+            .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in handleWillEnterForeground() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in handleDidBecomeActive() }
@@ -638,6 +639,47 @@ struct SimpleVideoPlayer: View {
         if loadingState.hasFailed {
             print("DEBUG: [VIDEO APP ACTIVE] Resetting error state for \(mid)")
             loadingState = .idle
+        }
+    }
+    
+    private func handleVideoInfrastructureRestarted() {
+        print("DEBUG: [VIDEO INFRA RESTART] Video infrastructure restarted for \(mid), mode: \(mode)")
+        
+        // If player was cleared and video is finished, we need to recreate it for screen lock recovery
+        if player == nil {
+            print("DEBUG: [VIDEO INFRA RESTART] Player was cleared during infrastructure restart")
+            
+            // Reset finished state to allow recreation
+            if playbackState.hasFinished {
+                print("DEBUG: [VIDEO INFRA RESTART] Resetting finished state for \(mid)")
+                playbackState = .notStarted
+            }
+            
+            // Reset loading state to allow recreation
+            if case .loading = loadingState {
+                // Keep loading state
+            } else {
+                loadingState = .idle
+            }
+            
+            // For visible videos in MediaCell, recreate the player
+            if mode == .mediaCell && isVisible && shouldLoadVideo {
+                print("DEBUG: [VIDEO INFRA RESTART] Recreating player for visible finished video \(mid)")
+                setupPlayer()
+            }
+            // For TweetDetail, always recreate (singleton needs restoration)
+            else if mode == .tweetDetail && shouldLoadVideo {
+                print("DEBUG: [VIDEO INFRA RESTART] Recreating singleton player for TweetDetail \(mid)")
+                setupPlayer()
+            }
+        } else {
+            print("DEBUG: [VIDEO INFRA RESTART] Player still exists for \(mid), ensuring mute state")
+            // Player still exists, just ensure mute state is correct
+            if mode == .mediaCell {
+                player?.isMuted = MuteState.shared.isMuted
+            } else if mode == .mediaBrowser {
+                player?.isMuted = false
+            }
         }
     }
     
