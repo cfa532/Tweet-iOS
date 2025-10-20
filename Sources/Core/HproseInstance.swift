@@ -201,11 +201,16 @@ final class HproseInstance: ObservableObject {
         }
         
         // Try to load cached user first (async, non-blocking)
+        // IMPORTANT: fetchUser() ALWAYS returns a valid User instance (never nil)
+        // - If cached: returns User from CoreData
+        // - If cache empty: returns User.getInstance(mid) as fallback
+        // This ensures safe operation even after cache is completely cleared
         let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
         
         await MainActor.run {
             // CRITICAL: Update the singleton instance instead of replacing _appUser
             // This ensures all references to this user get the cached data
+            // Safe to call even after cache clear because fetchUser never returns nil
             User.updateUserInstance(with: cachedUser)
             _appUser = User.getInstance(mid: userId)
             

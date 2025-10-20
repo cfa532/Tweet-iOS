@@ -215,6 +215,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     LocalHTTPServer.shared.resetConnectionPool()
                     
                     NSLog("✅ [AppDelegate] Players cleared, server still running")
+                    
+                    // Notify views to reload media (critical after cache clear + immediate background)
+                    NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                    print("[AppDelegate] Posted videoInfrastructureRestarted notification for short background")
                 } else {
                     // Server was killed even in short background - restart it
                     NSLog("⚠️ [AppDelegate] Server killed in short background, restarting...")
@@ -229,6 +233,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     
                     hideLoadingOverlay()
                     NSLog("✅ [AppDelegate] Server restarted")
+                    
+                    // Notify views to reload media
+                    NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                    print("[AppDelegate] Posted videoInfrastructureRestarted notification after server restart")
                 }
             }
         } else {
