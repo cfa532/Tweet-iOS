@@ -105,53 +105,26 @@ struct Avatar: View {
             return
         }
         
-        // Load from network if not cached, with timeout and throttling
+        // Load from network using regular image loading (no special avatar treatment)
         isLoading = true
         Task {
-            // Create the load task using throttled avatar loading
-            let loadTask = Task { () -> UIImage? in
-                if let url = URL(string: urlString) {
-                    // This call may wait for an existing request for the same avatar
-                    // When it returns, the image should be in cache (if successful)
-                    let _ = await ImageCacheManager.shared.loadAndCacheAvatar(from: url, for: avatarAttachment, baseUrl: baseUrl)
-                    
-                    // CRITICAL: Re-check cache after network request completes
-                    // This ensures all Avatar views get the image, even if they were waiting
-                    // for a shared network request that another view initiated
-                    if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
-                        return cached
-                    }
+            // Use standard image loading with deduplication
+            guard let url = URL(string: urlString) else {
+                await MainActor.run {
+                    loadFailed = true
+                    isLoading = false
                 }
-                return nil
+                return
             }
             
-            // Create a timeout task
-            let timeoutTask = Task {
-                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds timeout
-            }
-            
-            // Wait for either the load to complete or timeout
-            let result = await withTaskGroup(of: UIImage?.self) { group in
-                group.addTask {
-                    await loadTask.value
-                }
-                group.addTask {
-                    await timeoutTask.value
-                    return nil // Timeout returns nil
-                }
-                
-                // Return the first completed task result
-                let firstResult = await group.next()
-                group.cancelAll() // Cancel the other task
-                return firstResult ?? nil
-            }
+            let result = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment, baseUrl: baseUrl)
             
             await MainActor.run {
                 if let image = result {
                     cachedImage = image
                     loadFailed = false
                 } else {
-                    // Timeout or load failure - mark as failed to show default avatar
+                    // Load failure - mark as failed to show default avatar
                     loadFailed = true
                 }
                 isLoading = false
