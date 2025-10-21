@@ -584,7 +584,10 @@ final class HproseInstance: ObservableObject {
                 if let dict = originalTweetDict {
                     do {
                         let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                        originalTweet.author = try? await fetchUser(originalTweet.authorId)
+                        let author = try? await fetchUser(originalTweet.authorId)
+                        await MainActor.run {
+                            originalTweet.author = author
+                        }
                         TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: appUser.mid)
                         print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid)")
                     } catch {
