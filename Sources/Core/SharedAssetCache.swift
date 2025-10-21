@@ -1123,20 +1123,40 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func handleAppWillEnterForeground() {
-        refreshCachedPlayers()
+        // DON'T refresh players automatically - AppDelegate handles recovery strategy
+        // For short backgrounds, players are kept intact (no refresh needed)
+        // For long backgrounds, players are cleared and recreated (no refresh needed)
+        print("DEBUG: [SharedAssetCache] App entering foreground - skipping auto-refresh (handled by AppDelegate)")
     }
     
     private func handleAppDidBecomeActive() {
-        // Refresh players immediately when app becomes active
-        Task { @MainActor in
-            self.refreshCachedPlayers()
+        // DON'T refresh players automatically - AppDelegate handles recovery strategy
+        print("DEBUG: [SharedAssetCache] App became active - skipping auto-refresh (handled by AppDelegate)")
+    }
+    
+    /// Gentle refresh for short backgrounds - keep players intact, just refresh video layers
+    /// This is called when app returns from SHORT background (< 5 minutes)
+    /// iOS hasn't invalidated the video layers yet, so we can keep everything and avoid black screens
+    func refreshVideoLayersForShortBackground() {
+        print("DEBUG: [SharedAssetCache] Refreshing video layers for short background (keeping players intact)")
+        
+        // For short backgrounds, we DON'T clear anything
+        // The connection pool reset in LocalHTTPServer is enough
+        // Video layers are still valid, players can continue seamlessly
+        
+        // Just ensure all players are in a good state (not needed but harmless)
+        for (_, player) in playerCache {
+            // Don't pause or clear - just let them continue
+            // The video layer refresh will happen automatically when view appears
         }
+        
+        NSLog("DEBUG: [SharedAssetCache] Short background refresh complete - kept \(playerCache.count) players, \(assetCache.count) assets intact")
     }
     
     /// Clear video players for background recovery after long background periods
     /// This is called when app returns from extended background (>5 minutes)
     func clearVideoPlayersForBackgroundRecovery() {
-        print("DEBUG: [SharedAssetCache] Clearing video players for background recovery")
+        print("DEBUG: [SharedAssetCache] Clearing video players for LONG background recovery")
         
         // Count before
         let playerCountBefore = playerCache.count
@@ -1167,7 +1187,7 @@ class SharedAssetCache: ObservableObject {
         // Keep cacheTimestamps - they track cache expiration
         // Keep HLS disk cache - playlists now use relative paths (port-independent!)
         
-        NSLog("DEBUG: [SharedAssetCache] Background recovery - cleared \(playerCountBefore) players, \(assetCountBefore) assets, disk cache status (HLS cache kept - port-independent)")
+        NSLog("DEBUG: [SharedAssetCache] Long background recovery - cleared \(playerCountBefore) players, \(assetCountBefore) assets, disk cache status (HLS cache kept - port-independent)")
     }
     
     // MARK: - Cache Persistence Methods

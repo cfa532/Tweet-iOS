@@ -154,23 +154,51 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             
             // If resignActive was more recent than background, this is screen lock recovery
             if resignActiveDate > backgroundDate {
-                print("[AppDelegate] Screen lock recovery detected - restarting video infrastructure")
+                let timeInactive = Date().timeIntervalSince(resignActiveDate)
+                print("[AppDelegate] Screen lock recovery detected - inactive for \(Int(timeInactive))s")
                 
-                // Clear players first
-                SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                
-                // Show brief loading indicator for server restart
-                showLoadingOverlay()
-                Thread.sleep(forTimeInterval: 0.05)
-                
-                // Restart video infrastructure - ensures NWListener is responsive after screen lock
-                restartVideoInfrastructure()
-                
-                hideLoadingOverlay()
-                
-                // Notify views to reload media
-                NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
-                print("[AppDelegate] Posted videoInfrastructureRestarted notification for screen lock recovery")
+                // Use same time-based threshold as background recovery (5 minutes)
+                if timeInactive > 300 {
+                    // LONG screen lock (>5min) - full restart needed
+                    print("[AppDelegate] Long screen lock (\(Int(timeInactive))s) - forcing full restart")
+                    
+                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                    
+                    showLoadingOverlay()
+                    Thread.sleep(forTimeInterval: 0.05)
+                    
+                    restartVideoInfrastructure()
+                    
+                    hideLoadingOverlay()
+                    
+                    NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                    print("[AppDelegate] Posted videoInfrastructureRestarted notification for long screen lock")
+                } else {
+                    // SHORT screen lock (<5min) - gentle refresh, keep players intact
+                    print("[AppDelegate] Short screen lock (\(Int(timeInactive))s) - gentle refresh (keeping players)")
+                    
+                    if LocalHTTPServer.shared.isRunning {
+                        // Server still alive - just refresh, don't clear players
+                        SharedAssetCache.shared.refreshVideoLayersForShortBackground()
+                        LocalHTTPServer.shared.resetConnectionPool()
+                        print("[AppDelegate] Short screen lock recovery complete - videos kept intact")
+                        // NO notification - players intact
+                    } else {
+                        // Server killed during screen lock - restart it
+                        print("[AppDelegate] Server killed during screen lock, restarting...")
+                        SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                        
+                        showLoadingOverlay()
+                        Thread.sleep(forTimeInterval: 0.05)
+                        
+                        LocalHTTPServer.shared.startAndWait()
+                        
+                        hideLoadingOverlay()
+                        print("[AppDelegate] Server restarted after screen lock")
+                        
+                        NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                    }
+                }
             }
         }
         
@@ -230,25 +258,24 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 
                 NSLog("✅ [AppDelegate] Server fully restarted - videos ready")
             } else {
-                // SHORT background (<5min) - just clear players, server should be responsive
-                NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - clearing players only")
+                // SHORT background (<5min) - gentle refresh, keep players intact
+                NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - gentle refresh (keeping players)")
                 
                 // Check if server is still running
                 if LocalHTTPServer.shared.isRunning {
-                    // Server still alive - just clear video players for fresh connections
+                    // Server still alive - just refresh video layers, DON'T clear players!
+                    // This avoids black screens and pauses - videos continue seamlessly
                     // DON'T clear VideoStateCache - videos will resume from where they left off
-                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                    SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                     
                     // CRITICAL: Reset connection pool to close stale connections
                     // Without this, we get "Connection reset by peer" errors causing video blinking
                     NSLog("DEBUG: [AppDelegate] Resetting connection pool for short background recovery")
                     LocalHTTPServer.shared.resetConnectionPool()
                     
-                    NSLog("✅ [AppDelegate] Players cleared, server still running")
+                    NSLog("✅ [AppDelegate] Short background recovery complete - videos kept intact")
                     
-                    // Notify views to reload media (critical after cache clear + immediate background)
-                    NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
-                    print("[AppDelegate] Posted videoInfrastructureRestarted notification for short background")
+                    // NO notification needed - players are intact and will continue playing
                 } else {
                     // Server was killed even in short background - restart it
                     NSLog("⚠️ [AppDelegate] Server killed in short background, restarting...")
