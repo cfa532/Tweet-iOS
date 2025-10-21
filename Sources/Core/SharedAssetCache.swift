@@ -1144,12 +1144,6 @@ class SharedAssetCache: ObservableObject {
         // The connection pool reset in LocalHTTPServer is enough
         // Video layers are still valid, players can continue seamlessly
         
-        // Just ensure all players are in a good state (not needed but harmless)
-        for (_, player) in playerCache {
-            // Don't pause or clear - just let them continue
-            // The video layer refresh will happen automatically when view appears
-        }
-        
         NSLog("DEBUG: [SharedAssetCache] Short background refresh complete - kept \(playerCache.count) players, \(assetCache.count) assets intact")
     }
     
