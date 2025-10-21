@@ -515,7 +515,17 @@ struct SimpleVideoPlayer: View {
                 print("DEBUG: [VIDEO VISIBILITY] Video became visible with no player, setting up: \(mid)")
                 setupPlayer()
             } else {
-                // Restore cached video state if available
+                // SANITY CHECK: Run when becoming visible to catch broken players
+                if isPlayerBroken() {
+                    print("⚠️ [VIDEO VISIBILITY] Sanity check failed - player is broken, recreating for \(mid)")
+                    player = nil
+                    loadingState = .idle
+                    playbackState = .notStarted
+                    setupPlayer()
+                    return
+                }
+                
+                // Player is healthy, restore cached state
                 restoreCachedVideoState()
                 checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: visible)
             }
@@ -574,69 +584,79 @@ struct SimpleVideoPlayer: View {
         }
     }
     
-    /// UNIFIED recovery method - handles ALL background/screen lock scenarios
-    /// Single source of truth for recovery logic
+    /// SANITY CHECK: Detects if player is broken
+    private func isPlayerBroken() -> Bool {
+        guard let player = player else { return true }
+        guard let playerItem = player.currentItem else { return true }
+        
+        // Check 1: Status is failed
+        if playerItem.status == .failed {
+            return true
+        }
+        
+        // Check 2: For ready players, check if they have no loaded data (stale)
+        if playerItem.status == .readyToPlay && playerItem.loadedTimeRanges.isEmpty {
+            print("⚠️ [SANITY CHECK] Player ready but no loaded ranges - likely stale")
+            return true
+        }
+        
+        return false
+    }
+    
+    /// RECOVERY: Restore playback after background (with sanity check as safety net)
     private func recoverFromBackground() {
-        print("DEBUG: [VIDEO RECOVERY] Starting unified recovery for \(mid)")
+        print("DEBUG: [VIDEO RECOVERY] Starting recovery for \(mid)")
+        isPlayerDetached = false
         
-        // Step 1: Check if player exists and is valid
-        let playerIsValid = player != nil && player?.currentItem != nil && player?.currentItem?.status != .failed
-        
-        if !playerIsValid {
-            print("DEBUG: [VIDEO RECOVERY] Player invalid or missing, will recreate when needed")
+        // SANITY CHECK (2nd layer security) - detect broken players
+        if isPlayerBroken() {
+            print("⚠️ [VIDEO RECOVERY] Sanity check failed - player is broken, clearing")
             player = nil
             loadingState = .idle
             playbackState = .notStarted
-            isPlayerDetached = false
             
-            // Recreate player if visible
-            if isVisible && shouldLoadVideo && (mode == .mediaCell || mode == .tweetDetail) {
+            // Recreate if visible
+            if isVisible && shouldLoadVideo {
                 print("DEBUG: [VIDEO RECOVERY] Recreating player for visible video")
                 setupPlayer()
             }
             return
         }
         
-        // Step 2: Player is valid - reattach and refresh
-        print("DEBUG: [VIDEO RECOVERY] Player is valid, reattaching")
-        isPlayerDetached = false
+        // BASIC RESTORATION (1st layer) - restore playback state
+        print("✅ [VIDEO RECOVERY] Sanity check passed - restoring playback state")
         
         // Restore mute state
         if mode == .mediaCell {
             player?.isMuted = MuteState.shared.isMuted
-        } else if mode == .mediaBrowser {
+        } else {
             player?.isMuted = false
         }
         
-        // ALWAYS force view refresh for MediaCell after background
-        // Video layers become stale after screen lock, even if player is valid
-        // This is the only reliable way to prevent black screens
+        // Always refresh view layer for MediaCell (prevents stale layers)
         if mode == .mediaCell {
-            print("DEBUG: [VIDEO RECOVERY] MediaCell mode - forcing view refresh to prevent black screen")
             representableId += 1
         }
         
-        // Restore playback state from cache
+        // Restore playback position and play/pause state from cache
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
             print("DEBUG: [VIDEO RECOVERY] Restoring cached state - wasPlaying: \(cachedState.wasPlaying), time: \(CMTimeGetSeconds(cachedState.time))s")
             
-            // Seek to cached position
             let currentTime = player?.currentTime() ?? .zero
             let timeDiff = abs(CMTimeGetSeconds(cachedState.time) - CMTimeGetSeconds(currentTime))
             
+            // Seek if position differs significantly
             if timeDiff > 0.5 {
-                print("DEBUG: [VIDEO RECOVERY] Seeking to cached position: \(CMTimeGetSeconds(cachedState.time))s")
+                print("DEBUG: [VIDEO RECOVERY] Seeking to cached position")
                 player?.seek(to: cachedState.time)
             }
             
-            // Resume playback if it was playing
-            if cachedState.wasPlaying && shouldLoadVideo {
-                print("DEBUG: [VIDEO RECOVERY] Resuming playback")
+            // Resume playback if it was playing and video is visible
+            if cachedState.wasPlaying && shouldLoadVideo && isVisible {
+                print("DEBUG: [VIDEO RECOVERY] Resuming playback (was playing and visible)")
                 player?.play()
                 playbackState = .playing
             }
-        } else {
-            print("DEBUG: [VIDEO RECOVERY] No cached state found for \(mid)")
         }
         
         print("DEBUG: [VIDEO RECOVERY] Recovery complete for \(mid)")

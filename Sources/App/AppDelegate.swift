@@ -258,43 +258,26 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 
                 NSLog("✅ [AppDelegate] Server fully restarted - videos ready")
             } else {
-                // SHORT background (<5min) - gentle refresh, keep players intact
-                NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - gentle refresh (keeping players)")
+                // SHORT background (<5min) - simple approach: always clear and let videos recreate
+                NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - clearing players for clean state")
                 
-                // Check if server is still running
-                if LocalHTTPServer.shared.isRunning {
-                    // Server still alive - just refresh video layers, DON'T clear players!
-                    // This avoids black screens and pauses - videos continue seamlessly
-                    // DON'T clear VideoStateCache - videos will resume from where they left off
-                    SharedAssetCache.shared.refreshVideoLayersForShortBackground()
-                    
-                    // CRITICAL: Reset connection pool to close stale connections
-                    // Without this, we get "Connection reset by peer" errors causing video blinking
-                    NSLog("DEBUG: [AppDelegate] Resetting connection pool for short background recovery")
-                    LocalHTTPServer.shared.resetConnectionPool()
-                    
-                    NSLog("✅ [AppDelegate] Short background recovery complete - videos kept intact")
-                    
-                    // NO notification needed - players are intact and will continue playing
-                } else {
-                    // Server was killed even in short background - restart it
-                    NSLog("⚠️ [AppDelegate] Server killed in short background, restarting...")
-                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                    // DON'T clear VideoStateCache - preserve playback position for smooth resume
-                    
-                    // Show brief spinner for server restart
-                    showLoadingOverlay()
-                    Thread.sleep(forTimeInterval: 0.05)
-                    
+                // Always clear players for predictable recovery
+                // Trying to keep them "intact" creates too many edge cases
+                SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                
+                // Reset connection pool
+                LocalHTTPServer.shared.resetConnectionPool()
+                
+                // Ensure server is running
+                if !LocalHTTPServer.shared.isRunning {
+                    NSLog("⚠️ [AppDelegate] Server not running, restarting...")
                     LocalHTTPServer.shared.startAndWait()
-                    
-                    hideLoadingOverlay()
-                    NSLog("✅ [AppDelegate] Server restarted")
-                    
-                    // Notify views to reload media
-                    NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
-                    print("[AppDelegate] Posted videoInfrastructureRestarted notification after server restart")
                 }
+                
+                NSLog("✅ [AppDelegate] Short background recovery complete - players cleared")
+                
+                // Notify views to reload videos
+                NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
             }
         } else {
             NSLog("⚠️ [AppDelegate] No background timestamp, starting server")

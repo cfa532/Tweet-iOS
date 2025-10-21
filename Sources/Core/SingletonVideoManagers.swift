@@ -185,7 +185,20 @@ class FullScreenVideoManager: ObservableObject {
     
     // MARK: - App Lifecycle
     
+    private var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
+    private var hasRecoveredThisCycle = false
+    
     private func setupAppLifecycleNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleAppWillResignActive()
+            }
+        }
+        
         NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification,
             object: nil,
@@ -205,16 +218,185 @@ class FullScreenVideoManager: ObservableObject {
                 self?.handleAppWillEnterForeground()
             }
         }
+        
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleAppDidBecomeActive()
+            }
+        }
+    }
+    
+    private func handleAppWillResignActive() {
+        guard let player = singletonPlayer else { return }
+        
+        print("DEBUG: [FullScreenVideoManager] App resigning active (screen lock), saving state")
+        
+        // Save current playback state
+        let wasPlaying = player.rate > 0
+        let currentTime = player.currentTime()
+        savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
+        
+        // Pause the player
+        pause()
+        
+        // Reset recovery flag
+        hasRecoveredThisCycle = false
+        
+        print("DEBUG: [FullScreenVideoManager] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
     }
     
     private func handleAppDidEnterBackground() {
-        print("DEBUG: [FullScreenVideoManager] App entering background, pausing")
-        pause()
+        guard let player = singletonPlayer else { return }
+        
+        print("DEBUG: [FullScreenVideoManager] App entering background, saving state")
+        
+        // Save current playback state (if not already saved by willResignActive)
+        if savedPlaybackState == nil {
+            let wasPlaying = player.rate > 0
+            let currentTime = player.currentTime()
+            savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
+            
+            // Pause the player
+            pause()
+            
+            print("DEBUG: [FullScreenVideoManager] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
+        } else {
+            print("DEBUG: [FullScreenVideoManager] State already saved by willResignActive")
+        }
     }
     
     private func handleAppWillEnterForeground() {
-        print("DEBUG: [FullScreenVideoManager] App entering foreground")
-        // Don't auto-resume, let user control
+        print("DEBUG: [FullScreenVideoManager] App entering foreground, recovering from background")
+        recoverFromBackground()
+    }
+    
+    private func handleAppDidBecomeActive() {
+        print("DEBUG: [FullScreenVideoManager] App became active")
+        // Recover from screen lock (which triggers didBecomeActive but not willEnterForeground)
+        // Only recover if we haven't already recovered in this cycle (to avoid duplicate recovery)
+        if !hasRecoveredThisCycle {
+            print("DEBUG: [FullScreenVideoManager] Recovering from screen lock in didBecomeActive")
+            recoverFromBackground()
+        } else {
+            print("DEBUG: [FullScreenVideoManager] Already recovered in willEnterForeground, skipping")
+        }
+    }
+    
+    /// Two-layer recovery from background
+    private func recoverFromBackground() {
+        guard let player = singletonPlayer else {
+            print("DEBUG: [FullScreenVideoManager] No player to recover")
+            hasRecoveredThisCycle = true
+            return
+        }
+        
+        // Mark that we've recovered in this cycle
+        hasRecoveredThisCycle = true
+        
+        // Layer 2 (Security): Check if player is broken
+        if isPlayerBroken() {
+            NSLog("DEBUG: [FullScreenVideoManager] Layer 2 (Security): Player is broken - clearing to force recreation")
+            
+            // Clear broken player
+            if let observer = videoCompletionObserver {
+                NotificationCenter.default.removeObserver(observer)
+                videoCompletionObserver = nil
+            }
+            singletonPlayer?.pause()
+            singletonPlayer = nil
+            isPlaying = false
+            currentVideoMid = nil
+            currentTweetId = nil
+            currentSourceTweetId = nil
+            
+            // For fullscreen, the view should recreate when it sees nil player
+            // Unlike DetailView, fullscreen typically closes when backgrounded
+            NSLog("DEBUG: [FullScreenVideoManager] Player cleared - view should recreate")
+            
+            savedPlaybackState = nil
+            return
+        }
+        
+        // Layer 1 (Basic Restoration): Player is healthy, restore state
+        print("DEBUG: [FullScreenVideoManager] Layer 1 (Basic Restoration): Restoring playback state")
+        
+        // Ensure mute state is correct
+        player.isMuted = false
+        
+        // Force view refresh by seeking to current position
+        // This is critical to fix black screen issues
+        let currentTime = player.currentTime()
+        let seekTime: CMTime
+        let wasPlaying: Bool
+        
+        if let savedState = savedPlaybackState {
+            wasPlaying = savedState.wasPlaying
+            seekTime = savedState.time
+            print("DEBUG: [FullScreenVideoManager] Using saved state - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
+            savedPlaybackState = nil
+        } else {
+            wasPlaying = isPlaying
+            seekTime = currentTime
+            print("DEBUG: [FullScreenVideoManager] No saved state, using current - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
+        }
+        
+        // Pause first to ensure clean state
+        player.pause()
+        isPlaying = false
+        
+        // Force a seek to refresh the video layer
+        player.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+            guard finished, let self = self else { return }
+            
+            Task { @MainActor in
+                print("DEBUG: [FullScreenVideoManager] Seek completed, layer refreshed")
+                
+                // Resume playback if it was playing before
+                if wasPlaying {
+                    print("DEBUG: [FullScreenVideoManager] Resuming playback")
+                    self.singletonPlayer?.play()
+                    self.isPlaying = true
+                } else {
+                    print("DEBUG: [FullScreenVideoManager] Not resuming (was paused)")
+                }
+            }
+        }
+    }
+    
+    /// Check if player is broken (Layer 2 security check)
+    private func isPlayerBroken() -> Bool {
+        guard let player = singletonPlayer else {
+            NSLog("DEBUG: [FullScreenVideoManager] Player is nil -> BROKEN")
+            return true
+        }
+        
+        guard let currentItem = player.currentItem else {
+            NSLog("DEBUG: [FullScreenVideoManager] Player has no currentItem -> BROKEN")
+            return true
+        }
+        
+        // Check if player item is in failed state
+        if currentItem.status == .failed {
+            NSLog("DEBUG: [FullScreenVideoManager] Player item status is failed -> BROKEN")
+            return true
+        }
+        
+        // For screen lock recovery, don't check loadedTimeRanges
+        // iOS might temporarily clear this data, but it will reload
+        // Only check loadedTimeRanges if status is .readyToPlay AND duration is invalid
+        if currentItem.status == .readyToPlay && 
+           currentItem.loadedTimeRanges.isEmpty && 
+           !currentItem.duration.isValid {
+            NSLog("DEBUG: [FullScreenVideoManager] Player item has no loaded data AND invalid duration -> BROKEN")
+            return true
+        }
+        
+        NSLog("DEBUG: [FullScreenVideoManager] Player health check passed -> HEALTHY")
+        return false
     }
     
     /// Clear search function
@@ -421,8 +603,19 @@ class DetailVideoManager: NSObject, ObservableObject {
     // MARK: - App Lifecycle Handling
     
     private var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
+    private var hasRecoveredThisCycle = false
     
     private func setupAppLifecycleNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleAppWillResignActive()
+            }
+        }
+        
         NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification,
             object: nil,
@@ -454,51 +647,107 @@ class DetailVideoManager: NSObject, ObservableObject {
         }
     }
     
-    private func handleAppDidEnterBackground() {
+    private func handleAppWillResignActive() {
         guard let player = currentPlayer else { return }
         
-        print("DEBUG: [DetailVideoManager] App entering background, saving state")
+        NSLog("DEBUG: [DetailVideoManager] App resigning active (screen lock), saving state")
         
         // Save current playback state
         let wasPlaying = player.rate > 0
         let currentTime = player.currentTime()
         savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
         
-        // Pause the player to prevent black screen
+        // Pause the player
         player.pause()
         isPlaying = false
+        
+        // Reset recovery flag
+        hasRecoveredThisCycle = false
         
         print("DEBUG: [DetailVideoManager] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
     }
     
+    private func handleAppDidEnterBackground() {
+        guard let player = currentPlayer else { return }
+        
+        print("DEBUG: [DetailVideoManager] App entering background, saving state")
+        
+        // Save current playback state (if not already saved by willResignActive)
+        if savedPlaybackState == nil {
+            let wasPlaying = player.rate > 0
+            let currentTime = player.currentTime()
+            savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
+            
+            // Pause the player to prevent black screen
+            player.pause()
+            isPlaying = false
+            
+            print("DEBUG: [DetailVideoManager] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
+        } else {
+            print("DEBUG: [DetailVideoManager] State already saved by willResignActive")
+        }
+    }
+    
     private func handleAppWillEnterForeground() {
-        refreshVideoLayer()
+        print("DEBUG: [DetailVideoManager] App entering foreground, recovering from background")
+        recoverFromBackground()
     }
     
     private func handleAppDidBecomeActive() {
-        // Refresh immediately when app becomes active
-        refreshVideoLayer()
+        NSLog("DEBUG: [DetailVideoManager] App became active")
+        // Recover from screen lock (which triggers didBecomeActive but not willEnterForeground)
+        // Only recover if we haven't already recovered in this cycle (to avoid duplicate recovery)
+        if !hasRecoveredThisCycle {
+            NSLog("DEBUG: [DetailVideoManager] Recovering from screen lock in didBecomeActive")
+            recoverFromBackground()
+        } else {
+            NSLog("DEBUG: [DetailVideoManager] Already recovered in willEnterForeground, skipping")
+        }
     }
     
-    private func refreshVideoLayer() {
+    /// Two-layer recovery from background
+    private func recoverFromBackground() {
         guard let player = currentPlayer else {
-            print("DEBUG: [DetailVideoManager] No player to refresh")
+            NSLog("DEBUG: [DetailVideoManager] No player to recover")
+            hasRecoveredThisCycle = true
             return
         }
         
-        // Check if player is still valid (has a current item)
-        guard player.currentItem != nil else {
-            print("DEBUG: [DetailVideoManager] Player has no current item - needs recreation")
-            // Player was cleared by background recovery, need to recreate
-            // Clear our reference so it can be recreated when view appears
+        // Mark that we've recovered in this cycle
+        hasRecoveredThisCycle = true
+        
+        // Layer 2 (Security): Check if player is broken
+        if isPlayerBroken() {
+            NSLog("DEBUG: [DetailVideoManager] Layer 2 (Security): Player is broken - clearing to force recreation")
+            
+            // Clear broken player completely
+            if let playerItem = player.currentItem {
+                playerItem.removeObserver(self, forKeyPath: "status")
+            }
+            if let observer = videoCompletionObserver {
+                NotificationCenter.default.removeObserver(observer)
+                videoCompletionObserver = nil
+            }
+            
+            currentPlayer?.pause()
             currentPlayer = nil
             currentVideoMid = nil
             isPlaying = false
+            
+            // Post notification to tell SimpleVideoPlayer to reload
+            // This will trigger SimpleVideoPlayer's handleVideoInfrastructureRestarted
+            NSLog("DEBUG: [DetailVideoManager] Posting videoInfrastructureRestarted to trigger view reload")
+            NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+            
             savedPlaybackState = nil
             return
         }
         
-        print("DEBUG: [DetailVideoManager] Refreshing video layer after background/foreground transition")
+        // Layer 1 (Basic Restoration): Player is healthy, restore state
+        NSLog("DEBUG: [DetailVideoManager] Layer 1 (Basic Restoration): Restoring playback state")
+        
+        // Ensure mute state is correct
+        player.isMuted = false
         
         // Use saved state if available, otherwise use current state
         let wasPlaying: Bool
@@ -508,7 +757,7 @@ class DetailVideoManager: NSObject, ObservableObject {
             wasPlaying = savedState.wasPlaying
             seekTime = savedState.time
             print("DEBUG: [DetailVideoManager] Using saved state - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
-            savedPlaybackState = nil // Clear after using
+            savedPlaybackState = nil
         } else {
             wasPlaying = isPlaying
             seekTime = player.currentTime()
@@ -517,31 +766,64 @@ class DetailVideoManager: NSObject, ObservableObject {
         
         // Pause first to ensure clean state
         player.pause()
+        isPlaying = false
         
-        // Force a seek with zero tolerance to refresh the video layer
-        // This triggers the AVPlayerLayer to redraw its contents
+        // Force a seek to refresh the video layer
         player.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-            if finished {
-                print("DEBUG: [DetailVideoManager] Seek completed after layer refresh")
-                if wasPlaying {
-                    // Resume playback if it was playing before
-                    print("DEBUG: [DetailVideoManager] Resuming playback")
-                    player.play()
-                    Task { @MainActor [weak self] in
-                        self?.isPlaying = true
-                    }
-                } else {
-                    print("DEBUG: [DetailVideoManager] Not resuming playback (was paused)")
-                }
-            } else {
-                print("DEBUG: [DetailVideoManager] Seek failed after layer refresh - clearing invalid player")
-                // Seek failed, player is invalid, clear it
+            guard finished else {
+                print("DEBUG: [DetailVideoManager] Seek failed, clearing invalid player")
                 Task { @MainActor [weak self] in
                     self?.currentPlayer = nil
                     self?.currentVideoMid = nil
                     self?.isPlaying = false
                 }
+                return
+            }
+            
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                print("DEBUG: [DetailVideoManager] Seek completed, layer refreshed")
+                
+                if wasPlaying {
+                    print("DEBUG: [DetailVideoManager] Resuming playback")
+                    self.currentPlayer?.play()
+                    self.isPlaying = true
+                } else {
+                    print("DEBUG: [DetailVideoManager] Not resuming (was paused)")
+                }
             }
         }
+    }
+    
+    /// Check if player is broken (Layer 2 security check)
+    private func isPlayerBroken() -> Bool {
+        guard let player = currentPlayer else {
+            NSLog("DEBUG: [DetailVideoManager] Player is nil -> BROKEN")
+            return true
+        }
+        
+        guard let currentItem = player.currentItem else {
+            NSLog("DEBUG: [DetailVideoManager] Player has no currentItem -> BROKEN")
+            return true
+        }
+        
+        // Check if player item is in failed state
+        if currentItem.status == .failed {
+            NSLog("DEBUG: [DetailVideoManager] Player item status is failed -> BROKEN")
+            return true
+        }
+        
+        // For screen lock recovery, don't check loadedTimeRanges
+        // iOS might temporarily clear this data, but it will reload
+        // Only check loadedTimeRanges if status is .readyToPlay AND duration is invalid
+        if currentItem.status == .readyToPlay && 
+           currentItem.loadedTimeRanges.isEmpty && 
+           !currentItem.duration.isValid {
+            NSLog("DEBUG: [DetailVideoManager] Player item has no loaded data AND invalid duration -> BROKEN")
+            return true
+        }
+        
+        NSLog("DEBUG: [DetailVideoManager] Player health check passed -> HEALTHY")
+        return false
     }
 }
