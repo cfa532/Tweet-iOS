@@ -278,11 +278,13 @@
 "Video" = "视频";
 "Audio" = "音频";
 "File" = "文件";
+"Image" = "图片";
 "Camera" = "相机";
 "Photo Library" = "照片库";
 "Choose Photo" = "选择照片";
 "Take Photo" = "拍照";
 "Record Video" = "录制视频";
+"%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB." = "%@文件太大（%.1fMB）。最大允许大小为%.0fMB。";
 
 // MARK: - Settings
 "Settings" = "设置";

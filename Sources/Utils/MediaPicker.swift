@@ -294,22 +294,6 @@ struct MediaUploadHelper {
                 if let data = try await item.loadTransferable(type: Data.self) {
                     print("DEBUG: Successfully loaded media data: \(data.count) bytes")
                     
-                    // Check file size limit
-                    if data.count > Constants.MAX_FILE_SIZE {
-                        let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                        let fileType = getFileTypeDescription(from: typeIdentifier)
-                        let fileSizeMB = Double(data.count) / (1024 * 1024)
-                        let maxSizeMB = Double(Constants.MAX_FILE_SIZE) / (1024 * 1024)
-                        
-                        throw NSError(
-                            domain: "FileProcessing", 
-                            code: -1, 
-                            userInfo: [
-                                NSLocalizedDescriptionKey: String(format: NSLocalizedString("%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB.", comment: "File size error message"), fileType, fileSizeMB, maxSizeMB)
-                            ]
-                        )
-                    }
-                    
                     // Get the type identifier and determine file extension
                     let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
                     let fileExtension = getFileExtension(for: typeIdentifier)

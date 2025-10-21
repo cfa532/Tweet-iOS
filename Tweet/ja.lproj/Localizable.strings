@@ -275,11 +275,13 @@
 "Video" = "動画";
 "Audio" = "音声";
 "File" = "ファイル";
+"Image" = "画像";
 "Camera" = "カメラ";
 "Photo Library" = "写真ライブラリ";
 "Choose Photo" = "写真を選択";
 "Take Photo" = "写真を撮影";
 "Record Video" = "動画を録画";
+"%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB." = "%@ファイルが大きすぎます（%.1fMB）。最大サイズは%.0fMBです。";
 
 // MARK: - Settings
 "Settings" = "設定";

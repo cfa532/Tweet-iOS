@@ -643,18 +643,6 @@ struct ChatScreen: View {
                 let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
                 print("[ChatScreen] Type identifier: \(typeIdentifier)")
                 
-                // Check file size for all file types
-                if data.count > Constants.MAX_FILE_SIZE {
-                    let fileType = getFileTypeDescription(from: typeIdentifier)
-                    let fileSizeMB = Double(data.count) / (1024 * 1024)
-                    let maxSizeMB = Double(Constants.MAX_FILE_SIZE) / (1024 * 1024)
-                    
-                    await MainActor.run {
-                        showToastMessage(String(format: NSLocalizedString("%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB.", comment: "File size error message"), fileType, fileSizeMB, maxSizeMB), type: .error)
-                    }
-                    return
-                }
-                
                 // Detect media type and set appropriate file extension
                 let mediaType: MediaType
                 let fileExtension: String
