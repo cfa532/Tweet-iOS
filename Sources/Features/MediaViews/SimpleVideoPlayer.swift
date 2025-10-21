@@ -561,111 +561,85 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleWillEnterForeground() {
-        // App will enter foreground - reattach player to prevent black screens
         print("DEBUG: [VIDEO FOREGROUND] App will enter foreground for \(mid)")
-        
-        // Skip health check here - let the player try to recover first
-        // Health check in didBecomeActive will catch truly broken players
-        
-        reattachPlayerForForeground()
+        recoverFromBackground()
     }
     
     private func handleDidBecomeActive() {
-        // App became active - ensure player is properly reattached and configured
         print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
-        
-        // Validate player health AFTER reattachment has a chance to work
-        // Use a small delay to give the player time to recover
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
-            self.validatePlayerHealth()
-        }
-        
-        // ONLY force view recreation if player was actually cleared and recreated
-        // Don't force recreation for players that survived the background
-        // This reduces flicker for short backgrounds where players stay intact
-        // representableId increment happens automatically when player changes
-        
-        // Only restore cached state if no player exists and we're not already detached
-        if player == nil && shouldLoadVideo && !isPlayerDetached {
-            print("DEBUG: [VIDEO APP ACTIVE] No player found, attempting to restore cached state for \(mid)")
-            restoreCachedVideoState()
-        }
-        
-        // If still no player after cache restoration, try to get from SharedAssetCache
-        if player == nil && shouldLoadVideo && !isPlayerDetached {
-            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: playerCacheKey) {
-                print("DEBUG: [VIDEO APP ACTIVE] Found cached player in SharedAssetCache for \(mid) with key: \(playerCacheKey)")
-                configurePlayer(cachedPlayer)
-            }
-        }
-        
-        // If still no player, force reload by calling setupPlayer
-        // For tweetDetail mode, always try to recreate even if not visible (singleton needs restoration)
-        if player == nil && shouldLoadVideo && !isPlayerDetached && (isVisible || mode == .tweetDetail) {
-            print("DEBUG: [VIDEO APP ACTIVE] No valid player found, forcing reload for \(mid)")
-            setupPlayer()
-        }
-        
-        // Ensure player is reattached if it was detached (but don't duplicate reattach calls)
-        if isPlayerDetached {
-            print("DEBUG: [VIDEO APP ACTIVE] Player was detached, reattaching for \(mid)")
-            reattachPlayerForForeground()
-        }
-        
-        // Ensure mute state is properly applied when app becomes active
-        // This handles cases where MuteState was refreshed after video was created
-        if let player = player {
-            if mode == .mediaCell {
-                player.isMuted = MuteState.shared.isMuted
-                print("DEBUG: [VIDEO APP ACTIVE] Applied current global mute state (\(MuteState.shared.isMuted)) for MediaCell mode")
-            } else if mode == .mediaBrowser {
-                player.isMuted = false
-                print("DEBUG: [VIDEO APP ACTIVE] Forced unmuted for full screen mode")
-            }
-        }
-        
-        // If video is visible and should play, resume playback
-        if isVisible && currentAutoPlay && shouldLoadVideo {
-            print("DEBUG: [VIDEO APP ACTIVE] Resuming playback for \(mid)")
-            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
-        }
-        
-        // Reset error state for videos that might have been interrupted
-        if loadingState.hasFailed {
-            print("DEBUG: [VIDEO APP ACTIVE] Resetting error state for \(mid)")
-            loadingState = .idle
+        // Recovery already handled in willEnterForeground
+        // Just ensure mute state is correct
+        if let player = player, mode == .mediaCell {
+            player.isMuted = MuteState.shared.isMuted
         }
     }
     
-    /// Validate player health and clear if broken
-    /// This is a fallback for cases where iOS kills the player even during short backgrounds
-    private func validatePlayerHealth() {
-        guard let player = player else { return }
+    /// UNIFIED recovery method - handles ALL background/screen lock scenarios
+    /// Single source of truth for recovery logic
+    private func recoverFromBackground() {
+        print("DEBUG: [VIDEO RECOVERY] Starting unified recovery for \(mid)")
         
-        // Check if player item is still valid
-        if player.currentItem == nil {
-            print("⚠️ [VIDEO HEALTH] Player has no currentItem (iOS killed it), clearing for \(mid)")
-            self.player = nil
+        // Step 1: Check if player exists and is valid
+        let playerIsValid = player != nil && player?.currentItem != nil && player?.currentItem?.status != .failed
+        
+        if !playerIsValid {
+            print("DEBUG: [VIDEO RECOVERY] Player invalid or missing, will recreate when needed")
+            player = nil
             loadingState = .idle
             playbackState = .notStarted
+            isPlayerDetached = false
+            
+            // Recreate player if visible
+            if isVisible && shouldLoadVideo && (mode == .mediaCell || mode == .tweetDetail) {
+                print("DEBUG: [VIDEO RECOVERY] Recreating player for visible video")
+                setupPlayer()
+            }
             return
         }
         
-        // Check if player item status is failed
-        if player.currentItem?.status == .failed {
-            print("⚠️ [VIDEO HEALTH] Player item failed (error: \(player.currentItem?.error?.localizedDescription ?? "unknown")), clearing for \(mid)")
-            self.player = nil
-            loadingState = .idle
-            playbackState = .notStarted
-            return
+        // Step 2: Player is valid - reattach and refresh
+        print("DEBUG: [VIDEO RECOVERY] Player is valid, reattaching")
+        isPlayerDetached = false
+        
+        // Restore mute state
+        if mode == .mediaCell {
+            player?.isMuted = MuteState.shared.isMuted
+        } else if mode == .mediaBrowser {
+            player?.isMuted = false
         }
         
-        // Don't check tracks - that's too aggressive and can give false positives during loading
-        // Just checking currentItem exists and status is not failed is sufficient
-        // AVPlayer will handle track validation when actually playing
+        // ALWAYS force view refresh for MediaCell after background
+        // Video layers become stale after screen lock, even if player is valid
+        // This is the only reliable way to prevent black screens
+        if mode == .mediaCell {
+            print("DEBUG: [VIDEO RECOVERY] MediaCell mode - forcing view refresh to prevent black screen")
+            representableId += 1
+        }
         
-        print("✅ [VIDEO HEALTH] Player is healthy for \(mid) (has currentItem, status: \(player.currentItem?.status.rawValue ?? -1))")
+        // Restore playback state from cache
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            print("DEBUG: [VIDEO RECOVERY] Restoring cached state - wasPlaying: \(cachedState.wasPlaying), time: \(CMTimeGetSeconds(cachedState.time))s")
+            
+            // Seek to cached position
+            let currentTime = player?.currentTime() ?? .zero
+            let timeDiff = abs(CMTimeGetSeconds(cachedState.time) - CMTimeGetSeconds(currentTime))
+            
+            if timeDiff > 0.5 {
+                print("DEBUG: [VIDEO RECOVERY] Seeking to cached position: \(CMTimeGetSeconds(cachedState.time))s")
+                player?.seek(to: cachedState.time)
+            }
+            
+            // Resume playback if it was playing
+            if cachedState.wasPlaying && shouldLoadVideo {
+                print("DEBUG: [VIDEO RECOVERY] Resuming playback")
+                player?.play()
+                playbackState = .playing
+            }
+        } else {
+            print("DEBUG: [VIDEO RECOVERY] No cached state found for \(mid)")
+        }
+        
+        print("DEBUG: [VIDEO RECOVERY] Recovery complete for \(mid)")
     }
     
     private func handleVideoInfrastructureRestarted() {
@@ -1646,74 +1620,6 @@ struct SimpleVideoPlayer: View {
         print("DEBUG: [VIDEO DETACH] Player detached for \(mid), wasPlaying: \(wasPlaying)")
     }
     
-    private func reattachPlayerForForeground() {
-        guard let player = player else { 
-            print("DEBUG: [VIDEO REATTACH] No player available for \(mid)")
-            return 
-        }
-        
-        print("DEBUG: [VIDEO REATTACH] Reattaching player for foreground for \(mid)")
-        
-        // Mark as reattached
-        isPlayerDetached = false
-        
-        // Restore mute state immediately
-        if mode == .mediaCell {
-            player.isMuted = MuteState.shared.isMuted
-        } else if mode == .mediaBrowser {
-            player.isMuted = false
-        }
-        
-        // CRITICAL: For finished videos, force view recreation to refresh the first frame
-        // Without this, finished videos show black screen after screen lock
-        if playbackState.hasFinished {
-            print("DEBUG: [VIDEO REATTACH] Video was finished, forcing view refresh for \(mid)")
-            representableId += 1
-            // Ensure player is at beginning
-            player.seek(to: .zero)
-        }
-        
-        // Get cached state if available
-        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
-            print("DEBUG: [VIDEO REATTACH] Restoring cached state for \(mid)")
-            
-            let currentTime = player.currentTime()
-            let timeDifference = abs(CMTimeGetSeconds(cachedState.time) - CMTimeGetSeconds(currentTime))
-            
-            // Only seek if we're more than 0.5 seconds away from cached position
-            // This avoids unnecessary seeks that cause flicker
-            if timeDifference > 0.5 {
-                print("DEBUG: [VIDEO REATTACH] Seeking to cached position (\(CMTimeGetSeconds(cachedState.time))s, current: \(CMTimeGetSeconds(currentTime))s)")
-                player.seek(to: cachedState.time) { finished in
-                    if finished {
-                        self.resumePlaybackIfNeeded(wasPlaying: cachedState.wasPlaying)
-                    }
-                }
-            } else {
-                print("DEBUG: [VIDEO REATTACH] Already at cached position (\(CMTimeGetSeconds(currentTime))s), skipping seek")
-                resumePlaybackIfNeeded(wasPlaying: cachedState.wasPlaying)
-            }
-        } else {
-            print("DEBUG: [VIDEO REATTACH] No cached state found for \(mid)")
-        }
-        
-        print("DEBUG: [VIDEO REATTACH] Player reattached for \(mid)")
-    }
-    
-    private func resumePlaybackIfNeeded(wasPlaying: Bool) {
-        guard let player = player else { return }
-        
-        // Resume playback if it was playing before background
-        // Trust the cached state - if it was playing, resume it
-        // Visibility checks will pause it again if needed
-        if wasPlaying && shouldLoadVideo {
-            NSLog("DEBUG: [VIDEO REATTACH] Resuming playback for \(mid) (was playing: \(wasPlaying))")
-            player.play()
-            playbackState = .playing
-        } else {
-            NSLog("DEBUG: [VIDEO REATTACH] Not resuming - wasPlaying: \(wasPlaying), shouldLoad: \(shouldLoadVideo)")
-        }
-    }
 }
 
 // MARK: - Video Layer Refresh View
