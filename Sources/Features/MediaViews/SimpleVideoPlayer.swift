@@ -645,9 +645,19 @@ struct SimpleVideoPlayer: View {
     private func handleVideoInfrastructureRestarted() {
         print("DEBUG: [VIDEO INFRA RESTART] Video infrastructure restarted for \(mid), mode: \(mode)")
         
-        // If player was cleared and video is finished, we need to recreate it for screen lock recovery
-        if player == nil {
-            print("DEBUG: [VIDEO INFRA RESTART] Player was cleared during infrastructure restart")
+        // CRITICAL: Check if player's currentItem is valid, not just if player exists
+        // During short background recovery, clearVideoPlayersForBackgroundRecovery() sets
+        // player.replaceCurrentItem(with: nil), so player object exists but has no item
+        let needsRecreation = player == nil || player?.currentItem == nil
+        
+        if needsRecreation {
+            print("DEBUG: [VIDEO INFRA RESTART] Player needs recreation (player nil: \(player == nil), item nil: \(player?.currentItem == nil))")
+            
+            // Clear invalid player reference
+            if player != nil && player?.currentItem == nil {
+                print("DEBUG: [VIDEO INFRA RESTART] Clearing player with nil currentItem for \(mid)")
+                player = nil
+            }
             
             // Reset finished state to allow recreation
             if playbackState.hasFinished {
@@ -664,7 +674,7 @@ struct SimpleVideoPlayer: View {
             
             // For visible videos in MediaCell, recreate the player
             if mode == .mediaCell && isVisible && shouldLoadVideo {
-                print("DEBUG: [VIDEO INFRA RESTART] Recreating player for visible finished video \(mid)")
+                print("DEBUG: [VIDEO INFRA RESTART] Recreating player for visible MediaCell video \(mid)")
                 setupPlayer()
             }
             // For TweetDetail, always recreate (singleton needs restoration)
@@ -673,8 +683,8 @@ struct SimpleVideoPlayer: View {
                 setupPlayer()
             }
         } else {
-            print("DEBUG: [VIDEO INFRA RESTART] Player still exists for \(mid), ensuring mute state")
-            // Player still exists, just ensure mute state is correct
+            print("DEBUG: [VIDEO INFRA RESTART] Player still valid for \(mid), ensuring mute state")
+            // Player still exists and has valid item, just ensure mute state is correct
             if mode == .mediaCell {
                 player?.isMuted = MuteState.shared.isMuted
             } else if mode == .mediaBrowser {
