@@ -32,48 +32,27 @@ struct CommentComposeView: View {
             ZStack {
                 ScrollView {
                     VStack(spacing: 0) {
-                        // Quote checkbox
+                        // Quote checkbox with larger tappable area
                         HStack {
-                            Button(action: { isQuoting.toggle() }) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: isQuoting ? "checkmark.square.fill" : "square")
-                                        .foregroundColor(isQuoting ? .blue : .secondary)
-                                    Text(LocalizedStringKey("Quote Tweet"))
-                                        .font(.subheadline)
-                                        .foregroundColor(.primary)
-                                }
+                            HStack(spacing: 8) {
+                                Image(systemName: isQuoting ? "checkmark.square.fill" : "square")
+                                    .foregroundColor(isQuoting ? .blue : .secondary)
+                                    .font(.system(size: 20))
+                                Text(LocalizedStringKey("Quote Tweet"))
+                                    .font(.subheadline)
+                                    .foregroundColor(.primary)
                             }
-                            .buttonStyle(PlainButtonStyle())
+                            .padding(.vertical, 12)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                isQuoting.toggle()
+                            }
                             Spacer()
                         }
-                        .padding()
+                        .padding(.horizontal)
                         .background(Color(.systemBackground))
                         
-                        // Original tweet preview when quoting
-                        if isQuoting {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text(tweet.author?.name ?? "Unknown")
-                                        .font(.headline)
-                                        .foregroundColor(.themeText)
-                                    Text("@\(tweet.author?.username ?? NSLocalizedString("username", comment: "Default username"))")
-                                        .font(.subheadline)
-                                        .foregroundColor(.themeSecondaryText)
-                                }
-                                
-                                if let content = tweet.content {
-                                    Text(content)
-                                        .font(.body)
-                                        .foregroundColor(.themeText)
-                                        .lineLimit(3)
-                                }
-                            }
-                            .padding()
-                            .background(Color.themeSecondaryBackground)
-                            .cornerRadius(8)
-                            .padding(.horizontal)
-                            .frame(maxHeight: 150)
-                        }
+                        // Don't show quoted content preview
                         
                         TextEditor(text: $commentText)
                             .frame(minHeight: 150, maxHeight: 250) // Max height for ~10 lines
