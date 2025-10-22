@@ -4314,10 +4314,11 @@ final class HproseInstance: ObservableObject {
     func scheduleCommentUpload(
         comment: Tweet,
         to tweet: Tweet,
-        itemData: [PendingTweetUpload.ItemData]
+        itemData: [PendingTweetUpload.ItemData],
+        isQuoting: Bool = false
     ) {
         // Delegate to upload manager
-        uploadManager.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
+        uploadManager.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData, isQuoting: isQuoting)
     }
     
     /**

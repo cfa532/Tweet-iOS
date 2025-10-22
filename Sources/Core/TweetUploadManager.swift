@@ -85,7 +85,8 @@ class TweetUploadManager {
     func scheduleCommentUpload(
         comment: Tweet,
         to tweet: Tweet,
-        itemData: [PendingTweetUpload.ItemData]
+        itemData: [PendingTweetUpload.ItemData],
+        isQuoting: Bool = false
     ) {
         Task.detached(priority: .background) {
             // Start progress tracking on main thread
@@ -155,7 +156,8 @@ class TweetUploadManager {
                             comment: comment,
                             to: tweet,
                             itemData: updatedItemData,
-                            uploadedAttachments: uploadedAttachments
+                            uploadedAttachments: uploadedAttachments,
+                            isQuoting: isQuoting
                         )
                     }
                     
@@ -196,6 +198,18 @@ class TweetUploadManager {
                             print("✅ [Background Submit] Comment posted successfully!")
                             print("[TweetUploadManager] New comment mid: \(newComment.mid)")
                             print("[TweetUploadManager] Parent tweet mid: \(tweet.mid)")
+                            
+                            // If quoting, also upload as a new tweet
+                            if isQuoting {
+                                print("📝 [Quote Tweet] Uploading comment as quote tweet...")
+                                newComment.originalTweetId = tweet.mid
+                                newComment.originalAuthorId = tweet.authorId
+                                if let quoteTweet = try await hproseInstance.uploadTweet(newComment) {
+                                    print("✅ [Quote Tweet] Quote tweet posted successfully! ID: \(quoteTweet.mid)")
+                                } else {
+                                    print("❌ [Quote Tweet] Failed to post quote tweet")
+                                }
+                            }
                             // Success notification is posted by addComment()
                         } else {
                             let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to post comment", comment: "Comment error")])
@@ -789,7 +803,8 @@ extension TweetUploadManager {
         comment: Tweet,
         to parentTweet: Tweet,
         itemData: [PendingTweetUpload.ItemData],
-        uploadedAttachments: [MimeiFileType]
+        uploadedAttachments: [MimeiFileType],
+        isQuoting: Bool = false
     ) async {
         // Extract all job IDs from itemData
         let jobItems = itemData.filter { $0.videoJobId != nil }
@@ -873,7 +888,8 @@ extension TweetUploadManager {
                     comment: comment,
                     to: parentTweet,
                     itemData: itemData,
-                    completedCIDs: completedCIDs
+                    completedCIDs: completedCIDs,
+                    isQuoting: isQuoting
                 )
                 return
             }
@@ -894,7 +910,8 @@ extension TweetUploadManager {
         to parentTweet: Tweet,
         itemData: [PendingTweetUpload.ItemData],
         completedCIDs: [String: String],
-        retryCount: Int = 0
+        retryCount: Int = 0,
+        isQuoting: Bool = false
     ) async {
         guard let hproseInstance = hproseInstance else { return }
         
@@ -944,6 +961,18 @@ extension TweetUploadManager {
                 print("✅ [Comment Submit] Comment posted successfully with \(finalAttachments.count) attachments!")
                 print("[TweetUploadManager] New comment mid: \(newComment.mid)")
                 print("[TweetUploadManager] Parent tweet mid: \(parentTweet.mid)")
+                
+                // If quoting, also upload as a new tweet
+                if isQuoting {
+                    print("📝 [Quote Tweet] Uploading comment as quote tweet...")
+                    newComment.originalTweetId = parentTweet.mid
+                    newComment.originalAuthorId = parentTweet.authorId
+                    if let quoteTweet = try await hproseInstance.uploadTweet(newComment) {
+                        print("✅ [Quote Tweet] Quote tweet posted successfully! ID: \(quoteTweet.mid)")
+                    } else {
+                        print("❌ [Quote Tweet] Failed to post quote tweet")
+                    }
+                }
                 // Success notification is posted by addComment()
             } else {
                 throw NSError(domain: "CommentUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to post comment"])
@@ -960,7 +989,8 @@ extension TweetUploadManager {
                     to: parentTweet,
                     itemData: itemData,
                     completedCIDs: completedCIDs,
-                    retryCount: retryCount + 1
+                    retryCount: retryCount + 1,
+                    isQuoting: isQuoting
                 )
             } else {
                 print("❌ [Comment Submit] Max retries reached")

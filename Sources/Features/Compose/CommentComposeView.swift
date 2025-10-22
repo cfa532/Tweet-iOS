@@ -155,6 +155,7 @@ struct CommentComposeView: View {
                         let selectedItems = selectedItems
                         let selectedImages = selectedImages
                         let selectedVideos = selectedVideos
+                        let isQuotingCaptured = isQuoting
                         
                         dismiss()
                         
@@ -164,7 +165,8 @@ struct CommentComposeView: View {
                                 text: commentText,
                                 selectedItems: selectedItems,
                                 selectedImages: selectedImages,
-                                selectedVideos: selectedVideos
+                                selectedVideos: selectedVideos,
+                                isQuoting: isQuotingCaptured
                             )
                         }
                     }
@@ -250,77 +252,12 @@ struct CommentComposeView: View {
         }
     }
     
-    private func submitComment() async {
-        let trimmedContent = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Allow empty content if there are attachments
-        guard MediaUploadHelper.validateContent(
-            content: commentText,
-            selectedItems: selectedItems,
-            selectedImages: selectedImages,
-            selectedVideos: selectedVideos
-        ) else {
-            print("DEBUG: Comment validation failed - empty content and no attachments")
-            await MainActor.run {
-                showToastMessage(NSLocalizedString("Comment cannot be empty.", comment: "Empty comment error"), type: .error)
-            }
-            return
-        }
-        
-        
-        // Create comment object with a temporary UUID
-        let comment = Tweet(
-            mid: UUID().uuidString,         // temporary ID that will be replaced by server
-            authorId: hproseInstance.appUser.mid,
-            content: trimmedContent,
-            timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-            originalTweetId: isQuoting ? tweet.mid : nil,
-            originalAuthorId: isQuoting ? tweet.authorId : nil
-        )
-        
-        // Prepare item data using helper
-        print("DEBUG: Preparing item data for \(selectedItems.count) items")
-        let itemData: [HproseInstance.PendingTweetUpload.ItemData]
-        
-        do {
-            itemData = try await MediaUploadHelper.prepareItemData(
-                selectedItems: selectedItems,
-                selectedImages: selectedImages,
-                selectedVideos: selectedVideos
-            )
-        } catch {
-            print("DEBUG: Error preparing item data: \(error)")
-            await MainActor.run {
-                showToastMessage(NSLocalizedString("Failed to upload comment. Please try again.", comment: "Comment upload failed error"), type: .error)
-            }
-            return
-        }
-        
-        print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")
-        hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
-        
-        // Reset form and dismiss
-        await MainActor.run {
-            commentText = ""
-            selectedItems = []
-            selectedImages = []
-            selectedVideos = []
-            
-            // Show success toast before dismissing
-            showToastMessage(NSLocalizedString("Comment submitted", comment: "Comment submitted message"), type: .success)
-            
-            // Dismiss after a short delay to show the toast
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                dismiss()
-            }
-        }
-    }
-    
     private func submitCommentInBackground(
         text: String,
         selectedItems: [PhotosPickerItem],
         selectedImages: [UIImage],
-        selectedVideos: [URL]
+        selectedVideos: [URL],
+        isQuoting: Bool = false
     ) async {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         
@@ -330,7 +267,8 @@ struct CommentComposeView: View {
             return
         }
         
-        // Create comment object (Tweet, not ChatMessage)
+        // Create comment object WITHOUT originalTweetId/originalAuthorId
+        // Those will be set in TweetUploadManager if isQuoting is true
         let comment = Tweet(
             mid: UUID().uuidString,
             authorId: hproseInstance.appUser.mid,
@@ -353,8 +291,8 @@ struct CommentComposeView: View {
             return
         }
         
-        print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")
-        hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
+        print("DEBUG: Scheduling comment upload with \(itemData.count) attachments, isQuoting: \(isQuoting)")
+        hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData, isQuoting: isQuoting)
     }
     
 } 
