@@ -184,8 +184,27 @@ extension TweetCacheManager {
                         do {
                             let tweet = try Tweet.from(cdTweet: cdTweet)
                             
-                            // NOTE: Author will be lazy-loaded by the view when needed
-                            // Removed synchronous author population to avoid blocking
+                            // Load author from memory or cache if not already set
+                            // This allows tweets to render immediately without waiting for server
+                            if tweet.author == nil {
+                                // First check in-memory singleton
+                                let authorSingleton = User.getInstance(mid: tweet.authorId)
+                                
+                                // If singleton has no data (username is nil), load from Core Data cache
+                                if authorSingleton.username == nil {
+                                    let authorRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                                    authorRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
+                                    
+                                    if let cdUser = try? self.context.fetch(authorRequest).first {
+                                        // User found in cache - update singleton with cached data
+                                        _ = User.from(cdUser: cdUser)
+                                        // Note: User.from() updates the singleton, so authorSingleton is now updated
+                                    }
+                                }
+                                
+                                // Use the singleton (either with data from cache or as placeholder)
+                                tweet.author = authorSingleton
+                            }
                             
                             // Filter out tweets with invalid timestamps
                             if tweet.timestamp.timeIntervalSince1970 <= 0 {
@@ -215,16 +234,44 @@ extension TweetCacheManager {
 
     func fetchTweet(mid: String) async -> Tweet? {
         return await withCheckedContinuation { continuation in
+            // First check in-memory singleton
+            if let tweetInstance = Tweet.getInstance(for: mid) {
+                // Tweet is already in memory, return it immediately
+                continuation.resume(returning: tweetInstance)
+                return
+            }
+            
+            // Otherwise, load from Core Data cache
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                 request.predicate = NSPredicate(format: "tid == %@", mid)
                 
-                // First, get the tweet and convert it
+                // Get the tweet and convert it
                 if let cdTweet = try? self.context.fetch(request).first {
                     do {
                         let tweet = try Tweet.from(cdTweet: cdTweet)
-                        // NOTE: Author will be lazy-loaded by the view when needed
-                        // Removed synchronous author population to avoid blocking
+                        
+                        // Load author from memory or cache if not already set
+                        // This allows tweets to render immediately without waiting for server
+                        if tweet.author == nil {
+                            // First check in-memory singleton
+                            let authorSingleton = User.getInstance(mid: tweet.authorId)
+                            
+                            // If singleton has no data (username is nil), load from Core Data cache
+                            if authorSingleton.username == nil {
+                                let authorRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                                authorRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
+                                
+                                if let cdUser = try? self.context.fetch(authorRequest).first {
+                                    // User found in cache - update singleton with cached data
+                                    _ = User.from(cdUser: cdUser)
+                                    // Note: User.from() updates the singleton, so authorSingleton is now updated
+                                }
+                            }
+                            
+                            // Use the singleton (either with data from cache or as placeholder)
+                            tweet.author = authorSingleton
+                        }
                         
                         // Then update the cache time in a separate operation
                         cdTweet.timeCached = Date()
@@ -478,15 +525,28 @@ extension Tweet {
 extension TweetCacheManager {
     func fetchUser(mid: String) async -> User {
         return await withCheckedContinuation { continuation in
+            // First check in-memory singleton
+            let userSingleton = User.getInstance(mid: mid)
+            
+            // If singleton has data (username is not nil), return it immediately
+            if userSingleton.username != nil {
+                continuation.resume(returning: userSingleton)
+                return
+            }
+            
+            // Otherwise, load from Core Data cache
             context.perform {
                 let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
                 request.predicate = NSPredicate(format: "mid == %@", mid)
                 
                 if let cdUser = try? self.context.fetch(request).first {
-                    let user = User.from(cdUser: cdUser)
-                    continuation.resume(returning: user)
+                    // Update singleton with cached data
+                    _ = User.from(cdUser: cdUser)
+                    // Return the updated singleton
+                    continuation.resume(returning: userSingleton)
                 } else {
-                    continuation.resume(returning: User.getInstance(mid: mid))
+                    // No cache found, return placeholder singleton
+                    continuation.resume(returning: userSingleton)
                 }
             }
         }
