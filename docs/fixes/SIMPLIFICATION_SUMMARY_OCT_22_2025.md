@@ -7,7 +7,7 @@
 
 ## Summary
 
-Removed the complex baseURL assignment system that was a workaround for blocking tweet renders. By fixing the root cause (blocking author fetches), we eliminated ~60 lines of unnecessary complexity.
+Removed the complex baseURL assignment system that was a workaround for blocking tweet renders. By fixing the root cause (blocking author fetches), we eliminated ~34 lines of unnecessary complexity.
 
 ---
 

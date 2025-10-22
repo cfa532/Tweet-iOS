@@ -9,11 +9,12 @@
 ### Core Systems
 | Document | Description | Status |
 |----------|-------------|--------|
-| [**BASEURL_RESOLUTION_AND_CACHE_RENDERING.md**](./BASEURL_RESOLUTION_AND_CACHE_RENDERING.md) | BaseURL resolution strategy, instant cache rendering, localhost proxy fallback, timing sequences | ✅ Production |
+| [**INSTANT_TWEET_RENDERING.md**](./INSTANT_TWEET_RENDERING.md) | **CURRENT:** Simple instant cache rendering via non-blocking renders and user singletons | ✅ Production |
 | [**UPLOAD_SYSTEM.md**](./UPLOAD_SYSTEM.md) | Complete upload system with progress tracking, multi-attachment support, background polling | ✅ Production |
 | [**VIDEO_SYSTEM.md**](./VIDEO_SYSTEM.md) | Dual video architecture (new shared cache + old fullscreen), HLS/MP4 playback | ⚠️ Partial Migration |
 | [**ARCHITECTURE.md**](./ARCHITECTURE.md) | Overall app architecture, MVVM patterns, data flow | ✅ Current |
 | [**FEATURES.md**](./FEATURES.md) | Complete feature list and capabilities | ✅ Current |
+| [**BASEURL_RESOLUTION_AND_CACHE_RENDERING.md**](./BASEURL_RESOLUTION_AND_CACHE_RENDERING.md) | ~~Complex baseUrl assignment system~~ | ❌ Deprecated - see INSTANT_TWEET_RENDERING.md |
 
 ### Features
 | Document | Description | Status |
@@ -39,12 +40,12 @@
 ### Recent Critical Fixes
 | Document | Description | Date |
 |----------|-------------|------|
-| [**fixes/INSTANT_CACHE_RENDERING_FIX.md**](./fixes/INSTANT_CACHE_RENDERING_FIX.md) | **CRITICAL FIX**: Instant cache rendering with localhost fallback, non-blocking init, thread-safe baseUrl updates | Oct 22, 2025 |
-| [**fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md**](./fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md) | **FINAL FIX**: Port-independent HLS playlist caching for reliable background recovery | Oct 17, 2025 |
+| [**fixes/CACHED_TWEETS_BLOCKING_FIX.md**](./fixes/CACHED_TWEETS_BLOCKING_FIX.md) | **CURRENT PRODUCTION**: Non-blocking renders, eliminated 34 lines of baseUrl workaround code | Oct 22, 2025 |
+| [**fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md**](./fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md) | Code cleanup: removed complex baseUrl assignment system | Oct 22, 2025 |
+| [**fixes/LOGGING_IMPROVEMENTS_OCT_22_2025.md**](./fixes/LOGGING_IMPROVEMENTS_OCT_22_2025.md) | Removed repetitive logs, added strategic cache rendering logs | Oct 22, 2025 |
+| [**fixes/INSTANT_CACHE_RENDERING_FIX.md**](./fixes/INSTANT_CACHE_RENDERING_FIX.md) | ~~Earlier localhost baseUrl approach~~ | ⚠️ Superseded |
+| [**fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md**](./fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md) | Port-independent HLS playlist caching for reliable background recovery | Oct 17, 2025 |
 | [**fixes/SESSION_SUMMARY_OCT_17_2025.md**](./fixes/SESSION_SUMMARY_OCT_17_2025.md) | Complete session summary with all fixes, testing, and log access guide | Oct 17, 2025 |
-| [**fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md**](./fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md) | Initial fix attempts for black screens after background | Oct 17, 2025 |
-| [**fixes/VIDEO_MUTE_STATE_FIX.md**](./fixes/VIDEO_MUTE_STATE_FIX.md) | Fix for videos playing unmuted on app startup | Oct 17, 2025 |
-| [**fixes/SESSION_SUMMARY_OCT_16_2025.md**](./fixes/SESSION_SUMMARY_OCT_16_2025.md) | Previous session fixes | Oct 16, 2025 |
 
 ---
 
@@ -98,7 +99,7 @@ Historical documentation preserved for reference.
 - **Comment Features:** [CommentSystemREADME.md](CommentSystemREADME.md)
 
 ### For Troubleshooting
-- **Cache/Rendering Issues:** [BASEURL_RESOLUTION_AND_CACHE_RENDERING.md](BASEURL_RESOLUTION_AND_CACHE_RENDERING.md) → Debugging section
+- **Cache/Rendering Issues:** [INSTANT_TWEET_RENDERING.md](INSTANT_TWEET_RENDERING.md) → Current system
 - **Upload Issues:** [UPLOAD_SYSTEM.md](UPLOAD_SYSTEM.md) → Error Handling section
 - **Video Issues:** [VIDEO_SYSTEM.md](VIDEO_SYSTEM.md) → Known Issues section
 - **Network Issues:** [NETWORK_RESILIENCE.md](NETWORK_RESILIENCE.md)
@@ -132,19 +133,23 @@ All main documents should include:
 ## 🔄 Recent Updates
 
 ### October 22, 2025
-- ✅ **CRITICAL RESOLVED**: Instant Cache Rendering
-  - **Root cause identified**: Cached tweets waiting for server response before rendering
-  - **Solution**: Multi-stage baseUrl resolution (localhost → real IP)
-  - **Performance**: Cache renders in 7.9ms (was 2000ms+)
+- ✅ **CRITICAL RESOLVED**: Cached Tweets Blocking Fix
+  - **Root cause**: `TweetItemView` blocked rendering when `author.username == nil`
+  - **Solution**: Render immediately with placeholders, fetch author in background
+  - **Result**: Eliminated entire complex baseUrl assignment system (~34 lines removed)
+  - **Performance**: Cache loads in 7-9ms, first render ~70ms
   - **Key Changes**:
-    - TweetCacheManager returns tweets WITHOUT baseUrl assignment
-    - FollowingsTweetView assigns baseUrl on MainActor before returning
-    - App init non-blocking (followings/blacklist in background)
-    - User.updateAllUsersWithLocalhostToRealIP() updates all cached users
-  - **Threading**: All @Published updates on MainActor (zero warnings)
-  - **Offline Support**: Full functionality with localhost proxy
-  - **Files**: `TweetCacheManager.swift`, `HproseInstance.swift`, `FollowingsTweetView.swift`, `User.swift`
-- 📄 Added [BASEURL_RESOLUTION_AND_CACHE_RENDERING.md](./BASEURL_RESOLUTION_AND_CACHE_RENDERING.md) - Complete baseUrl system documentation
+    - TweetItemView: Non-blocking author fetches (all scenarios)
+    - FollowingsTweetView: Removed baseUrl assignment loop
+    - HproseInstance: Removed updateAllUsersWithLocalhostToRealIP call
+    - User.swift: Removed updateAllUsersWithLocalhostToRealIP function
+  - **Code quality**: Simpler, fewer lines, same functionality
+  - **Files**: `TweetItemView.swift`, `FollowingsTweetView.swift`, `HproseInstance.swift`, `User.swift`
+- ✅ **Logging Improvements**: Removed repetitive video logs, improved cache load logs
+- 📄 Added [INSTANT_TWEET_RENDERING.md](./INSTANT_TWEET_RENDERING.md) - Current production system (simple!)
+- 📄 Added [fixes/CACHED_TWEETS_BLOCKING_FIX.md](./fixes/CACHED_TWEETS_BLOCKING_FIX.md) - Complete fix documentation
+- 📄 Added [fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md](./fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md) - Code cleanup summary
+- 📄 Deprecated [BASEURL_RESOLUTION_AND_CACHE_RENDERING.md](./BASEURL_RESOLUTION_AND_CACHE_RENDERING.md) - Complex system no longer used
 
 ### October 20, 2025
 - ✅ **BlackList Persistence Enhancement**

@@ -3,16 +3,29 @@
 **Last Updated:** October 22, 2025  
 **Status:** ⚠️ **DEPRECATED** - Simplified approach implemented
 
-> **Note:** This document describes the complex baseURL assignment system that was previously used.  
-> As of October 22, 2025, this has been **simplified** by rendering tweets immediately with placeholders  
-> and fetching complete author data (including baseUrl) in the background.  
-> See [CACHED_TWEETS_BLOCKING_FIX.md](fixes/CACHED_TWEETS_BLOCKING_FIX.md) for the simpler approach.
+> **⚠️ IMPORTANT:**  
+> This document describes a **complex workaround system** that is **NO LONGER USED**.  
+>  
+> **What happened:**
+> - This system assigned dummy localhost baseUrls to cached tweets
+> - Then updated them to real IPs later
+> - Required ~34 lines of complex synchronization code
+>  
+> **Why it was removed:**
+> - Root cause was blocking renders in `TweetItemView.swift`
+> - Fixed by rendering immediately with placeholders
+> - Background fetches now get complete author data (including baseUrl)
+> - User singletons automatically propagate baseUrl updates
+> - **Result: All this complexity became unnecessary**
+>  
+> **Current approach:**  
+> See [CACHED_TWEETS_BLOCKING_FIX.md](fixes/CACHED_TWEETS_BLOCKING_FIX.md) for the **simpler solution**.
 
 ---
 
-## Overview
+## Historical Overview (Deprecated System)
 
-This document explains how the app achieves **instant rendering of cached tweets** without network delays, and how baseUrl resolution works in the background to ensure media loads correctly.
+The following describes how the app **used to** achieve instant rendering through a complex baseUrl assignment system. This is kept for historical reference only.
 
 ## Core Problem
 

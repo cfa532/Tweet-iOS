@@ -83,7 +83,6 @@ struct TweetItemView: View, Equatable {
             )
         }
         .task {
-            let taskStartTime = Date()
             isVisible = true
             tweet.isVisible = true
             // Usually TweetDetailView is not orignalTweet
@@ -112,7 +111,9 @@ struct TweetItemView: View, Equatable {
                     _ = try? await hproseInstance.fetchUser(tweet.authorId)
                 }
             } else {
-                // Only log once on app start for first few tweets
+                // Tweet has complete author data (username + baseUrl)
+                // This happens when app init completed before tweet started rendering
+                // Comment out in production to reduce log noise
                 // print("⚡ [RENDER] Tweet ready (@\(tweet.author?.username ?? "?"))")
             }
         }

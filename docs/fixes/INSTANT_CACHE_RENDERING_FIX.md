@@ -1,8 +1,12 @@
 # Instant Cache Rendering Fix - Session Summary
 
 **Date:** October 22, 2025  
-**Status:** ✅ **RESOLVED**  
+**Status:** ⚠️ **SUPERSEDED**  
 **Priority:** 🔴 **CRITICAL**
+
+> **Note:** This document describes an earlier fix that used localhost baseUrl assignment.  
+> This approach has been **further simplified** - see [CACHED_TWEETS_BLOCKING_FIX.md](CACHED_TWEETS_BLOCKING_FIX.md)  
+> for the current production solution that eliminates the need for dummy baseUrl assignment.
 
 ---
 
