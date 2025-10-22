@@ -504,8 +504,13 @@ struct MediaGridView: View {
                 videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
                 
                 // Check if this tweet should load media based on VideoLoadingManager
+                // Defer the state change slightly to prevent scroll jumps during layout
                 if videoLoadingManager.shouldLoadVideos(for: parentTweet.mid) {
-                    shouldLoadVideo = true
+                    Task { @MainActor in
+                        // Delay to let layout settle before triggering video setup
+                        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+                        shouldLoadVideo = true
+                    }
                 } else {
                     shouldLoadVideo = false
                 }
