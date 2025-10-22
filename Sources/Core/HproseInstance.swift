@@ -303,37 +303,53 @@ final class HproseInstance: ObservableObject {
                     
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
                         print("provider ip:  \(providerIp)")
+                        print("🔄 [INIT] Fetching user data for appUser...")
                         // Try to fetch user (retry logic is now built into fetchUser method)
                         let user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
+                        print("✅ [INIT] User data fetched, got user: \(user != nil)")
                         
                         if let user = user {
                             // Valid login user is found, use its provider IP as base.
                             HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
                             client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                            let followings = (try? await getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
-                            let blackList = (try? await getListByType(user: user, entry: .BLACK_LIST)) ?? []
+                            
+                            // CRITICAL: Set user.baseUrl on MainActor to avoid publishing warnings
+                            let realIP = HproseInstance.baseUrl
                             await MainActor.run {
-                                // Update the appUser to the fetched user with all properties
-                                user.baseUrl = HproseInstance.baseUrl
-                                user.followingList = followings
-                                user.userBlackList = blackList
-                                
-                                // CRITICAL: Update the singleton instance instead of replacing _appUser
-                                // This ensures that all tweet authors pointing to this user get the updated baseUrl
-                                // This will trigger .userBaseUrlUpdated notification, which SimpleVideoPlayer observes
-                                User.updateUserInstance(with: user)
-                                
-                                // Also ensure _appUser points to the singleton
-                                _appUser = User.getInstance(mid: user.mid)
-                                
-                                // Print detailed app user content after successful login
-                                self.printAppUserContent("After successful login")
-                                
-                                // App is now initialized since appUser has IP address
+                                user.baseUrl = realIP
+                            }
+                            
+                            // CRITICAL: Update all cached users with localhost to use real IP IMMEDIATELY
+                            // Do this BEFORE fetching followings/blacklist which might be slow
+                            // This ensures tweets can render with real IP while followings are loading
+                            print("🔄 [INIT] Updating all users from localhost to real IP...")
+                            await User.updateAllUsersWithLocalhostToRealIP(realIP: realIP)
+                            
+                            // App is now initialized with base connectivity
+                            await MainActor.run {
                                 isInitializationComplete = true
-                                
-                                // Notify FollowingsTweetView to refresh for logged-in user
+                                User.updateUserInstance(with: user)
+                                _appUser = User.getInstance(mid: user.mid)
+                            }
+                            print("✅ [INIT] App initialized with real IP: \(providerIp)")
+                            
+                            // Notify UI that app is ready (tweets can now render with real IP)
+                            await MainActor.run {
                                 NotificationCenter.default.post(name: .appUserReady, object: nil)
+                            }
+                            
+                            // Fetch followings and blacklist in background (non-blocking)
+                            print("🔄 [INIT] Fetching followings and blacklist in background...")
+                            Task.detached(priority: .background) {
+                                let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                                print("✅ [INIT] Followings fetched: \(followings.count)")
+                                let blackList = (try? await self.getListByType(user: user, entry: .BLACK_LIST)) ?? []
+                                print("✅ [INIT] Blacklist fetched: \(blackList.count)")
+                                await MainActor.run {
+                                    user.followingList = followings
+                                    user.userBlackList = blackList
+                                    self.printAppUserContent("After background data loaded")
+                                }
                             }
                             print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(providerIp)")
                         } else {

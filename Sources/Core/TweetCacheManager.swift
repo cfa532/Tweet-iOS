@@ -170,12 +170,6 @@ final class TweetCacheManager: @unchecked Sendable {
 // MARK: - Tweet Caching
 extension TweetCacheManager {
     func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil) async -> [Tweet?] {
-        // Only use resolved baseUrl if app is initialized (has real IP)
-        // Otherwise let fetchUser() resolve it properly after init completes
-        let resolvedBaseUrl = await MainActor.run {
-            HproseInstance.shared.isAppInitialized ? HproseInstance.shared.appUser.baseUrl : nil
-        }
-        
         return await withCheckedContinuation { continuation in
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
@@ -212,11 +206,7 @@ extension TweetCacheManager {
                                 tweet.author = authorSingleton
                             }
                             
-                            // CRITICAL: Assign resolved baseUrl if author has none
-                            // Core Data doesn't persist baseUrl, so cached authors need it assigned immediately
-                            if let author = tweet.author, author.baseUrl == nil {
-                                author.baseUrl = resolvedBaseUrl
-                            }
+                            // NOTE: baseUrl will be assigned on MainActor after all tweets are collected
                             
                             // Filter out tweets with invalid timestamps
                             if tweet.timestamp.timeIntervalSince1970 <= 0 {
@@ -236,6 +226,7 @@ extension TweetCacheManager {
                             tweets.append(nil)
                         }
                     }
+                    
                     continuation.resume(returning: tweets)
                 } else {
                     continuation.resume(returning: [])
@@ -245,12 +236,6 @@ extension TweetCacheManager {
     }
 
     func fetchTweet(mid: String) async -> Tweet? {
-        // Only use resolved baseUrl if app is initialized (has real IP)
-        // Otherwise let fetchUser() resolve it properly after init completes
-        let resolvedBaseUrl = await MainActor.run {
-            HproseInstance.shared.isAppInitialized ? HproseInstance.shared.appUser.baseUrl : nil
-        }
-        
         return await withCheckedContinuation { continuation in
             // First check in-memory singleton
             if let tweetInstance = Tweet.getInstance(for: mid) {
@@ -291,15 +276,10 @@ extension TweetCacheManager {
                             tweet.author = authorSingleton
                         }
                         
-                        // CRITICAL: Assign resolved baseUrl if author has none
-                        // Core Data doesn't persist baseUrl, so cached authors need it assigned immediately
-                        if let author = tweet.author, author.baseUrl == nil {
-                            author.baseUrl = resolvedBaseUrl
-                        }
-                        
                         // Then update the cache time in a separate operation
                         cdTweet.timeCached = Date()
                         try? self.context.save()
+                        
                         continuation.resume(returning: tweet)
                     } catch {
                         print("Error processing tweet: \(error)")
@@ -559,6 +539,7 @@ extension TweetCacheManager {
             }
             
             // Otherwise, load from Core Data cache
+            // Capture only mid (Sendable) instead of userSingleton (non-Sendable)
             context.perform {
                 let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
                 request.predicate = NSPredicate(format: "mid == %@", mid)
@@ -566,12 +547,9 @@ extension TweetCacheManager {
                 if let cdUser = try? self.context.fetch(request).first {
                     // Update singleton with cached data
                     _ = User.from(cdUser: cdUser)
-                    // Return the updated singleton
-                    continuation.resume(returning: userSingleton)
-                } else {
-                    // No cache found, return placeholder singleton
-                    continuation.resume(returning: userSingleton)
                 }
+                // Always return the singleton (updated or not)
+                continuation.resume(returning: User.getInstance(mid: mid))
             }
         }
     }

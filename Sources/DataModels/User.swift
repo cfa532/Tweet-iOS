@@ -232,6 +232,30 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
     }
     
+    /// Update all user singletons that have localhost baseUrl to use the real IP
+    @MainActor
+    static func updateAllUsersWithLocalhostToRealIP(realIP: URL) {
+        let localhostPattern = "127.0.0.1"
+        var usersToUpdate: [(String, User)] = []
+        
+        // Collect users to update outside of main thread
+        userInstancesQueue.sync {
+            print("DEBUG: [User] Checking \(User.userInstances.count) cached users for localhost URLs")
+            for (mid, user) in User.userInstances {
+                if let currentBaseUrl = user.baseUrl, currentBaseUrl.absoluteString.contains(localhostPattern) {
+                    usersToUpdate.append((mid, user))
+                }
+            }
+        }
+        
+        // Update all users in a single batch on MainActor (already on it)
+        for (mid, user) in usersToUpdate {
+            print("DEBUG: [User] Updating user \(mid) from \(user.baseUrl?.absoluteString ?? "nil") to \(realIP.absoluteString)")
+            user.baseUrl = realIP
+        }
+        print("✅ [User] Updated \(usersToUpdate.count) users from localhost to real IP: \(realIP.absoluteString)")
+    }
+    
     /// Update user instance with backend data. Keep current baseUrl
     static func from(dict: [String: Any]) throws -> User {
         do {
