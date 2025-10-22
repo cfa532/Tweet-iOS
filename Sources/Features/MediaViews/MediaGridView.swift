@@ -645,46 +645,8 @@ struct MediaGridViewModel {
             } else {
                 return 2.0      // One portrait, one landscape: horizontal, aspect 2:1
             }
-        case 3:
-            return calculateOptimalAspectRatioForThreeItems(attachments)
         default:
             return 1.0
         }
-    }
-    
-    /// Calculates optimal aspect ratio for 3 items based on their characteristics
-    private static func calculateOptimalAspectRatioForThreeItems(_ attachments: [MimeiFileType]) -> CGFloat {
-        let ar0 = attachments[0].aspectRatio ?? 1
-        let ar1 = attachments[1].aspectRatio ?? 1
-        let ar2 = attachments[2].aspectRatio ?? 1
-        
-        // Count portrait and landscape images
-        let portraitCount = [ar0, ar1, ar2].filter { $0 < 1 }.count
-        let landscapeCount = [ar0, ar1, ar2].filter { $0 > 1 }.count
-        
-        // Decision algorithm:
-        // 1. If all images are portrait (aspect ratio < 1), use square grid with golden ratio layout
-        if portraitCount == 3 {
-            return 1.0 // Square grid for golden ratio layout
-        }
-        
-        // 2. If all images are landscape (aspect ratio > 1), use square grid with golden ratio layout
-        if landscapeCount == 3 {
-            return 1.0 // Square grid for golden ratio layout
-        }
-        
-        // 3. If there's a mix of orientations, analyze the distribution
-        if portraitCount == 2 && landscapeCount == 1 {
-            // Two portraits, one landscape - prefer portrait layout
-            return 4.0/6.0 // 0.67
-        }
-        
-        if portraitCount == 1 && landscapeCount == 2 {
-            // One portrait, two landscapes - prefer square layout for better balance
-            return 1.0 // Square layout
-        }
-        
-        // 4. Default to square layout for better visual balance
-        return 1.0 // Square layout
     }
 }
