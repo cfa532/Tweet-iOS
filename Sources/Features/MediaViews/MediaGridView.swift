@@ -542,7 +542,6 @@ struct MediaGridView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
-            print("DEBUG: [MediaGridView] Received stopAllVideos notification for tweet \(parentTweet.mid)")
             shouldLoadVideo = false
             videoManager.stopSequentialPlayback()
         }

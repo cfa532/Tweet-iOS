@@ -319,12 +319,6 @@ final class HproseInstance: ObservableObject {
                                 user.baseUrl = realIP
                             }
                             
-                            // CRITICAL: Update all cached users with localhost to use real IP IMMEDIATELY
-                            // Do this BEFORE fetching followings/blacklist which might be slow
-                            // This ensures tweets can render with real IP while followings are loading
-                            print("🔄 [INIT] Updating all users from localhost to real IP...")
-                            await User.updateAllUsersWithLocalhostToRealIP(realIP: realIP)
-                            
                             // App is now initialized with base connectivity
                             await MainActor.run {
                                 isInitializationComplete = true

@@ -14,30 +14,21 @@ struct FollowingsTweetView: View {
             tweetFetcher: { page, size, isFromCache, shouldCache in
                 let startTime = Date()
                 if isFromCache {
-                    print("📋 [FEED LOAD] Fetching page \(page) from CACHE")
+                    print("📋 [CACHE LOAD] Fetching page \(page) from cache")
                     // Use "main_feed" as special user ID for main feed cache to separate from profile browsing
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: "main_feed", page: page, pageSize: size, currentUserId: viewModel.hproseInstance.appUser.mid)
                     
-                    // CRITICAL: Assign baseUrl on MainActor BEFORE returning to avoid UI updates during render
-                    // Wait for assignment to complete so tweets have baseUrl when they start rendering
-                    await MainActor.run {
-                        let resolvedBaseUrl = viewModel.hproseInstance.appUser.baseUrl ?? URL(string: "http://127.0.0.1:\(LocalHTTPServer.shared.port)")!
-                        for tweet in cachedTweets.compactMap({ $0 }) {
-                            if let author = tweet.author, author.baseUrl == nil {
-                                author.baseUrl = resolvedBaseUrl
-                            }
-                        }
-                    }
-                    
                     let elapsed = Date().timeIntervalSince(startTime) * 1000
-                    print("✅ [FEED LOAD] Cache returned \(cachedTweets.compactMap{$0}.count) tweets in \(String(format: "%.1f", elapsed))ms")
+                    let validCount = cachedTweets.compactMap{$0}.count
+                    print("✅ [CACHE LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms - rendering immediately!")
                     return cachedTweets
                 } else {
-                    print("🌐 [FEED LOAD] Fetching page \(page) from SERVER")
+                    print("🌐 [SERVER LOAD] Fetching page \(page) from server")
                     let serverTweets = await viewModel.fetchTweets(page: page, pageSize: size, shouldCache: shouldCache)
                     let elapsed = Date().timeIntervalSince(startTime) * 1000
-                    print("✅ [FEED LOAD] Server returned \(serverTweets.compactMap{$0}.count) tweets in \(String(format: "%.1f", elapsed))ms")
+                    let validCount = serverTweets.compactMap{$0}.count
+                    print("✅ [SERVER LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms")
                     return serverTweets
                 }
             },

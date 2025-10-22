@@ -559,7 +559,6 @@ struct SimpleVideoPlayer: View {
         if mode == .mediaCell {
             player?.pause()
             player?.isMuted = true
-            NSLog("DEBUG: [SimpleVideoPlayer] stopAllVideos - paused MediaCell \(mid)")
         }
         // TweetDetail and MediaBrowser: DO NOTHING
     }
@@ -1610,11 +1609,8 @@ struct SimpleVideoPlayer: View {
     
     private func detachPlayerForBackground() {
         guard let player = player else { 
-            print("DEBUG: [VIDEO DETACH] No player available for \(mid)")
             return 
         }
-        
-        print("DEBUG: [VIDEO DETACH] Detaching player for background for \(mid)")
         
         // Store current state before detaching
         let wasPlaying = player.rate > 0
@@ -1634,8 +1630,6 @@ struct SimpleVideoPlayer: View {
         
         // Mark as detached - this prevents the video layer from becoming invalid
         isPlayerDetached = true
-        
-        print("DEBUG: [VIDEO DETACH] Player detached for \(mid), wasPlaying: \(wasPlaying)")
     }
     
 }

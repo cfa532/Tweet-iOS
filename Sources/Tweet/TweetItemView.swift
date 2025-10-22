@@ -89,24 +89,31 @@ struct TweetItemView: View, Equatable {
             // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
             
-            // Load author if not already loaded OR if author has no username (placeholder)
-            if tweet.author == nil || tweet.author?.username == nil {
-                print("⏳ [TWEET RENDER] Tweet \(tweet.mid) WAITING for author fetch (username: \(tweet.author?.username ?? "nil"), baseUrl: \(tweet.author?.baseUrl?.absoluteString ?? "nil"))")
-                if let author = try? await hproseInstance.fetchUser(tweet.authorId) {
-                    let elapsed = Date().timeIntervalSince(taskStartTime) * 1000
-                    await MainActor.run {
-                        tweet.author = author
-                    }
-                    print("✅ [TWEET RENDER] Tweet \(tweet.mid) author loaded in \(String(format: "%.1f", elapsed))ms")
+            // Load author if not already loaded
+            if tweet.author == nil {
+                // No author at all - create placeholder and fetch in background
+                await MainActor.run {
+                    tweet.author = User.getInstance(mid: tweet.authorId)
+                }
+                print("⚡ [RENDER] Tweet rendering with placeholder (no author), fetching in background")
+                Task.detached(priority: .background) {
+                    _ = try? await hproseInstance.fetchUser(tweet.authorId)
+                }
+            } else if tweet.author?.username == nil {
+                print("⚡ [RENDER] Tweet rendering with placeholder (no username), fetching in background")
+                // Author exists but has no username - render with placeholder and fetch in background
+                Task.detached(priority: .background) {
+                    _ = try? await hproseInstance.fetchUser(tweet.authorId)
                 }
             } else if tweet.author?.baseUrl == nil {
-                print("⚡ [TWEET RENDER] Tweet \(tweet.mid) rendering IMMEDIATELY, resolving IP in background (username: \(tweet.author?.username ?? "nil"))")
+                print("⚡ [RENDER] Tweet rendering immediately (@\(tweet.author?.username ?? "?")) - fetching baseUrl in background")
                 // Author exists with username but no baseUrl - resolve IP in background
                 Task.detached(priority: .background) {
                     _ = try? await hproseInstance.fetchUser(tweet.authorId)
                 }
             } else {
-                print("⚡ [TWEET RENDER] Tweet \(tweet.mid) rendering IMMEDIATELY (username: \(tweet.author?.username ?? "nil"), baseUrl: \(tweet.author?.baseUrl?.absoluteString ?? "nil"))")
+                // Only log once on app start for first few tweets
+                // print("⚡ [RENDER] Tweet ready (@\(tweet.author?.username ?? "?"))")
             }
         }
         .onAppear {

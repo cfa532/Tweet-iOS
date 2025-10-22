@@ -1,7 +1,12 @@
 # BaseURL Resolution & Instant Cache Rendering
 
 **Last Updated:** October 22, 2025  
-**Status:** ✅ Production Ready
+**Status:** ⚠️ **DEPRECATED** - Simplified approach implemented
+
+> **Note:** This document describes the complex baseURL assignment system that was previously used.  
+> As of October 22, 2025, this has been **simplified** by rendering tweets immediately with placeholders  
+> and fetching complete author data (including baseUrl) in the background.  
+> See [CACHED_TWEETS_BLOCKING_FIX.md](fixes/CACHED_TWEETS_BLOCKING_FIX.md) for the simpler approach.
 
 ---
 
