@@ -22,11 +22,6 @@ struct CommentComposeView: View {
     @FocusState private var isEditorFocused: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
     
-    // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
-    private var identifiableItems: [IdentifiablePhotosPickerItem] {
-        selectedItems.map { IdentifiablePhotosPickerItem(item: $0) }
-    }
-    
     // Check if there's content or attachments that would be lost
     private var hasContentOrAttachments: Bool {
         !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty

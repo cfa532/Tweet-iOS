@@ -14,11 +14,6 @@ struct ComposeTweetView: View {
     @State private var showLoginView = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     
-    // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
-    private var identifiableItems: [IdentifiablePhotosPickerItem] {
-        viewModel.selectedItems.map { IdentifiablePhotosPickerItem(item: $0) }
-    }
-    
     // Check if there's content or attachments that would be lost
     private var hasContentOrAttachments: Bool {
         !viewModel.tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !viewModel.selectedItems.isEmpty || !viewModel.selectedImages.isEmpty || !viewModel.selectedVideos.isEmpty

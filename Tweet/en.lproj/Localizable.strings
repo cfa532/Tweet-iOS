@@ -290,13 +290,11 @@
 "Video" = "Video";
 "Audio" = "Audio";
 "File" = "File";
-"Image" = "Image";
 "Camera" = "Camera";
 "Photo Library" = "Photo Library";
 "Choose Photo" = "Choose Photo";
 "Take Photo" = "Take Photo";
 "Record Video" = "Record Video";
-"%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB." = "%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB.";
 
 // MARK: - Settings
 "Settings" = "Settings";

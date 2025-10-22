@@ -145,7 +145,10 @@ struct MediaPicker: View {
 
 // Helper struct to maintain stable order for PhotosPicker items
 struct IndexedPhotosPickerItem: Identifiable {
-    let id = UUID()
+    // Use itemIdentifier as the stable ID to prevent re-rendering on text changes
+    var id: String {
+        return item.itemIdentifier ?? "\(originalIndex)"
+    }
     let item: PhotosPickerItem
     let originalIndex: Int
 }
