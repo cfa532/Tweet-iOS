@@ -91,66 +91,8 @@ struct MediaCell: View, Equatable {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
-                    
-                    if shouldLoadVideo {
-                        videoPlayerView(url: url)
-                    } else {
-                        // Show placeholder for videos that haven't been loaded yet
-                        ZStack {
-                            Color.gray.opacity(0.3)
-                                .aspectRatio(contentMode: .fill)
-                                .overlay(
-                                    Group {
-                                        if isPreloading {
-                                            // Show loading indicator during preload
-                                            ProgressView()
-                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                                .scaleEffect(0.8)
-                                                .background(Color.gray.opacity(0.4))
-                                                .clipShape(Circle())
-                                                .padding(4)
-                                        } else {
-                                            // Show play button when not preloading
-                                            Image(systemName: "play.circle")
-                                                .font(.system(size: 40))
-                                                .foregroundColor(.white)
-                                        }
-                                    }
-                                )
-                                .onTapGesture {
-                                    // Open full screen for video placeholders
-                                    handleTap()
-                                }
-                            
-                            // Invisible overlay to prevent tap propagation to parent views and add long press
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    // This prevents the tap from reaching parent views
-                                    handleTap()
-                                }
-                                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                                    // FIRST: Clear all caches immediately
-                                    print("DEBUG: [VIDEO RELOAD] Long press load triggered for \(attachment.mid)")
-                                    
-                                    if let url = attachment.getUrl(baseUrl) {
-                                        // Clear player cache
-                                        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? attachment.mid)
-                                        
-                                        // Clear asset cache
-                                        Task {
-                                            await MainActor.run {
-                                                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? attachment.mid)
-                                                print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Note: shouldLoadVideo is controlled by VideoLoadingManager, not overridden here
-                                }
-                        }
-                    }
-                    // #endif
+                    // Always show video player, no placeholder
+                    videoPlayerView(url: url)
                 case .audio:
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
@@ -346,8 +288,7 @@ struct MediaCell: View, Equatable {
     // MARK: - Video Player View
     @ViewBuilder
     private func videoPlayerView(url: URL) -> some View {
-        ZStack {
-            SimpleVideoPlayer(
+        SimpleVideoPlayer(
                 url: url,
                 mid: attachment.mid,
                 parentTweetId: parentTweet.mid,
@@ -367,19 +308,18 @@ struct MediaCell: View, Equatable {
                 shouldLoadVideo: shouldLoadVideo,
                 mode: .mediaCell
             )
-            
-            // Invisible overlay to prevent tap propagation to parent views and add long press
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    showFullScreen = true
-                }
-                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                    handleVideoReload()
-                }
-        }
-        // Note: SimpleVideoPlayer handles its own lifecycle internally
-        .overlay(
+            .overlay(
+                // Invisible overlay to prevent tap propagation to parent views and add long press
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        showFullScreen = true
+                    }
+                    .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
+                        handleVideoReload()
+                    }
+            )
+            .overlay(
             // Video controls overlay
             Group {
                 VStack {
