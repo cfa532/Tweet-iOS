@@ -64,6 +64,7 @@ struct TweetItemBodyView: View {
                     .frame(height: gridHeight) // Fixed height to prevent shifts
                     .clipped()
                     .cornerRadius(8)
+                    .id("\(tweet.mid)_grid")
             }
         }
         .sheet(isPresented: $showLoginSheet) {
