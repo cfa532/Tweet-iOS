@@ -2752,6 +2752,9 @@ final class HproseInstance: ObservableObject {
             request.httpBody = body
             request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
             
+            // Set timeout for large video uploads (10 minutes)
+            request.timeoutInterval = 600
+            
             // Upload the file
             let (responseData, response) = try await URLSession.shared.data(for: request)
             
@@ -3131,20 +3134,40 @@ final class HproseInstance: ObservableObject {
                 chunkCount += 1
                 
                 let nsData = chunkData as NSData
-                let response = try await uploadChunk(
-                    uploadClient: uploadClient,
-                    request: request,
-                    data: nsData,
-                    chunkNumber: chunkCount
-                )
-                
-                if let fsid = response as? String {
-                    offset += Int64(chunkData.count)
-                    request["offset"] = offset
-                    request["fsid"] = fsid
-                } else {
-                    print("ERROR: Chunk \(chunkCount) upload failed - invalid response")
-                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload file", comment: "Upload error")])
+                do {
+                    let response = try await uploadChunk(
+                        uploadClient: uploadClient,
+                        request: request,
+                        data: nsData,
+                        chunkNumber: chunkCount
+                    )
+                    
+                    if let fsid = response as? String {
+                        offset += Int64(chunkData.count)
+                        request["offset"] = offset
+                        request["fsid"] = fsid
+                    } else {
+                        print("ERROR: Chunk \(chunkCount) upload failed - invalid response type: \(type(of: response))")
+                        throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Server returned invalid response", comment: "Upload error")])
+                    }
+                } catch let error as NSError {
+                    // Provide more specific error message based on the error
+                    if error.domain == NSURLErrorDomain {
+                        switch error.code {
+                        case NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet:
+                            print("ERROR: Chunk \(chunkCount) upload failed - network connection lost")
+                            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Network connection lost. Please check your connection and try again.", comment: "Network error")])
+                        case NSURLErrorTimedOut:
+                            print("ERROR: Chunk \(chunkCount) upload failed - timeout")
+                            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload timed out. Please try again.", comment: "Timeout error")])
+                        default:
+                            print("ERROR: Chunk \(chunkCount) upload failed - network error: \(error.localizedDescription)")
+                            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Network error: %@", comment: "Network error"), error.localizedDescription)])
+                        }
+                    } else {
+                        // Re-throw other errors
+                        throw error
+                    }
                 }
             }
             
@@ -3524,8 +3547,22 @@ final class HproseInstance: ObservableObject {
             data: NSData,
             chunkNumber: Int
         ) async throws -> Any {
-            let response = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]]) as Any
-            return response
+            // Add 3 minute timeout for each chunk upload (handles slow connections)
+            return try await withThrowingTaskGroup(of: Any.self) { group in
+                group.addTask {
+                    uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]]) as Any
+                }
+                
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 180_000_000_000) // 180 seconds (3 minutes)
+                    throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload timeout - chunk \(chunkNumber) took too long"])
+                }
+                
+                // Return the first result (either success or timeout)
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            }
         }
     }
     
