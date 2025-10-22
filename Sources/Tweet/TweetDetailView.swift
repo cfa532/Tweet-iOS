@@ -574,35 +574,36 @@ struct TweetDetailView: View {
     }
     
     private var tweetContent: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 0) {
+            // Show text content if available
             if let content = displayTweet.content, !content.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(content)
-//                        .font(.body)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                Text(content)
+//                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+            }
+            
+            // Show quoted tweet if this is a quote tweet (regardless of content)
+            if let _ = tweet.originalTweetId, let _ = tweet.originalAuthorId {
+                if let orig = originalTweet {
+                    VStack {
+                        TweetItemView(
+                            tweet: orig,
+                            onTap: nil, // Enable NavigationLink for quoted tweet
+                            hideActions: true,
+                            backgroundColor: Color(.systemGray6).opacity(0.5)
+                        )
+                        
+                    }
+                    .cornerRadius(8)
+                    .padding(.horizontal)
+                    .padding(.top, (displayTweet.content?.isEmpty ?? true) ? 8 : 0)
+                } else {
+                    Text("Loading quoted tweet...")
+                        .foregroundColor(.secondary)
                         .padding(.horizontal)
                         .padding(.vertical, 8)
-                    // If this is a retweet with content, show quoted tweet without actions
-                    if let _ = tweet.originalTweetId, let _ = tweet.originalAuthorId {
-                        if let orig = originalTweet {
-                            VStack {
-                                TweetItemView(
-                                    tweet: orig,
-                                    onTap: nil, // Enable NavigationLink for quoted tweet
-                                    hideActions: true,
-                                    backgroundColor: Color(.systemGray6).opacity(0.5)
-                                )
-                                
-                            }
-                            .cornerRadius(8)
-                            .padding(.horizontal)
-                        } else {
-                            Text("Loading quoted tweet...")
-                                .foregroundColor(.secondary)
-                                .padding(.horizontal)
-                                .padding(.vertical, 8)
-                        }
-                    }
                 }
             }
         }
