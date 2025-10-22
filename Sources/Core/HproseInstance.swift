@@ -727,7 +727,6 @@ final class HproseInstance: ObservableObject {
         // If we have a valid cached user that hasn't expired, return it
         // BUT: If baseUrl is nil (cleared after loading from disk cache), we need to re-resolve IP
         if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil {
-            print("DEBUG: [fetchUser] Using cached user for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
             return cachedUser
         }
         

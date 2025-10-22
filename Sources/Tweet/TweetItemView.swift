@@ -83,19 +83,30 @@ struct TweetItemView: View, Equatable {
             )
         }
         .task {
+            let taskStartTime = Date()
             isVisible = true
             tweet.isVisible = true
             // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
             
-            // Load author if not already loaded OR if author has no baseUrl
-            // After init completes, fetchUser will resolve the baseUrl
-            if tweet.author == nil || tweet.author?.baseUrl == nil {
+            // Load author if not already loaded OR if author has no username (placeholder)
+            if tweet.author == nil || tweet.author?.username == nil {
+                print("⏳ [TWEET RENDER] Tweet \(tweet.mid) WAITING for author fetch (username: \(tweet.author?.username ?? "nil"), baseUrl: \(tweet.author?.baseUrl?.absoluteString ?? "nil"))")
                 if let author = try? await hproseInstance.fetchUser(tweet.authorId) {
+                    let elapsed = Date().timeIntervalSince(taskStartTime) * 1000
                     await MainActor.run {
                         tweet.author = author
                     }
+                    print("✅ [TWEET RENDER] Tweet \(tweet.mid) author loaded in \(String(format: "%.1f", elapsed))ms")
                 }
+            } else if tweet.author?.baseUrl == nil {
+                print("⚡ [TWEET RENDER] Tweet \(tweet.mid) rendering IMMEDIATELY, resolving IP in background (username: \(tweet.author?.username ?? "nil"))")
+                // Author exists with username but no baseUrl - resolve IP in background
+                Task.detached(priority: .background) {
+                    _ = try? await hproseInstance.fetchUser(tweet.authorId)
+                }
+            } else {
+                print("⚡ [TWEET RENDER] Tweet \(tweet.mid) rendering IMMEDIATELY (username: \(tweet.author?.username ?? "nil"), baseUrl: \(tweet.author?.baseUrl?.absoluteString ?? "nil"))")
             }
         }
         .onAppear {

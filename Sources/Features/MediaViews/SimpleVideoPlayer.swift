@@ -1294,8 +1294,6 @@ struct SimpleVideoPlayer: View {
         
         // Store reference to the player that added this observer
         timeObserverPlayer = player
-        
-        print("DEBUG: [VIDEO TIME OBSERVER] Setup time observer for memory management for \(mid)")
     }
     
     private func setupPlayerObservers(_ player: AVPlayer) {

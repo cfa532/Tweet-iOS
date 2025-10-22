@@ -84,8 +84,6 @@ class VideoLoadingManager: ObservableObject {
     /// Check if a tweet should load videos/audio (with performance throttling and cache awareness)
     /// Note: Despite the method name, this handles all media types (video, audio, etc.)
     func shouldLoadVideos(for tweetId: String) -> Bool {
-        print("DEBUG: [VideoLoadingManager] shouldLoadVideos called for tweetId: \(tweetId)")
-        print("DEBUG: [VideoLoadingManager] allTweetIds count: \(allTweetIds.count), currentVisibleTweetIndex: \(currentVisibleTweetIndex)")
         
         // CRITICAL: Check if this tweet is the original tweet of a currently visible retweet
         // This ensures videos in original tweets load immediately when their retweet is visible
@@ -99,9 +97,7 @@ class VideoLoadingManager: ObservableObject {
             print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) not found in allTweetIds - denying loading")
             return false 
         }
-        
-        print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) found at index \(index)")
-        
+                
         // HIGHEST PRIORITY: Current visible tweet should always load regardless of any constraints
         if index == currentVisibleTweetIndex {
             print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is current visible tweet, highest priority - allowing loading")

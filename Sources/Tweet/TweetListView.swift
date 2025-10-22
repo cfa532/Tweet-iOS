@@ -137,7 +137,6 @@ struct TweetListView<RowView: View>: View {
         header: (() -> AnyView)? = nil,
         rowView: @escaping (Tweet) -> RowView
     ) {
-        print("DEBUG: [TweetListView] Initializing TweetListView with title: \(title)")
         self.title = title
         self._tweets = tweets
         self.tweetFetcher = tweetFetcher

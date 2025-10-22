@@ -514,8 +514,6 @@ struct MediaGridView: View {
                 } else {
                     shouldLoadVideo = false
                 }
-            } else {
-                print("DEBUG: [MediaGridView] Grid contains no media")
             }
         }
         .onDisappear {

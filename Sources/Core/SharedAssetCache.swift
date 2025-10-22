@@ -264,7 +264,6 @@ class SharedAssetCache: ObservableObject {
         for mediaID in tweetMediaIDs {
             cancelLoading(for: mediaID)
         }
-        print("DEBUG: [SharedAssetCache] Cancelled all loading tasks for tweet \(tweetId) (no cache available)")
     }
     
     /// Trigger video preloading for a tweet
@@ -281,9 +280,7 @@ class SharedAssetCache: ObservableObject {
     
     /// Extract mediaID from URL
     func extractMediaID(from url: URL) -> String? {
-        let urlString = url.absoluteString
-        print("DEBUG: [SHARED ASSET CACHE] extractMediaID called for URL: \(urlString)")
-        
+        let urlString = url.absoluteString        
         // Look for IPFS hash pattern (Qm...)
         // IPFS hashes typically start with Qm and are 46 characters long
         if let range = urlString.range(of: "Qm[A-Za-z0-9]{44}") {

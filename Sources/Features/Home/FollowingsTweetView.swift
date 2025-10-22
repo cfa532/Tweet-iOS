@@ -12,13 +12,21 @@ struct FollowingsTweetView: View {
             title: "",
             tweets: $viewModel.tweets,
             tweetFetcher: { page, size, isFromCache, shouldCache in
+                let startTime = Date()
                 if isFromCache {
+                    print("📋 [FEED LOAD] Fetching page \(page) from CACHE")
                     // Use "main_feed" as special user ID for main feed cache to separate from profile browsing
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: "main_feed", page: page, pageSize: size, currentUserId: viewModel.hproseInstance.appUser.mid)
+                    let elapsed = Date().timeIntervalSince(startTime) * 1000
+                    print("✅ [FEED LOAD] Cache returned \(cachedTweets.compactMap{$0}.count) tweets in \(String(format: "%.1f", elapsed))ms")
                     return cachedTweets
                 } else {
-                    return await viewModel.fetchTweets(page: page, pageSize: size, shouldCache: shouldCache)
+                    print("🌐 [FEED LOAD] Fetching page \(page) from SERVER")
+                    let serverTweets = await viewModel.fetchTweets(page: page, pageSize: size, shouldCache: shouldCache)
+                    let elapsed = Date().timeIntervalSince(startTime) * 1000
+                    print("✅ [FEED LOAD] Server returned \(serverTweets.compactMap{$0}.count) tweets in \(String(format: "%.1f", elapsed))ms")
+                    return serverTweets
                 }
             },
             showTitle: false,

@@ -170,6 +170,12 @@ final class TweetCacheManager: @unchecked Sendable {
 // MARK: - Tweet Caching
 extension TweetCacheManager {
     func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil) async -> [Tweet?] {
+        // Only use resolved baseUrl if app is initialized (has real IP)
+        // Otherwise let fetchUser() resolve it properly after init completes
+        let resolvedBaseUrl = await MainActor.run {
+            HproseInstance.shared.isAppInitialized ? HproseInstance.shared.appUser.baseUrl : nil
+        }
+        
         return await withCheckedContinuation { continuation in
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
@@ -206,6 +212,12 @@ extension TweetCacheManager {
                                 tweet.author = authorSingleton
                             }
                             
+                            // CRITICAL: Assign resolved baseUrl if author has none
+                            // Core Data doesn't persist baseUrl, so cached authors need it assigned immediately
+                            if let author = tweet.author, author.baseUrl == nil {
+                                author.baseUrl = resolvedBaseUrl
+                            }
+                            
                             // Filter out tweets with invalid timestamps
                             if tweet.timestamp.timeIntervalSince1970 <= 0 {
                                 print("ERROR: [TweetCacheManager] Found cached tweet with invalid timestamp: \(tweet.timestamp), skipping")
@@ -233,6 +245,12 @@ extension TweetCacheManager {
     }
 
     func fetchTweet(mid: String) async -> Tweet? {
+        // Only use resolved baseUrl if app is initialized (has real IP)
+        // Otherwise let fetchUser() resolve it properly after init completes
+        let resolvedBaseUrl = await MainActor.run {
+            HproseInstance.shared.isAppInitialized ? HproseInstance.shared.appUser.baseUrl : nil
+        }
+        
         return await withCheckedContinuation { continuation in
             // First check in-memory singleton
             if let tweetInstance = Tweet.getInstance(for: mid) {
@@ -271,6 +289,12 @@ extension TweetCacheManager {
                             
                             // Use the singleton (either with data from cache or as placeholder)
                             tweet.author = authorSingleton
+                        }
+                        
+                        // CRITICAL: Assign resolved baseUrl if author has none
+                        // Core Data doesn't persist baseUrl, so cached authors need it assigned immediately
+                        if let author = tweet.author, author.baseUrl == nil {
+                            author.baseUrl = resolvedBaseUrl
                         }
                         
                         // Then update the cache time in a separate operation
