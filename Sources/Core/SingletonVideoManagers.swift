@@ -785,6 +785,11 @@ class DetailVideoManager: NSObject, ObservableObject {
         player.pause()
         isPlaying = false
         
+        // CRITICAL: Post notification to force SimpleVideoPlayer view refresh
+        // This ensures AVPlayerViewController layer is properly reconnected after screen lock
+        NSLog("DEBUG: [DetailVideoManager] Posting videoLayerRefresh to force view update")
+        NotificationCenter.default.post(name: .videoLayerRefresh, object: nil)
+        
         // Force a seek to refresh the video layer
         player.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
             guard finished else {
