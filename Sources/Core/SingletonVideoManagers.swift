@@ -35,6 +35,21 @@ class FullScreenVideoManager: ObservableObject {
     // Video completion observer
     private var videoCompletionObserver: NSObjectProtocol?
     
+    /// Initialize singleton player early (called during app startup)
+    func initializePlayerEarly() {
+        guard singletonPlayer == nil else {
+            print("DEBUG: [FullScreenVideoManager] Player already initialized, skipping early init")
+            return
+        }
+        
+        // Create empty player instance to warm up AVFoundation infrastructure
+        singletonPlayer = AVPlayer()
+        singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
+        singletonPlayer?.isMuted = false
+        
+        print("DEBUG: [FullScreenVideoManager] ✅ Initialized singleton player early during app startup")
+    }
+    
     /// Set the video search function from TweetListView
     func setVideoSearchFunction(_ findNext: @escaping (String, Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)?, onNavigate: @escaping (Tweet, Int, String) -> Void) {
         self.findNextVideo = findNext
@@ -152,10 +167,12 @@ class FullScreenVideoManager: ObservableObject {
         }
     }
     
-    /// Clear singleton player
+    /// Clear singleton player content (keeps player instance for reuse)
     func clearSingletonPlayer() {
+        // Pause and clear the current item, but keep the player instance
         singletonPlayer?.pause()
-        singletonPlayer = nil
+        singletonPlayer?.replaceCurrentItem(with: nil)
+        
         currentVideoMid = nil
         currentTweetId = nil
         currentSourceTweetId = nil
@@ -168,7 +185,7 @@ class FullScreenVideoManager: ObservableObject {
             videoCompletionObserver = nil
         }
         
-        print("DEBUG: [FullScreenVideoManager] Cleared singleton player")
+        print("DEBUG: [FullScreenVideoManager] Cleared video content (player instance retained)")
     }
     
     /// Pause current playback

@@ -41,6 +41,11 @@ class AppState: ObservableObject {
                 // Initialize audio session manager for call-friendly audio handling
                 _ = AudioSessionManager.shared
                 
+                // Initialize fullscreen singleton player early to avoid first-open delay
+                await MainActor.run {
+                    FullScreenVideoManager.shared.initializePlayerEarly()
+                }
+                
                 // Cleanup caches after a delay
                 Task.detached(priority: .background) {
                     // Wait 30 seconds after app initialization
