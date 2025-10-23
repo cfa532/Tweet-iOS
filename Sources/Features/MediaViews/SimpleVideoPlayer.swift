@@ -149,6 +149,7 @@ struct SimpleVideoPlayer: View {
     @State private var playbackState: PlaybackState = .notStarted
     @State private var isLongPressing = false
     @State private var isPlayerDetached = false  // Track background state
+    @State private var hasRecoveredThisCycle = false  // Prevent double recovery (background + screen lock)
     @State private var isBuffering = false // Track buffering state
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var videoCompletionObserver: NSObjectProtocol?
@@ -565,7 +566,9 @@ struct SimpleVideoPlayer: View {
     
     private func handleDidEnterBackground() {
         // App going to background - detach player to prevent black screens
+        // Reset recovery flag so next foreground/active will trigger recovery
         print("DEBUG: [VIDEO BACKGROUND] App entering background for \(mid)")
+        hasRecoveredThisCycle = false
         detachPlayerForBackground()
     }
     
@@ -576,10 +579,13 @@ struct SimpleVideoPlayer: View {
     
     private func handleDidBecomeActive() {
         print("DEBUG: [VIDEO APP ACTIVE] App became active for \(mid)")
-        // Recovery already handled in willEnterForeground
-        // Just ensure mute state is correct
-        if let player = player, mode == .mediaCell {
-            player.isMuted = MuteState.shared.isMuted
+        // Recover from screen lock (which triggers didBecomeActive but not willEnterForeground)
+        // Only recover if we haven't already recovered in this cycle (to avoid duplicate recovery)
+        if !hasRecoveredThisCycle {
+            print("DEBUG: [VIDEO APP ACTIVE] Recovering from screen lock for \(mid)")
+            recoverFromBackground()
+        } else {
+            print("DEBUG: [VIDEO APP ACTIVE] Already recovered in willEnterForeground, skipping for \(mid)")
         }
     }
     
@@ -606,6 +612,7 @@ struct SimpleVideoPlayer: View {
     private func recoverFromBackground() {
         print("DEBUG: [VIDEO RECOVERY] Starting recovery for \(mid)")
         isPlayerDetached = false
+        hasRecoveredThisCycle = true  // Mark that we've recovered
         
         // SANITY CHECK (2nd layer security) - detect broken players
         if isPlayerBroken() {

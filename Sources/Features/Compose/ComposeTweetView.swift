@@ -201,19 +201,13 @@ struct ComposeTweetView: View {
         }
         
         // Create tweet object
-        #if DEBUG
-        let isPrivateValue = isPrivate
-        #else
-        let isPrivateValue = false
-        #endif
-        
         let tweet = Tweet(
             mid: Constants.GUEST_ID,        // placeholder Mimei Id
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
             attachments: nil,
-            isPrivate: isPrivateValue
+            isPrivate: isPrivate
         )
         
         // Prepare item data using helper
