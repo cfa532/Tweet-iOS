@@ -252,10 +252,7 @@ struct TweetMenu: View {
         if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
             print("Successfully deleted tweet: \(tweetId)")
             
-            // Update user's tweet count
-            await MainActor.run {
-                hproseInstance.appUser.tweetCount = max(0, (hproseInstance.appUser.tweetCount ?? 0) - 1)
-            }
+            // Note: tweetCount is updated by refreshAppUserFromServer() inside deleteTweet()
             
             if let originalTweetId = tweet.originalTweetId,
                let originalAuthorId = tweet.originalAuthorId,

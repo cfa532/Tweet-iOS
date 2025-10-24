@@ -159,8 +159,36 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     @Published var fansList: [MimeiId]? // List of MimeiId
     @Published var followingList: [MimeiId]? // List of MimeiId
-    @Published var bookmarkedTweets: [MimeiId]? // List of MimeiId
-    @Published var favoriteTweets: [MimeiId]? // List of MimeiId
+    @Published var bookmarkedTweets: [MimeiId]? {
+        didSet {
+            Task { @MainActor in
+                // Update cached version when bookmarkedTweets changes
+                if bookmarkedTweets != oldValue {
+                    // Update the singleton instance in the cache
+                    User.userInstances[mid]?.bookmarkedTweets = bookmarkedTweets
+                    // Also update Core Data cache if this is the app user
+                    if mid == HproseInstance.shared.appUser.mid {
+                        TweetCacheManager.shared.saveUser(self)
+                    }
+                }
+            }
+        }
+    }
+    @Published var favoriteTweets: [MimeiId]? {
+        didSet {
+            Task { @MainActor in
+                // Update cached version when favoriteTweets changes
+                if favoriteTweets != oldValue {
+                    // Update the singleton instance in the cache
+                    User.userInstances[mid]?.favoriteTweets = favoriteTweets
+                    // Also update Core Data cache if this is the app user
+                    if mid == HproseInstance.shared.appUser.mid {
+                        TweetCacheManager.shared.saveUser(self)
+                    }
+                }
+            }
+        }
+    }
     @Published var repliedTweets: [MimeiId]? // List of MimeiId
     @Published var commentsList: [MimeiId]? // List of MimeiId
     @Published var topTweets: [MimeiId]? // List of MimeiId
@@ -320,6 +348,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.bookmarksCount = user.bookmarksCount
             instance.favoritesCount = user.favoritesCount
             instance.commentsCount = user.commentsCount
+            
+            // Update array properties
+            instance.fansList = user.fansList
+            instance.followingList = user.followingList
+            instance.bookmarkedTweets = user.bookmarkedTweets
+            instance.favoriteTweets = user.favoriteTweets
+            instance.repliedTweets = user.repliedTweets
+            instance.commentsList = user.commentsList
+            instance.topTweets = user.topTweets
+            instance.userBlackList = user.userBlackList
         } else {
             DispatchQueue.main.async {
                 instance.name = user.name
@@ -347,6 +385,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.bookmarksCount = user.bookmarksCount
                 instance.favoritesCount = user.favoritesCount
                 instance.commentsCount = user.commentsCount
+                
+                // Update array properties
+                instance.fansList = user.fansList
+                instance.followingList = user.followingList
+                instance.bookmarkedTweets = user.bookmarkedTweets
+                instance.favoriteTweets = user.favoriteTweets
+                instance.repliedTweets = user.repliedTweets
+                instance.commentsList = user.commentsList
+                instance.topTweets = user.topTweets
+                instance.userBlackList = user.userBlackList
             }
         }
     }

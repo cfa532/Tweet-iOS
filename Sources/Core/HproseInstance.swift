@@ -1645,6 +1645,10 @@ final class HproseInstance: ObservableObject {
             guard let deletedTweetId = response["tweetid"] as? String else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
+            
+            // Refresh appUser from server to get updated tweetCount and other properties
+            try? await self.refreshAppUserFromServer()
+            
             return deletedTweetId
         } else {
             // Failure case: extract error message
@@ -3840,6 +3844,10 @@ final class HproseInstance: ObservableObject {
                 let uploadedTweet = tweet
                 uploadedTweet.mid = newTweetId
                 uploadedTweet.author = try? await self.fetchUser(tweet.authorId)
+                
+                // Refresh appUser from server to get updated tweetCount and other properties
+                try? await self.refreshAppUserFromServer()
+                
                 return uploadedTweet
             } else {
                 // Failure case: extract error message
@@ -3916,9 +3924,8 @@ final class HproseInstance: ObservableObject {
                 // Success - remove pending upload and notify
                 await removePendingUpload()
                 
-                // Update user's tweet count and post notification
+                // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                 await MainActor.run {
-                    self.appUser.tweetCount = (self.appUser.tweetCount ?? 0) + 1
                     NotificationCenter.default.post(
                         name: .newTweetCreated,
                         object: nil,
@@ -4228,9 +4235,8 @@ final class HproseInstance: ObservableObject {
                     // Success - remove pending upload and notify
                     await removePendingUpload()
                     
-                    // Update user's tweet count and post notification
+                    // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                     await MainActor.run {
-                        self.appUser.tweetCount = (self.appUser.tweetCount ?? 0) + 1
                         NotificationCenter.default.post(
                             name: .newTweetCreated,
                             object: nil,

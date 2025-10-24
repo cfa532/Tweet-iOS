@@ -526,9 +526,8 @@ extension TweetUploadManager {
                 while submitRetryCount <= maxRetries {
                     do {
                         if let uploadedTweet = try await hproseInstance.uploadTweet(tweet) {
-                            // Success!
+                            // Success! (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                             await MainActor.run {
-                                hproseInstance.appUser.tweetCount = (hproseInstance.appUser.tweetCount ?? 0) + 1
                                 NotificationCenter.default.post(
                                     name: .newTweetCreated,
                                     object: nil,
@@ -765,11 +764,10 @@ extension TweetUploadManager {
         // Submit the tweet
         do {
             if let uploadedTweet = try await hproseInstance.uploadTweet(tweet) {
-                // Success!
+                // Success! (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                 await removePendingUpload()
                 
                 await MainActor.run {
-                    hproseInstance.appUser.tweetCount = (hproseInstance.appUser.tweetCount ?? 0) + 1
                     NotificationCenter.default.post(
                         name: .newTweetCreated,
                         object: nil,
@@ -1313,8 +1311,8 @@ extension TweetUploadManager {
                 if let uploadedTweet = try await hproseInstance.uploadTweet(pendingUpload.tweet) {
                     await removePendingUpload()
                     
+                    // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                     await MainActor.run {
-                        hproseInstance.appUser.tweetCount = (hproseInstance.appUser.tweetCount ?? 0) + 1
                         NotificationCenter.default.post(
                             name: .newTweetCreated,
                             object: nil,
