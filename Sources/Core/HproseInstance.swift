@@ -403,7 +403,18 @@ final class HproseInstance: ObservableObject {
         guard let client = appUser.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]?] else {
+        
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        
+        // Handle empty array case - server returns empty array when tweet has no comments
+        let response: [[String: Any]?]
+        if let arrayResponse = rawResponse as? [[String: Any]?] {
+            response = arrayResponse
+        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+            // Server returned empty array - handle gracefully
+            response = []
+            print("DEBUG: [HproseInstance] fetchComments - Server returned empty array (no comments)")
+        } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
         }
         
@@ -1159,7 +1170,17 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         
-        guard let response = client.invoke("runMApp", withArgs: [entry.rawValue, params]) as? [[String: Any]] else {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry.rawValue, params])
+        
+        // Handle empty array case - server returns empty array when user has no followers/following
+        let response: [[String: Any]]
+        if let arrayResponse = rawResponse as? [[String: Any]] {
+            response = arrayResponse
+        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+            // Server returned empty array - handle gracefully
+            response = []
+            print("DEBUG: [HproseInstance] getListByType - Server returned empty array for \(entry.rawValue)")
+        } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
         }
         
@@ -1189,7 +1210,17 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
             
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            
+            // Handle empty array case - server returns empty array when user has no followings
+            let response: [[String: Any]]
+            if let arrayResponse = rawResponse as? [[String: Any]] {
+                response = arrayResponse
+            } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+                // Server returned empty array - handle gracefully
+                response = []
+                print("DEBUG: [HproseInstance] getFollowings - Server returned empty array (no followings)")
+            } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
             }
             
@@ -1267,7 +1298,17 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
             
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            
+            // Handle empty array case - server returns empty array when user has no fans
+            let response: [[String: Any]]
+            if let arrayResponse = rawResponse as? [[String: Any]] {
+                response = arrayResponse
+            } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+                // Server returned empty array - handle gracefully
+                response = []
+                print("DEBUG: [HproseInstance] getFans - Server returned empty array (no fans)")
+            } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
             }
             
@@ -1317,7 +1358,17 @@ final class HproseInstance: ObservableObject {
             newClient = newHproseClient
         }
         
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]?] else {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        
+        // Handle empty array case - server returns empty array when user has no bookmarks/favorites
+        let response: [[String: Any]?]
+        if let arrayResponse = rawResponse as? [[String: Any]?] {
+            response = arrayResponse
+        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+            // Server returned empty array - handle gracefully
+            response = []
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Server returned empty array (no bookmarks/favorites)")
+        } else {
             newClient?.close()
             print("DEBUG: [HproseInstance] getUserTweetsByType - Invalid response format")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
@@ -1646,8 +1697,10 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
             
+            print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId), refreshing appUser from server...")
             // Refresh appUser from server to get updated tweetCount and other properties
             try? await self.refreshAppUserFromServer()
+            print("DEBUG: [deleteTweet] Finished refreshing appUser, new tweetCount: \(appUser.tweetCount ?? 0)")
             
             return deletedTweetId
         } else {
@@ -4409,9 +4462,25 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "appuserid": appUser.mid
         ]
-        guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
+        
+        guard let client = user.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        }
+        
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        
+        // Handle empty array case - server returns empty array when user has no pinned tweets
+        let response: [[String: Any]]
+        if let arrayResponse = rawResponse as? [[String: Any]] {
+            response = arrayResponse
+        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+            // Server returned empty array - handle gracefully
+            response = []
+            print("DEBUG: [HproseInstance] getPinnedTweets - Server returned empty array (no pinned tweets)")
+        } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to get pinned tweets", comment: "Get pinned tweets error")])
         }
+        
         var result: [[String: Any]] = []
         for dict in response {
             if let tweetDict = dict["tweet"] as? [String: Any] {

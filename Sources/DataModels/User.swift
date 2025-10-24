@@ -342,6 +342,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.writableUrl = newWritableUrl
             }
             
+            if instance.tweetCount != user.tweetCount {
+                print("DEBUG: [User.updateUserInstance] Updating tweetCount from \(instance.tweetCount ?? 0) to \(user.tweetCount ?? 0) for user \(instance.mid)")
+            }
             instance.tweetCount = user.tweetCount
             instance.followingCount = user.followingCount
             instance.followersCount = user.followersCount
@@ -379,6 +382,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                     instance.writableUrl = newWritableUrl
                 }
                 
+                if instance.tweetCount != user.tweetCount {
+                    print("DEBUG: [User.updateUserInstance] Updating tweetCount from \(instance.tweetCount ?? 0) to \(user.tweetCount ?? 0) for user \(instance.mid)")
+                }
                 instance.tweetCount = user.tweetCount
                 instance.followingCount = user.followingCount
                 instance.followersCount = user.followersCount

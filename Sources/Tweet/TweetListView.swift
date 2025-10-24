@@ -239,9 +239,11 @@ struct TweetListView<RowView: View>: View {
                         if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
                             if notification.name == .tweetDeleted {
                                 // For tweet deletion, handle directly in TweetListView
+                                let countBefore = tweets.count
                                 tweets.removeAll { $0.mid == tweetId }
+                                let countAfter = tweets.count
                                 TweetCacheManager.shared.deleteTweet(mid: tweetId)
-                                print("DEBUG: [TweetListView] Removed deleted tweet \(tweetId) from list")
+                                print("DEBUG: [TweetListView] Removed deleted tweet \(tweetId) from list (title: \(title), count: \(countBefore) -> \(countAfter))")
                             } else {
                                 // For other notifications (like privacy changes), call the custom handler
                                 // Find the actual tweet in the list and pass it to the handler
@@ -289,8 +291,10 @@ struct TweetListView<RowView: View>: View {
             let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
             let validCachedTweets = tweetsFromCache.compactMap { $0 }
             
+            let hasCachedContent = !validCachedTweets.isEmpty
+            
             await MainActor.run {
-                if !validCachedTweets.isEmpty {
+                if hasCachedContent {
                     // If we have cached content, show it immediately without loading spinner
                     tweets.mergeTweets(validCachedTweets)
                     
@@ -302,17 +306,24 @@ struct TweetListView<RowView: View>: View {
                     isLoading = false
                     initialLoadComplete = true
                 } else {
-                    // No cached content - show loading spinner
+                    // No cached content - show loading spinner and wait for server
                     isLoading = true
                     initialLoadComplete = false
                 }
             }
             
-            // Step 2: Load from server in background to get the most up-to-date data
-            // This happens asynchronously and won't block the UI
-            Task.detached(priority: .background) {
-                await self.loadFromServer(page: page, pageSize: self.pageSize) { _ in
-                    // Server load completion handled separately
+            // Step 2: Load from server to get the most up-to-date data
+            if hasCachedContent {
+                // If we have cache, load server data in background (non-blocking)
+                Task.detached(priority: .background) {
+                    await self.loadFromServer(page: page, pageSize: self.pageSize) { _ in
+                        // Server load completion handled separately
+                    }
+                }
+            } else {
+                // No cache - wait for server load to complete before marking as loaded
+                await loadFromServer(page: page, pageSize: pageSize) { _ in
+                    // Server load completed
                 }
             }
             
@@ -514,10 +525,20 @@ struct TweetListView<RowView: View>: View {
                     currentPage = page
                 } else if tweetsFromServer.count < pageSize {
                     hasMoreTweets = false
+                    // Update VideoLoadingManager even when no tweets
+                    if page == 0 && tweets.isEmpty {
+                        videoLoadingManager.updateTweetList([])
+                    }
                 } else {
                     // All tweets are nil but we got a full page, continue to next page
                     currentPage = page
                     // Don't call loadMoreTweets recursively here, let the normal flow continue
+                }
+                
+                // Mark initial load as complete for page 0
+                if page == 0 {
+                    isLoading = false
+                    initialLoadComplete = true
                 }
                 
                 // Clear scroll anchor after a brief delay to allow layout to settle
@@ -531,6 +552,11 @@ struct TweetListView<RowView: View>: View {
             
             await MainActor.run {
                 errorMessage = "Unable to load fresh content. Showing cached data."
+                // Mark initial load as complete even on error for page 0
+                if page == 0 {
+                    isLoading = false
+                    initialLoadComplete = true
+                }
                 // Don't modify tweets array - keep cached data intact
             }
         }

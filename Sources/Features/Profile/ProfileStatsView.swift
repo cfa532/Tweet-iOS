@@ -9,6 +9,11 @@ struct ProfileStatsView: View {
     let onFavoritesTap: () -> Void
     @EnvironmentObject private var hproseInstance: HproseInstance
     
+    // Always use singleton instance to ensure stats update when data changes
+    private var singleton: User {
+        User.getInstance(mid: user.mid)
+    }
+    
     var body: some View {
         HStack {
             Button {
@@ -18,7 +23,7 @@ struct ProfileStatsView: View {
                     Text(LocalizedStringKey("Fans"))
                         .font(.caption)
                         .foregroundColor(.themeSecondaryText)
-                    Text("\(user.followersCount ?? 0)")
+                    Text("\(singleton.followersCount ?? 0)")
                         .font(.headline)
                         .foregroundColor(.themeText)
                 }
@@ -31,7 +36,7 @@ struct ProfileStatsView: View {
                     Text(LocalizedStringKey("Followings"))
                         .font(.caption)
                         .foregroundColor(.themeSecondaryText)
-                    Text("\(user.followingCount ?? 0)")
+                    Text("\(singleton.followingCount ?? 0)")
                         .font(.headline)
                         .foregroundColor(.themeText)
                 }
@@ -41,7 +46,7 @@ struct ProfileStatsView: View {
                 Text(LocalizedStringKey("Tweets"))
                     .font(.caption)
                     .foregroundColor(.themeSecondaryText)
-                Text("\(user.tweetCount ?? 0)")
+                Text("\(singleton.tweetCount ?? 0)")
                     .font(.headline)
                     .foregroundColor(.themeText)
             }
@@ -53,7 +58,7 @@ struct ProfileStatsView: View {
                     VStack {
                         Image(systemName: "bookmark")
                             .foregroundColor(.themeSecondaryText)
-                        Text("\(user.bookmarksCount ?? 0)")
+                        Text("\(singleton.bookmarksCount ?? 0)")
                             .font(.headline)
                             .foregroundColor(.themeText)
                     }
@@ -65,7 +70,7 @@ struct ProfileStatsView: View {
                     VStack {
                         Image(systemName: "heart")
                             .foregroundColor(.themeSecondaryText)
-                        Text("\(user.favoritesCount ?? 0)")
+                        Text("\(singleton.favoritesCount ?? 0)")
                             .font(.headline)
                             .foregroundColor(.themeText)
                     }
@@ -75,5 +80,6 @@ struct ProfileStatsView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(Color.cyan.opacity(0.3))
+        .id(singleton.tweetCount) // Force re-render when tweetCount changes
     }
 }
