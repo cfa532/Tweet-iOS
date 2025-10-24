@@ -46,6 +46,9 @@ class AppState: ObservableObject {
                     FullScreenVideoManager.shared.initializePlayerEarly()
                 }
                 
+                // Start periodic appUser refresh every 30 minutes
+                HproseInstance.shared.startPeriodicAppUserRefresh()
+                
                 // Cleanup caches after a delay
                 Task.detached(priority: .background) {
                     // Wait 30 seconds after app initialization

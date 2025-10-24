@@ -3716,6 +3716,28 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /// Start periodic refresh of appUser every 30 minutes
+    func startPeriodicAppUserRefresh() {
+        Task.detached(priority: .background) { [weak self] in
+            guard let self = self else { return }
+            
+            print("DEBUG: [HproseInstance] Started periodic appUser refresh (every 30 minutes)")
+            
+            while true {
+                // Wait 30 minutes
+                try? await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000)
+                
+                // Refresh appUser from server
+                do {
+                    try await self.refreshAppUserFromServer()
+                } catch {
+                    print("DEBUG: [HproseInstance] Periodic refresh failed: \(error)")
+                    // Continue with next iteration even if this one failed
+                }
+            }
+        }
+    }
+    
     // MARK: - Background Upload
     // Background task approach removed - using immediate upload with persistence instead
     
