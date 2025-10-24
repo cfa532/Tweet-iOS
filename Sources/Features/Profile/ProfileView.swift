@@ -9,10 +9,10 @@ struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     
     /// Navigation state
-    @State private var selectedUser: User? = nil
     @State private var showUserList = false
     @State private var showTweetList = false
     @State private var selectedTweetForNavigation: Tweet? = nil
+    @State private var selectedUserForNavigation: User? = nil
     
     @State private var userListType: UserListType = .FOLLOWER
     @State private var tweetListType: TweetListType = .BOOKMARKS
@@ -63,7 +63,7 @@ struct ProfileView: View {
                     pinnedTweetIds: pinnedTweetIds,
                     user: user,
                     hproseInstance: hproseInstance,
-                    onUserSelect: { user in selectedUser = user },
+                    onUserSelect: { _ in }, // Not used - NavigationLink handles user navigation
                     onTweetTap: { tweet in
                         // This should never be called since we'll use NavigationLink directly
                         print("DEBUG: [ProfileView] onTweetTap called - this should not happen")
@@ -353,14 +353,19 @@ struct ProfileView: View {
             )
         }
         .navigationDestination(isPresented: $showTweetList) {
-            bookmarksOrFavoritesListView()
+            print("🔵 [ProfileView] navigationDestination(showTweetList) TRIGGERED - type: \(tweetListType), user: \(user.username ?? "nil")")
+            return bookmarksOrFavoritesListView()
                 .onAppear {
+                    print("🔵 [ProfileView] Bookmarks/Favorites list appeared - type: \(tweetListType), user: \(user.username ?? "nil")")
                     // Clear tweets when view appears to ensure fresh data
                     if tweetListType == .BOOKMARKS {
                         bookmarksTweets.removeAll()
                     } else {
                         favoritesTweets.removeAll()
                     }
+                }
+                .onDisappear {
+                    print("🔵 [ProfileView] Bookmarks/Favorites list disappeared - type: \(tweetListType)")
                 }
         }
         .navigationDestination(item: $selectedTweetForNavigation) { tweet in
@@ -373,9 +378,30 @@ struct ProfileView: View {
                 TweetDetailView(tweet: tweet)
             }
         }
-        
-        
-        
+        .navigationDestination(item: $selectedUserForNavigation) { user in
+            print("🟢 [ProfileView] navigationDestination(selectedUser) TRIGGERED - navigating to user: \(user.username ?? "nil"), mid: \(user.mid)")
+            print("🟢 [ProfileView] Current showTweetList value: \(showTweetList)")
+            // Navigate to user's profile when avatar is tapped from favorites/bookmarks
+            return ProfileView(user: user, onLogout: onLogout, navigationPath: $navigationPath)
+                .onAppear {
+                    print("🟢 [ProfileView] NEW user profile appeared: \(user.username ?? "nil")")
+                }
+        }
+        .onChange(of: selectedUserForNavigation) { oldValue, newValue in
+            print("🟡 [ProfileView] selectedUserForNavigation changed from \(oldValue?.username ?? "nil") to \(newValue?.username ?? "nil")")
+            print("🟡 [ProfileView] Current showTweetList: \(showTweetList), will set to false")
+            // When navigating to a user profile, dismiss the favorites/bookmarks list
+            if newValue != nil {
+                showTweetList = false
+                print("🟡 [ProfileView] Set showTweetList = false")
+            }
+        }
+        .onChange(of: showTweetList) { oldValue, newValue in
+            print("🟠 [ProfileView] showTweetList changed from \(oldValue) to \(newValue) - user: \(user.username ?? "nil")")
+        }
+        .onChange(of: navigationPath.count) { oldCount, newCount in
+            print("🟣 [ProfileView] navigationPath.count changed from \(oldCount) to \(newCount) - user: \(user.username ?? "nil")")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .bookmarkAdded)) { notification in
             if let tweet = notification.userInfo?["tweet"] as? Tweet,
                isAppUser {
@@ -787,7 +813,11 @@ struct ProfileView: View {
                     TweetItemView(
                         tweet: tweet,
                         showDeleteButton: isAppUser,
-                        onAvatarTap: { user in selectedUser = user },
+                        onAvatarTap: { tappedUser in
+                            print("🔴 [ProfileView-Bookmarks] Avatar tapped - user: \(tappedUser.username ?? "nil"), mid: \(tappedUser.mid)")
+                            print("🔴 [ProfileView-Bookmarks] Current showTweetList: \(showTweetList), current user: \(user.username ?? "nil")")
+                            selectedUserForNavigation = tappedUser
+                        },
                         onTap: { selectedTweet in
                             selectedTweetForNavigation = selectedTweet
                         }
@@ -815,7 +845,11 @@ struct ProfileView: View {
                     TweetItemView(
                         tweet: tweet,
                         showDeleteButton: isAppUser,
-                        onAvatarTap: { user in selectedUser = user },
+                        onAvatarTap: { tappedUser in
+                            print("🔴 [ProfileView-Favorites] Avatar tapped - user: \(tappedUser.username ?? "nil"), mid: \(tappedUser.mid)")
+                            print("🔴 [ProfileView-Favorites] Current showTweetList: \(showTweetList), current user: \(user.username ?? "nil")")
+                            selectedUserForNavigation = tappedUser
+                        },
                         onTap: { selectedTweet in
                             selectedTweetForNavigation = selectedTweet
                         }
