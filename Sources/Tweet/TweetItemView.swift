@@ -42,6 +42,43 @@ struct TweetItemView: View, Equatable {
             }
         }
     }
+    
+    @ViewBuilder
+    private func avatarView(for user: User, context: String) -> some View {
+        if isInProfile {
+            // Check if this is the same user as the profile being viewed
+            if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
+                // Same user - scroll to top
+                Avatar(user: user)
+                    .onTapGesture {
+                        onAvatarTapInProfile?(user)
+                    }
+            } else {
+                // Different user - navigate to their profile
+                NavigationLink(value: user) {
+                    Avatar(user: user)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        } else {
+            if onAvatarTap != nil {
+                // Use callback when provided
+                Button {
+                    print("⭐ [TweetItemView] Avatar button tapped (\(context)) - user: \(user.username ?? "nil")")
+                    onAvatarTap?(user)
+                } label: {
+                    Avatar(user: user)
+                }
+                .buttonStyle(PlainButtonStyle())
+            } else {
+                // Use NavigationLink when no callback
+                NavigationLink(value: user) {
+                    Avatar(user: user)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+    }
 
     var body: some View {
         Group {
@@ -166,41 +203,9 @@ struct TweetItemView: View, Equatable {
                     // Use Group to force re-evaluation when originalTweet.author changes (@Published)
                     Group {
                         if let user = originalTweet.author {
-                            if isInProfile {
-                                // Check if this is the same user as the profile being viewed
-                                if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
-                                    // Same user - scroll to top (handled by onAvatarTapInProfile)
-                                    Avatar(user: user)
-                                        .onTapGesture {
-                                            onAvatarTapInProfile?(user)
-                                        }
-                                } else {
-                                    // Different user - navigate to their profile
-                                    NavigationLink(value: user) {
-                                        Avatar(user: user)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                }
-                            } else {
-                                if onAvatarTap != nil {
-                                    // Use callback when provided
-                                    Button {
-                                        print("⭐ [TweetItemView] Avatar button tapped (retweet no content, !isInProfile) - user: \(user.username ?? "nil")")
-                                        onAvatarTap?(user)
-                                    } label: {
-                                        Avatar(user: user)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                } else {
-                                    // Use NavigationLink when no callback
-                                    NavigationLink(value: user) {
-                                        Avatar(user: user)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                }
-                            }
+                            avatarView(for: user, context: "retweet-no-content")
                         } else {
-                            // Show placeholder while author loads (same size as Avatar default: 40)
+                            // Show placeholder while author loads
                             Circle()
                                 .fill(Color.gray.opacity(0.3))
                                 .frame(width: 40, height: 40)
@@ -236,41 +241,9 @@ struct TweetItemView: View, Equatable {
                     // Use Group to force re-evaluation when tweet.author changes (@Published)
                     Group {
                         if let user = tweet.author {
-                            if isInProfile {
-                                // Check if this is the same user as the profile being viewed
-                                if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
-                                    // Same user - scroll to top (handled by onAvatarTapInProfile)
-                                    Avatar(user: user)
-                                        .onTapGesture {
-                                            onAvatarTapInProfile?(user)
-                                        }
-                                } else {
-                                    // Different user - navigate to their profile
-                                    NavigationLink(value: user) {
-                                        Avatar(user: user)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                }
-                            } else {
-                                if onAvatarTap != nil {
-                                    // Use callback when provided
-                                    Button {
-                                        print("⭐ [TweetItemView] Avatar button tapped (retweet with content, !isInProfile) - user: \(user.username ?? "nil")")
-                                        onAvatarTap?(user)
-                                    } label: {
-                                        Avatar(user: user)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                } else {
-                                    // Use NavigationLink when no callback
-                                    NavigationLink(value: user) {
-                                        Avatar(user: user)
-                                    }
-                                    .buttonStyle(PlainButtonStyle())
-                                }
-                            }
+                            avatarView(for: user, context: "retweet-with-content")
                         } else {
-                            // Show placeholder while author loads (same size as Avatar default: 40)
+                            // Show placeholder while author loads
                             Circle()
                                 .fill(Color.gray.opacity(0.3))
                                 .frame(width: 40, height: 40)
@@ -307,39 +280,7 @@ struct TweetItemView: View, Equatable {
                 // Use Group to force re-evaluation when tweet.author changes (@Published)
                 Group {
                     if let user = tweet.author {
-                        if isInProfile {
-                            // Check if this is the same user as the profile being viewed
-                            if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
-                                // Same user - scroll to top (handled by onAvatarTapInProfile)
-                                Avatar(user: user)
-                                    .onTapGesture {
-                                        onAvatarTapInProfile?(user)
-                                    }
-                            } else {
-                                // Different user - navigate to their profile
-                                NavigationLink(value: user) {
-                                    Avatar(user: user)
-                                }
-                                .buttonStyle(PlainButtonStyle())
-                            }
-                        } else {
-                            if onAvatarTap != nil {
-                                // Use callback when provided
-                                Button {
-                                    print("⭐ [TweetItemView] Avatar button tapped (regular tweet, !isInProfile) - user: \(user.username ?? "nil")")
-                                    onAvatarTap?(user)
-                                } label: {
-                                    Avatar(user: user)
-                                }
-                                .buttonStyle(PlainButtonStyle())
-                            } else {
-                                // Use NavigationLink when no callback
-                                NavigationLink(value: user) {
-                                    Avatar(user: user)
-                                }
-                                .buttonStyle(PlainButtonStyle())
-                            }
-                        }
+                        avatarView(for: user, context: "regular-tweet")
                     } else {
                         // Show placeholder while author loads
                         Circle()
