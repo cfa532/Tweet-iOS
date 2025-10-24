@@ -182,7 +182,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                         LocalHTTPServer.shared.resetConnectionPool()
                         print("[AppDelegate] Short screen lock recovery complete - videos kept intact")
-                        // NO notification - players intact
+                        // Post notification to trigger video recovery (fixes profile video black screens)
+                        NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                        print("[AppDelegate] Posted videoInfrastructureRestarted notification for short screen lock recovery")
                     } else {
                         // Server killed during screen lock - restart it
                         print("[AppDelegate] Server killed during screen lock, restarting...")

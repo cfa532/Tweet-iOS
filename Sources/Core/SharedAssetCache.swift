@@ -1137,11 +1137,29 @@ class SharedAssetCache: ObservableObject {
     func refreshVideoLayersForShortBackground() {
         print("DEBUG: [SharedAssetCache] Refreshing video layers for short background (keeping players intact)")
         
-        // For short backgrounds, we DON'T clear anything
-        // The connection pool reset in LocalHTTPServer is enough
-        // Video layers are still valid, players can continue seamlessly
+        // For short backgrounds, we keep players/assets but refresh their state
+        // The connection pool reset in LocalHTTPServer is usually enough
+        // But we need to verify players are still healthy
         
-        NSLog("DEBUG: [SharedAssetCache] Short background refresh complete - kept \(playerCache.count) players, \(assetCache.count) assets intact")
+        var unhealthyPlayers = 0
+        for (cid, player) in playerCache {
+            if let item = player.currentItem {
+                // Check if player is in failed state
+                if item.status == .failed {
+                    print("DEBUG: [SharedAssetCache] Found unhealthy player for \(cid), status: failed")
+                    unhealthyPlayers += 1
+                }
+            } else {
+                print("DEBUG: [SharedAssetCache] Found player with nil currentItem for \(cid)")
+                unhealthyPlayers += 1
+            }
+        }
+        
+        if unhealthyPlayers > 0 {
+            print("⚠️ [SharedAssetCache] Short background found \(unhealthyPlayers) unhealthy players - they will be recreated by notification")
+        }
+        
+        NSLog("DEBUG: [SharedAssetCache] Short background refresh complete - kept \(playerCache.count) players (\(unhealthyPlayers) unhealthy), \(assetCache.count) assets intact")
     }
     
     /// Clear video players for background recovery after long background periods
