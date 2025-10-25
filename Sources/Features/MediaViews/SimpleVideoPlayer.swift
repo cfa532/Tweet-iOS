@@ -150,6 +150,7 @@ struct SimpleVideoPlayer: View {
     @State private var isLongPressing = false
     @State private var isPlayerDetached = false  // Track background state
     @State private var hasRecoveredThisCycle = false  // Prevent double recovery (background + screen lock)
+    @State private var didEnterBackground = false  // Track if we actually went to background (vs just screen lock)
     @State private var isBuffering = false // Track buffering state
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var videoCompletionObserver: NSObjectProtocol?
@@ -223,6 +224,7 @@ struct SimpleVideoPlayer: View {
             .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
             .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
             .onReceive(NotificationCenter.default.publisher(for: .videoLayerRefresh)) { _ in handleVideoLayerRefresh() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in handleWillResignActive() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in handleWillEnterForeground() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in handleDidBecomeActive() }
@@ -565,12 +567,24 @@ struct SimpleVideoPlayer: View {
         // TweetDetail and MediaBrowser: DO NOTHING
     }
     
-    private func handleDidEnterBackground() {
-        // App going to background - detach player to prevent black screens
-        // Reset recovery flag so next foreground/active will trigger recovery
-        print("DEBUG: [VIDEO BACKGROUND] App entering background for \(mid)")
+    private func handleWillResignActive() {
+        // CRITICAL: This handles BOTH screen lock AND app backgrounding
+        // Screen lock: willResignActive → (locked) → didBecomeActive
+        // App background: willResignActive → didEnterBackground → willEnterForeground → didBecomeActive
+        print("DEBUG: [VIDEO RESIGN ACTIVE] App will resign active for \(mid), mode: \(mode)")
+        
+        // Reset flags
         hasRecoveredThisCycle = false
+        didEnterBackground = false  // Reset - will be set to true if didEnterBackground fires
+        
+        // Detach player to prevent black screens
         detachPlayerForBackground()
+    }
+    
+    private func handleDidEnterBackground() {
+        // App actually went to background (not just screen lock)
+        print("DEBUG: [VIDEO BACKGROUND] App entering background for \(mid)")
+        didEnterBackground = true  // Mark that we went to background (not just screen lock)
     }
     
     private func handleWillEnterForeground() {
@@ -619,62 +633,75 @@ struct SimpleVideoPlayer: View {
     
     /// RECOVERY: Restore playback after background (with sanity check as safety net)
     private func recoverFromBackground() {
-        print("DEBUG: [VIDEO RECOVERY] Starting recovery for \(mid), mode: \(mode)")
+        print("DEBUG: [VIDEO RECOVERY] Starting recovery for \(mid), mode: \(mode), didEnterBackground: \(didEnterBackground), shouldLoadVideo: \(shouldLoadVideo)")
         isPlayerDetached = false
         hasRecoveredThisCycle = true  // Mark that we've recovered
         
-        // SANITY CHECK (2nd layer security) - detect broken players
-        if isPlayerBroken() {
-            print("⚠️ [VIDEO RECOVERY] Sanity check failed - player is broken, clearing")
+        // SMART RECOVERY STRATEGY:
+        // - Screen lock (didEnterBackground=false): AGGRESSIVE - always recreate MediaCell players
+        // - App background (didEnterBackground=true): GENTLE - only recreate if broken
+        
+        let isScreenLock = !didEnterBackground
+        
+        if mode == .mediaCell && player != nil && shouldLoadVideo && isScreenLock {
+            // SCREEN LOCK: Always recreate MediaCell players (bulletproof recovery)
+            print("DEBUG: [VIDEO RECOVERY] Screen lock detected - FORCE recreating MediaCell player")
+            
+            // Clean up completely
+            if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
+                observerPlayer.removeTimeObserver(observer)
+            }
+            timeObserver = nil
+            timeObserverPlayer = nil
+            
+            player?.pause()
             player = nil
             loadingState = .idle
             playbackState = .notStarted
             
-            // Recreate if visible or in detail/fullscreen mode (always recover these)
-            if (isVisible && shouldLoadVideo) || mode == .tweetDetail || mode == .mediaBrowser {
-                print("DEBUG: [VIDEO RECOVERY] Recreating player for visible/detail video")
+            // Recreate from scratch
+            setupPlayer()
+            print("DEBUG: [VIDEO RECOVERY] MediaCell player recreated after screen lock")
+            return
+        }
+        
+        // APP BACKGROUND or non-MediaCell: Gentle recovery (only recreate if broken)
+        
+        // Gentle recovery: only recreate if actually broken
+        if isPlayerBroken() {
+            print("⚠️ [VIDEO RECOVERY] Player is broken, recreating")
+            player = nil
+            loadingState = .idle
+            playbackState = .notStarted
+            
+            if shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser {
                 setupPlayer()
             }
             return
         }
         
-        // BASIC RESTORATION (1st layer) - restore playback state
-        print("✅ [VIDEO RECOVERY] Sanity check passed - restoring playback state")
+        // Player is healthy - gentle recovery with view layer refresh
+        print("✅ [VIDEO RECOVERY] Player healthy - gentle recovery with view layer refresh")
         
-        // Restore mute state
         if mode == .mediaCell {
             player?.isMuted = MuteState.shared.isMuted
         } else {
             player?.isMuted = false
         }
         
-        // CRITICAL: Refresh view layer for modes using AVPlayerViewController
-        // Screen lock can cause AVPlayerViewController layer to become disconnected
-        // MediaCell uses AVPlayerLayer which is more resilient, so we skip it to avoid flickering
-        if mode == .tweetDetail || mode == .mediaBrowser {
-            print("DEBUG: [VIDEO RECOVERY] Forcing view refresh for \(mode) mode (AVPlayerViewController)")
-            representableId += 1
-        } else {
-            print("DEBUG: [VIDEO RECOVERY] Skipping view refresh for MediaCell (AVPlayerLayer is resilient)")
-        }
+        representableId += 1
         
-        // Restore playback position and play/pause state from cache
+        // Restore playback state
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
-            print("DEBUG: [VIDEO RECOVERY] Restoring cached state - wasPlaying: \(cachedState.wasPlaying), time: \(CMTimeGetSeconds(cachedState.time))s")
-            
             let currentTime = player?.currentTime() ?? .zero
             let timeDiff = abs(CMTimeGetSeconds(cachedState.time) - CMTimeGetSeconds(currentTime))
             
-            // Seek if position differs significantly
             if timeDiff > 0.5 {
-                print("DEBUG: [VIDEO RECOVERY] Seeking to cached position")
                 player?.seek(to: cachedState.time, toleranceBefore: .zero, toleranceAfter: .zero)
             }
             
-            // Resume playback if it was playing and video is visible (or in detail/fullscreen mode)
-            let shouldResume = cachedState.wasPlaying && (shouldLoadVideo && isVisible || mode == .tweetDetail || mode == .mediaBrowser)
+            let shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
             if shouldResume {
-                print("DEBUG: [VIDEO RECOVERY] Resuming playback (was playing and visible/detail mode)")
                 player?.play()
                 playbackState = .playing
             }
@@ -684,57 +711,66 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleVideoInfrastructureRestarted() {
-        print("DEBUG: [VIDEO INFRA RESTART] Video infrastructure restarted for \(mid), mode: \(mode)")
+        print("DEBUG: [VIDEO INFRA RESTART] Video infrastructure restarted for \(mid), mode: \(mode), shouldLoadVideo: \(shouldLoadVideo)")
         
-        // SMART RECOVERY: Only recreate if player is actually broken
-        // Check both if player exists AND if it's healthy
+        // BULLETPROOF: For MediaCell, ALWAYS recreate if player exists
+        if mode == .mediaCell && player != nil && shouldLoadVideo {
+            print("DEBUG: [VIDEO INFRA RESTART] MediaCell - FORCE recreating player")
+            
+            if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
+                observerPlayer.removeTimeObserver(observer)
+            }
+            timeObserver = nil
+            timeObserverPlayer = nil
+            
+            player?.pause()
+            player = nil
+            loadingState = .idle
+            playbackState = .notStarted
+            
+            setupPlayer()
+            return
+        }
+        
+        // For other modes, check if broken
         let playerIsMissing = player == nil || player?.currentItem == nil
         let playerIsBroken = !playerIsMissing && isPlayerBroken()
         
-        let needsRecreation = playerIsMissing || playerIsBroken
-        
-        if needsRecreation {
-            let reason = playerIsMissing ? "player/item missing" : "player broken/unhealthy"
-            print("DEBUG: [VIDEO INFRA RESTART] Player needs recreation (\(reason)) - player nil: \(player == nil), item nil: \(player?.currentItem == nil), broken: \(playerIsBroken)")
+        if playerIsMissing || playerIsBroken {
+            print("DEBUG: [VIDEO INFRA RESTART] Player broken/missing - recreating")
             
-            // Clear invalid player reference
             if player != nil && player?.currentItem == nil {
-                print("DEBUG: [VIDEO INFRA RESTART] Clearing player with nil currentItem for \(mid)")
                 player = nil
             }
             
-            // If player is broken but still has item, clear it
             if playerIsBroken {
-                print("DEBUG: [VIDEO INFRA RESTART] Clearing broken player for \(mid)")
                 player = nil
             }
             
-            // Reset finished state to allow recreation
             if playbackState.hasFinished {
-                print("DEBUG: [VIDEO INFRA RESTART] Resetting finished state for \(mid)")
                 playbackState = .notStarted
             }
             
-            // Reset loading state to allow recreation
             if case .loading = loadingState {
-                // Keep loading state
             } else {
                 loadingState = .idle
             }
             
-            // For visible videos in MediaCell, recreate the player
-            if mode == .mediaCell && isVisible && shouldLoadVideo {
-                print("DEBUG: [VIDEO INFRA RESTART] Recreating player for visible MediaCell video \(mid)")
-                setupPlayer()
-            }
-            // For TweetDetail, always recreate (singleton needs restoration)
-            else if mode == .tweetDetail && shouldLoadVideo {
-                print("DEBUG: [VIDEO INFRA RESTART] Recreating singleton player for TweetDetail \(mid)")
+            if shouldLoadVideo || mode == .tweetDetail {
                 setupPlayer()
             }
         } else {
-            // Player is healthy - don't touch it to avoid flicker
-            print("DEBUG: [VIDEO INFRA RESTART] Player is healthy for \(mid), skipping recreation to avoid flicker")
+            // Non-MediaCell healthy player - refresh view
+            print("DEBUG: [VIDEO INFRA RESTART] Non-MediaCell healthy - refresh view")
+            representableId += 1
+            
+            if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+                let shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
+                if shouldResume && player?.rate == 0 {
+                    player?.play()
+                    playbackState = .playing
+                }
+            }
         }
     }
     
