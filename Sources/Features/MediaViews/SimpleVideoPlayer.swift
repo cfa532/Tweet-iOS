@@ -643,28 +643,41 @@ struct SimpleVideoPlayer: View {
         
         let isScreenLock = !didEnterBackground
         
-        if mode == .mediaCell && player != nil && shouldLoadVideo && isScreenLock {
-            // SCREEN LOCK: Always recreate MediaCell players (bulletproof recovery)
-            print("DEBUG: [VIDEO RECOVERY] Screen lock detected - FORCE recreating MediaCell player")
+        if mode == .mediaCell && player != nil && shouldLoadVideo && isScreenLock && isVisible {
+            // SCREEN LOCK RECOVERY FOR VISIBLE VIDEOS: Force complete player recreation
+            print("DEBUG: [VIDEO RECOVERY] Screen lock for VISIBLE video - forcing complete refresh")
             
-            // Clean up completely
+            let wasPlaying = player?.rate ?? 0 > 0
+            let currentTime = player?.currentTime() ?? .zero
+            
+            // Clean up observer
             if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
                 observerPlayer.removeTimeObserver(observer)
             }
             timeObserver = nil
             timeObserverPlayer = nil
             
+            // CRITICAL: Remove from SharedAssetCache to force fresh creation
+            SharedAssetCache.shared.removeInvalidPlayer(for: mid)
+            
             player?.pause()
             player = nil
             loadingState = .idle
             playbackState = .notStarted
             
-            // Recreate from scratch
+            // Recreate completely fresh player (not from cache)
             setupPlayer()
             
-            // CRITICAL: Force view layer to recreate for on-screen videos
-            representableId += 1
-            print("DEBUG: [VIDEO RECOVERY] MediaCell player recreated, representableId: \(representableId)")
+            // Restore position and resume
+            if let player = player {
+                player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    if finished && wasPlaying {
+                        player.play()
+                    }
+                }
+            }
+            
+            print("DEBUG: [VIDEO RECOVERY] Visible video recreated from scratch")
             return
         }
         
