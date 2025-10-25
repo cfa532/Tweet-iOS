@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import UIKit
 
 public class LocalHTTPServer: @unchecked Sendable {
     public static let shared = LocalHTTPServer()
@@ -45,6 +46,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         return pool
     }
     
+    // Screen lock resilience
+    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    private var didEnterBackground = false
+    
     private init() {
         // Initialize preference helper for port persistence
         self.preferenceHelper = PreferenceHelper()
@@ -54,6 +59,141 @@ public class LocalHTTPServer: @unchecked Sendable {
             self.port = savedPort
             NSLog("DEBUG: [LocalHTTPServer] Loaded saved port from preferences: \(savedPort)")
         }
+        
+        // Setup app lifecycle listeners for screen lock resilience
+        setupLifecycleListeners()
+    }
+    
+    private func setupLifecycleListeners() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleWillResignActive),
+            name: UIApplication.willResignActiveNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+    
+    @objc private func handleWillResignActive() {
+        NSLog("[LocalHTTPServer] App will resign active - preparing for screen lock/background")
+        didEnterBackground = false
+        
+        // Request background time to keep server alive during screen lock
+        if backgroundTaskID == .invalid {
+            backgroundTaskID = UIApplication.shared.beginBackgroundTask { [weak self] in
+                // If iOS needs to end our background task, end it gracefully
+                self?.endBackgroundTask()
+            }
+            NSLog("[LocalHTTPServer] Background task started: \(backgroundTaskID.rawValue)")
+        }
+    }
+    
+    @objc private func handleDidEnterBackground() {
+        NSLog("[LocalHTTPServer] App entering background")
+        didEnterBackground = true
+        // Keep background task active - we need the server for quick app returns
+    }
+    
+    @objc private func handleDidBecomeActive() {
+        let isScreenLock = !didEnterBackground
+        NSLog("[LocalHTTPServer] App became active - isScreenLock: \(isScreenLock)")
+        
+        // End background task - no longer needed
+        endBackgroundTask()
+        
+        // Check server health and restart if needed
+        queue.async { [weak self] in
+            self?.verifyServerHealth()
+        }
+    }
+    
+    private func endBackgroundTask() {
+        if backgroundTaskID != .invalid {
+            NSLog("[LocalHTTPServer] Ending background task: \(backgroundTaskID.rawValue)")
+            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+            backgroundTaskID = .invalid
+        }
+    }
+    
+    private func verifyServerHealth() {
+        guard isRunning else {
+            NSLog("[LocalHTTPServer] Server not running, no health check needed")
+            return
+        }
+        
+        // Check if listener is still healthy
+        guard listener != nil else {
+            NSLog("[LocalHTTPServer] ⚠️ Listener is nil but isRunning=true, restarting")
+            restart()
+            return
+        }
+        
+        // Quick health check - try to create a test connection
+        let testURL = URL(string: "http://127.0.0.1:\(port)/health")!
+        var request = URLRequest(url: testURL, timeoutInterval: 1.0)
+        request.httpMethod = "HEAD"
+        
+        let semaphore = DispatchSemaphore(value: 0)
+        var isHealthy = false
+        
+        let task = URLSession.shared.dataTask(with: request) { _, response, error in
+            if let httpResponse = response as? HTTPURLResponse {
+                // Server responded - it's alive
+                isHealthy = true
+                NSLog("[LocalHTTPServer] ✓ Health check passed (status: \(httpResponse.statusCode))")
+            } else if let error = error {
+                NSLog("[LocalHTTPServer] ✗ Health check failed: \(error.localizedDescription)")
+            }
+            semaphore.signal()
+        }
+        task.resume()
+        
+        // Wait up to 1 second for health check
+        let result = semaphore.wait(timeout: .now() + 1.0)
+        
+        if result == .timedOut || !isHealthy {
+            NSLog("[LocalHTTPServer] ⚠️ Server unhealthy after wake, restarting")
+            restart()
+        } else {
+            NSLog("[LocalHTTPServer] ✓ Server healthy and responsive")
+        }
+    }
+    
+    private func restart() {
+        NSLog("[LocalHTTPServer] Restarting server...")
+        
+        // Stop current instance
+        stop()
+        
+        // Small delay to ensure clean shutdown
+        Thread.sleep(forTimeInterval: 0.1)
+        
+        // Start fresh
+        startServer()
+        
+        if isRunning {
+            NSLog("[LocalHTTPServer] ✓ Server restarted successfully on port \(port)")
+        } else {
+            NSLog("[LocalHTTPServer] ✗ Server restart failed")
+        }
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        endBackgroundTask()
     }
     
     /// Start the server synchronously and WAIT until it's ready
