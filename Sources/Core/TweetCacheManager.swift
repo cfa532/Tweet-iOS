@@ -184,25 +184,11 @@ extension TweetCacheManager {
                         do {
                             let tweet = try Tweet.from(cdTweet: cdTweet)
                             
-                            // Load author from memory or cache if not already set
-                            // This allows tweets to render immediately without waiting for server
+                            // Load author from memory singleton only (no Core Data cache for user)
+                            // This ensures all tweets share the same User singleton
                             if tweet.author == nil {
-                                // First check in-memory singleton
+                                // Get singleton - don't load from CDUser cache as it can be stale
                                 let authorSingleton = User.getInstance(mid: tweet.authorId)
-                                
-                                // If singleton has no data (username is nil), load from Core Data cache
-                                if authorSingleton.username == nil {
-                                    let authorRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-                                    authorRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
-                                    
-                                    if let cdUser = try? self.context.fetch(authorRequest).first {
-                                        // User found in cache - update singleton with cached data
-                                        _ = User.from(cdUser: cdUser)
-                                        // Note: User.from() updates the singleton, so authorSingleton is now updated
-                                    }
-                                }
-                                
-                                // Use the singleton (either with data from cache or as placeholder)
                                 tweet.author = authorSingleton
                             }
                             
@@ -254,25 +240,11 @@ extension TweetCacheManager {
                     do {
                         let tweet = try Tweet.from(cdTweet: cdTweet)
                         
-                        // Load author from memory or cache if not already set
-                        // This allows tweets to render immediately without waiting for server
+                        // Load author from memory singleton only (no Core Data cache for user)
+                        // This ensures all tweets share the same User singleton
                         if tweet.author == nil {
-                            // First check in-memory singleton
+                            // Get singleton - don't load from CDUser cache as it can be stale
                             let authorSingleton = User.getInstance(mid: tweet.authorId)
-                            
-                            // If singleton has no data (username is nil), load from Core Data cache
-                            if authorSingleton.username == nil {
-                                let authorRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-                                authorRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
-                                
-                                if let cdUser = try? self.context.fetch(authorRequest).first {
-                                    // User found in cache - update singleton with cached data
-                                    _ = User.from(cdUser: cdUser)
-                                    // Note: User.from() updates the singleton, so authorSingleton is now updated
-                                }
-                            }
-                            
-                            // Use the singleton (either with data from cache or as placeholder)
                             tweet.author = authorSingleton
                         }
                         
