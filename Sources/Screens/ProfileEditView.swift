@@ -117,38 +117,41 @@ struct ProfileEditView: View {
                                             NSLog("DEBUG: [Avatar Upload] Starting avatar update process")
                                             
                                             let oldAvatar = await MainActor.run { hproseInstance.appUser.avatar }
-                                            NSLog("DEBUG: [Avatar Upload] Old avatar: \(oldAvatar ?? "nil")")
                                             
-                                            try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
-                                            NSLog("DEBUG: [Avatar Upload] Backend updated successfully")
+                                            // Wait for server to confirm avatar update
+                                            let confirmedAvatar = try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
                                             
                                             await MainActor.run {
-                                                // Clear old avatar cache FIRST
+                                                NSLog("🔄 [Avatar Upload] Old avatar: \(oldAvatar ?? "nil")")
+                                                NSLog("🔄 [Avatar Upload] New confirmed avatar: \(confirmedAvatar)")
+                                                
+                                                // Clear old avatar image cache
                                                 if let old = oldAvatar {
                                                     ImageCacheManager.shared.clearCache(for: old)
-                                                    NSLog("DEBUG: [Avatar Upload] Cleared cache for old avatar: \(old)")
+                                                    NSLog("🗑️ [Avatar Upload] Cleared cache for old avatar: \(old)")
                                                 }
                                                 
-                                                // Update avatar (triggers @Published automatically)
-                                                hproseInstance.appUser.avatar = uploaded.mid
-                                                NSLog("DEBUG: [Avatar Upload] Updated appUser.avatar to: \(hproseInstance.appUser.avatar ?? "nil")")
-                                                
-                                                // Save to cache
-                                                TweetCacheManager.shared.saveUser(hproseInstance.appUser)
-                                                
+                                                // Update appUser with server-confirmed avatar
+                                                hproseInstance.appUser.avatar = confirmedAvatar
+                                                NSLog("✅ [Avatar Upload] Updated appUser.avatar to: \(hproseInstance.appUser.avatar ?? "nil")")
+                                            }
+                                            
+                                            // CRITICAL: Save synchronously to ensure Core Data has new avatar
+                                            NSLog("💾 [Avatar Upload] Saving appUser to Core Data...")
+                                            TweetCacheManager.shared.saveUserAndWait(hproseInstance.appUser)
+                                            NSLog("✅ [Avatar Upload] Saved to Core Data (appUser IS the singleton, no need to update separately)")
+                                            
+                                            await MainActor.run {
                                                 // Force ProfileEditView's Avatar to recreate
                                                 avatarUpdateTrigger += 1
-                                                NSLog("DEBUG: [Avatar Upload] Triggered avatar view update (trigger: \(avatarUpdateTrigger))")
                                                 
-                                                // Broadcast to ALL Avatar components to reload this user's avatar
+                                                // Broadcast notification ONCE to update all Avatar views
                                                 NotificationCenter.default.post(
-                                                    name: .avatarDidChange, 
-                                                    object: nil, 
-                                                    userInfo: ["userId": hproseInstance.appUser.mid, "newAvatar": uploaded.mid]
+                                                    name: .avatarDidChange,
+                                                    object: nil,
+                                                    userInfo: ["userId": hproseInstance.appUser.mid]
                                                 )
-                                                NSLog("DEBUG: [Avatar Upload] Posted avatarDidChange notification to update all views")
-                                                
-                                                NSLog("✅ [Avatar Upload] Complete - avatar changed from \(oldAvatar ?? "nil") to \(uploaded.mid)")
+                                                NSLog("📢 [Avatar Upload] Posted notification to update all avatars")
                                             }
                                             // Notify success
                                             onAvatarUploadSuccess?()

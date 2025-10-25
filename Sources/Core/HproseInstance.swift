@@ -207,6 +207,8 @@ final class HproseInstance: ObservableObject {
         // This ensures safe operation even after cache is completely cleared
         let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
         
+        NSLog("🔍 [initializeAppUser] Loaded cached user: \(userId), avatar: \(cachedUser.avatar ?? "nil")")
+        
         await MainActor.run {
             // CRITICAL: Update the singleton instance instead of replacing _appUser
             // This ensures all references to this user get the cached data
@@ -217,6 +219,7 @@ final class HproseInstance: ObservableObject {
             // Set following list
             _appUser.followingList = Gadget.getAlphaIds()
             
+            NSLog("✅ [initializeAppUser] AppUser singleton avatar: \(appUser.avatar ?? "nil")")
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
             
             // Mark initialization as complete so error messages can be shown
@@ -4609,8 +4612,8 @@ final class HproseInstance: ObservableObject {
     }
     
     // MARK: - User Avatar
-    /// Sets the user's avatar on the server
-    func setUserAvatar(user: User, avatar: MimeiId) async throws {
+    /// Sets the user's avatar on the server and returns confirmed avatar
+    func setUserAvatar(user: User, avatar: MimeiId) async throws -> String {
         let entry = "set_user_avatar"
         let params: [String: Any] = [
             "aid": appId,
@@ -4618,7 +4621,17 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "avatar": avatar
         ]
-        _ = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+        
+        guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
+        }
+        
+        // Server returns avatar MimeiId directly as a String
+        if let confirmedAvatar = response as? String {
+            return confirmedAvatar
+        }
+        
+        throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected server response"])
     }
     
     func getProviderIP(_ mid: String) async throws -> String? {

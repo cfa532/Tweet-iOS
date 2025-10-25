@@ -661,7 +661,10 @@ struct SimpleVideoPlayer: View {
             
             // Recreate from scratch
             setupPlayer()
-            print("DEBUG: [VIDEO RECOVERY] MediaCell player recreated after screen lock")
+            
+            // CRITICAL: Force view layer to recreate for on-screen videos
+            representableId += 1
+            print("DEBUG: [VIDEO RECOVERY] MediaCell player recreated, representableId: \(representableId)")
             return
         }
         
@@ -729,6 +732,10 @@ struct SimpleVideoPlayer: View {
             playbackState = .notStarted
             
             setupPlayer()
+            
+            // CRITICAL: Force view layer to recreate for on-screen videos
+            representableId += 1
+            print("DEBUG: [VIDEO INFRA RESTART] Incremented representableId to \(representableId) to refresh view layer")
             return
         }
         
