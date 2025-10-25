@@ -40,6 +40,8 @@ struct ProfileEditView: View {
     @State private var hasUnsavedChanges = false
     @State private var initialValues: [String: String] = [:]
     @State private var avatarUpdateTrigger = 0 // Force avatar view update
+    @State private var showImageCropper = false
+    @State private var selectedImage: UIImage? = nil
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
@@ -55,320 +57,420 @@ struct ProfileEditView: View {
         self.onProfileUpdateFailure = onProfileUpdateFailure
     }
 
-    var body: some View {
-        NavigationView {
-            ScrollView {
-                VStack(spacing: 20) {
-                    // Avatar section
-                    VStack {
-                        ZStack(alignment: .bottomTrailing) {
-                            Avatar(user: hproseInstance.appUser, size: 80)
-                                .id("profile_avatar_\(avatarUpdateTrigger)")
-                                .onTapGesture { showImagePicker = true }
-                                .overlay(
-                                    Group {
-                                        if isUploadingAvatar {
-                                            ZStack {
-                                                Color.black.opacity(0.6)
-                                                    .clipShape(Circle())
-                                                
-                                                VStack(spacing: 8) {
-                                                    ProgressView()
-                                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                                        .scaleEffect(1.2)
-                                                    
-                                                    Text(NSLocalizedString("Uploading...", comment: "Upload progress message"))
-                                                        .font(.caption)
-                                                        .foregroundColor(.white)
-                                                }
-                                            }
-                                            .frame(width: 80, height: 80)
-                                        }
-                                    }
-                                )
-                            Image(systemName: "camera.fill")
-                                .foregroundColor(.white)
-                                .background(Circle().fill(Color.blue).frame(width: 28, height: 28))
-                                .offset(x: -8, y: -8)
-                        }
-                        if let avatarUploadError = avatarUploadError {
-                            Text(avatarUploadError)
-                                .foregroundColor(.red)
-                                .font(.caption)
-                        }
-                    }
-                    .padding(.bottom, 8)
-                    .photosPicker(isPresented: $showImagePicker, selection: $selectedPhoto, matching: .images)
-                    .onChange(of: selectedPhoto) { _, newItem in
-                        if let item = newItem {
-                            Task {
-                                isUploadingAvatar = true
-                                avatarUploadError = nil
-                                onAvatarUploadStateChange?(true) // Notify parent about upload start
-                                do {
-                                    if let data = try await item.loadTransferable(type: Data.self) {
-                                        let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                                        let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
-                                        let (uploaded, _) = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName, referenceId: hproseInstance.appUser.mid)
-                                        
-                                        NSLog("DEBUG: [Avatar Upload] uploadToIPFS returned - uploaded: \(uploaded?.mid ?? "NIL"), isEmpty: \(uploaded?.mid.isEmpty ?? true)")
-                                        
-                                        if let uploaded = uploaded, !uploaded.mid.isEmpty {
-                                            NSLog("DEBUG: [Avatar Upload] Starting avatar update process")
-                                            
-                                            let oldAvatar = await MainActor.run { hproseInstance.appUser.avatar }
-                                            
-                                            // Wait for server to confirm avatar update
-                                            let confirmedAvatar = try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
-                                            
-                                            await MainActor.run {
-                                                NSLog("🔄 [Avatar Upload] Old avatar: \(oldAvatar ?? "nil")")
-                                                NSLog("🔄 [Avatar Upload] New confirmed avatar: \(confirmedAvatar)")
-                                                
-                                                // Clear old avatar image cache
-                                                if let old = oldAvatar {
-                                                    ImageCacheManager.shared.clearCache(for: old)
-                                                    NSLog("🗑️ [Avatar Upload] Cleared cache for old avatar: \(old)")
-                                                }
-                                                
-                                                // Update appUser with server-confirmed avatar
-                                                hproseInstance.appUser.avatar = confirmedAvatar
-                                                NSLog("✅ [Avatar Upload] Updated appUser.avatar to: \(hproseInstance.appUser.avatar ?? "nil")")
-                                            }
-                                            
-                                            // CRITICAL: Save synchronously to ensure Core Data has new avatar
-                                            NSLog("💾 [Avatar Upload] Saving appUser to Core Data...")
-                                            TweetCacheManager.shared.saveUserAndWait(hproseInstance.appUser)
-                                            NSLog("✅ [Avatar Upload] Saved to Core Data (appUser IS the singleton, no need to update separately)")
-                                            
-                                            await MainActor.run {
-                                                // Force ProfileEditView's Avatar to recreate
-                                                avatarUpdateTrigger += 1
-                                                
-                                                // Broadcast notification ONCE to update all Avatar views
-                                                NotificationCenter.default.post(
-                                                    name: .avatarDidChange,
-                                                    object: nil,
-                                                    userInfo: ["userId": hproseInstance.appUser.mid]
-                                                )
-                                                NSLog("📢 [Avatar Upload] Posted notification to update all avatars")
-                                            }
-                                            // Notify success
-                                            onAvatarUploadSuccess?()
-                                        } else {
-                                            NSLog("⚠️ [Avatar Upload] Upload check failed - uploaded: \(uploaded != nil), mid: \(uploaded?.mid ?? "NIL")")
-                                            let errorMessage = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
-                                            avatarUploadError = errorMessage
-                                            onAvatarUploadFailure?(errorMessage)
-                                        }
-                                    } else {
-                                        NSLog("⚠️ [Avatar Upload] Failed to load image data from picker")
-                                        let errorMessage = NSLocalizedString("Failed to load image data.", comment: "Image data loading error")
-                                        avatarUploadError = errorMessage
-                                        onAvatarUploadFailure?(errorMessage)
-                                    }
-                                } catch {
-                                    avatarUploadError = error.localizedDescription
-                                    onAvatarUploadFailure?(error.localizedDescription)
-                                }
-                                isUploadingAvatar = false
-                                onAvatarUploadStateChange?(false) // Notify parent about upload end
-                            }
-                        }
-                    }
-
-                    // Username display (read-only)
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(LocalizedStringKey("Username"))
-                                .font(.caption)
-                                .foregroundColor(.themeSecondaryText)
-                            Spacer()
-                        }
-                        Text(username)
-                            .padding()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(.systemGray6))
-                            .cornerRadius(8)
-                            .foregroundColor(.secondary)
-                    }
-
-                    // Password fields (optional for profile update)
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(LocalizedStringKey("New Password (optional)"))
-                                .font(.caption)
-                                .foregroundColor(.themeSecondaryText)
-                            Spacer()
-                        }
-                        SecureField(LocalizedStringKey("New Password"), text: $password)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .focused($focusedField, equals: .password)
-                            .contentShape(Rectangle())
-                            .onTapGesture { focusedField = .password }
-                    }
-
-                    if !password.isEmpty {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(LocalizedStringKey("Confirm New Password"))
-                                .font(.caption)
-                                .foregroundColor(.themeSecondaryText)
-                            SecureField(LocalizedStringKey("Confirm New Password"), text: $confirmPassword)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .focused($focusedField, equals: .confirmPassword)
-                                .contentShape(Rectangle())
-                                .onTapGesture { focusedField = .confirmPassword }
-                        }
-                    }
-
-                    // Editable fields
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(LocalizedStringKey("Alias"))
-                            .font(.caption)
-                            .foregroundColor(.themeSecondaryText)
-                        TextField(LocalizedStringKey("Alias"), text: $alias)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .focused($focusedField, equals: .alias)
-                            .contentShape(Rectangle())
-                            .onTapGesture { focusedField = .alias }
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(LocalizedStringKey("Profile"))
-                            .font(.caption)
-                            .foregroundColor(.themeSecondaryText)
-                        TextEditor(text: $profile)
-                            .frame(minHeight: 60, maxHeight: 120)
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.themeBorder.opacity(0.3)))
-                            .focused($focusedField, equals: .profile)
-                            .onTapGesture { focusedField = .profile }
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(LocalizedStringKey("Host ID (optional)"))
-                            .font(.caption)
-                            .foregroundColor(.themeSecondaryText)
-                        TextField("", text: $hostId)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .focused($focusedField, equals: .hostId)
-                            .contentShape(Rectangle())
-                            .onTapGesture { focusedField = .hostId }
-                            .onChange(of: hostId) { _, newValue in
-                                if newValue.count > Constants.MIMEI_ID_LENGTH {
-                                    hostId = String(newValue.prefix(Constants.MIMEI_ID_LENGTH))
-                                }
-                            }
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(LocalizedStringKey("Cloud Drive Port"))
-                            .font(.caption)
-                            .foregroundColor(.themeSecondaryText)
-                        TextField(LocalizedStringKey("Cloud Drive Port"), text: $cloudDrivePort)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .keyboardType(.numberPad)
-                            .focused($focusedField, equals: .cloudDrivePort)
-                            .contentShape(Rectangle())
-                            .onTapGesture { focusedField = .cloudDrivePort }
-                            .onChange(of: cloudDrivePort) { _, newValue in
-                                // Only allow numeric input
-                                let filtered = newValue.filter { $0.isNumber }
-                                if filtered != newValue {
-                                    cloudDrivePort = filtered
-                                }
-                            }
-                    }
-
-                    if let errorMessage = errorMessage {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                            .font(.caption)
-                    }
-
-                    DebounceButton(
-                        cooldownDuration: 1.0,
-                        enableVibration: false
-                    ) {
-                        handleSubmit()
-                    } label: {
-                        HStack {
-                            if isSubmitting {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
-                            }
-                            Text(isSubmitting ? NSLocalizedString("Saving...", comment: "Save progress message") : NSLocalizedString("Save", comment: "Save button"))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background((isSubmitting || isUploadingAvatar) ? Color.themeAccent.opacity(0.6) : Color.themeAccent)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                    }
-                    .disabled(isSubmitting || isUploadingAvatar)
-                }
-                .padding()
-            }
-            .navigationBarItems(trailing: Button(NSLocalizedString("Close", comment: "Close button")) { 
-                if hasUnsavedChanges {
-                    showExitConfirmation = true
-                } else {
-                    dismiss()
-                }
-            })
-            .overlay(
-                // Toast message overlay
-                VStack {
-                    Spacer()
-                    if showToast {
-                        ToastView(message: toastMessage, type: toastType)
-                            .padding(.bottom, 40)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                }
-                .animation(.easeInOut(duration: 0.3), value: showToast)
-            )
-            .onAppear {
-                let appUser = hproseInstance.appUser
-                username = appUser.username ?? ""
-                alias = appUser.name ?? ""
-                profile = appUser.profile ?? ""
-                hostId = appUser.hostIds?.first ?? ""
-                avatarId = appUser.avatar
-                cloudDrivePort = (appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort.description
+    private var avatarSection: some View {
+        VStack {
+            ZStack(alignment: .bottomTrailing) {
+                Avatar(user: hproseInstance.appUser, size: 80)
+                    .id("profile_avatar_\(avatarUpdateTrigger)")
+                    .onTapGesture { showImagePicker = true }
+                    .overlay(uploadingOverlay)
                 
-                // Store initial values for change detection
-                initialValues = [
-                    "username": username,
-                    "alias": alias,
-                    "profile": profile,
-                    "hostId": hostId,
-                    "cloudDrivePort": cloudDrivePort
-                ]
+                Image(systemName: "camera.fill")
+                    .foregroundColor(.white)
+                    .background(Circle().fill(Color.blue).frame(width: 28, height: 28))
+                    .offset(x: -8, y: -8)
             }
-            .onChange(of: password) { _, _ in checkForChanges() }
-            .onChange(of: confirmPassword) { _, _ in checkForChanges() }
-            .onChange(of: alias) { _, _ in checkForChanges() }
-            .onChange(of: profile) { _, _ in checkForChanges() }
-                          .onChange(of: hostId) { _, _ in checkForChanges() }
-              .onChange(of: cloudDrivePort) { _, _ in checkForChanges() }
-            .confirmationDialog(
-                NSLocalizedString("Unsaved Changes", comment: "Confirmation dialog title"),
-                isPresented: $showExitConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button(NSLocalizedString("Discard Changes", comment: "Discard changes button"), role: .destructive) {
-                    dismiss()
+            
+            if let avatarUploadError = avatarUploadError {
+                Text(avatarUploadError)
+                    .foregroundColor(.red)
+                    .font(.caption)
+            }
+        }
+        .padding(.bottom, 8)
+        .photosPicker(isPresented: $showImagePicker, selection: $selectedPhoto, matching: .images)
+        .onChange(of: selectedPhoto) { _, newItem in
+            if let item = newItem {
+                NSLog("📸 [Avatar] Photo selected, loading image...")
+                Task {
+                    do {
+                        if let data = try await item.loadTransferable(type: Data.self),
+                           let image = UIImage(data: data) {
+                            NSLog("✅ [Avatar] Image loaded successfully, size: \(image.size)")
+                            await MainActor.run {
+                                selectedImage = image
+                                showImageCropper = true
+                                NSLog("🎬 [Avatar] showImageCropper set to true")
+                            }
+                        } else {
+                            NSLog("⚠️ [Avatar] Failed to load image data or create UIImage")
+                        }
+                    } catch {
+                        NSLog("⚠️ [Avatar Upload] Failed to load image: \(error.localizedDescription)")
+                        avatarUploadError = NSLocalizedString("Failed to load image.", comment: "Image loading error")
+                    }
                 }
-                Button(NSLocalizedString("Continue Editing", comment: "Continue editing button"), role: .cancel) {
-                    // Do nothing, just dismiss the dialog
-                }
-            } message: {
-                Text(NSLocalizedString("You have unsaved changes. Are you sure you want to exit without saving?", comment: "Confirmation dialog message"))
             }
         }
     }
+    
+    @ViewBuilder
+    private var uploadingOverlay: some View {
+        if isUploadingAvatar {
+            ZStack {
+                Color.black.opacity(0.6)
+                    .clipShape(Circle())
+                
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.2)
+                    
+                    Text(NSLocalizedString("Uploading...", comment: "Upload progress message"))
+                        .font(.caption)
+                        .foregroundColor(.white)
+                }
+            }
+            .frame(width: 80, height: 80)
+        }
+    }
+    
+    private var formFields: some View {
+        VStack(spacing: 20) {
+            avatarSection
 
+            // Username display (read-only)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(LocalizedStringKey("Username"))
+                        .font(.caption)
+                        .foregroundColor(.themeSecondaryText)
+                    Spacer()
+                }
+                Text(username)
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                    .foregroundColor(.secondary)
+            }
+
+            // Password fields (optional for profile update)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(LocalizedStringKey("New Password (optional)"))
+                        .font(.caption)
+                        .foregroundColor(.themeSecondaryText)
+                    Spacer()
+                }
+                SecureField(LocalizedStringKey("New Password"), text: $password)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .focused($focusedField, equals: .password)
+                    .contentShape(Rectangle())
+                    .onTapGesture { focusedField = .password }
+            }
+
+            if !password.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(LocalizedStringKey("Confirm New Password"))
+                        .font(.caption)
+                        .foregroundColor(.themeSecondaryText)
+                    SecureField(LocalizedStringKey("Confirm New Password"), text: $confirmPassword)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .focused($focusedField, equals: .confirmPassword)
+                        .contentShape(Rectangle())
+                        .onTapGesture { focusedField = .confirmPassword }
+                }
+            }
+
+            // Editable fields
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LocalizedStringKey("Alias"))
+                    .font(.caption)
+                    .foregroundColor(.themeSecondaryText)
+                TextField(LocalizedStringKey("Alias"), text: $alias)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .focused($focusedField, equals: .alias)
+                    .contentShape(Rectangle())
+                    .onTapGesture { focusedField = .alias }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LocalizedStringKey("Profile"))
+                    .font(.caption)
+                    .foregroundColor(.themeSecondaryText)
+                TextEditor(text: $profile)
+                    .frame(minHeight: 60, maxHeight: 120)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.themeBorder.opacity(0.3)))
+                    .focused($focusedField, equals: .profile)
+                    .onTapGesture { focusedField = .profile }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LocalizedStringKey("Host ID (optional)"))
+                    .font(.caption)
+                    .foregroundColor(.themeSecondaryText)
+                TextField("", text: $hostId)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .focused($focusedField, equals: .hostId)
+                    .contentShape(Rectangle())
+                    .onTapGesture { focusedField = .hostId }
+                    .onChange(of: hostId) { _, newValue in
+                        if newValue.count > Constants.MIMEI_ID_LENGTH {
+                            hostId = String(newValue.prefix(Constants.MIMEI_ID_LENGTH))
+                        }
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LocalizedStringKey("Cloud Drive Port"))
+                    .font(.caption)
+                    .foregroundColor(.themeSecondaryText)
+                TextField(LocalizedStringKey("Cloud Drive Port"), text: $cloudDrivePort)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .keyboardType(.numberPad)
+                    .focused($focusedField, equals: .cloudDrivePort)
+                    .contentShape(Rectangle())
+                    .onTapGesture { focusedField = .cloudDrivePort }
+                    .onChange(of: cloudDrivePort) { _, newValue in
+                        // Only allow numeric input
+                        let filtered = newValue.filter { $0.isNumber }
+                        if filtered != newValue {
+                            cloudDrivePort = filtered
+                        }
+                    }
+            }
+
+            if let errorMessage = errorMessage {
+                Text(errorMessage)
+                    .foregroundColor(.red)
+                    .font(.caption)
+            }
+
+            DebounceButton(
+                cooldownDuration: 1.0,
+                enableVibration: false
+            ) {
+                handleSubmit()
+            } label: {
+                HStack {
+                    if isSubmitting {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.8)
+                    }
+                    Text(isSubmitting ? NSLocalizedString("Saving...", comment: "Save progress message") : NSLocalizedString("Save", comment: "Save button"))
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background((isSubmitting || isUploadingAvatar) ? Color.themeAccent.opacity(0.6) : Color.themeAccent)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+            }
+            .disabled(isSubmitting || isUploadingAvatar)
+        }
+        .padding()
+    }
+    
+    private var mainContent: some View {
+        ScrollView {
+            formFields
+        }
+        .navigationBarItems(trailing: closeButton)
+        .overlay(toastOverlay)
+        .onAppear(perform: loadInitialData)
+        .onChange(of: password) { _, _ in checkForChanges() }
+        .onChange(of: confirmPassword) { _, _ in checkForChanges() }
+        .onChange(of: alias) { _, _ in checkForChanges() }
+        .onChange(of: profile) { _, _ in checkForChanges() }
+        .onChange(of: hostId) { _, _ in checkForChanges() }
+        .onChange(of: cloudDrivePort) { _, _ in checkForChanges() }
+        .confirmationDialog(
+            NSLocalizedString("Unsaved Changes", comment: "Confirmation dialog title"),
+            isPresented: $showExitConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(NSLocalizedString("Discard Changes", comment: "Discard changes button"), role: .destructive) {
+                dismiss()
+            }
+            Button(NSLocalizedString("Continue Editing", comment: "Continue editing button"), role: .cancel) {}
+        } message: {
+            Text(NSLocalizedString("You have unsaved changes. Are you sure you want to exit without saving?", comment: "Confirmation dialog message"))
+        }
+    }
+    
+    private var closeButton: some View {
+        Button(NSLocalizedString("Close", comment: "Close button")) {
+            if hasUnsavedChanges {
+                showExitConfirmation = true
+            } else {
+                dismiss()
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var toastOverlay: some View {
+        VStack {
+            Spacer()
+            if showToast {
+                ToastView(message: toastMessage, type: toastType)
+                    .padding(.bottom, 40)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: showToast)
+    }
+    
+    @ViewBuilder
+    private var cropperView: some View {
+        if let image = selectedImage {
+            CircularImageCropperView(
+                image: image,
+                onCrop: { croppedImage in
+                    NSLog("✅ [Avatar] User tapped Done, cropping image")
+                    showImageCropper = false
+                    uploadCroppedImage(croppedImage)
+                },
+                onCancel: {
+                    NSLog("❌ [Avatar] User cancelled crop")
+                    showImageCropper = false
+                    selectedImage = nil
+                    selectedPhoto = nil
+                }
+            )
+            .onAppear {
+                NSLog("🎨 [Avatar] Presenting CircularImageCropperView")
+            }
+        } else {
+            Color.clear
+                .onAppear {
+                    NSLog("⚠️ [Avatar] fullScreenCover triggered but selectedImage is nil")
+                    showImageCropper = false
+                }
+        }
+    }
+    
+    var body: some View {
+        NavigationView {
+            mainContent
+        }
+        .fullScreenCover(isPresented: $showImageCropper) {
+            cropperView
+        }
+        .onChange(of: showImageCropper) { _, newValue in
+            NSLog("🔄 [Avatar] showImageCropper changed to: \(newValue)")
+        }
+    }
+    
+    private func loadInitialData() {
+        let appUser = hproseInstance.appUser
+        username = appUser.username ?? ""
+        alias = appUser.name ?? ""
+        profile = appUser.profile ?? ""
+        hostId = appUser.hostIds?.first ?? ""
+        avatarId = appUser.avatar
+        cloudDrivePort = (appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort.description
+        
+        // Store initial values for change detection
+        initialValues = [
+            "username": username,
+            "alias": alias,
+            "profile": profile,
+            "hostId": hostId,
+            "cloudDrivePort": cloudDrivePort
+        ]
+    }
+
+    private func uploadCroppedImage(_ image: UIImage) {
+        Task {
+            isUploadingAvatar = true
+            avatarUploadError = nil
+            onAvatarUploadStateChange?(true) // Notify parent about upload start
+            
+            do {
+                // Convert UIImage to JPEG data
+                guard let data = image.jpegData(compressionQuality: 0.9) else {
+                    throw NSError(domain: "ProfileEditView", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert image to data"])
+                }
+                
+                let typeIdentifier = "public.jpeg"
+                let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
+                let (uploaded, _) = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName, referenceId: hproseInstance.appUser.mid)
+                
+                NSLog("DEBUG: [Avatar Upload] uploadToIPFS returned - uploaded: \(uploaded?.mid ?? "NIL"), isEmpty: \(uploaded?.mid.isEmpty ?? true)")
+                
+                if let uploaded = uploaded, !uploaded.mid.isEmpty {
+                    NSLog("DEBUG: [Avatar Upload] Starting avatar update process")
+                    
+                    let oldAvatar = await MainActor.run { hproseInstance.appUser.avatar }
+                    
+                    // Wait for server to confirm avatar update
+                    let confirmedAvatar = try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
+                    
+                    await MainActor.run {
+                        NSLog("🔄 [Avatar Upload] Old avatar: \(oldAvatar ?? "nil")")
+                        NSLog("🔄 [Avatar Upload] New confirmed avatar: \(confirmedAvatar)")
+                        
+                        // Clear old avatar image cache
+                        if let old = oldAvatar {
+                            ImageCacheManager.shared.clearCache(for: old)
+                            NSLog("🗑️ [Avatar Upload] Cleared cache for old avatar: \(old)")
+                        }
+                        
+                        // Update appUser with server-confirmed avatar
+                        hproseInstance.appUser.avatar = confirmedAvatar
+                        NSLog("✅ [Avatar Upload] Updated appUser.avatar to: \(hproseInstance.appUser.avatar ?? "nil")")
+                    }
+                    
+                    // CRITICAL: Save synchronously to ensure Core Data has new avatar
+                    NSLog("💾 [Avatar Upload] Saving appUser to Core Data...")
+                    TweetCacheManager.shared.saveUserAndWait(hproseInstance.appUser)
+                    NSLog("✅ [Avatar Upload] Saved to Core Data (appUser IS the singleton, no need to update separately)")
+                    
+                    await MainActor.run {
+                        NSLog("🔵 [Avatar Upload] MainActor: Stopping upload state...")
+                        // Stop uploading state FIRST
+                        isUploadingAvatar = false
+                        NSLog("🔵 [Avatar Upload] isUploadingAvatar set to: \(isUploadingAvatar)")
+                        onAvatarUploadStateChange?(false)
+                        
+                        // Force ProfileEditView's Avatar to recreate
+                        avatarUpdateTrigger += 1
+                        NSLog("🔵 [Avatar Upload] avatarUpdateTrigger incremented to: \(avatarUpdateTrigger)")
+                        
+                        // Broadcast notification ONCE to update all Avatar views
+                        NotificationCenter.default.post(
+                            name: .avatarDidChange,
+                            object: nil,
+                            userInfo: ["userId": hproseInstance.appUser.mid]
+                        )
+                        NSLog("📢 [Avatar Upload] Posted notification to update all avatars")
+                        
+                        // Clean up
+                        selectedImage = nil
+                        selectedPhoto = nil
+                        NSLog("🔵 [Avatar Upload] Cleanup complete, upload state should be cleared")
+                    }
+                    // Notify success
+                    onAvatarUploadSuccess?()
+                } else {
+                    NSLog("⚠️ [Avatar Upload] Upload check failed - uploaded: \(uploaded != nil), mid: \(uploaded?.mid ?? "NIL")")
+                    let errorMessage = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
+                    await MainActor.run {
+                        avatarUploadError = errorMessage
+                        isUploadingAvatar = false
+                        onAvatarUploadStateChange?(false)
+                        selectedImage = nil
+                        selectedPhoto = nil
+                    }
+                    onAvatarUploadFailure?(errorMessage)
+                }
+            } catch {
+                let errorMessage = error.localizedDescription
+                NSLog("⚠️ [Avatar Upload] Error: \(errorMessage)")
+                await MainActor.run {
+                    avatarUploadError = errorMessage
+                    isUploadingAvatar = false
+                    onAvatarUploadStateChange?(false)
+                    selectedImage = nil
+                    selectedPhoto = nil
+                }
+                onAvatarUploadFailure?(errorMessage)
+            }
+        }
+    }
+    
     private func handleSubmit() {
         // Prevent repeated submission
         guard !isSubmitting else { return }
