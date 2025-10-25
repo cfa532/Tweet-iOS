@@ -39,6 +39,7 @@ struct ProfileEditView: View {
     @State private var showExitConfirmation = false
     @State private var hasUnsavedChanges = false
     @State private var initialValues: [String: String] = [:]
+    @State private var avatarUpdateTrigger = 0 // Force avatar view update
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
@@ -62,6 +63,7 @@ struct ProfileEditView: View {
                     VStack {
                         ZStack(alignment: .bottomTrailing) {
                             Avatar(user: hproseInstance.appUser, size: 80)
+                                .id("profile_avatar_\(avatarUpdateTrigger)")
                                 .onTapGesture { showImagePicker = true }
                                 .overlay(
                                     Group {
@@ -108,21 +110,56 @@ struct ProfileEditView: View {
                                         let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
                                         let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
                                         let (uploaded, _) = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName, referenceId: hproseInstance.appUser.mid)
+                                        
+                                        NSLog("DEBUG: [Avatar Upload] uploadToIPFS returned - uploaded: \(uploaded?.mid ?? "NIL"), isEmpty: \(uploaded?.mid.isEmpty ?? true)")
+                                        
                                         if let uploaded = uploaded, !uploaded.mid.isEmpty {
+                                            NSLog("DEBUG: [Avatar Upload] Starting avatar update process")
+                                            
+                                            let oldAvatar = await MainActor.run { hproseInstance.appUser.avatar }
+                                            NSLog("DEBUG: [Avatar Upload] Old avatar: \(oldAvatar ?? "nil")")
+                                            
                                             try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
+                                            NSLog("DEBUG: [Avatar Upload] Backend updated successfully")
+                                            
                                             await MainActor.run {
+                                                // Clear old avatar cache FIRST
+                                                if let old = oldAvatar {
+                                                    ImageCacheManager.shared.clearCache(for: old)
+                                                    NSLog("DEBUG: [Avatar Upload] Cleared cache for old avatar: \(old)")
+                                                }
+                                                
+                                                // Update avatar (triggers @Published automatically)
                                                 hproseInstance.appUser.avatar = uploaded.mid
-                                                // Save updated user to cache to ensure fetchUser returns fresh data
+                                                NSLog("DEBUG: [Avatar Upload] Updated appUser.avatar to: \(hproseInstance.appUser.avatar ?? "nil")")
+                                                
+                                                // Save to cache
                                                 TweetCacheManager.shared.saveUser(hproseInstance.appUser)
+                                                
+                                                // Force ProfileEditView's Avatar to recreate
+                                                avatarUpdateTrigger += 1
+                                                NSLog("DEBUG: [Avatar Upload] Triggered avatar view update (trigger: \(avatarUpdateTrigger))")
+                                                
+                                                // Broadcast to ALL Avatar components to reload this user's avatar
+                                                NotificationCenter.default.post(
+                                                    name: .avatarDidChange, 
+                                                    object: nil, 
+                                                    userInfo: ["userId": hproseInstance.appUser.mid, "newAvatar": uploaded.mid]
+                                                )
+                                                NSLog("DEBUG: [Avatar Upload] Posted avatarDidChange notification to update all views")
+                                                
+                                                NSLog("✅ [Avatar Upload] Complete - avatar changed from \(oldAvatar ?? "nil") to \(uploaded.mid)")
                                             }
                                             // Notify success
                                             onAvatarUploadSuccess?()
                                         } else {
+                                            NSLog("⚠️ [Avatar Upload] Upload check failed - uploaded: \(uploaded != nil), mid: \(uploaded?.mid ?? "NIL")")
                                             let errorMessage = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
                                             avatarUploadError = errorMessage
                                             onAvatarUploadFailure?(errorMessage)
                                         }
                                     } else {
+                                        NSLog("⚠️ [Avatar Upload] Failed to load image data from picker")
                                         let errorMessage = NSLocalizedString("Failed to load image data.", comment: "Image data loading error")
                                         avatarUploadError = errorMessage
                                         onAvatarUploadFailure?(errorMessage)

@@ -55,18 +55,41 @@ struct Avatar: View {
                         loadAvatar(from: avatarUrl)
                     }
                 }
-                .onChange(of: user.avatarUrl) { _, _ in
+                .onChange(of: user.avatarUrl) { oldUrl, newUrl in
                     // Reset and reload when avatar URL changes
+                    NSLog("DEBUG: [Avatar] avatarUrl changed from \(oldUrl ?? "nil") to \(newUrl ?? "nil") for user \(user.mid)")
                     cachedImage = nil
                     loadFailed = false
                     if let avatarUrl = user.avatarUrl {
                         loadAvatar(from: avatarUrl)
                     }
                 }
-                .onChange(of: user.avatar) { _, newAvatar in
-                    // CRITICAL: Also observe avatar changes directly
-                    // This ensures views update when user.avatar loads
-                    if newAvatar != nil && cachedImage == nil && !isLoading {
+                .onChange(of: user.avatar) { oldAvatar, newAvatar in
+                    // CRITICAL: Reload when avatar changes
+                    NSLog("DEBUG: [Avatar] avatar changed from \(oldAvatar ?? "nil") to \(newAvatar ?? "nil") for user \(user.mid)")
+                    
+                    // ALWAYS clear and reload when avatar changes
+                    cachedImage = nil
+                    loadFailed = false
+                    isLoading = false
+                    
+                    if let avatarUrl = user.avatarUrl {
+                        loadAvatar(from: avatarUrl)
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .avatarDidChange)) { notification in
+                    // Reload when this user's avatar changes (from any screen)
+                    if let userId = notification.userInfo?["userId"] as? String, userId == user.mid {
+                        NSLog("DEBUG: [Avatar] Received avatarDidChange notification for user \(user.mid), isLoading: \(isLoading)")
+                        
+                        // Only reload if not already loading (prevent infinite loop)
+                        guard !isLoading else {
+                            NSLog("DEBUG: [Avatar] Already loading, skipping notification reload")
+                            return
+                        }
+                        
+                        cachedImage = nil
+                        loadFailed = false
                         if let avatarUrl = user.avatarUrl {
                             loadAvatar(from: avatarUrl)
                         }
@@ -85,11 +108,17 @@ struct Avatar: View {
     }
     
     private func loadAvatar(from urlString: String) {
-        guard !isLoading else { return }
+        NSLog("DEBUG: [Avatar.loadAvatar] Called for user \(user.mid), avatar: \(user.avatar ?? "nil")")
+        
+        guard !isLoading else { 
+            NSLog("DEBUG: [Avatar.loadAvatar] Already loading, skipping")
+            return 
+        }
         
         // IMPORTANT: Use user's avatar MimeiId as the cache key (stable identifier)
         // NOT the URL which can change when baseUrl changes
         let cacheKey = user.avatar ?? (URL(string: urlString)?.lastPathComponent ?? urlString)
+        NSLog("DEBUG: [Avatar.loadAvatar] Using cache key: \(cacheKey)")
         
         // Create a MimeiFileType with the user's avatar MimeiId so caching works correctly
         let avatarAttachment = MimeiFileType(
@@ -101,9 +130,12 @@ struct Avatar: View {
         
         // Check cache first
         if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
+            NSLog("DEBUG: [Avatar.loadAvatar] Found in cache: \(cacheKey)")
             cachedImage = cached
             return
         }
+        
+        NSLog("DEBUG: [Avatar.loadAvatar] Not in cache, loading from network: \(cacheKey)")
         
         // Load from network using regular image loading (no special avatar treatment)
         isLoading = true

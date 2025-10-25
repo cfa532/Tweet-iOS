@@ -2,6 +2,8 @@ import Foundation
 
 extension Notification.Name {
     // MARK: - User Related
+    /// Posted when a user's avatar changes
+    static let avatarDidChange = Notification.Name("avatarDidChange")
     /// Posted when a user successfully logs in
     static let userDidLogin = Notification.Name("UserDidLogin")
     static let userDidLogout = Notification.Name("UserDidLogout")
