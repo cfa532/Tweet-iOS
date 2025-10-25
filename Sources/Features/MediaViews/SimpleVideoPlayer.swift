@@ -647,7 +647,6 @@ struct SimpleVideoPlayer: View {
             // SCREEN LOCK RECOVERY FOR VISIBLE VIDEOS: Force complete player recreation
             print("DEBUG: [VIDEO RECOVERY] Screen lock for VISIBLE video - forcing complete refresh")
             
-            let wasPlaying = player?.rate ?? 0 > 0
             let currentTime = player?.currentTime() ?? .zero
             
             // Clean up observer
@@ -668,12 +667,27 @@ struct SimpleVideoPlayer: View {
             // Recreate completely fresh player (not from cache)
             setupPlayer()
             
-            // Restore position and resume
-            if let player = player {
-                player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                    if finished && wasPlaying {
-                        player.play()
+            // Wait for player to be ready, then restore position and autoplay
+            Task { @MainActor in
+                // Poll for player to be ready (setupPlayer is async internally)
+                var attempts = 0
+                while player == nil && !loadingState.hasFailed && attempts < 50 {
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                    attempts += 1
+                }
+                
+                // Restore position and autoplay for visible video
+                if let player = player {
+                    print("DEBUG: [VIDEO RECOVERY] Player ready, restoring position and autoplaying")
+                    player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                        if finished {
+                            // Always autoplay visible videos after aggressive recovery
+                            player.play()
+                            print("DEBUG: [VIDEO RECOVERY] Autoplaying visible video after recovery")
+                        }
                     }
+                } else {
+                    print("⚠️ [VIDEO RECOVERY] Player failed to initialize after aggressive recovery")
                 }
             }
             
