@@ -28,8 +28,6 @@ struct ProfileEditView: View {
     @State private var errorMessage: String?
     @FocusState private var focusedField: Field?
     @State private var avatarId: String? = nil
-    @State private var showImagePicker = false
-    @State private var selectedPhoto: PhotosPickerItem? = nil
     @State private var isUploadingAvatar = false
     @State private var avatarUploadError: String? = nil
     @State private var isSubmitting = false
@@ -41,7 +39,6 @@ struct ProfileEditView: View {
     @State private var initialValues: [String: String] = [:]
     @State private var avatarUpdateTrigger = 0 // Force avatar view update
     @State private var showImageCropper = false
-    @State private var selectedImage: UIImage? = nil
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
@@ -62,7 +59,7 @@ struct ProfileEditView: View {
             ZStack(alignment: .bottomTrailing) {
                 Avatar(user: hproseInstance.appUser, size: 80)
                     .id("profile_avatar_\(avatarUpdateTrigger)")
-                    .onTapGesture { showImagePicker = true }
+                    .onTapGesture { showImageCropper = true }
                     .overlay(uploadingOverlay)
                 
                 Image(systemName: "camera.fill")
@@ -78,30 +75,6 @@ struct ProfileEditView: View {
             }
         }
         .padding(.bottom, 8)
-        .photosPicker(isPresented: $showImagePicker, selection: $selectedPhoto, matching: .images)
-        .onChange(of: selectedPhoto) { _, newItem in
-            if let item = newItem {
-                NSLog("📸 [Avatar] Photo selected, loading image...")
-                Task {
-                    do {
-                        if let data = try await item.loadTransferable(type: Data.self),
-                           let image = UIImage(data: data) {
-                            NSLog("✅ [Avatar] Image loaded successfully, size: \(image.size)")
-                            await MainActor.run {
-                                selectedImage = image
-                                showImageCropper = true
-                                NSLog("🎬 [Avatar] showImageCropper set to true")
-                            }
-                        } else {
-                            NSLog("⚠️ [Avatar] Failed to load image data or create UIImage")
-                        }
-                    } catch {
-                        NSLog("⚠️ [Avatar Upload] Failed to load image: \(error.localizedDescription)")
-                        avatarUploadError = NSLocalizedString("Failed to load image.", comment: "Image loading error")
-                    }
-                }
-            }
-        }
     }
     
     @ViewBuilder
@@ -314,30 +287,19 @@ struct ProfileEditView: View {
     
     @ViewBuilder
     private var cropperView: some View {
-        if let image = selectedImage {
-            CircularImageCropperView(
-                image: image,
-                onCrop: { croppedImage in
-                    NSLog("✅ [Avatar] User tapped Done, cropping image")
-                    showImageCropper = false
-                    uploadCroppedImage(croppedImage)
-                },
-                onCancel: {
-                    NSLog("❌ [Avatar] User cancelled crop")
-                    showImageCropper = false
-                    selectedImage = nil
-                    selectedPhoto = nil
-                }
-            )
-            .onAppear {
-                NSLog("🎨 [Avatar] Presenting CircularImageCropperView")
+        CircularImageCropperView(
+            onCrop: { croppedImage in
+                NSLog("✅ [Avatar] User tapped Done, cropping image")
+                showImageCropper = false
+                uploadCroppedImage(croppedImage)
+            },
+            onCancel: {
+                NSLog("❌ [Avatar] User cancelled crop")
+                showImageCropper = false
             }
-        } else {
-            Color.clear
-                .onAppear {
-                    NSLog("⚠️ [Avatar] fullScreenCover triggered but selectedImage is nil")
-                    showImageCropper = false
-                }
+        )
+        .onAppear {
+            NSLog("🎨 [Avatar] Presenting CircularImageCropperView")
         }
     }
     
@@ -425,8 +387,6 @@ struct ProfileEditView: View {
                         NSLog("🔵 [Avatar Upload] STEP 1: Stopping upload state...")
                         isUploadingAvatar = false
                         onAvatarUploadStateChange?(false)
-                        selectedImage = nil
-                        selectedPhoto = nil
                         NSLog("✅ [Avatar Upload] Upload state cleared, isUploadingAvatar = \(isUploadingAvatar)")
                     }
                     
@@ -458,8 +418,6 @@ struct ProfileEditView: View {
                         avatarUploadError = errorMessage
                         isUploadingAvatar = false
                         onAvatarUploadStateChange?(false)
-                        selectedImage = nil
-                        selectedPhoto = nil
                     }
                     onAvatarUploadFailure?(errorMessage)
                 }
@@ -470,8 +428,6 @@ struct ProfileEditView: View {
                     avatarUploadError = errorMessage
                     isUploadingAvatar = false
                     onAvatarUploadStateChange?(false)
-                    selectedImage = nil
-                    selectedPhoto = nil
                 }
                 onAvatarUploadFailure?(errorMessage)
             }

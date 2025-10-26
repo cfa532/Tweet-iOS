@@ -7,12 +7,15 @@
 
 import SwiftUI
 import UIKit
+import PhotosUI
 
 struct CircularImageCropperView: View {
-    let image: UIImage
     let onCrop: (UIImage) -> Void
     let onCancel: () -> Void
     
+    @State private var selectedImage: UIImage? = nil
+    @State private var showPhotoPicker = false
+    @State private var selectedPhoto: PhotosPickerItem? = nil
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
     @State private var scale: CGFloat = 1.0
@@ -20,16 +23,87 @@ struct CircularImageCropperView: View {
     
     private let circleSize: CGFloat = 280
     
+    private var image: UIImage? {
+        selectedImage
+    }
+    
     var body: some View {
         ZStack {
             Color.black
                 .ignoresSafeArea()
             
-            VStack(spacing: 0) {
-                Spacer()
-                
-                // Image cropping area
-                GeometryReader { geometry in
+            if let image = selectedImage {
+                // Show cropping UI when image is selected
+                croppingView(for: image)
+            } else {
+                // Show "Select Photo" screen
+                selectPhotoView
+            }
+        }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhoto, matching: .images)
+        .onChange(of: selectedPhoto) { _, newItem in
+            if let item = newItem {
+                Task {
+                    if let data = try? await item.loadTransferable(type: Data.self),
+                       let loadedImage = UIImage(data: data) {
+                        await MainActor.run {
+                            selectedImage = loadedImage
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            // Open photo picker immediately when cropper appears
+            showPhotoPicker = true
+        }
+    }
+    
+    private var selectPhotoView: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 60))
+                .foregroundColor(.white.opacity(0.5))
+            
+            Text(NSLocalizedString("Select a photo", comment: "Select photo prompt"))
+                .font(.title2)
+                .foregroundColor(.white)
+            
+            Button(action: {
+                showPhotoPicker = true
+            }) {
+                Text(NSLocalizedString("Choose Photo", comment: "Choose photo button"))
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: 200)
+                    .padding()
+                    .background(Color.blue)
+                    .cornerRadius(12)
+            }
+            
+            Spacer()
+            
+            Button(action: onCancel) {
+                Text(NSLocalizedString("Cancel", comment: "Cancel button"))
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: 200)
+                    .padding()
+                    .background(Color.gray.opacity(0.3))
+                    .cornerRadius(12)
+            }
+            .padding(.bottom, 40)
+        }
+    }
+    
+    private func croppingView(for image: UIImage) -> some View {
+        VStack(spacing: 0) {
+            Spacer()
+            
+            // Image cropping area
+            GeometryReader { geometry in
                     let screenWidth = geometry.size.width
                     let screenHeight = geometry.size.height
                     
@@ -79,45 +153,40 @@ struct CircularImageCropperView: View {
                     }
                     .frame(width: screenWidth, height: screenHeight)
                     .clipped()
-                }
-                
-                Spacer()
-                
-                // Bottom buttons and instructions
-                VStack(spacing: 12) {
-                    Text(NSLocalizedString("Drag to move, pinch to zoom", comment: "Cropper help text"))
-                        .foregroundColor(.white.opacity(0.7))
-                        .font(.footnote)
-                    
-                    HStack(spacing: 20) {
-                        Button(action: onCancel) {
-                            Text(NSLocalizedString("Cancel", comment: "Cancel button"))
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.gray.opacity(0.3))
-                                .cornerRadius(12)
-                        }
-                        
-                        Button(action: cropImage) {
-                            Text(NSLocalizedString("Done", comment: "Done button"))
-                                .font(.headline)
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.blue)
-                                .cornerRadius(12)
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                }
-                .padding(.bottom, 20)
             }
+            
+            Spacer()
+            
+            // Bottom buttons
+            HStack(spacing: 16) {
+                Button(action: onCancel) {
+                    Text(NSLocalizedString("Cancel", comment: "Cancel button"))
+                        .font(.body)
+                        .foregroundColor(.white)
+                        .frame(width: 140)
+                        .padding(.vertical, 12)
+                        .background(Color.white.opacity(0.15))
+                        .cornerRadius(8)
+                }
+                
+                Button(action: cropImage) {
+                    Text(NSLocalizedString("Done", comment: "Done button"))
+                        .font(.body)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(width: 140)
+                        .padding(.vertical, 12)
+                        .background(Color.blue)
+                        .cornerRadius(8)
+                }
+            }
+            .padding(.bottom, 30)
         }
     }
     
     private func cropImage() {
+        guard let image = selectedImage else { return }
+        
         let screenSize = UIScreen.main.bounds.size
         
         // Calculate how the image is displayed (scaledToFit)
