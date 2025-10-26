@@ -418,29 +418,36 @@ struct ProfileEditView: View {
                     TweetCacheManager.shared.saveUserAndWait(hproseInstance.appUser)
                     NSLog("✅ [Avatar Upload] Saved to Core Data (appUser IS the singleton, no need to update separately)")
                     
+                    // Update state on main thread in TWO separate steps to ensure clean UI update
+                    
+                    // STEP 1: Stop spinner and clean up
                     await MainActor.run {
-                        NSLog("🔵 [Avatar Upload] MainActor: Stopping upload state...")
-                        // Stop uploading state FIRST
+                        NSLog("🔵 [Avatar Upload] STEP 1: Stopping upload state...")
                         isUploadingAvatar = false
-                        NSLog("🔵 [Avatar Upload] isUploadingAvatar set to: \(isUploadingAvatar)")
                         onAvatarUploadStateChange?(false)
-                        
-                        // Force ProfileEditView's Avatar to recreate
+                        selectedImage = nil
+                        selectedPhoto = nil
+                        NSLog("✅ [Avatar Upload] Upload state cleared, isUploadingAvatar = \(isUploadingAvatar)")
+                    }
+                    
+                    // STEP 2: Force Avatar to recreate WITHOUT the spinner overlay
+                    await MainActor.run {
+                        NSLog("🔵 [Avatar Upload] STEP 2: Forcing Avatar recreate...")
                         avatarUpdateTrigger += 1
-                        NSLog("🔵 [Avatar Upload] avatarUpdateTrigger incremented to: \(avatarUpdateTrigger)")
-                        
-                        // Broadcast notification ONCE to update all Avatar views
+                        NSLog("✅ [Avatar Upload] avatarUpdateTrigger = \(avatarUpdateTrigger)")
+                    }
+                    
+                    // STEP 3: Brief delay then broadcast to all other avatars
+                    try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 second
+                    
+                    await MainActor.run {
+                        NSLog("🔵 [Avatar Upload] STEP 3: Broadcasting to all avatars...")
                         NotificationCenter.default.post(
                             name: .avatarDidChange,
                             object: nil,
                             userInfo: ["userId": hproseInstance.appUser.mid]
                         )
-                        NSLog("📢 [Avatar Upload] Posted notification to update all avatars")
-                        
-                        // Clean up
-                        selectedImage = nil
-                        selectedPhoto = nil
-                        NSLog("🔵 [Avatar Upload] Cleanup complete, upload state should be cleared")
+                        NSLog("✅ [Avatar Upload] Notification posted - upload complete!")
                     }
                     // Notify success
                     onAvatarUploadSuccess?()
