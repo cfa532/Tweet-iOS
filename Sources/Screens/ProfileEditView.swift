@@ -59,8 +59,11 @@ struct ProfileEditView: View {
             ZStack(alignment: .bottomTrailing) {
                 Avatar(user: hproseInstance.appUser, size: 80)
                     .id("profile_avatar_\(avatarUpdateTrigger)")
-                    .onTapGesture { showImageCropper = true }
-                    .overlay(uploadingOverlay)
+                    .onTapGesture { 
+                        if !isUploadingAvatar {
+                            showImageCropper = true
+                        }
+                    }
                 
                 Image(systemName: "camera.fill")
                     .foregroundColor(.white)
@@ -75,27 +78,6 @@ struct ProfileEditView: View {
             }
         }
         .padding(.bottom, 8)
-    }
-    
-    @ViewBuilder
-    private var uploadingOverlay: some View {
-        if isUploadingAvatar {
-            ZStack {
-                Color.black.opacity(0.6)
-                    .clipShape(Circle())
-                
-                VStack(spacing: 8) {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.2)
-                    
-                    Text(NSLocalizedString("Uploading...", comment: "Upload progress message"))
-                        .font(.caption)
-                        .foregroundColor(.white)
-                }
-            }
-            .frame(width: 80, height: 80)
-        }
     }
     
     private var formFields: some View {
@@ -380,54 +362,43 @@ struct ProfileEditView: View {
                     TweetCacheManager.shared.saveUserAndWait(hproseInstance.appUser)
                     NSLog("✅ [Avatar Upload] Saved to Core Data (appUser IS the singleton, no need to update separately)")
                     
-                    // Update state on main thread in TWO separate steps to ensure clean UI update
+                    // Pre-cache the uploaded image locally so Avatar doesn't show spinner
+                    let avatarAttachment = MimeiFileType(mid: confirmedAvatar, mediaType: .image)
+                    ImageCacheManager.shared.cacheImageData(data, for: avatarAttachment, baseUrl: hproseInstance.appUser.baseUrl ?? HproseInstance.baseUrl)
+                    NSLog("✅ [Avatar Upload] Pre-cached new avatar image locally")
                     
-                    // STEP 1: Stop spinner and clean up
+                    // Update UI state
                     await MainActor.run {
-                        NSLog("🔵 [Avatar Upload] STEP 1: Stopping upload state...")
                         isUploadingAvatar = false
                         onAvatarUploadStateChange?(false)
-                        NSLog("✅ [Avatar Upload] Upload state cleared, isUploadingAvatar = \(isUploadingAvatar)")
-                    }
-                    
-                    // STEP 2: Force Avatar to recreate WITHOUT the spinner overlay
-                    await MainActor.run {
-                        NSLog("🔵 [Avatar Upload] STEP 2: Forcing Avatar recreate...")
                         avatarUpdateTrigger += 1
-                        NSLog("✅ [Avatar Upload] avatarUpdateTrigger = \(avatarUpdateTrigger)")
-                    }
-                    
-                    // STEP 3: Brief delay then broadcast to all other avatars
-                    try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 second
-                    
-                    await MainActor.run {
-                        NSLog("🔵 [Avatar Upload] STEP 3: Broadcasting to all avatars...")
+                        
+                        // Broadcast to all avatars
                         NotificationCenter.default.post(
                             name: .avatarDidChange,
                             object: nil,
                             userInfo: ["userId": hproseInstance.appUser.mid]
                         )
-                        NSLog("✅ [Avatar Upload] Notification posted - upload complete!")
+                        NSLog("✅ [Avatar Upload] Complete")
                     }
-                    // Notify success
                     onAvatarUploadSuccess?()
                 } else {
-                    NSLog("⚠️ [Avatar Upload] Upload check failed - uploaded: \(uploaded != nil), mid: \(uploaded?.mid ?? "NIL")")
                     let errorMessage = NSLocalizedString("Failed to upload avatar.", comment: "Avatar upload error")
                     await MainActor.run {
                         avatarUploadError = errorMessage
                         isUploadingAvatar = false
                         onAvatarUploadStateChange?(false)
+                        avatarUpdateTrigger += 1
                     }
                     onAvatarUploadFailure?(errorMessage)
                 }
             } catch {
                 let errorMessage = error.localizedDescription
-                NSLog("⚠️ [Avatar Upload] Error: \(errorMessage)")
                 await MainActor.run {
                     avatarUploadError = errorMessage
                     isUploadingAvatar = false
                     onAvatarUploadStateChange?(false)
+                    avatarUpdateTrigger += 1
                 }
                 onAvatarUploadFailure?(errorMessage)
             }
