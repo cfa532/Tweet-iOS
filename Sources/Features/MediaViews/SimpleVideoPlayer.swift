@@ -148,7 +148,6 @@ struct SimpleVideoPlayer: View {
     @State private var loadingState: LoadingState = .idle
     @State private var playbackState: PlaybackState = .notStarted
     @State private var isLongPressing = false
-    @State private var isPlayerDetached = false  // Track background state
     @State private var hasRecoveredThisCycle = false  // Prevent double recovery (background + screen lock)
     @State private var didEnterBackground = false  // Track if we actually went to background (vs just screen lock)
     @State private var isBuffering = false // Track buffering state
@@ -577,8 +576,9 @@ struct SimpleVideoPlayer: View {
         hasRecoveredThisCycle = false
         didEnterBackground = false  // Reset - will be set to true if didEnterBackground fires
         
-        // Detach player to prevent black screens
-        detachPlayerForBackground()
+        // Cache state but DON'T detach player view
+        // This keeps the last frame visible instead of showing black screen
+        cacheStateForBackground()
     }
     
     private func handleDidEnterBackground() {
@@ -634,7 +634,6 @@ struct SimpleVideoPlayer: View {
     /// RECOVERY: Restore playback after background (with sanity check as safety net)
     private func recoverFromBackground() {
         print("DEBUG: [VIDEO RECOVERY] Starting recovery for \(mid), mode: \(mode), didEnterBackground: \(didEnterBackground), shouldLoadVideo: \(shouldLoadVideo)")
-        isPlayerDetached = false
         hasRecoveredThisCycle = true  // Mark that we've recovered
         
         // SMART RECOVERY STRATEGY:
@@ -854,11 +853,10 @@ struct SimpleVideoPlayer: View {
     private func videoPlayerView() -> some View {
         if let player = player {
             ZStack {
-                // Main video player - only show if not detached
-                if !isPlayerDetached {
-                    if mode == .mediaBrowser || mode == .tweetDetail {
-                        // Use AVPlayerViewController for fullscreen and detail modes to get native controls and reliable autoplay
-                        AVPlayerViewControllerRepresentable(player: player, isBuffering: $isBuffering)
+                // Main video player - always visible to avoid black screen flashes
+                if mode == .mediaBrowser || mode == .tweetDetail {
+                    // Use AVPlayerViewController for fullscreen and detail modes to get native controls and reliable autoplay
+                    AVPlayerViewControllerRepresentable(player: player, isBuffering: $isBuffering)
                             .id("\(mid)_\(representableId)") // Force recreation with representableId changes
                             .onAppear {
                             }
@@ -876,21 +874,6 @@ struct SimpleVideoPlayer: View {
                                     onVideoTap()
                                 }
                             }
-                    }
-                } else {
-                    // Show placeholder when player is detached (background state)
-                    Rectangle()
-                        .fill(Color.black.opacity(0.8))
-                        .overlay(
-                            VStack(spacing: 8) {
-                                Image(systemName: "pause.circle")
-                                    .font(.title)
-                                    .foregroundColor(.white.opacity(0.7))
-                                Text("Video paused")
-                                    .font(.caption)
-                                    .foregroundColor(.white.opacity(0.7))
-                            }
-                        )
                 }
                 
                 // Show buffering spinner when buffering (fullscreen only)
@@ -1724,12 +1707,12 @@ struct SimpleVideoPlayer: View {
     }
     
     
-    private func detachPlayerForBackground() {
+    private func cacheStateForBackground() {
         guard let player = player else { 
             return 
         }
         
-        // Store current state before detaching
+        // Store current state for restoration when coming back to foreground
         let wasPlaying = player.rate > 0
         let currentTime = player.currentTime()
         
@@ -1742,11 +1725,11 @@ struct SimpleVideoPlayer: View {
             originalMuteState: mode == .mediaCell ? isMuted : MuteState.shared.isMuted
         )
         
-        // Pause the player first
+        // Pause the player to save resources
+        // But DON'T hide the view - keep last frame visible to avoid black screen
         player.pause()
         
-        // Mark as detached - this prevents the video layer from becoming invalid
-        isPlayerDetached = true
+        print("DEBUG: [VIDEO CACHE STATE] Cached state for \(mid) - wasPlaying: \(wasPlaying), time: \(CMTimeGetSeconds(currentTime))s")
     }
     
 }
