@@ -281,6 +281,8 @@
 "Choose Photo" = "写真を選択";
 "Take Photo" = "写真を撮影";
 "Record Video" = "動画を録画";
+"Select a photo" = "写真を選択";
+"Choose" = "選択";
 "%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB." = "%@ファイルが大きすぎます（%.1fMB）。最大サイズは%.0fMBです。";
 
 // MARK: - Settings
