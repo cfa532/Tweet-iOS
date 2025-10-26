@@ -60,41 +60,48 @@ struct CircularImageCropperView: View {
     }
     
     private var selectPhotoView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 24) {
             Spacer()
             
             Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 60))
-                .foregroundColor(.white.opacity(0.5))
+                .font(.system(size: 64))
+                .foregroundColor(.white.opacity(0.4))
             
             Text(NSLocalizedString("Select a photo", comment: "Select photo prompt"))
-                .font(.title2)
-                .foregroundColor(.white)
-            
-            Button(action: {
-                showPhotoPicker = true
-            }) {
-                Text(NSLocalizedString("Choose Photo", comment: "Choose photo button"))
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: 200)
-                    .padding()
-                    .background(Color.blue)
-                    .cornerRadius(12)
-            }
+                .font(.title3)
+                .fontWeight(.medium)
+                .foregroundColor(.white.opacity(0.9))
             
             Spacer()
             
-            Button(action: onCancel) {
-                Text(NSLocalizedString("Cancel", comment: "Cancel button"))
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: 200)
-                    .padding()
-                    .background(Color.gray.opacity(0.3))
-                    .cornerRadius(12)
+            VStack(spacing: 16) {
+                Button(action: {
+                    showPhotoPicker = true
+                }) {
+                    Text(NSLocalizedString("Choose Photo", comment: "Choose photo button"))
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: 280)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.blue)
+                        )
+                }
+                
+                Button(action: onCancel) {
+                    Text(NSLocalizedString("Cancel", comment: "Cancel button"))
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundColor(.white.opacity(0.9))
+                        .frame(maxWidth: 280)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.white.opacity(0.15))
+                        )
+                }
             }
-            .padding(.bottom, 40)
+            .padding(.bottom, 44)
         }
     }
     
@@ -158,29 +165,34 @@ struct CircularImageCropperView: View {
             Spacer()
             
             // Bottom buttons
-            HStack(spacing: 16) {
+            HStack(spacing: 20) {
                 Button(action: onCancel) {
                     Text(NSLocalizedString("Cancel", comment: "Cancel button"))
-                        .font(.body)
+                        .font(.system(size: 17, weight: .regular))
                         .foregroundColor(.white)
-                        .frame(width: 140)
-                        .padding(.vertical, 12)
-                        .background(Color.white.opacity(0.15))
-                        .cornerRadius(8)
+                        .frame(minWidth: 120)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 13)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.white.opacity(0.2))
+                        )
                 }
                 
                 Button(action: cropImage) {
-                    Text(NSLocalizedString("Done", comment: "Done button"))
-                        .font(.body)
-                        .fontWeight(.semibold)
+                    Text(NSLocalizedString("Choose", comment: "Choose button"))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundColor(.white)
-                        .frame(width: 140)
-                        .padding(.vertical, 12)
-                        .background(Color.blue)
-                        .cornerRadius(8)
+                        .frame(minWidth: 120)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 13)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.blue)
+                        )
                 }
             }
-            .padding(.bottom, 30)
+            .padding(.bottom, 34)
         }
     }
     

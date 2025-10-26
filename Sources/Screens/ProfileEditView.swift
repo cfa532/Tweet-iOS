@@ -57,13 +57,29 @@ struct ProfileEditView: View {
     private var avatarSection: some View {
         VStack {
             ZStack(alignment: .bottomTrailing) {
-                Avatar(user: hproseInstance.appUser, size: 80)
-                    .id("profile_avatar_\(avatarUpdateTrigger)")
-                    .onTapGesture { 
-                        if !isUploadingAvatar {
-                            showImageCropper = true
+                ZStack {
+                    Avatar(user: hproseInstance.appUser, size: 80)
+                        .id("profile_avatar_\(avatarUpdateTrigger)")
+                    
+                    // Upload progress overlay
+                    if isUploadingAvatar {
+                        ZStack {
+                            Color.black.opacity(0.7)
+                                .clipShape(Circle())
+                            
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.2)
                         }
+                        .frame(width: 80, height: 80)
+                        .transition(.opacity)
                     }
+                }
+                .onTapGesture { 
+                    if !isUploadingAvatar {
+                        showImageCropper = true
+                    }
+                }
                 
                 Image(systemName: "camera.fill")
                     .foregroundColor(.white)
