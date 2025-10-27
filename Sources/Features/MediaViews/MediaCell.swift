@@ -48,6 +48,7 @@ struct MediaCell: View, Equatable {
     @State private var onVideoFinished: (() -> Void)?
     @State private var preloadTask: Task<Void, Never>?
     @State private var isPreloading = false
+    @State private var isOpeningFullScreen = false
     let showMuteButton: Bool
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
@@ -206,6 +207,8 @@ struct MediaCell: View, Equatable {
             if newValue {
                 // Video is going into full-screen mode
                 VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
+                // Reset loading state once fullscreen is presented
+                isOpeningFullScreen = false
             } else {
                 // Video is exiting full-screen mode
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)
@@ -235,8 +238,13 @@ struct MediaCell: View, Equatable {
         // Use internal full screen logic
         switch attachment.type {
         case .video, .hls_video:
-            // Open full screen for videos
-            showFullScreen = true
+            // Show loading spinner for videos
+            isOpeningFullScreen = true
+            // Delay opening fullscreen to allow spinner to render
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                showFullScreen = true
+            }
         case .audio:
             // Toggle audio playback - handled by SimpleAudioPlayer
             break
@@ -302,7 +310,11 @@ struct MediaCell: View, Equatable {
                 showNativeControls: false,
                 isMuted: muteState.isMuted,
                 onVideoTap: {
-                    showFullScreen = true
+                    isOpeningFullScreen = true
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                        showFullScreen = true
+                    }
                 },
                 disableAutoRestart: true,
                 shouldLoadVideo: shouldLoadVideo,
@@ -313,7 +325,11 @@ struct MediaCell: View, Equatable {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        showFullScreen = true
+                        isOpeningFullScreen = true
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                            showFullScreen = true
+                        }
                     }
                     .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
                         handleVideoReload()
@@ -332,6 +348,21 @@ struct MediaCell: View, Equatable {
                                 .padding(.bottom, 8)
                         }
                     }
+                }
+            }
+        )
+        .overlay(
+            // Loading spinner overlay when opening fullscreen
+            Group {
+                if isOpeningFullScreen {
+                    ZStack {
+                        Color.black.opacity(0.4)
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.5)
+                    }
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: isOpeningFullScreen)
                 }
             }
         )
