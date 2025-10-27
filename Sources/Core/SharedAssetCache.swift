@@ -742,12 +742,12 @@ class SharedAssetCache: ObservableObject {
         print("DEBUG: [SharedAssetCache] Resolving HLS URL: \(url.absoluteString)")
         
         // First attempt: try master.m3u8, then playlist.m3u8
-        if await urlExists(masterURL, timeout: 3.0) {
+        if await urlExists(masterURL, timeout: 15.0) {
             print("DEBUG: [SharedAssetCache] Found master.m3u8 at: \(masterURL.absoluteString)")
             return masterURL
         }
         
-        if await urlExists(playlistURL, timeout: 3.0) {
+        if await urlExists(playlistURL, timeout: 15.0) {
             print("DEBUG: [SharedAssetCache] Found playlist.m3u8 at: \(playlistURL.absoluteString)")
             return playlistURL
         }
@@ -755,12 +755,12 @@ class SharedAssetCache: ObservableObject {
         // Second attempt: retry the combo once more
         print("DEBUG: [SharedAssetCache] First attempt failed, retrying HLS URLs...")
         
-        if await urlExists(masterURL, timeout: 3.0) {
+        if await urlExists(masterURL, timeout: 15.0) {
             print("DEBUG: [SharedAssetCache] Retry successful - found master.m3u8 at: \(masterURL.absoluteString)")
             return masterURL
         }
         
-        if await urlExists(playlistURL, timeout: 3.0) {
+        if await urlExists(playlistURL, timeout: 15.0) {
             print("DEBUG: [SharedAssetCache] Retry successful - found playlist.m3u8 at: \(playlistURL.absoluteString)")
             return playlistURL
         }
@@ -771,7 +771,7 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Check if URL exists with configurable timeout
-    private func urlExists(_ url: URL, timeout: TimeInterval = 3.0) async -> Bool {
+    private func urlExists(_ url: URL, timeout: TimeInterval = 15.0) async -> Bool {
         do {
             var request = URLRequest(url: url)
             request.httpMethod = "HEAD"
