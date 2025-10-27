@@ -831,8 +831,22 @@ struct SimpleVideoPlayer: View {
     
     private func handleLongPress() {
         isLongPressing = true
+        
+        // Provide haptic feedback
+        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+        impactFeedback.impactOccurred()
+        
+        // Show visual feedback
+        print("🔄 [VIDEO RELOAD] Long press detected - reloading video for \(mid)")
+        
         // Handle manual video reset on long press
         handleError(strategy: .manualReset)
+        
+        // Reset the long press state after a short delay
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+            isLongPressing = false
+        }
     }
     
     private func handlePressingChanged(pressing: Bool) {
@@ -915,15 +929,14 @@ struct SimpleVideoPlayer: View {
                 }
             }
         } else {
-            // No player yet - show subtle loading placeholder to avoid black flicker
+            // No player yet - show visible loading placeholder
             ZStack {
-                Color.gray.opacity(0.2)
+                Color.black.opacity(0.9)
                 
-                if loadingState.isLoading {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.2)
-                }
+                // Always show spinner when no player exists
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.2)
                 
                 // Error state
                 if loadingState.hasFailed {
@@ -954,12 +967,21 @@ struct SimpleVideoPlayer: View {
                     .cornerRadius(8)
                 }
                 
-                // Long press indicator
+                // Long press indicator with reload icon
                 if isLongPressing {
-                    Color.black.opacity(0.3)
-                        .onTapGesture {
-                            isLongPressing = false
+                    ZStack {
+                        Color.black.opacity(0.5)
+                        VStack(spacing: 12) {
+                            Image(systemName: "arrow.clockwise.circle.fill")
+                                .font(.system(size: 50))
+                                .foregroundColor(.white)
+                            Text("Reloading Video...")
+                                .font(.headline)
+                                .foregroundColor(.white)
                         }
+                    }
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: isLongPressing)
                 }
             }
         }
@@ -1455,7 +1477,7 @@ struct SimpleVideoPlayer: View {
         // Schedule a check after a short delay
         readyCheckTask = Task { @MainActor in
             // Wait for player to potentially become ready
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
             
             guard !Task.isCancelled else { return }
             

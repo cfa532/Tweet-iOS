@@ -338,8 +338,12 @@ struct MediaCell: View, Equatable {
     }
     
     private func handleVideoReload() {
+        // Provide haptic feedback
+        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+        impactFeedback.impactOccurred()
+        
         // Clear all caches and force reload by toggling shouldLoadVideo
-        print("DEBUG: [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
+        print("🔄 [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
         
         if let url = attachment.getUrl(baseUrl) {
             // Clear player cache
@@ -362,7 +366,9 @@ struct MediaCell: View, Equatable {
         shouldLoadVideo = false
         // Use Task to avoid blocking
         Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second delay
             shouldLoadVideo = true
+            print("✅ [VIDEO RELOAD] Video reload initiated")
         }
     }
 }
