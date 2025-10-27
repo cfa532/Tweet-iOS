@@ -304,6 +304,11 @@ struct SimpleVideoPlayer: View {
         // For fullscreen and detail modes, always try to set up player regardless of shouldLoadVideo
         if mode == .mediaBrowser || mode == .tweetDetail {
             if player == nil {
+                // Reset loading state if stuck
+                if loadingState.isLoading {
+                    print("DEBUG: [VIDEO APPEAR] loadingState stuck at .loading, resetting to .idle")
+                    loadingState = .idle
+                }
                 setupPlayer()
             } else {
                 // Player exists, validate and configure it
@@ -327,6 +332,11 @@ struct SimpleVideoPlayer: View {
         
         // Set up player if needed
         if player == nil && shouldLoadVideo && isVisible {
+            // Reset loading state if stuck
+            if loadingState.isLoading {
+                print("DEBUG: [VIDEO APPEAR] loadingState stuck at .loading, resetting to .idle")
+                loadingState = .idle
+            }
             setupPlayer()
         }
     }
@@ -488,6 +498,11 @@ struct SimpleVideoPlayer: View {
             if mode == .mediaBrowser || mode == .tweetDetail {
                 NSLog("DEBUG: [VIDEO VISIBILITY] Fullscreen/Detail mode - forcing player setup for \(mid)")
                 if player == nil {
+                    // Reset loading state if stuck
+                    if loadingState.isLoading {
+                        NSLog("DEBUG: [VIDEO VISIBILITY] loadingState stuck at .loading, resetting to .idle")
+                        loadingState = .idle
+                    }
                     setupPlayer()
                 } else {
                     validateAndConfigureExistingPlayer()
@@ -517,6 +532,11 @@ struct SimpleVideoPlayer: View {
             // If no player and loading is enabled, set up the player
             if player == nil {
                 print("DEBUG: [VIDEO VISIBILITY] Video became visible with no player, setting up: \(mid)")
+                // Reset loading state if stuck
+                if loadingState.isLoading {
+                    print("DEBUG: [VIDEO VISIBILITY] loadingState stuck at .loading, resetting to .idle")
+                    loadingState = .idle
+                }
                 setupPlayer()
             } else {
                 // SANITY CHECK: Run when becoming visible to catch broken players
@@ -786,27 +806,35 @@ struct SimpleVideoPlayer: View {
     private func handleVideoInfrastructureRestarted() {
         print("DEBUG: [VIDEO INFRA RESTART] Video infrastructure restarted for \(mid), mode: \(mode), shouldLoadVideo: \(shouldLoadVideo)")
         
-        // BULLETPROOF: For MediaCell, ALWAYS recreate if player exists
-        if mode == .mediaCell && player != nil && shouldLoadVideo {
-            print("DEBUG: [VIDEO INFRA RESTART] MediaCell - FORCE recreating player")
+        // BULLETPROOF: For MediaCell, ALWAYS recreate if video was previously loaded
+        // This handles the case where AppDelegate cleared players before this notification
+        if mode == .mediaCell {
+            // Check if player exists OR if video was previously loaded (check if in cache)
+            let hadPlayer = player != nil
+            let wasInCache = VideoStateCache.shared.getCachedState(for: mid) != nil
             
-            if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
-                observerPlayer.removeTimeObserver(observer)
+            if hadPlayer || wasInCache {
+                print("DEBUG: [VIDEO INFRA RESTART] MediaCell - FORCE recreating player (hadPlayer: \(hadPlayer), wasInCache: \(wasInCache))")
+                
+                if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
+                    observerPlayer.removeTimeObserver(observer)
+                }
+                timeObserver = nil
+                timeObserverPlayer = nil
+                
+                player?.pause()
+                player = nil
+                loadingState = .idle
+                playbackState = .notStarted
+                
+                // Always recreate - even if currently offscreen, so it's ready when scrolled back
+                setupPlayer()
+                
+                // CRITICAL: Force view layer to recreate for on-screen videos
+                representableId += 1
+                print("DEBUG: [VIDEO INFRA RESTART] Incremented representableId to \(representableId) to refresh view layer")
+                return
             }
-            timeObserver = nil
-            timeObserverPlayer = nil
-            
-            player?.pause()
-            player = nil
-            loadingState = .idle
-            playbackState = .notStarted
-            
-            setupPlayer()
-            
-            // CRITICAL: Force view layer to recreate for on-screen videos
-            representableId += 1
-            print("DEBUG: [VIDEO INFRA RESTART] Incremented representableId to \(representableId) to refresh view layer")
-            return
         }
         
         // For other modes, check if broken
@@ -1059,6 +1087,11 @@ struct SimpleVideoPlayer: View {
             }
         } else {
             NSLog("DEBUG: [VIDEO VALIDATE] No player item for \(mid), setting up new player")
+            // Reset loading state if stuck
+            if loadingState.isLoading {
+                NSLog("DEBUG: [VIDEO VALIDATE] loadingState stuck at .loading, resetting to .idle")
+                loadingState = .idle
+            }
             setupPlayer()
         }
     }
@@ -1248,6 +1281,7 @@ struct SimpleVideoPlayer: View {
             NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player has no currentItem, clearing cache and creating new player for \(mid)")
             VideoStateCache.shared.clearCache(for: mid)
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            loadingState = .idle  // Reset loading state before recreating
             setupPlayer()
             return
         }
@@ -1258,6 +1292,7 @@ struct SimpleVideoPlayer: View {
             NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item is in failed state, clearing cache and creating new player for \(mid)")
             VideoStateCache.shared.clearCache(for: mid)
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            loadingState = .idle  // Reset loading state before recreating
             setupPlayer()
             return
         }
@@ -1285,6 +1320,7 @@ struct SimpleVideoPlayer: View {
                     NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item not ready (status: \(playerItem.status.rawValue)) and no buffered data for MediaCell, clearing cache and creating new player for \(mid)")
                     VideoStateCache.shared.clearCache(for: mid)
                     SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+                    loadingState = .idle  // Reset loading state before recreating
                     setupPlayer()
                     return
                 }
@@ -1517,18 +1553,51 @@ struct SimpleVideoPlayer: View {
         // Cancel any existing check
         readyCheckTask?.cancel()
         
-        // Schedule a check after a short delay
+        // Schedule a check with retry logic
         readyCheckTask = Task { @MainActor in
-            // Wait for player to potentially become ready
-            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+            // Retry until player is ready (max 10 attempts = 3 seconds)
+            var attempts = 0
+            let maxAttempts = 10
+            
+            while attempts < maxAttempts {
+                guard !Task.isCancelled else { return }
+                
+                // Wait before checking
+                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                attempts += 1
+                
+                guard !Task.isCancelled else { return }
+                
+                // Check if player is ready with buffered data
+                guard let item = player.currentItem else {
+                    NSLog("DEBUG: [VIDEO READY CHECK] No player item for \(self.mid) (attempt \(attempts)/\(maxAttempts))")
+                    continue
+                }
+                
+                if item.status == .readyToPlay && !item.loadedTimeRanges.isEmpty {
+                    // Player is ready!
+                    break
+                } else {
+                    NSLog("DEBUG: [VIDEO READY CHECK] Player not ready yet for \(self.mid) (attempt \(attempts)/\(maxAttempts), status: \(item.status.rawValue))")
+                    
+                    // If status is failed, stop trying
+                    if item.status == .failed {
+                        NSLog("⚠️ [VIDEO READY CHECK] Player failed for \(self.mid), stopping retry")
+                        return
+                    }
+                    
+                    // Continue retrying
+                    continue
+                }
+            }
             
             guard !Task.isCancelled else { return }
             
-            // Check if player is ready with buffered data
+            // Final check after all retries
             guard let item = player.currentItem,
                   item.status == .readyToPlay,
                   !item.loadedTimeRanges.isEmpty else {
-                NSLog("DEBUG: [VIDEO READY CHECK] Player not ready yet for \(self.mid)")
+                NSLog("⚠️ [VIDEO READY CHECK] Player still not ready after \(attempts) attempts for \(self.mid)")
                 return
             }
             
@@ -1536,7 +1605,7 @@ struct SimpleVideoPlayer: View {
             let shouldAutoPlay = self.currentAutoPlay && self.isVisible && self.shouldLoadVideo
             
             if shouldAutoPlay && player.rate == 0 {
-                NSLog("DEBUG: [VIDEO READY CHECK] Player ready, triggering autoplay for \(self.mid)")
+                NSLog("DEBUG: [VIDEO READY CHECK] Player ready after \(attempts) attempts, triggering autoplay for \(self.mid)")
                 NSLog("🔇 [PLAYER MUTE] About to play - current isMuted: \(player.isMuted) for \(self.mid)")
                 player.play()
             }
@@ -1608,8 +1677,8 @@ struct SimpleVideoPlayer: View {
             }
             
         case .manualReset, .networkRecovery:
-            loadingState = .loading
             playbackState = .notStarted
+            loadingState = .idle  // Reset to idle - setupPlayer() will set to .loading
             
             if shouldLoadVideo {
                 setupPlayer()
@@ -1617,7 +1686,8 @@ struct SimpleVideoPlayer: View {
             
         case .backgroundRecovery:
             player = nil
-            loadingState = .loading
+            playbackState = .notStarted
+            loadingState = .idle  // Reset to idle - setupPlayer() will set to .loading
             
             if shouldLoadVideo {
                 setupPlayer()
@@ -1774,6 +1844,11 @@ struct SimpleVideoPlayer: View {
             // Loading enabled - set up player if needed
             if player == nil {
                 print("DEBUG: [VIDEO SETUP] Loading enabled, setting up player for \(mid)")
+                // Reset loading state if stuck
+                if loadingState.isLoading {
+                    print("DEBUG: [VIDEO SETUP] loadingState stuck at .loading, resetting to .idle")
+                    loadingState = .idle
+                }
                 setupPlayer()
             } else {
                 // Player exists, validate and reconfigure it
