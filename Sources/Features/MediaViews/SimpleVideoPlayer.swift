@@ -577,8 +577,8 @@ struct SimpleVideoPlayer: View {
         hasRecoveredThisCycle = false
         didEnterBackground = false  // Reset - will be set to true if didEnterBackground fires
         
-        // Detach player to prevent black screens
-        detachPlayerForBackground()
+        // Cache player state but DON'T detach yet - keep video visible
+        cachePlayerStateForBackground()
     }
     
     private func handleDidEnterBackground() {
@@ -634,8 +634,9 @@ struct SimpleVideoPlayer: View {
     /// RECOVERY: Restore playback after background (with sanity check as safety net)
     private func recoverFromBackground() {
         print("DEBUG: [VIDEO RECOVERY] Starting recovery for \(mid), mode: \(mode), didEnterBackground: \(didEnterBackground), shouldLoadVideo: \(shouldLoadVideo)")
-        isPlayerDetached = false
-        hasRecoveredThisCycle = true  // Mark that we've recovered
+        
+        // Mark that we've recovered (but don't reattach yet)
+        hasRecoveredThisCycle = true
         
         // SMART RECOVERY STRATEGY:
         // - Screen lock (didEnterBackground=false): AGGRESSIVE - always recreate MediaCell players
@@ -686,6 +687,10 @@ struct SimpleVideoPlayer: View {
                             print("DEBUG: [VIDEO RECOVERY] Autoplaying visible video after recovery")
                         }
                     }
+                    
+                    // Reattach player after successful recovery
+                    self.isPlayerDetached = false
+                    print("✅ [VIDEO RECOVERY] Player reattached after validation")
                 } else {
                     print("⚠️ [VIDEO RECOVERY] Player failed to initialize after aggressive recovery")
                 }
@@ -706,38 +711,76 @@ struct SimpleVideoPlayer: View {
             
             if shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser {
                 setupPlayer()
+                
+                // Wait for player to be ready before reattaching
+                Task { @MainActor in
+                    var attempts = 0
+                    while player == nil && !loadingState.hasFailed && attempts < 50 {
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                        attempts += 1
+                    }
+                    
+                    if player != nil {
+                        // Reattach player after successful recreation
+                        self.isPlayerDetached = false
+                        print("✅ [VIDEO RECOVERY] Player recreated and reattached")
+                    } else {
+                        print("⚠️ [VIDEO RECOVERY] Failed to recreate player")
+                    }
+                }
             }
             return
         }
         
-        // Player is healthy - gentle recovery with view layer refresh
-        print("✅ [VIDEO RECOVERY] Player healthy - gentle recovery with view layer refresh")
+        // Player is healthy - validate it before reattaching
+        print("✅ [VIDEO RECOVERY] Player healthy - validating before reattach")
+        
+        // Ensure player is in valid state
+        guard let player = player, let playerItem = player.currentItem else {
+            print("⚠️ [VIDEO RECOVERY] Player or item missing, cannot reattach")
+            return
+        }
+        
+        // Verify player item status is valid
+        if playerItem.status == .failed || playerItem.status == .unknown {
+            print("⚠️ [VIDEO RECOVERY] Player item status invalid (\(playerItem.status.rawValue)), recreating")
+            self.player = nil
+            loadingState = .idle
+            playbackState = .notStarted
+            setupPlayer()
+            return
+        }
+        
+        // Player is valid - safe to reattach
+        print("✅ [VIDEO RECOVERY] Player validated successfully, reattaching")
         
         if mode == .mediaCell {
-            player?.isMuted = MuteState.shared.isMuted
+            player.isMuted = MuteState.shared.isMuted
         } else {
-            player?.isMuted = false
+            player.isMuted = false
         }
         
         representableId += 1
         
         // Restore playback state
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
-            let currentTime = player?.currentTime() ?? .zero
+            let currentTime = player.currentTime()
             let timeDiff = abs(CMTimeGetSeconds(cachedState.time) - CMTimeGetSeconds(currentTime))
             
             if timeDiff > 0.5 {
-                player?.seek(to: cachedState.time, toleranceBefore: .zero, toleranceAfter: .zero)
+                player.seek(to: cachedState.time, toleranceBefore: .zero, toleranceAfter: .zero)
             }
             
             let shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
             if shouldResume {
-                player?.play()
+                player.play()
                 playbackState = .playing
             }
         }
         
-        print("DEBUG: [VIDEO RECOVERY] Recovery complete for \(mid)")
+        // Reattach player after all validation and restoration
+        isPlayerDetached = false
+        print("✅ [VIDEO RECOVERY] Player reattached - recovery complete for \(mid)")
     }
     
     private func handleVideoInfrastructureRestarted() {
@@ -1746,6 +1789,33 @@ struct SimpleVideoPlayer: View {
     }
     
     
+    /// Cache player state when going to background (but don't detach)
+    private func cachePlayerStateForBackground() {
+        guard let player = player else { 
+            return 
+        }
+        
+        // Store current state for later restoration
+        let wasPlaying = player.rate > 0
+        let currentTime = player.currentTime()
+        
+        print("DEBUG: [VIDEO BACKGROUND] Caching state for \(mid) - wasPlaying: \(wasPlaying), time: \(CMTimeGetSeconds(currentTime))")
+        
+        // Cache the state for restoration
+        VideoStateCache.shared.cacheVideoState(
+            for: mid,
+            player: player,
+            time: currentTime,
+            wasPlaying: wasPlaying,
+            originalMuteState: mode == .mediaCell ? isMuted : MuteState.shared.isMuted
+        )
+        
+        // Pause the player but keep it attached
+        player.pause()
+        print("DEBUG: [VIDEO BACKGROUND] Player paused but NOT detached for \(mid)")
+    }
+    
+    /// Detach player (old function kept for reference but not called anymore)
     private func detachPlayerForBackground() {
         guard let player = player else { 
             return 
