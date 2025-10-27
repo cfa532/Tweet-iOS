@@ -28,6 +28,8 @@ struct MediaBrowserView: View {
     @State private var isDragging = false
     @State private var previousIndex: Int = -1 // Track previous index for video management
     @State private var isImageZoomed = false // Track if current image is zoomed
+    @State private var isTransitioning = false // Track transition animation
+    @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     private var attachments: [MimeiFileType] {
         return currentTweet.attachments ?? []
     }
@@ -63,6 +65,8 @@ struct MediaBrowserView: View {
                 baseUrl: baseUrl,
                 imageStates: $imageStates,
                 isImageZoomed: $isImageZoomed,
+                isTransitioning: $isTransitioning,
+                transitionOffset: $transitionOffset,
                 currentTweet: currentTweet,
                 currentSourceTweetId: currentSourceTweetId,
                 dismiss: { dismiss() },
@@ -81,39 +85,68 @@ struct MediaBrowserView: View {
     }
     
     private func setupFullScreenManager() {
-        // Set up navigation callback for auto-advance
+        // Set up navigation callback for auto-advance and swipe up
         FullScreenVideoManager.shared.onNavigateToNextVideo = { [self] nextTweet, videoIndex, nextSourceTweetId in
             print("DEBUG: [MediaBrowserView] Navigating to tweet: \(nextTweet.mid), videoIndex: \(videoIndex), sourceTweetId: \(nextSourceTweetId)")
             
-            // Load the next video immediately
-            if let attachments = nextTweet.attachments,
-               videoIndex < attachments.count {
-                let attachment = attachments[videoIndex]
-                let baseUrl = nextTweet.author?.baseUrl 
-                    ?? HproseInstance.shared.appUser.baseUrl 
-                    ?? HproseInstance.baseUrl
-                
-                if let url = attachment.getUrl(baseUrl) {
-                    print("DEBUG: [MediaBrowserView] Loading next video: \(url)")
-                    FullScreenVideoManager.shared.loadVideo(
-                        url: url,
-                        mid: attachment.mid,
-                        tweetId: nextTweet.mid,
-                        sourceTweetId: nextSourceTweetId,
-                        videoIndex: videoIndex,
-                        mediaType: attachment.type
-                    )
+            // Animate transition: slide current video up and next video in from bottom
+            Task { @MainActor in
+                // Start transition - slide current content up (only 30% of screen for tight transition)
+                let slideDistance = UIScreen.main.bounds.height * 0.3
+                isTransitioning = true
+                withAnimation(.easeOut(duration: 0.25)) {
+                    transitionOffset = -slideDistance
                 }
-            }
-            
-            // Update UI state with animation
-            withAnimation(.easeInOut(duration: 0.3)) {
+                
+                // Wait for slide-out to complete
+                try? await Task.sleep(nanoseconds: 125_000_000) // 0.125 seconds (halfway)
+                
+                // Load the next video
+                if let attachments = nextTweet.attachments,
+                   videoIndex < attachments.count {
+                    let attachment = attachments[videoIndex]
+                    let baseUrl = nextTweet.author?.baseUrl 
+                        ?? HproseInstance.shared.appUser.baseUrl 
+                        ?? HproseInstance.baseUrl
+                    
+                    if let url = attachment.getUrl(baseUrl) {
+                        print("DEBUG: [MediaBrowserView] Loading next video: \(url)")
+                        FullScreenVideoManager.shared.loadVideo(
+                            url: url,
+                            mid: attachment.mid,
+                            tweetId: nextTweet.mid,
+                            sourceTweetId: nextSourceTweetId,
+                            videoIndex: videoIndex,
+                            mediaType: attachment.type
+                        )
+                    }
+                }
+                
+                // Update UI state
                 self.currentTweet = nextTweet
                 self.currentIndex = videoIndex
                 self.previousIndex = videoIndex
                 self.currentSourceTweetId = nextSourceTweetId
                 self.imageStates = [:]
+                
+                // Reset to bottom position for slide-in (30% for tight transition)
+                transitionOffset = slideDistance
+                
+                // Slide in from bottom
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    transitionOffset = 0
+                }
+                
+                // Wait for slide-in to complete
+                try? await Task.sleep(nanoseconds: 250_000_000) // 0.25 seconds
+                isTransitioning = false
             }
+        }
+        
+        // Set up exit fullscreen callback (when no more videos)
+        FullScreenVideoManager.shared.onExitFullScreen = { [self] in
+            print("DEBUG: [MediaBrowserView] Exiting fullscreen - no more videos")
+            dismiss()
         }
     }
     
@@ -129,6 +162,8 @@ struct MediaBrowserView: View {
         let baseUrl: URL
         @Binding var imageStates: [Int: ImageState]
         @Binding var isImageZoomed: Bool
+        @Binding var isTransitioning: Bool
+        @Binding var transitionOffset: CGFloat
         let currentTweet: Tweet
         let currentSourceTweetId: String
         let dismiss: () -> Void
@@ -138,77 +173,107 @@ struct MediaBrowserView: View {
         
         var body: some View {
             ZStack {
+                // Background layer - stays in place (not affected by offset)
                 Color.black
                     .ignoresSafeArea(.all, edges: .all)
                 
-                TabView(selection: $currentIndex) {
-                    ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
-                        Group {
-                            if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                videoView(for: attachment, url: url, index: index)
-                            } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                audioView(for: attachment, url: url, index: index)
-                            } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                imageView(for: attachment, url: url, index: index)
+                // Content layer - slides during transition
+                ZStack {
+                    TabView(selection: $currentIndex) {
+                        ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
+                            Group {
+                                if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                    videoView(for: attachment, url: url, index: index)
+                                } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                    audioView(for: attachment, url: url, index: index)
+                                } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                    imageView(for: attachment, url: url, index: index)
+                                }
                             }
+                            .background(Color.black)
+                            .tag(index)
                         }
-                        .tag(index)
                     }
-                }
-                .tabViewStyle(.page)
-                .indexViewStyle(.page(backgroundDisplayMode: .always))
-                .onChange(of: currentIndex) { _, newIndex in
-                    print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
-                    previousIndex = newIndex
+                    .background(Color.black)
+                    .tabViewStyle(.page)
+                    .indexViewStyle(.page(backgroundDisplayMode: .always))
+                    .onChange(of: currentIndex) { _, newIndex in
+                        print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
+                        previousIndex = newIndex
+                        
+                        // Clean up non-visible images to free memory
+                        cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
+                    }
                     
-                    // Clean up non-visible images to free memory
-                    cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
-                }
-                
-                // Close button overlay
-                if showControls {
-                    VStack {
-                        HStack {
-                            Button(action: { dismiss() }) {
-                                Image(systemName: "xmark")
-                                    .font(.title2)
-                                    .foregroundColor(.white)
-                                    .padding()
-                                    .background(Color.black.opacity(0.5))
-                                    .clipShape(Circle())
+                    // Close button overlay
+                    if showControls {
+                        VStack {
+                            HStack {
+                                Button(action: { dismiss() }) {
+                                    Image(systemName: "xmark")
+                                        .font(.title2)
+                                        .foregroundColor(.white)
+                                        .padding()
+                                        .background(Color.black.opacity(0.5))
+                                        .clipShape(Circle())
+                                }
+                                Spacer()
                             }
                             Spacer()
                         }
-                        Spacer()
+                        .transition(.opacity)
                     }
-                    .transition(.opacity)
                 }
+                .offset(y: isTransitioning ? transitionOffset : dragOffset.height)
+                .scaleEffect(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 1000.0))
+                .opacity(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 500.0))
             }
             .statusBar(hidden: true)
-            .offset(y: dragOffset.height)
-            .scaleEffect(1.0 - abs(dragOffset.height) / 1000.0)
-            .opacity(1.0 - abs(dragOffset.height) / 500.0)
             .gesture(
                 DragGesture()
                     .onChanged { value in
-                        // Only allow drag-down-to-exit if no image is zoomed
-                        if value.translation.height > 0 && !isImageZoomed {
+                        // Disable gestures during transition
+                        if isTransitioning {
+                            return
+                        }
+                        
+                        // Allow vertical swipes if no image is zoomed
+                        if !isImageZoomed {
                             dragOffset = value.translation
                             isDragging = true
                             showControls = true
                         }
                     }
                     .onEnded { value in
-                        // Only allow exit if no image is zoomed
-                        if !isImageZoomed && (value.translation.height > 100 || value.velocity.height > 500) {
-                            dismiss()
-                        } else {
-                            withAnimation(.spring()) {
-                                dragOffset = .zero
-                            }
-                            isDragging = false
-                            resetControlsTimer()
+                        // Disable gestures during transition
+                        if isTransitioning {
+                            return
                         }
+                        
+                        // Only handle gestures if no image is zoomed
+                        if !isImageZoomed {
+                            let swipeThreshold: CGFloat = 100
+                            let velocityThreshold: CGFloat = 500
+                            
+                            // Swipe down - exit fullscreen
+                            if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
+                                dismiss()
+                                return
+                            }
+                            
+                            // Swipe up - next video
+                            if value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold {
+                                print("DEBUG: [SWIPE] Swipe up detected - navigating to next video")
+                                FullScreenVideoManager.shared.navigateToNext()
+                            }
+                        }
+                        
+                        // Reset drag offset
+                        withAnimation(.spring()) {
+                            dragOffset = .zero
+                        }
+                        isDragging = false
+                        resetControlsTimer()
                     }
             )
             .onTapGesture {

@@ -31,6 +31,7 @@ class FullScreenVideoManager: ObservableObject {
     // Closures for finding and navigating to next video
     var findNextVideo: ((String, Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)?)? // Async closure to find next video
     var onNavigateToNextVideo: ((Tweet, Int, String) -> Void)? // Callback to navigate to next video (tweet, videoIndex, sourceTweetId)
+    var onExitFullScreen: (() -> Void)? // Callback to exit fullscreen
     
     // Video completion observer
     private var videoCompletionObserver: NSObjectProtocol?
@@ -162,6 +163,31 @@ class FullScreenVideoManager: ObservableObject {
             } else {
                 await MainActor.run {
                     print("DEBUG: [FullScreenVideoManager] ❌ No more videos found in feed")
+                }
+            }
+        }
+    }
+    
+    /// Navigate to next video (triggered by swipe up)
+    func navigateToNext() {
+        guard let currentSourceTweetId = currentSourceTweetId,
+              let findNextVideo = findNextVideo else {
+            print("DEBUG: [FullScreenVideoManager] No source tweet ID or search function")
+            return
+        }
+        
+        print("DEBUG: [FullScreenVideoManager] Swipe up - navigating to next video from sourceTweet: \(currentSourceTweetId)")
+        
+        Task {
+            if let nextVideo = await findNextVideo(currentSourceTweetId, currentVideoIndex) {
+                await MainActor.run {
+                    print("DEBUG: [FullScreenVideoManager] ✅ Found next video - navigating")
+                    onNavigateToNextVideo?(nextVideo.tweet, nextVideo.videoIndex, nextVideo.sourceTweetId)
+                }
+            } else {
+                await MainActor.run {
+                    print("DEBUG: [FullScreenVideoManager] ❌ No more videos - exiting fullscreen")
+                    onExitFullScreen?()
                 }
             }
         }
