@@ -1,6 +1,6 @@
 # Memory Management System
 
-**Last Updated:** October 14, 2025  
+**Last Updated:** October 28, 2025  
 **Status:** Active
 
 ## Overview
@@ -241,6 +241,7 @@ func loadAndCacheAvatar(from url: URL, ...) async -> UIImage? {
 - Priority queue management
 - Concurrency control (max 8 concurrent)
 - Request deduplication
+- **Retry management with memory leak prevention**
 
 **Configuration:**
 ```swift
@@ -258,7 +259,50 @@ enum ImageLoadingPriority: Int {
 }
 ```
 
-**Memory Warning:** Only acts if > 1GB
+**Retry Management (Fixed for Memory Safety):**
+```swift
+// Cancellable retries using DispatchWorkItem
+private var scheduledRetries: [String: DispatchWorkItem] = [:]
+private var permanentlyFailedRequests: Set<String> = []
+
+private func handleLoadFailure(_ request: ImageLoadRequest) {
+    let newRetryCount = (retryCounts[request.id] ?? 0) + 1
+    
+    if newRetryCount < 3 {
+        // Cancel any existing retry to prevent accumulation
+        scheduledRetries[request.id]?.cancel()
+        
+        // Create cancellable retry with weak self
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.loadImage(request: request)
+        }
+        
+        scheduledRetries[request.id] = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(newRetryCount) * 2.0, 
+                                     execute: workItem)
+    } else {
+        // Mark as permanently failed after 3 retries
+        permanentlyFailedRequests.insert(request.id)
+        retryCounts.removeValue(forKey: request.id)
+    }
+}
+```
+
+**Memory Cleanup:**
+```swift
+// Cancel all scheduled retries during memory pressure
+for workItem in scheduledRetries.values {
+    workItem.cancel()
+}
+scheduledRetries.removeAll()
+
+// Limit unbounded growth
+if retryCounts.count > 100 {
+    // Keep only recent 100 items
+}
+```
+
+**Memory Warning:** Only acts if > 1.4GB
 
 ---
 
@@ -288,6 +332,23 @@ func clearMemoryCache() {
 - Chat message memory cache
 - Chat session data
 - Core Data persistence
+
+---
+
+### 8. DiskCacheCleanupManager
+**Location:** `Sources/CachingPlayerItem/DiskCacheCleanupManager.swift`
+
+**Responsibilities:**
+- Clean up old HLS video segments from disk
+- Scheduled cleanup (separate from memory management)
+- **NOT called during memory pressure** (disk cache doesn't consume RAM)
+
+**Important Note:**
+```swift
+// ✅ Disk cache cleanup is INDEPENDENT of memory management
+// ❌ Do NOT call during memory warnings - disk cache doesn't affect RAM
+// ✓ Only call on schedule or when disk space is low
+```
 
 ---
 
@@ -387,11 +448,13 @@ This prevents unnecessary cleanup at startup when iOS sends false positive warni
 - Release 30% of video cache (oldest first)
 - Clean old image files (>7 days)
 - Keep all memory caches intact
+- **Does NOT touch disk cache** (disk cache doesn't consume RAM)
 
 ```swift
 private func performPreventiveCleanup() {
     SharedAssetCache.shared.releasePartialCache(percentage: 30)
     ImageCacheManager.shared.cleanupOldCache()
+    // ❌ NO disk cache cleanup - it doesn't affect memory
 }
 ```
 
@@ -404,7 +467,7 @@ private func performPreventiveCleanup() {
 - Clean old image files
 - Clear tweet memory cache
 - Clear chat memory cache
-- Keep disk caches intact
+- **Does NOT touch disk cache** (disk cache doesn't consume RAM)
 
 ```swift
 private func performAggressiveCleanup() {
@@ -412,6 +475,7 @@ private func performAggressiveCleanup() {
     ImageCacheManager.shared.cleanupOldCache()
     TweetCacheManager.shared.clearMemoryCache()
     ChatCacheManager.shared.clearMemoryCache()
+    // ❌ NO disk cache cleanup - it doesn't affect memory
 }
 ```
 
@@ -424,6 +488,7 @@ private func performAggressiveCleanup() {
 - Clean all old images
 - Clear ALL memory caches
 - Clear video state cache
+- **Does NOT touch disk cache** (disk cache doesn't consume RAM)
 - Force garbage collection
 
 ```swift
@@ -433,6 +498,7 @@ private func performEmergencyCleanup() {
     TweetCacheManager.shared.clearMemoryCache()
     ChatCacheManager.shared.clearMemoryCache()
     VideoStateCache.shared.clearAllCache()
+    // ❌ NO disk cache cleanup - it doesn't affect memory
     
     // Force ARC cleanup
     autoreleasepool { }
@@ -658,6 +724,84 @@ NotificationCenter.default.addObserver(
 }
 ```
 
+### 8. Avoid Memory Leaks in Retry Logic
+
+❌ **DON'T:** Uncancellable closures that capture completion handlers
+```swift
+// WRONG - Memory leak!
+DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+    self.loadImage(request: request)  // Strong capture, can't be cancelled
+}
+```
+
+✅ **DO:** Cancellable work items with weak references
+```swift
+// CORRECT - Can be cancelled, weak self
+let workItem = DispatchWorkItem { [weak self] in
+    self?.loadImage(request: request)
+}
+scheduledRetries[id] = workItem
+DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: workItem)
+
+// Later: cancel if needed
+scheduledRetries[id]?.cancel()
+```
+
+❌ **DON'T:** Infinite retries without limits
+```swift
+// WRONG - Will retry forever!
+if loadFailed {
+    retryLoad()
+}
+```
+
+✅ **DO:** Limit retries and mark permanent failures
+```swift
+// CORRECT - Max 3 retries
+let retryCount = (retryCounts[id] ?? 0) + 1
+if retryCount < 3 {
+    scheduleRetry()
+} else {
+    permanentlyFailedRequests.insert(id)
+    retryCounts.removeValue(forKey: id)
+}
+```
+
+❌ **DON'T:** Unbounded dictionaries that grow forever
+```swift
+// WRONG - Grows without limit!
+retryCounts[id] = count  // Never cleaned up
+```
+
+✅ **DO:** Periodic cleanup of tracking dictionaries
+```swift
+// CORRECT - Limit growth
+if retryCounts.count > 100 {
+    let keysToKeep = Set(Array(retryCounts.keys).suffix(100))
+    retryCounts = retryCounts.filter { keysToKeep.contains($0.key) }
+}
+```
+
+### 9. Separate Disk and Memory Management
+
+❌ **DON'T:** Clean disk cache during memory pressure
+```swift
+// WRONG - Disk cache doesn't affect RAM!
+func handleMemoryWarning() {
+    DiskCacheCleanupManager.shared.clearAllCache()  // ❌
+}
+```
+
+✅ **DO:** Only clean RAM-consuming caches during memory pressure
+```swift
+// CORRECT - Only clean memory caches
+func handleMemoryWarning() {
+    SharedAssetCache.shared.releasePartialCache(percentage: 20)
+    ImageCacheManager.shared.releasePartialCache(percentage: 20)
+    // ✓ Disk cache cleanup happens separately, on schedule
+}
+```
+
 ---
 
 ## Monitoring & Debugging
@@ -694,22 +838,58 @@ print("DEBUG: [ImageCacheManager] ...")
 
 ## Recent Improvements (October 2025)
 
-### 1. Fixed False Memory Warnings
+### 1. Fixed Critical Image Loading Memory Leak (October 28, 2025)
+- **Problem:** Image retry logic caused severe memory leaks
+  - Uncancellable `DispatchQueue.asyncAfter` closures captured completion handlers
+  - Failed images retried infinitely, accumulating closures in memory
+  - Each closure held onto UI views and images via completion handlers
+  - `retryCounts` dictionary grew unbounded, never cleaned up
+  - Could cause app crashes during long sessions or poor network
+- **Solution:** Complete retry system overhaul
+  - Use `DispatchWorkItem` for cancellable retries with `[weak self]`
+  - Track all scheduled retries in dictionary for cancellation
+  - Mark permanently failed images after 3 retries (no more infinite retries)
+  - Cancel ALL scheduled retries during memory pressure
+  - Limit `retryCounts` to 100 items, `permanentlyFailedRequests` to 200 items
+  - Cancel retries when views disappear or app backgrounds
+- **Impact:** 
+  - Prevents memory buildup from failed image loads
+  - Stops infinite retry loops
+  - Aggressive cleanup during memory warnings
+  - Significantly reduces crash risk
+
+### 2. Removed Disk Cache from Memory Management (October 28, 2025)
+- **Problem:** Disk cache cleanup called during memory pressure (incorrect)
+  - `DiskCacheCleanupManager` called in `MemoryWarningManager`
+  - `DiskCacheCleanupManager` called in `MemoryCapManager` (3 places)
+  - **Disk cache does NOT consume RAM** - only disk space
+  - Wasted CPU cycles during critical memory pressure
+- **Solution:** Removed ALL disk cache cleanup from memory handlers
+  - Removed from `MemoryWarningManager.releaseMemoryCaches()`
+  - Removed from `MemoryCapManager.performPreventiveCleanup()`
+  - Removed from `MemoryCapManager.performAggressiveCleanup()`
+  - Removed from `MemoryCapManager.performEmergencyCleanup()`
+- **Impact:**
+  - Memory handlers only clean RAM-consuming caches
+  - Faster memory cleanup response
+  - Disk cache still cleaned on schedule (separate system)
+
+### 3. Fixed False Memory Warnings
 - **Problem:** Aggressive cleanup at ~100MB usage
 - **Solution:** All managers check usage > 1.4GB before cleanup (aligned with preventive threshold)
 - **Impact:** No more unnecessary cleanup at startup; unified threshold design
 
-### 2. Stable Cache Keys
+### 4. Stable Cache Keys
 - **Problem:** Cache invalidated when server/URL changed
 - **Solution:** Use MimeiId/mediaID instead of URLs
 - **Impact:** Cache survives server changes
 
-### 3. Avatar Loading Throttling
+### 5. Avatar Loading Throttling
 - **Problem:** Network congestion in user lists
 - **Solution:** Limit to 4 concurrent avatar loads
 - **Impact:** Better performance in profile views
 
-### 4. Removed Duplicate MemoryCapManager
+### 6. Removed Duplicate MemoryCapManager
 - **Problem:** Two instances doing identical work
 - **Solution:** Synchronized both with 1GB threshold
 - **Impact:** No double cleanup on warnings
