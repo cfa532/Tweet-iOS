@@ -1555,18 +1555,26 @@ struct SimpleVideoPlayer: View {
         
         // Schedule a check with retry logic
         readyCheckTask = Task { @MainActor in
-            // Retry until player is ready (max 10 attempts = 3 seconds)
+            // Retry until player is ready (max 3 attempts = 6 seconds)
             var attempts = 0
-            let maxAttempts = 10
+            let maxAttempts = 3
             
             while attempts < maxAttempts {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { 
+                    NSLog("DEBUG: [VIDEO READY CHECK] Task cancelled for \(self.mid)")
+                    return 
+                }
                 
-                // Wait before checking
-                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                // Wait before checking - give video time to buffer
+                // Progressive backoff: 1s, 2s, 3s
+                let delay = UInt64((attempts + 1) * 1_000_000_000) // 1s, 2s, 3s
+                try? await Task.sleep(nanoseconds: delay)
                 attempts += 1
                 
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { 
+                    NSLog("DEBUG: [VIDEO READY CHECK] Task cancelled for \(self.mid)")
+                    return 
+                }
                 
                 // Check if player is ready with buffered data
                 guard let item = player.currentItem else {
@@ -1576,13 +1584,16 @@ struct SimpleVideoPlayer: View {
                 
                 if item.status == .readyToPlay && !item.loadedTimeRanges.isEmpty {
                     // Player is ready!
+                    NSLog("DEBUG: [VIDEO READY CHECK] Player became ready for \(self.mid) after \(attempts) attempts")
                     break
                 } else {
-                    NSLog("DEBUG: [VIDEO READY CHECK] Player not ready yet for \(self.mid) (attempt \(attempts)/\(maxAttempts), status: \(item.status.rawValue))")
+                    let nextDelay = attempts < maxAttempts ? (attempts + 1) : 0
+                    NSLog("DEBUG: [VIDEO READY CHECK] Player not ready yet for \(self.mid) (attempt \(attempts)/\(maxAttempts), status: \(item.status.rawValue), next check in \(nextDelay)s)")
                     
-                    // If status is failed, stop trying
+                    // If status is failed, cleanup and stop trying
                     if item.status == .failed {
-                        NSLog("⚠️ [VIDEO READY CHECK] Player failed for \(self.mid), stopping retry")
+                        NSLog("⚠️ [VIDEO READY CHECK] Player failed for \(self.mid), cleaning up")
+                        self.cleanupFailedPlayer()
                         return
                     }
                     
@@ -1591,13 +1602,17 @@ struct SimpleVideoPlayer: View {
                 }
             }
             
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else { 
+                NSLog("DEBUG: [VIDEO READY CHECK] Task cancelled for \(self.mid)")
+                return 
+            }
             
             // Final check after all retries
             guard let item = player.currentItem,
                   item.status == .readyToPlay,
                   !item.loadedTimeRanges.isEmpty else {
-                NSLog("⚠️ [VIDEO READY CHECK] Player still not ready after \(attempts) attempts for \(self.mid)")
+                NSLog("⚠️ [VIDEO READY CHECK] Player still not ready after \(attempts) attempts (total ~6s) for \(self.mid), cleaning up")
+                self.cleanupFailedPlayer()
                 return
             }
             
@@ -1605,11 +1620,21 @@ struct SimpleVideoPlayer: View {
             let shouldAutoPlay = self.currentAutoPlay && self.isVisible && self.shouldLoadVideo
             
             if shouldAutoPlay && player.rate == 0 {
-                NSLog("DEBUG: [VIDEO READY CHECK] Player ready after \(attempts) attempts, triggering autoplay for \(self.mid)")
+                NSLog("DEBUG: [VIDEO READY CHECK] Player ready, triggering autoplay for \(self.mid)")
                 NSLog("🔇 [PLAYER MUTE] About to play - current isMuted: \(player.isMuted) for \(self.mid)")
                 player.play()
             }
         }
+    }
+    
+    private func cleanupFailedPlayer() {
+        NSLog("DEBUG: [VIDEO CLEANUP] Cleaning up failed player for \(self.mid)")
+        
+        // Remove from shared cache to free memory
+        SharedAssetCache.shared.clearPlayerForMediaID(self.mid)
+        
+        // Clear local reference
+        self.player = nil
     }
     
     private func removePlayerObservers() {
@@ -1659,21 +1684,18 @@ struct SimpleVideoPlayer: View {
         case .loadFailure:
             removePlayerObservers()
             
-            // Clear player if max retries reached
-            if currentRetryCount >= 3 {
-                player = nil
-                loadingState = .failed(retryCount: 3)
-            } else {
-                loadingState = .failed(retryCount: currentRetryCount)
-            }
+            // Clean up failed player
+            cleanupFailedPlayer()
             
-            // For fullscreen, try to restore from cache
+            // Set to failed state - no automatic retries
+            loadingState = .failed(retryCount: currentRetryCount + 1)
+            player = nil
+            
+            print("DEBUG: [VIDEO ERROR] Video failed to load for \(mid), user can manually retry with long press")
+            
+            // For fullscreen, try to restore from cache as last resort
             if mode == .mediaBrowser {
                 restoreCachedVideoState()
-            } else if currentRetryCount < 3 {
-                // For MediaCell, retry immediately
-                loadingState = .failed(retryCount: currentRetryCount + 1)
-                setupPlayer()
             }
             
         case .manualReset, .networkRecovery:

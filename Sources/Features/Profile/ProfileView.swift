@@ -518,8 +518,6 @@ struct ProfileView: View {
     @State private var lastSignificantDelta: CGFloat = 0
     
     private func handleScroll(offset: CGFloat, delta: CGFloat) {
-        print("[ProfileView] handleScroll called - offset: \(offset), delta: \(delta)")
-        
         // Threshold for detecting intentional scroll
         let scrollThreshold: CGFloat = 15
         
@@ -538,7 +536,6 @@ struct ProfileView: View {
         // Update navigation visibility based on scroll direction
         if isScrollingDown && isNavigationVisible {
             // Scrolling down significantly - hide bottom bar
-            print("[ProfileView] Scrolling DOWN - hiding navigation, posting notification")
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = false
             }
@@ -550,7 +547,6 @@ struct ProfileView: View {
             lastSignificantDelta = delta
         } else if isScrollingUp && !isNavigationVisible {
             // Scrolling up significantly - show bottom bar
-            print("[ProfileView] Scrolling UP - showing navigation, posting notification")
             withAnimation(.easeInOut(duration: 0.4)) {
                 isNavigationVisible = true
             }

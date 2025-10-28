@@ -476,6 +476,30 @@ class SharedAssetCache: ObservableObject {
         print("DEBUG: [SHARED ASSET CACHE] Cleared asset cache for mediaID: \(mediaID)")
     }
     
+    /// Clear player and associated assets for a specific mediaID (for failed players)
+    @MainActor func clearPlayerForMediaID(_ mediaID: String) {
+        // Pause and remove player
+        if let player = playerCache.removeValue(forKey: mediaID) {
+            player.pause()
+            print("DEBUG: [SHARED ASSET CACHE] Paused and removed player for mediaID: \(mediaID)")
+        }
+        
+        // Clear associated data
+        assetCache.removeValue(forKey: mediaID)
+        cacheTimestamps.removeValue(forKey: mediaID)
+        cachingPlayerDelegates.removeValue(forKey: mediaID)
+        cachingPlayerItems.removeValue(forKey: mediaID)
+        resourceLoaderDelegates.removeValue(forKey: mediaID)
+        
+        // Cancel any pending loading tasks
+        if let task = loadingTasks.removeValue(forKey: mediaID) {
+            task.cancel()
+            print("DEBUG: [SHARED ASSET CACHE] Cancelled loading task for mediaID: \(mediaID)")
+        }
+        
+        print("DEBUG: [SHARED ASSET CACHE] Completely cleared failed player and assets for mediaID: \(mediaID)")
+    }
+    
     /// Get cached player or create new one with asset
     func getOrCreatePlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
         guard let mediaID = extractMediaID(from: url) else {
