@@ -216,6 +216,7 @@ struct ProfileView: View {
                 }
             }
         }
+        .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
         .sheet(isPresented: $showEditSheet) {
             ProfileEditView(
                 onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
@@ -550,7 +551,7 @@ struct ProfileView: View {
         } else if isScrollingUp && !isNavigationVisible {
             // Scrolling up significantly - show bottom bar
             print("[ProfileView] Scrolling UP - showing navigation, posting notification")
-            withAnimation(.easeInOut(duration: 0.25)) {
+            withAnimation(.easeInOut(duration: 0.4)) {
                 isNavigationVisible = true
             }
             NotificationCenter.default.post(
