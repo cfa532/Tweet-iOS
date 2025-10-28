@@ -187,10 +187,13 @@ class GlobalImageLoadManager: ObservableObject {
         permanentlyFailedRequests.removeAll()
         
         // Cancel all scheduled retries
-        for workItem in scheduledRetries.values {
-            workItem.cancel()
+        if !scheduledRetries.isEmpty {
+            print("DEBUG: [GlobalImageLoadManager] Clearing history, cancelling \(scheduledRetries.count) scheduled retries")
+            for workItem in scheduledRetries.values {
+                workItem.cancel()
+            }
+            scheduledRetries.removeAll()
         }
-        scheduledRetries.removeAll()
         
         updateStatistics()
     }
@@ -647,10 +650,13 @@ class GlobalImageLoadManager: ObservableObject {
         cancelLoads(priority: .normal)
         
         // Cancel all scheduled retries when app goes to background to save memory
-        for workItem in scheduledRetries.values {
-            workItem.cancel()
+        if !scheduledRetries.isEmpty {
+            print("DEBUG: [GlobalImageLoadManager] App backgrounded, cancelling \(scheduledRetries.count) scheduled retries")
+            for workItem in scheduledRetries.values {
+                workItem.cancel()
+            }
+            scheduledRetries.removeAll()
         }
-        scheduledRetries.removeAll()
     }
     
     private func handleAppForegrounded() {
