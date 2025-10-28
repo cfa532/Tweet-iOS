@@ -289,17 +289,37 @@ struct ProfileView: View {
         .task {
             if !didLoad {
                 isLoading = true
-                _ = try? await hproseInstance.fetchUser(user.mid, baseUrl: "") // force user to reload from server
+                
+                // Fetch fresh user data from server
+                do {
+                    let refreshedUser = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
+                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server")
+                    
+                    // Save updated user to cache if fetch was successful
+                    if let refreshedUser = refreshedUser {
+                        TweetCacheManager.shared.saveUser(refreshedUser)
+                        print("DEBUG: [ProfileView] Saved fetched user to cache")
+                    }
+                } catch {
+                    print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): \(error)")
+                }
+                
+                // Refresh pinned tweets
                 await refreshPinnedTweets()
+                
                 isLoading = false
                 didLoad = true
                 
-                // Resync user data in detached task to update user object in memory
+                // Resync user data on server in background (long-running operation)
                 let userId = user.mid
                 Task.detached {
                     do {
-                        _ = try await hproseInstance.resyncUser(userId: userId)
-                        print("DEBUG: [ProfileView] Successfully resynced user \(userId) - user object updated in memory")
+                        let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
+                        print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
+                        
+                        // Save resynced user to cache
+                        TweetCacheManager.shared.saveUser(resyncedUser)
+                        print("DEBUG: [ProfileView] Saved resynced user to cache")
                     } catch {
                         print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
                     }

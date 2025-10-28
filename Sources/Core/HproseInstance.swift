@@ -754,8 +754,15 @@ final class HproseInstance: ObservableObject {
         
         // If we have a valid cached user that hasn't expired, return it
         // BUT: If baseUrl is nil (cleared after loading from disk cache), we need to re-resolve IP
-        if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil {
+        // ALSO: If baseUrl is empty string, force refresh to re-resolve provider IP
+        if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil && !baseUrl.isEmpty {
+            print("DEBUG: [fetchUser] ✅ Returning cached user for \(userId), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
             return cachedUser
+        }
+        
+        // If baseUrl is empty, force update from server to re-resolve provider IP
+        if baseUrl.isEmpty && cachedUser.username != nil {
+            print("DEBUG: [fetchUser] 🔄 baseUrl is empty, forcing IP re-evaluation for userId: \(userId), current baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
         }
         
         // If cached user has nil baseUrl (loaded from disk), re-resolve IP even if cache hasn't expired
@@ -905,11 +912,12 @@ final class HproseInstance: ObservableObject {
         return try await retryOperation(maxRetries: 3) {
             // Always re-resolve IP address from provider to handle cases where the node's IP has changed
             // Even if we have a cached baseUrl, the hostId might now resolve to a different IP
-            print("DEBUG: [updateUserFromServer] Re-resolving provider IP for userId: \(userId)")
+            let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
+            print("DEBUG: [updateUserFromServer] 🔍 Re-resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl)")
             guard let providerIP = try await self.getProviderIP(userId) else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
             }
-            print("DEBUG: [updateUserFromServer] Setting baseUrl to provider IP: \(providerIP) for userId: \(userId)")
+            print("DEBUG: [updateUserFromServer] ✅ Setting baseUrl to provider IP: \(providerIP) for userId: \(userId) (was: \(oldBaseUrl))")
             await MainActor.run {
                 user.baseUrl = URL(string: "http://\(providerIP)")!
             }

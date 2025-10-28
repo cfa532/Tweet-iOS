@@ -289,7 +289,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Foreground handling is now done by SimpleVideoPlayer's notification observers
     }
     
-    /// Refresh appUser's IP address when app returns from background
+    /// Refresh appUser's provider IP when app returns from background
     /// This prevents using stale IPs if the server moved while app was suspended
     private func refreshAppUserIP() async {
         let appUser = HproseInstance.shared.appUser
@@ -300,41 +300,26 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
         
-        // Get fresh IP from server
-        do {
-            print("[AppDelegate] Refreshing appUser IP address...")
-            let hproseInstance = HproseInstance.shared
-            
-            // Get current provider IP
-            guard let freshIP = try await hproseInstance.getProviderIP(appUser.mid) else {
-                print("[AppDelegate] Failed to get provider IP for appUser")
-                return
-            }
-            
-            let oldIP = appUser.baseUrl?.host ?? "nil"
-            let newIP = freshIP
-            
-            // Update appUser's baseUrl if IP has changed
-            await MainActor.run {
-                appUser.baseUrl = URL(string: "http://\(freshIP)")
+        let hproseInstance = HproseInstance.shared
+        
+        // Refresh provider IP in background (non-blocking)
+        Task.detached {
+            do {
+                print("[AppDelegate] Refreshing appUser provider IP...")
                 
-                if oldIP != newIP {
-                    print("[AppDelegate] ✅ AppUser IP updated: \(oldIP) → \(newIP)")
-                } else {
-                    print("[AppDelegate] ✅ AppUser IP unchanged: \(newIP)")
+                // Force IP re-evaluation by passing empty baseUrl
+                let refreshedUser = try await hproseInstance.fetchUser(appUser.mid, baseUrl: "")
+                print("[AppDelegate] Successfully refreshed appUser provider IP")
+                
+                // Save updated user to cache if fetch was successful
+                if let refreshedUser = refreshedUser {
+                    TweetCacheManager.shared.saveUser(refreshedUser)
+                    print("[AppDelegate] Saved refreshed appUser to cache")
                 }
+            } catch {
+                print("[AppDelegate] ⚠️ Failed to refresh appUser IP: \(error)")
+                // Non-fatal - we'll continue with cached IP and retry on next API call
             }
-            
-            // Also update the HproseInstance base URL if this is the primary user
-            if HproseInstance.baseUrl.host != freshIP {
-                HproseInstance.baseUrl = URL(string: "http://\(freshIP)")!
-                hproseInstance.client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                print("[AppDelegate] Updated HproseInstance baseUrl to: \(freshIP)")
-            }
-            
-        } catch {
-            print("[AppDelegate] ⚠️ Failed to refresh appUser IP: \(error)")
-            // Non-fatal - we'll continue with cached IP and retry on next API call
         }
     }
     
