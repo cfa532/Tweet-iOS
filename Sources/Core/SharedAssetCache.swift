@@ -734,37 +734,50 @@ class SharedAssetCache: ObservableObject {
         }
         
         // Look for cached playlist files in order of preference
-        // The cache stores playlists with their original names (master.m3u8, _master.m3u8, playlist.m3u8)
-        let possiblePlaylistNames = ["_master.m3u8", "master.m3u8", "_playlist.m3u8", "playlist.m3u8"]
+        // Playlists may be in subdirectories like /720p, /480p, etc.
+        let possiblePlaylistNames = ["master.m3u8", "_master.m3u8", "playlist.m3u8", "_playlist.m3u8"]
         
-        for playlistName in possiblePlaylistNames {
-            let playlistPath = mediaCacheDir.appendingPathComponent(playlistName)
+        // Search recursively for playlists in subdirectories
+        guard let enumerator = FileManager.default.enumerator(
+            at: mediaCacheDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            NSLog("DEBUG: [SHARED ASSET CACHE] Failed to create enumerator for \(mediaCacheDir.path)")
+            return nil
+        }
+        
+        // Collect all valid playlists found
+        var foundPlaylists: [(url: URL, name: String)] = []
+        
+        while let fileURL = enumerator.nextObject() as? URL {
+            let fileName = fileURL.lastPathComponent
             
-            if FileManager.default.fileExists(atPath: playlistPath.path) {
+            if possiblePlaylistNames.contains(fileName) {
                 // Validate that the cached playlist is not empty and contains valid content
-                do {
-                    let data = try Data(contentsOf: playlistPath)
-                    let playlistString = String(data: data, encoding: .utf8) ?? ""
-                    
-                    // Check if playlist contains valid HLS content (segment references or sub-playlist references)
-                    let hasValidContent = playlistString.contains("#EXTM3U") && 
-                                         (playlistString.contains(".ts") || playlistString.contains(".m3u8"))
-                    
-                    if hasValidContent {
-                        // Reconstruct the URL that this playlist represents
-                        // If it's _master.m3u8, the original was master.m3u8
-                        let originalFilename = playlistName.replacingOccurrences(of: "_", with: "")
-                        let reconstructedURL = baseURL.appendingPathComponent(originalFilename)
-                        
-                        NSLog("DEBUG: [SHARED ASSET CACHE] Found valid cached playlist at: \(playlistPath.path)")
-                        NSLog("DEBUG: [SHARED ASSET CACHE] Reconstructed URL: \(reconstructedURL.absoluteString)")
-                        return reconstructedURL
-                    } else {
-                        NSLog("DEBUG: [SHARED ASSET CACHE] Cached playlist at \(playlistPath.path) is invalid or empty")
-                    }
-                } catch {
-                    NSLog("DEBUG: [SHARED ASSET CACHE] Error reading cached playlist at \(playlistPath.path): \(error)")
+                if let data = try? Data(contentsOf: fileURL),
+                   let playlistString = String(data: data, encoding: .utf8),
+                   playlistString.contains("#EXTM3U") &&
+                   (playlistString.contains(".ts") || playlistString.contains(".m3u8")) {
+                    foundPlaylists.append((url: fileURL, name: fileName))
                 }
+            }
+        }
+        
+        // Return the highest priority playlist found
+        for playlistName in possiblePlaylistNames {
+            if let found = foundPlaylists.first(where: { $0.name == playlistName }) {
+                // Remove underscore prefix from filename only (e.g., _master.m3u8 -> master.m3u8)
+                let cachedFileName = found.url.lastPathComponent
+                let fileName = cachedFileName.hasPrefix("_") ? String(cachedFileName.dropFirst()) : cachedFileName
+                
+                // baseURL already contains the full path including mediaID (e.g., http://.../ipfs/QmHash)
+                // We just need to append the filename directly
+                let reconstructedURL = baseURL.appendingPathComponent(fileName)
+                
+                NSLog("DEBUG: [SHARED ASSET CACHE] ✅ Found cached playlist (NO NETWORK): \(found.url.path)")
+                NSLog("DEBUG: [SHARED ASSET CACHE] Reconstructed URL: \(reconstructedURL.absoluteString)")
+                return reconstructedURL
             }
         }
         
