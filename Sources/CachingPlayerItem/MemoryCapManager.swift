@@ -195,6 +195,9 @@ class MemoryCapManager {
     private func performAggressiveCleanup() {
         logger.info("Performing aggressive memory cleanup")
         
+        // CRITICAL: Cancel active downloads first to stop memory growth
+        SharedAssetCache.shared.cancelAllLoadingTasks()
+        
         // Clean up more video caches (memory)
         SharedAssetCache.shared.releasePartialCache(percentage: 60)
         
@@ -207,6 +210,14 @@ class MemoryCapManager {
         // Clear chat cache
         ChatCacheManager.shared.clearMemoryCache()
         
+        // Notify user about memory pressure
+        let memoryMB = currentMemoryUsage / (1024 * 1024)
+        NotificationCenter.default.post(
+            name: .memoryWarningCritical,
+            object: nil,
+            userInfo: ["memoryMB": memoryMB, "severity": "high"]
+        )
+        
         // Force garbage collection
         DispatchQueue.global(qos: .utility).async {
             // This helps trigger ARC cleanup
@@ -216,6 +227,9 @@ class MemoryCapManager {
     @MainActor
     private func performEmergencyCleanup() {
         logger.error("Performing EMERGENCY memory cleanup to enforce 2GB hard cap")
+        
+        // CRITICAL: Cancel ALL active downloads IMMEDIATELY to stop memory growth
+        SharedAssetCache.shared.cancelAllLoadingTasks()
         
         // Clear 80% of video caches - keep only most recent
         SharedAssetCache.shared.releasePartialCache(percentage: 80)
@@ -230,6 +244,14 @@ class MemoryCapManager {
         // Clear video state cache
         VideoStateCache.shared.clearAllCache()
         
+        // Notify user about critical memory situation
+        let memoryMB = currentMemoryUsage / (1024 * 1024)
+        NotificationCenter.default.post(
+            name: .memoryWarningCritical,
+            object: nil,
+            userInfo: ["memoryMB": memoryMB, "severity": "critical"]
+        )
+        
         // Force garbage collection
         DispatchQueue.global(qos: .utility).async {
             autoreleasepool {
@@ -237,7 +259,7 @@ class MemoryCapManager {
             }
         }
         
-        print("⚠️ EMERGENCY CLEANUP COMPLETE - cleared 80% of caches + ALL disk cache to stay under 2GB cap")
+        print("⚠️ EMERGENCY CLEANUP COMPLETE - cancelled all downloads, cleared 80% of caches to stay under 2GB cap")
     }
     
     @MainActor

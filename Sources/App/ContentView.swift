@@ -193,6 +193,27 @@ struct ContentView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .memoryWarningCritical)) { notification in
+            if let memoryMB = notification.userInfo?["memoryMB"] as? UInt64,
+               let severity = notification.userInfo?["severity"] as? String {
+                
+                let memoryGB = String(format: "%.1f", Double(memoryMB) / 1024.0)
+                
+                if severity == "critical" {
+                    toastMessage = NSLocalizedString("Memory critically low (\(memoryGB)GB). Please restart the app to free resources.", comment: "Critical memory warning")
+                } else {
+                    toastMessage = NSLocalizedString("Memory is running low (\(memoryGB)GB). Consider restarting the app if issues persist.", comment: "High memory warning")
+                }
+                
+                toastType = .error
+                showToast = true
+                
+                // Keep toast visible longer for memory warnings (10 seconds)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                    withAnimation { showToast = false }
+                }
+            }
+        }
         .overlay(
             // Toast message overlay
             VStack {

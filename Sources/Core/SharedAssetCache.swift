@@ -847,6 +847,30 @@ class SharedAssetCache: ObservableObject {
         print("DEBUG: [SharedAssetCache] All caches cleared")
     }
     
+    /// Cancel all active loading tasks to free memory immediately
+    @MainActor func cancelAllLoadingTasks() {
+        let taskCount = loadingTasks.count + preloadTasks.count
+        
+        if taskCount > 0 {
+            print("⚠️ [SharedAssetCache] EMERGENCY: Cancelling \(taskCount) active downloads to prevent crash")
+        }
+        
+        // Cancel all asset loading tasks
+        for (key, task) in loadingTasks {
+            task.cancel()
+            print("🚫 [SharedAssetCache] Cancelled loading task: \(key)")
+        }
+        loadingTasks.removeAll()
+        
+        // Cancel all preload tasks
+        for (key, task) in preloadTasks {
+            task.cancel()
+        }
+        preloadTasks.removeAll()
+        
+        print("DEBUG: [SharedAssetCache] All loading tasks cancelled")
+    }
+    
     /// Release a percentage of cache to free memory (preserves current playing videos)
     @MainActor func releasePartialCache(percentage: Int) {
         let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range
@@ -1076,13 +1100,16 @@ class SharedAssetCache: ObservableObject {
         // Only release cache if memory usage exceeds 1.4GB (preventive cleanup threshold)
         if memoryUsageMB > 1400 {
             print("DEBUG: [SharedAssetCache] Memory usage exceeds 1.4GB, releasing 30% of cache")
+            
+            // CRITICAL: Cancel active downloads to prevent memory from growing further
+            cancelAllLoadingTasks()
+            
             // Release 30% of cache (less aggressive)
             releasePartialCache(percentage: 30)
         } else {
             print("DEBUG: [SharedAssetCache] Memory usage under 1.4GB, no action needed")
         }
         
-        // Don't cancel ongoing loadings - let them complete for better UX
         // Don't clear URL mapping - preserve user's browsing context
     }
     

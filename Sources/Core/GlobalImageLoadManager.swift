@@ -57,7 +57,7 @@ class GlobalImageLoadManager: ObservableObject {
     static let shared = GlobalImageLoadManager()
     
     // MARK: - Configuration
-    private let maxConcurrentLoads = 8
+    private let maxConcurrentLoads = 16  // Increased from 8 for better network utilization
     private let maxQueueSize = 100
     private let memoryWarningThreshold = 0.8 // 80% of available memory
     

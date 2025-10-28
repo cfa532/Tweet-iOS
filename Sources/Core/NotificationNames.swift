@@ -63,6 +63,10 @@ extension Notification.Name {
     static let commentPublishFailed = Notification.Name("CommentPublishFailed")
     static let commentDeleteFailed = Notification.Name("CommentDeleteFailed")
     
+    // MARK: - Memory Management
+    /// Posted when memory usage is critically high
+    static let memoryWarningCritical = Notification.Name("MemoryWarningCritical")
+    
     // MARK: - Chat Related
     /// Posted when a new chat message is received
     static let newChatMessageReceived = Notification.Name("NewChatMessageReceived")
