@@ -520,6 +520,11 @@ class SharedAssetCache: ObservableObject {
             return cachedPlayer
         }
         
+        // CRITICAL: Notify VideoLoadingManager that a load is starting
+        await MainActor.run {
+            VideoLoadingManager.shared.videoLoadStarted()
+        }
+        
         // Use MediaType to determine video type if available, otherwise fall back to URL-based detection
         let isHLSVideo: Bool
         if let mediaType = mediaType {
@@ -535,7 +540,20 @@ class SharedAssetCache: ObservableObject {
         if isHLSVideo {
             // Use CachingPlayerItem for HLS videos
             NSLog("DEBUG: [SHARED ASSET CACHE] Using CachingPlayerItem for HLS video: \(url.absoluteString)")
-            return try await createCachingPlayer(for: url, tweetId: tweetId)
+            do {
+                let player = try await createCachingPlayer(for: url, tweetId: tweetId)
+                // Notify success
+                await MainActor.run {
+                    VideoLoadingManager.shared.videoLoadCompleted()
+                }
+                return player
+            } catch {
+                // Notify failure
+                await MainActor.run {
+                    VideoLoadingManager.shared.videoLoadCompleted()
+                }
+                throw error
+            }
         } else {
             // For progressive videos, use LocalHTTPServer to proxy and fix Content-Type
             NSLog("DEBUG: [SHARED ASSET CACHE] Creating progressive video player via LocalHTTPServer for \(mediaID)")
@@ -570,6 +588,8 @@ class SharedAssetCache: ObservableObject {
             await MainActor.run { 
                 cachePlayer(player, for: cacheKey)
                 NSLog("DEBUG: [SHARED ASSET CACHE] Cached progressive player with cacheKey: \(cacheKey)")
+                // Notify completion
+                VideoLoadingManager.shared.videoLoadCompleted()
             }
             
             return player
@@ -582,6 +602,8 @@ class SharedAssetCache: ObservableObject {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
         
+        let startTime = Date()
+        NSLog("⏱️ [VIDEO LOAD START] Creating CachingPlayerItem for mediaID: \(mediaID)")
         NSLog("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for HLS video: \(url.absoluteString), mediaID: \(mediaID)")
         
         // Check if we have cached content first to avoid network requests
@@ -594,7 +616,10 @@ class SharedAssetCache: ObservableObject {
             resolvedURL = cachedURL
         } else {
             NSLog("DEBUG: [SHARED ASSET CACHE] No cached playlist found, resolving HLS URL from network")
+            let resolveStart = Date()
             resolvedURL = await resolveHLSURL(url)
+            let resolveTime = Date().timeIntervalSince(resolveStart)
+            NSLog("⏱️ [HLS RESOLVE] Took \(String(format: "%.2f", resolveTime))s for mediaID: \(mediaID)")
             NSLog("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL from network: \(resolvedURL.absoluteString)")
         }
         
@@ -639,6 +664,8 @@ class SharedAssetCache: ObservableObject {
         
         // DON'T auto-play here - let the view decide when to play
         // The player is ready, the view will call play() when appropriate
+        let totalTime = Date().timeIntervalSince(startTime)
+        NSLog("⏱️ [VIDEO LOAD COMPLETE] Total time: \(String(format: "%.2f", totalTime))s for mediaID: \(mediaID)")
         NSLog("DEBUG: [SHARED ASSET CACHE] Player created and cached for mediaID: \(mediaID), ready for playback")
         
         return player

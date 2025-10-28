@@ -23,7 +23,7 @@ class ImageCacheManager: @unchecked Sendable {
     private let requestsQueue = DispatchQueue(label: "com.tweet.imagecache.requests", attributes: .concurrent)
     
     // Avatar loading throttling
-    private let maxConcurrentAvatarLoads = 8 // Increased from 4 for better network utilization
+    private let maxConcurrentAvatarLoads = 4 // Balanced for stable network performance
     private var activeAvatarLoads: [String: Task<UIImage?, Never>] = [:]
     private var pendingAvatarRequests: [(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL, continuation: CheckedContinuation<UIImage?, Never>)] = []
     private let avatarQueue = DispatchQueue(label: "com.tweet.imagecache.avatars", attributes: .concurrent)

@@ -1617,24 +1617,13 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 // CRITICAL: For HLS videos, .readyToPlay fires BEFORE data is buffered
-                // Check if we have buffered data before hiding spinner
+                // Check if we have buffered data before acting
                 let hasBufferedData = !item.loadedTimeRanges.isEmpty
                 NSLog("✅ [KVO STATUS] Player ready for \(mid) - buffered: \(hasBufferedData)")
                 
                 DispatchQueue.main.async {
-                    // Only hide spinner if we have buffered data (or it's a progressive video that's truly ready)
-                    if hasBufferedData {
-                        loadingState = .loaded
-                        NSLog("🎬 [KVO STATUS] Hiding spinner for \(mid)")
-                        
-                        // OPTIMIZATION: Stop observing status once we've handled readiness
-                        // Status rarely changes after .readyToPlay, so no need to keep observing
-                        self.playerItemStatusObserver?.invalidate()
-                        self.playerItemStatusObserver = nil
-                        NSLog("🛑 [KVO STATUS] Stopped observing status for \(mid) - player ready, job done!")
-                    } else {
-                        NSLog("⏳ [KVO STATUS] Ready but no buffer yet for \(mid) - will wait for buffer observer")
-                    }
+                    // Don't hide spinner yet - let buffer observer handle that
+                    // Just start playback/preroll when ready
                     
                     if shouldAutoPlay {
                         // Start playing automatically
@@ -1643,35 +1632,28 @@ struct SimpleVideoPlayer: View {
                     } else {
                         // Preroll to render first frame without playing
                         player.preroll(atRate: 0.0) { finished in
-                            guard finished else { return }
-                            NSLog("🎬 [VIDEO READY] Prerolled first frame for \(mid)")
-                            // Hide spinner after preroll completes
-                            DispatchQueue.main.async {
-                                loadingState = .loaded
+                            guard finished else { 
+                                NSLog("❌ [PREROLL] Failed for \(mid), keeping observers active")
+                                return 
                             }
+                            NSLog("🎬 [VIDEO READY] Prerolled first frame for \(mid)")
                         }
                     }
                 }
             }
             
-            // Observe buffered data to hide spinner when data arrives (for HLS videos that start playing before buffering)
+            // Observe buffered data to hide spinner when data arrives
             playerItemBufferObserver = playerItem.observe(\.loadedTimeRanges, options: [.new]) { item, change in
                 
                 let hasBufferedData = !item.loadedTimeRanges.isEmpty
                 NSLog("🔍 [KVO BUFFER] Fired for \(mid) - hasData: \(hasBufferedData), loadingState: \(loadingState)")
                 
                 DispatchQueue.main.async {
-                    // Hide spinner once we have buffered data
-                    if hasBufferedData && loadingState.isLoading {
-                        NSLog("📦 [BUFFER READY] Data buffered for \(mid), hiding spinner")
+                    // Hide spinner once we have buffered data AND player is ready
+                    if hasBufferedData && loadingState.isLoading && item.status == .readyToPlay {
+                        NSLog("📦 [BUFFER READY] Data buffered and player ready for \(mid), hiding spinner")
                         loadingState = .loaded
-                        
-                        // OPTIMIZATION: Stop observing once spinner is hidden
-                        // The buffer observer's only job is to hide the spinner
-                        // After that, we don't need to keep firing on every segment load
-                        self.playerItemBufferObserver?.invalidate()
-                        self.playerItemBufferObserver = nil
-                        NSLog("🛑 [KVO BUFFER] Stopped observing buffer for \(mid) - spinner hidden, job done!")
+                        // Keep observer active to detect stalls - it will be cleaned up when view disappears
                     }
                 }
             }
@@ -1682,7 +1664,7 @@ struct SimpleVideoPlayer: View {
                 let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
                 NSLog("✅ [INITIAL CHECK] Already ready for \(mid) - buffered: \(hasBufferedData)")
                 
-                // Only hide spinner if we have buffered data
+                // Hide spinner if we have buffered data
                 if hasBufferedData {
                     loadingState = .loaded
                     NSLog("🎬 [INITIAL CHECK] Hiding spinner immediately for \(mid)")
@@ -1696,14 +1678,10 @@ struct SimpleVideoPlayer: View {
                 } else {
                     player.preroll(atRate: 0.0) { finished in
                         guard finished else { 
-                            NSLog("❌ [PREROLL] Failed for \(mid)")
+                            NSLog("❌ [PREROLL] Failed for \(mid), keeping observers active for retry")
                             return 
                         }
                         NSLog("🎬 [VIDEO SETUP] Already ready - prerolled \(mid)")
-                        // Hide spinner after preroll completes
-                        DispatchQueue.main.async {
-                            loadingState = .loaded
-                        }
                     }
                 }
             } else {
