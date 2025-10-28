@@ -199,8 +199,13 @@ struct UserRowView: View {
                         // If username is nil, start a delayed check to verify background fetch succeeded
                         if fetchedUser.username == nil || fetchedUser.username?.isEmpty == true {
                             Task {
-                                // Wait 5 seconds for background fetch to complete
-                                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                                // Wait 15 seconds for background fetch to complete
+                                // This accounts for:
+                                // - Network latency
+                                // - 3 retries with 1s and 2s delays = ~3s
+                                // - Server processing time
+                                // - IP resolution time
+                                try? await Task.sleep(nanoseconds: 15_000_000_000)
                                 
                                 // Check if username is still nil after background fetch
                                 // Fetch from singleton to get latest data
@@ -209,7 +214,7 @@ struct UserRowView: View {
                                 await MainActor.run {
                                     guard taskCancellationToken == currentCancellationToken else { return }
                                     if updatedUser.username == nil || updatedUser.username?.isEmpty == true {
-                                        print("DEBUG: [UserRowView] Background fetch failed to populate username for \(userId), hiding row")
+                                        print("DEBUG: [UserRowView] Background fetch failed after 15s timeout for \(userId), hiding row")
                                         self.loadFailed = true
                                         self.onLoadFailed?(userId)
                                     } else {

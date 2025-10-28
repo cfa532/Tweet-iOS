@@ -1,4 +1,4 @@
-import Foundation
+ import Foundation
 import Combine
 import hprose
 
@@ -23,13 +23,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     @Published var tweetCount: Int? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when tweetCount changes
                 if let newValue = tweetCount, newValue != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.tweetCount = newValue
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.tweetCount = newValue
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -38,13 +41,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var followingCount: Int? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when followingCount changes
                 if let newValue = followingCount, newValue != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.followingCount = newValue
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.followingCount = newValue
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -53,13 +59,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var followersCount: Int? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when followersCount changes
                 if let newValue = followersCount, newValue != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.followersCount = newValue
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.followersCount = newValue
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -68,13 +77,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var bookmarksCount: Int? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when bookmarksCount changes
                 if let newValue = bookmarksCount, newValue != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.bookmarksCount = newValue
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.bookmarksCount = newValue
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -83,13 +95,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var favoritesCount: Int? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when favoritesCount changes
                 if let newValue = favoritesCount, newValue != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.favoritesCount = newValue
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.favoritesCount = newValue
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -161,13 +176,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var followingList: [MimeiId]? // List of MimeiId
     @Published var bookmarkedTweets: [MimeiId]? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when bookmarkedTweets changes
                 if bookmarkedTweets != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.bookmarkedTweets = bookmarkedTweets
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.bookmarkedTweets = bookmarkedTweets
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -176,13 +194,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var favoriteTweets: [MimeiId]? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when favoriteTweets changes
                 if favoriteTweets != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.favoriteTweets = favoriteTweets
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.favoriteTweets = favoriteTweets
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
