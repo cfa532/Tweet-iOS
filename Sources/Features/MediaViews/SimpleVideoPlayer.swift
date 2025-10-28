@@ -230,6 +230,7 @@ struct SimpleVideoPlayer: View {
             .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
             .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
             .onReceive(NotificationCenter.default.publisher(for: .videoLayerRefresh)) { _ in handleVideoLayerRefresh() }
+            .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in handleAppUserReady() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in handleWillResignActive() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in handleWillEnterForeground() }
@@ -955,6 +956,46 @@ struct SimpleVideoPlayer: View {
             if let player = player {
                 player.isMuted = false
                 print("DEBUG: [VIDEO LAYER REFRESH] Ensured unmuted state for detail/fullscreen mode")
+            }
+        }
+    }
+    
+    private func handleAppUserReady() {
+        // This is called when app initialization completes
+        // Force reload for any videos that were blocked waiting for initialization
+        print("DEBUG: [APP USER READY] App initialized for \(mid), loadingState: \(loadingState), player: \(player != nil)")
+        
+        // Only force reload if:
+        // 1. We have a player (meaning setup was attempted)
+        // 2. We're in a loading state (stuck waiting)
+        // 3. We haven't loaded any data yet
+        guard let player = player, case .loading = loadingState else {
+            return
+        }
+        
+        // Check if player has any data loaded
+        if let playerItem = player.currentItem,
+           playerItem.status == .unknown,
+           playerItem.loadedTimeRanges.isEmpty {
+            print("🔄 [APP USER READY] Player stuck with no data, forcing reload for \(mid)")
+            
+            // Force reload by replacing the current item with a new one
+            Task { @MainActor in
+                player.pause()
+                loadingState = .idle
+                
+                // Recreate the player
+                do {
+                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(
+                        for: url,
+                        tweetId: mid,
+                        mediaType: mediaType
+                    )
+                    self.player = newPlayer
+                    configurePlayer(newPlayer)
+                } catch {
+                    print("❌ [APP USER READY] Failed to reload player: \(error)")
+                }
             }
         }
     }
