@@ -726,11 +726,15 @@ public class LocalHTTPServer: @unchecked Sendable {
         let isProbeRequest = requestSize < 1024  // Requests < 1KB are just probes
         
         // Check cache for this specific range (skip probes)
-        if !isProbeRequest, let start = rangeStart, let cachedData = readCachedProgressiveRange(mediaID: mediaID, start: start, end: rangeEnd) {
+        // CRITICAL: If no range header, try to serve full file from cache (range 0-end)
+        let effectiveStart = rangeStart ?? 0
+        let effectiveEnd = rangeEnd
+        
+        if !isProbeRequest, let cachedData = readCachedProgressiveRange(mediaID: mediaID, start: effectiveStart, end: effectiveEnd) {
             // Validate cached data size
             if cachedData.count >= 1024 {
                 // CACHE HIT - serve from cache instantly
-                let rangeStr = rangeEnd != nil ? "\(start)-\(rangeEnd!)" : "\(start)-end"
+                let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(effectiveEnd?.description ?? "end")" : "full-file"
                 NSLog("🎯 [PROGRESSIVE CACHE HIT] mediaID: \(mediaID), range: \(rangeStr), size: \(cachedData.count) bytes")
                 
                 var headers: [String: String] = [
@@ -739,8 +743,8 @@ public class LocalHTTPServer: @unchecked Sendable {
                     "Accept-Ranges": "bytes"
                 ]
                 
-                if let end = rangeEnd {
-                    headers["Content-Range"] = "bytes \(start)-\(end)/*"
+                if rangeHeader != nil, let end = effectiveEnd {
+                    headers["Content-Range"] = "bytes \(effectiveStart)-\(end)/*"
                 }
                 
                 let statusCode = rangeHeader != nil ? 206 : 200
@@ -749,10 +753,10 @@ public class LocalHTTPServer: @unchecked Sendable {
             } else {
                 // Delete corrupted cache
                 NSLog("⚠️ [PROGRESSIVE CACHE] Deleting corrupted cache: \(cachedData.count) bytes for mediaID: \(mediaID)")
-                deleteCachedProgressiveRange(mediaID: mediaID, start: start, end: rangeEnd)
+                deleteCachedProgressiveRange(mediaID: mediaID, start: effectiveStart, end: effectiveEnd)
             }
-        } else if !isProbeRequest, let start = rangeStart {
-            let rangeStr = rangeEnd != nil ? "\(start)-\(rangeEnd!)" : "\(start)-end"
+        } else if !isProbeRequest {
+            let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(effectiveEnd?.description ?? "end")" : "full-file"
             NSLog("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr) - will fetch from network")
         }
         
@@ -879,7 +883,10 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             
             // Check if cached range fully contains requested range
-            if cachedStart <= start && cachedEnd >= requestEnd {
+            // CRITICAL: When end is nil (full file request), accept any cache starting at requested position
+            let containsRequest = cachedStart <= start && (end == nil ? true : cachedEnd >= requestEnd)
+            
+            if containsRequest {
                 let cachePath = mediaDir.appendingPathComponent(file)
                 guard let fullData = try? Data(contentsOf: cachePath) else {
                     continue

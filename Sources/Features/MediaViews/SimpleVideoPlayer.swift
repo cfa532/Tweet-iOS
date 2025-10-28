@@ -33,6 +33,11 @@ enum LoadingState {
         return false
     }
     
+    var isLoaded: Bool {
+        if case .loaded = self { return true }
+        return false
+    }
+    
     var retryCount: Int {
         if case .failed(let count) = self { return count }
         return 0
@@ -1064,38 +1069,22 @@ struct SimpleVideoPlayer: View {
             ZStack {
                 Color.black.opacity(0.9)
                 
-                // Always show spinner when no player exists
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.2)
-                
-                // Error state
+                // Show spinner when loading, or error icon when failed
                 if loadingState.hasFailed {
+                    // Just show error icon, no retry button
                     VStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.title)
-                            .foregroundColor(.white)
-                        Text("Failed to load video")
-                            .foregroundColor(.white)
+                            .foregroundColor(.white.opacity(0.7))
+                        Text("Failed to load")
+                            .foregroundColor(.white.opacity(0.7))
                             .font(.caption)
-                        Button(action: {
-                            handleError(strategy: .manualReset)
-                        }) {
-                            HStack {
-                                Image(systemName: "arrow.clockwise")
-                                Text("Retry")
-                            }
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.blue.opacity(0.8))
-                            .cornerRadius(4)
-                        }
                     }
-                    .padding()
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(8)
+                } else {
+                    // Show spinner when loading
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.2)
                 }
                 
                 // Long press indicator with reload icon
@@ -1163,8 +1152,10 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // Mark as loading to prevent duplicate calls
-        loadingState = .loading
+        // Mark as loading to prevent duplicate calls (unless already loaded from tweetDetail path)
+        if !loadingState.isLoaded {
+            loadingState = .loading
+        }
         
         // SPECIAL CASE: For TweetDetail mode, use singleton DetailVideoManager
         if mode == .tweetDetail {
@@ -1515,7 +1506,10 @@ struct SimpleVideoPlayer: View {
         // This ensures the view's player binding is set when reusing cached players
         self.player = player
         // DON'T set loadingState = .loaded here! Let the KVO observers handle it based on actual readiness
-        self.loadingState = .loading  // Show spinner while video loads
+        // CRITICAL: Don't overwrite .loaded state (tweetDetail sets it before calling this)
+        if !self.loadingState.isLoaded {
+            self.loadingState = .loading  // Show spinner while video loads
+        }
         self.playbackState = .notStarted
         self.representableId += 1 // Force VideoPlayerRepresentable to recreate
         self.viewConfigTimestamp = Date().timeIntervalSince1970 // Force unique view ID
@@ -1611,6 +1605,15 @@ struct SimpleVideoPlayer: View {
                 
                 NSLog("🔍 [KVO STATUS] Fired for \(mid) - status: \(item.status.rawValue), buffered: \(!item.loadedTimeRanges.isEmpty)")
                 
+                // Check for failed status first
+                if item.status == .failed {
+                    NSLog("❌ [KVO STATUS] Player FAILED for \(mid) - error: \(item.error?.localizedDescription ?? "unknown")")
+                    DispatchQueue.main.async {
+                        self.handleError(strategy: .loadFailure)
+                    }
+                    return
+                }
+                
                 guard item.status == .readyToPlay else { 
                     NSLog("⏳ [KVO STATUS] Not ready yet for \(mid) - status: \(item.status.rawValue)")
                     return 
@@ -1622,8 +1625,11 @@ struct SimpleVideoPlayer: View {
                 NSLog("✅ [KVO STATUS] Player ready for \(mid) - buffered: \(hasBufferedData)")
                 
                 DispatchQueue.main.async {
-                    // Don't hide spinner yet - let buffer observer handle that
-                    // Just start playback/preroll when ready
+                    // CRITICAL: Hide spinner if we have buffered data (buffer observer might have already fired)
+                    if hasBufferedData && loadingState.isLoading {
+                        NSLog("📦 [STATUS READY] Data already buffered, hiding spinner for \(mid)")
+                        loadingState = .loaded
+                    }
                     
                     if shouldAutoPlay {
                         // Start playing automatically
@@ -1752,14 +1758,37 @@ struct SimpleVideoPlayer: View {
             // Clean up failed player
             cleanupFailedPlayer()
             
-            // Set to failed state - no automatic retries
-            loadingState = .failed(retryCount: currentRetryCount + 1)
-            player = nil
-            
-            print("DEBUG: [VIDEO ERROR] Video failed to load for \(mid), user can manually retry with long press")
+            // Automatic retry up to 3 times
+            if currentRetryCount < 3 {
+                let retryDelay = Double(currentRetryCount + 1) * 1.0 // 1s, 2s, 3s delays
+                print("DEBUG: [VIDEO ERROR] Auto-retry #\(currentRetryCount + 1) in \(retryDelay)s for \(mid)")
+                
+                loadingState = .failed(retryCount: currentRetryCount + 1)
+                player = nil
+                
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+                    
+                    // Only retry if still visible and should load
+                    guard self.isVisible && self.shouldLoadVideo else {
+                        print("DEBUG: [VIDEO ERROR] Skipping retry - video no longer visible")
+                        return
+                    }
+                    
+                    print("DEBUG: [VIDEO ERROR] Executing auto-retry for \(self.mid)")
+                    self.loadingState = .idle
+                    self.playbackState = .notStarted
+                    self.setupPlayer()
+                }
+            } else {
+                // After 3 retries, give up
+                loadingState = .failed(retryCount: currentRetryCount + 1)
+                player = nil
+                print("DEBUG: [VIDEO ERROR] Video permanently failed after 3 retries for \(mid)")
+            }
             
             // For fullscreen, try to restore from cache as last resort
-            if mode == .mediaBrowser {
+            if mode == .mediaBrowser && currentRetryCount >= 3 {
                 restoreCachedVideoState()
             }
             
