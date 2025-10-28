@@ -350,6 +350,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.avatar = user.avatar
             instance.email = user.email
             instance.profile = user.profile
+            instance.timestamp = user.timestamp
             instance.lastLogin = user.lastLogin
             instance.cloudDrivePort = user.cloudDrivePort
             instance.hostIds = user.hostIds
@@ -390,6 +391,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.avatar = user.avatar
                 instance.email = user.email
                 instance.profile = user.profile
+                instance.timestamp = user.timestamp
                 instance.lastLogin = user.lastLogin
                 instance.cloudDrivePort = user.cloudDrivePort
                 instance.hostIds = user.hostIds
