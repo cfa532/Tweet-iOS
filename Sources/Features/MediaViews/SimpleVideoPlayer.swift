@@ -155,7 +155,8 @@ struct SimpleVideoPlayer: View {
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var videoCompletionObserver: NSObjectProtocol?
     @State private var videoErrorObserver: NSObjectProtocol?
-    @State private var readyCheckTask: Task<Void, Never>? // Delayed ready check task
+    @State private var playerItemStatusObserver: NSKeyValueObservation?
+    @State private var playerItemBufferObserver: NSKeyValueObservation?
     @State private var timeObserver: Any?
     @State private var timeObserverPlayer: AVPlayer?
     @State private var representableId: Int = 0 // Force VideoPlayerRepresentable recreation
@@ -496,7 +497,18 @@ struct SimpleVideoPlayer: View {
         if visible {
             // For fullscreen and detail modes, always allow setup regardless of shouldLoadVideo
             if mode == .mediaBrowser || mode == .tweetDetail {
-                NSLog("DEBUG: [VIDEO VISIBILITY] Fullscreen/Detail mode - forcing player setup for \(mid)")
+                NSLog("DEBUG: [VIDEO VISIBILITY] Fullscreen/Detail mode - checking state for \(mid)")
+                
+                // Check if video failed and needs retry
+                if loadingState.hasFailed {
+                    NSLog("✅ [VIDEO VISIBILITY] Fullscreen video was in failed state, retrying load for \(mid)")
+                    player = nil
+                    loadingState = .idle
+                    playbackState = .notStarted
+                    setupPlayer()
+                    return
+                }
+                
                 if player == nil {
                     // Reset loading state if stuck
                     if loadingState.isLoading {
@@ -505,6 +517,27 @@ struct SimpleVideoPlayer: View {
                     }
                     setupPlayer()
                 } else {
+                    // Check if player is ready and should play
+                    if let playerItem = player?.currentItem {
+                        let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
+                        let isPlayerReady = playerItem.status == .readyToPlay || hasBufferedData
+                        
+                        if isPlayerReady {
+                            NSLog("✅ [VIDEO VISIBILITY] Fullscreen player ready with data for \(mid)")
+                            if loadingState.isLoading {
+                                loadingState = .loaded
+                            }
+                            
+                            // Auto-play fullscreen videos if not already playing
+                            if player?.rate == 0 {
+                                NSLog("▶️ [VIDEO VISIBILITY] Starting fullscreen playback for \(mid)")
+                                player?.play()
+                                playbackState = .playing
+                            }
+                            return
+                        }
+                    }
+                    
                     validateAndConfigureExistingPlayer()
                 }
                 return
@@ -516,16 +549,43 @@ struct SimpleVideoPlayer: View {
                 return
             }
             
-            // Validate existing player state if present - but be less aggressive about failure detection
+            // Check if video is in failed state and needs retry
+            if loadingState.hasFailed {
+                print("✅ [VIDEO VISIBILITY] Video was in failed state, retrying load for \(mid)")
+                player = nil
+                loadingState = .idle
+                playbackState = .notStarted
+                setupPlayer()
+                return
+            }
+            
+            // Validate existing player state if present
             if let player = player, let playerItem = player.currentItem {
-                if playerItem.status == .failed && loadingState.hasFailed {
-                    // Only trigger recovery if we've already marked this as failed
-                    print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state and already marked as failed for \(mid), triggering recovery")
+                if playerItem.status == .failed {
+                    print("DEBUG: [VIDEO VISIBILITY] Player item failed, retrying for \(mid)")
                     handleError(strategy: .loadFailure)
                     return
-                } else if playerItem.status == .failed {
-                    // Player item is failed but not marked as failed yet - just log and continue
-                    print("DEBUG: [VIDEO VISIBILITY] Player item is in failed state for \(mid), but not marked as failed yet - continuing")
+                }
+                
+                // Check if player has data ready and should play
+                let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
+                let isPlayerReady = playerItem.status == .readyToPlay || hasBufferedData
+                
+                if isPlayerReady {
+                    print("✅ [VIDEO VISIBILITY] Player ready with data for \(mid), checking playback conditions")
+                    
+                    // Update loading state to show video is ready
+                    if loadingState.isLoading {
+                        loadingState = .loaded
+                    }
+                    
+                    // Check if should auto-play
+                    if currentAutoPlay && player.rate == 0 {
+                        print("▶️ [VIDEO VISIBILITY] Starting playback for visible ready video: \(mid)")
+                        player.play()
+                        playbackState = .playing
+                    }
+                    return
                 }
             }
             
@@ -1446,15 +1506,16 @@ struct SimpleVideoPlayer: View {
         } else {
         }
         
-        // Set up observers only if not already set up
-        if videoCompletionObserver == nil {
-            setupPlayerObservers(player)
-        }
+        // CRITICAL: Always set up observers for the new player
+        // Clear existing observers first, then set up for this player
+        removePlayerObservers()
+        setupPlayerObservers(player)
         
         // CRITICAL: Always update state, even if same player instance
         // This ensures the view's player binding is set when reusing cached players
         self.player = player
-        self.loadingState = .loaded
+        // DON'T set loadingState = .loaded here! Let the KVO observers handle it based on actual readiness
+        self.loadingState = .loading  // Show spinner while video loads
         self.playbackState = .notStarted
         self.representableId += 1 // Force VideoPlayerRepresentable to recreate
         self.viewConfigTimestamp = Date().timeIntervalSince1970 // Force unique view ID
@@ -1540,89 +1601,113 @@ struct SimpleVideoPlayer: View {
             self.handleError(strategy: .loadFailure)
         }
         
-        // Schedule a delayed check for player readiness
-        // This handles the case where player becomes ready after initial configuration
-        // More efficient than continuous KVO observers
-        scheduleReadyCheck(for: player)
-    }
-    
-    private func scheduleReadyCheck(for player: AVPlayer) {
-        // Only schedule for MediaCell mode (fullscreen handles autoplay differently)
-        guard mode == .mediaCell else { return }
-        
-        // Cancel any existing check
-        readyCheckTask?.cancel()
-        
-        // Schedule a check with retry logic
-        readyCheckTask = Task { @MainActor in
-            // Retry until player is ready (max 3 attempts = 6 seconds)
-            var attempts = 0
-            let maxAttempts = 3
-            
-            while attempts < maxAttempts {
-                guard !Task.isCancelled else { 
-                    NSLog("DEBUG: [VIDEO READY CHECK] Task cancelled for \(self.mid)")
-                    return 
-                }
-                
-                // Wait before checking - give video time to buffer
-                // Progressive backoff: 1s, 2s, 3s
-                let delay = UInt64((attempts + 1) * 1_000_000_000) // 1s, 2s, 3s
-                try? await Task.sleep(nanoseconds: delay)
-                attempts += 1
-                
-                guard !Task.isCancelled else { 
-                    NSLog("DEBUG: [VIDEO READY CHECK] Task cancelled for \(self.mid)")
-                    return 
-                }
-                
-                // Check if player is ready with buffered data
-                guard let item = player.currentItem else {
-                    NSLog("DEBUG: [VIDEO READY CHECK] No player item for \(self.mid) (attempt \(attempts)/\(maxAttempts))")
-                    continue
-                }
-                
-                if item.status == .readyToPlay && !item.loadedTimeRanges.isEmpty {
-                    // Player is ready!
-                    NSLog("DEBUG: [VIDEO READY CHECK] Player became ready for \(self.mid) after \(attempts) attempts")
-                    break
-                } else {
-                    let nextDelay = attempts < maxAttempts ? (attempts + 1) : 0
-                    NSLog("DEBUG: [VIDEO READY CHECK] Player not ready yet for \(self.mid) (attempt \(attempts)/\(maxAttempts), status: \(item.status.rawValue), next check in \(nextDelay)s)")
-                    
-                    // If status is failed, cleanup and stop trying
-                    if item.status == .failed {
-                        NSLog("⚠️ [VIDEO READY CHECK] Player failed for \(self.mid), cleaning up")
-                        self.cleanupFailedPlayer()
-                        return
-                    }
-                    
-                    // Continue retrying
-                    continue
-                }
-            }
-            
-            guard !Task.isCancelled else { 
-                NSLog("DEBUG: [VIDEO READY CHECK] Task cancelled for \(self.mid)")
-                return 
-            }
-            
-            // Final check after all retries
-            guard let item = player.currentItem,
-                  item.status == .readyToPlay,
-                  !item.loadedTimeRanges.isEmpty else {
-                NSLog("⚠️ [VIDEO READY CHECK] Player still not ready after \(attempts) attempts (total ~6s) for \(self.mid), cleaning up")
-                self.cleanupFailedPlayer()
-                return
-            }
-            
-            // Check all autoplay conditions
+        // Simple approach: Tell AVPlayer what to do and let IT handle the rest
+        // For MediaCell mode, observe when player is ready and react accordingly
+        if mode == .mediaCell {
             let shouldAutoPlay = self.currentAutoPlay && self.isVisible && self.shouldLoadVideo
             
-            if shouldAutoPlay && player.rate == 0 {
-                NSLog("DEBUG: [VIDEO READY CHECK] Player ready, triggering autoplay for \(self.mid)")
-                NSLog("🔇 [PLAYER MUTE] About to play - current isMuted: \(player.isMuted) for \(self.mid)")
-                player.play()
+            // Observe player status to know when it's ready
+            playerItemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { item, change in
+                
+                NSLog("🔍 [KVO STATUS] Fired for \(mid) - status: \(item.status.rawValue), buffered: \(!item.loadedTimeRanges.isEmpty)")
+                
+                guard item.status == .readyToPlay else { 
+                    NSLog("⏳ [KVO STATUS] Not ready yet for \(mid) - status: \(item.status.rawValue)")
+                    return 
+                }
+                
+                // CRITICAL: For HLS videos, .readyToPlay fires BEFORE data is buffered
+                // Check if we have buffered data before hiding spinner
+                let hasBufferedData = !item.loadedTimeRanges.isEmpty
+                NSLog("✅ [KVO STATUS] Player ready for \(mid) - buffered: \(hasBufferedData)")
+                
+                DispatchQueue.main.async {
+                    // Only hide spinner if we have buffered data (or it's a progressive video that's truly ready)
+                    if hasBufferedData {
+                        loadingState = .loaded
+                        NSLog("🎬 [KVO STATUS] Hiding spinner for \(mid)")
+                        
+                        // OPTIMIZATION: Stop observing status once we've handled readiness
+                        // Status rarely changes after .readyToPlay, so no need to keep observing
+                        self.playerItemStatusObserver?.invalidate()
+                        self.playerItemStatusObserver = nil
+                        NSLog("🛑 [KVO STATUS] Stopped observing status for \(mid) - player ready, job done!")
+                    } else {
+                        NSLog("⏳ [KVO STATUS] Ready but no buffer yet for \(mid) - will wait for buffer observer")
+                    }
+                    
+                    if shouldAutoPlay {
+                        // Start playing automatically
+                        player.play()
+                        NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (buffered: \(hasBufferedData))")
+                    } else {
+                        // Preroll to render first frame without playing
+                        player.preroll(atRate: 0.0) { finished in
+                            guard finished else { return }
+                            NSLog("🎬 [VIDEO READY] Prerolled first frame for \(mid)")
+                            // Hide spinner after preroll completes
+                            DispatchQueue.main.async {
+                                loadingState = .loaded
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Observe buffered data to hide spinner when data arrives (for HLS videos that start playing before buffering)
+            playerItemBufferObserver = playerItem.observe(\.loadedTimeRanges, options: [.new]) { item, change in
+                
+                let hasBufferedData = !item.loadedTimeRanges.isEmpty
+                NSLog("🔍 [KVO BUFFER] Fired for \(mid) - hasData: \(hasBufferedData), loadingState: \(loadingState)")
+                
+                DispatchQueue.main.async {
+                    // Hide spinner once we have buffered data
+                    if hasBufferedData && loadingState.isLoading {
+                        NSLog("📦 [BUFFER READY] Data buffered for \(mid), hiding spinner")
+                        loadingState = .loaded
+                        
+                        // OPTIMIZATION: Stop observing once spinner is hidden
+                        // The buffer observer's only job is to hide the spinner
+                        // After that, we don't need to keep firing on every segment load
+                        self.playerItemBufferObserver?.invalidate()
+                        self.playerItemBufferObserver = nil
+                        NSLog("🛑 [KVO BUFFER] Stopped observing buffer for \(mid) - spinner hidden, job done!")
+                    }
+                }
+            }
+            
+            // If already ready, trigger immediately
+            NSLog("🔍 [INITIAL CHECK] Player status: \(playerItem.status.rawValue), buffered: \(!playerItem.loadedTimeRanges.isEmpty) for \(mid)")
+            if playerItem.status == .readyToPlay {
+                let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
+                NSLog("✅ [INITIAL CHECK] Already ready for \(mid) - buffered: \(hasBufferedData)")
+                
+                // Only hide spinner if we have buffered data
+                if hasBufferedData {
+                    loadingState = .loaded
+                    NSLog("🎬 [INITIAL CHECK] Hiding spinner immediately for \(mid)")
+                } else {
+                    NSLog("⏳ [INITIAL CHECK] Ready but waiting for buffer data for \(mid)")
+                }
+                
+                if shouldAutoPlay {
+                    player.play()
+                    NSLog("▶️ [VIDEO SETUP] Already ready - auto-playing \(mid) (buffered: \(hasBufferedData))")
+                } else {
+                    player.preroll(atRate: 0.0) { finished in
+                        guard finished else { 
+                            NSLog("❌ [PREROLL] Failed for \(mid)")
+                            return 
+                        }
+                        NSLog("🎬 [VIDEO SETUP] Already ready - prerolled \(mid)")
+                        // Hide spinner after preroll completes
+                        DispatchQueue.main.async {
+                            loadingState = .loaded
+                        }
+                    }
+                }
+            } else {
+                NSLog("⏳ [INITIAL CHECK] Not ready yet for \(mid), waiting for KVO")
             }
         }
     }
@@ -1649,9 +1734,11 @@ struct SimpleVideoPlayer: View {
             videoErrorObserver = nil
         }
         
-        // Cancel any pending ready check
-        readyCheckTask?.cancel()
-        readyCheckTask = nil
+        // Cancel KVO observers
+        playerItemStatusObserver?.invalidate()
+        playerItemStatusObserver = nil
+        playerItemBufferObserver?.invalidate()
+        playerItemBufferObserver = nil
         
         playerItem = nil
     }
