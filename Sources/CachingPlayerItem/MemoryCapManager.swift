@@ -179,8 +179,11 @@ class MemoryCapManager {
     private func performPreventiveCleanup() {
         logger.info("Performing preventive memory cleanup")
         
-        // Clean up video caches
+        // Clean up video caches (memory)
         SharedAssetCache.shared.releasePartialCache(percentage: 30)
+        
+        // Clean up disk cache (video segments - happens async on background thread)
+        DiskCacheCleanupManager.shared.performScheduledCleanup()
         
         // Clean up image caches
         ImageCacheManager.shared.cleanupOldCache()
@@ -195,8 +198,11 @@ class MemoryCapManager {
     private func performAggressiveCleanup() {
         logger.info("Performing aggressive memory cleanup")
         
-        // Clean up more video caches
+        // Clean up more video caches (memory)
         SharedAssetCache.shared.releasePartialCache(percentage: 60)
+        
+        // Clean up disk cache aggressively (video segments)
+        DiskCacheCleanupManager.shared.performScheduledCleanup()
         
         // Clean up more image caches
         ImageCacheManager.shared.cleanupOldCache()
@@ -220,6 +226,9 @@ class MemoryCapManager {
         // Clear 80% of video caches - keep only most recent
         SharedAssetCache.shared.releasePartialCache(percentage: 80)
         
+        // CRITICAL: Clear ALL disk cache to free up memory immediately
+        DiskCacheCleanupManager.shared.clearAllCache()
+        
         // Clear image caches aggressively
         ImageCacheManager.shared.cleanupOldCache()
         
@@ -237,7 +246,7 @@ class MemoryCapManager {
             }
         }
         
-        print("⚠️ EMERGENCY CLEANUP COMPLETE - cleared 80% of caches to stay under 2GB cap")
+        print("⚠️ EMERGENCY CLEANUP COMPLETE - cleared 80% of caches + ALL disk cache to stay under 2GB cap")
     }
     
     @MainActor

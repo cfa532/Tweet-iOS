@@ -517,34 +517,27 @@ struct ProfileView: View {
     @State private var lastSignificantDelta: CGFloat = 0
     
     private func handleScroll(offset: CGFloat, delta: CGFloat) {
+        print("[ProfileView] handleScroll called - offset: \(offset), delta: \(delta)")
+        
         // Threshold for detecting intentional scroll
         let scrollThreshold: CGFloat = 15
         
-        // Always show when at or near the top
-        if offset >= 0 {
-            if !isNavigationVisible {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    isNavigationVisible = true
-                }
-                NotificationCenter.default.post(
-                    name: .navigationVisibilityChanged,
-                    object: nil,
-                    userInfo: ["isVisible": true]
-                )
-            }
-            return
-        }
+        // DON'T force show based on offset - ProfileView offset is often negative
+        // Just rely on scroll direction (delta)
         
         // Ignore very small deltas (noise from rendering/layout)
         guard abs(delta) > 2 else { return }
         
         // Detect significant scroll direction changes
-        let isScrollingDown = delta < -scrollThreshold
-        let isScrollingUp = delta > scrollThreshold
+        // Positive delta = scrolling down (content moves up)
+        // Negative delta = scrolling up (content moves down)
+        let isScrollingDown = delta > scrollThreshold
+        let isScrollingUp = delta < -scrollThreshold
         
         // Update navigation visibility based on scroll direction
         if isScrollingDown && isNavigationVisible {
-            // Scrolling down significantly - hide header
+            // Scrolling down significantly - hide bottom bar
+            print("[ProfileView] Scrolling DOWN - hiding navigation, posting notification")
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = false
             }
@@ -555,7 +548,8 @@ struct ProfileView: View {
             )
             lastSignificantDelta = delta
         } else if isScrollingUp && !isNavigationVisible {
-            // Scrolling up significantly - show header
+            // Scrolling up significantly - show bottom bar
+            print("[ProfileView] Scrolling UP - showing navigation, posting notification")
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = true
             }

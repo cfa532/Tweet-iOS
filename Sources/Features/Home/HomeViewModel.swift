@@ -142,15 +142,13 @@ struct HomeView: View {
     }
     
     // MARK: - Scroll Handling
-    @State private var accumulatedDelta: CGFloat = 0
-    @State private var scrollUpAccumulated: CGFloat = 0
+    @State private var lastSignificantDelta: CGFloat = 0
     
     private func handleScroll(offset: CGFloat, delta: CGFloat) {
-        // Positive offset = scrolled down, negative offset = pull-to-refresh
-        // Positive delta = scrolling down, negative delta = scrolling up
+        // Threshold for detecting intentional scroll
+        let scrollThreshold: CGFloat = 15
         
-        // CRITICAL: Always show header when at or near the top (offset <= 10)
-        // This prevents header from hiding during pull-to-refresh
+        // Always show when at or near the top
         if offset <= 10 {
             if !isNavigationVisible {
                 withAnimation(.easeInOut(duration: 0.25)) {
@@ -158,38 +156,33 @@ struct HomeView: View {
                 }
                 onNavigationVisibilityChanged?(true)
             }
-            // Reset accumulated deltas when at top
-            accumulatedDelta = 0
-            scrollUpAccumulated = 0
             return
         }
         
-        if delta > 5 {
-            // Scrolling down - accumulate
-            accumulatedDelta += delta
-            scrollUpAccumulated = 0 // Reset scroll up counter
-            
-            if accumulatedDelta > 50 && isNavigationVisible {
-                // Scrolled down enough - hide header
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    isNavigationVisible = false
-                }
-                onNavigationVisibilityChanged?(false)
-                accumulatedDelta = 0
+        // Ignore very small deltas (noise from rendering/layout)
+        guard abs(delta) > 2 else { return }
+        
+        // Detect significant scroll direction changes
+        // Positive delta = scrolling down (content moves up)
+        // Negative delta = scrolling up (content moves down)
+        let isScrollingDown = delta > scrollThreshold
+        let isScrollingUp = delta < -scrollThreshold
+        
+        // Update navigation visibility based on scroll direction
+        if isScrollingDown && isNavigationVisible {
+            // Scrolling down significantly - hide header and bottom bar
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isNavigationVisible = false
             }
-        } else if delta < -5 {
-            // Scrolling up - accumulate a bit before showing
-            scrollUpAccumulated += abs(delta)
-            accumulatedDelta = 0 // Reset scroll down counter
-            
-            if scrollUpAccumulated > 20 && !isNavigationVisible {
-                // Scrolled up a bit - show header
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    isNavigationVisible = true
-                }
-                onNavigationVisibilityChanged?(true)
-                scrollUpAccumulated = 0
+            onNavigationVisibilityChanged?(false)
+            lastSignificantDelta = delta
+        } else if isScrollingUp && !isNavigationVisible {
+            // Scrolling up significantly - show header and bottom bar
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isNavigationVisible = true
             }
+            onNavigationVisibilityChanged?(true)
+            lastSignificantDelta = delta
         }
     }
 }

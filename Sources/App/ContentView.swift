@@ -50,7 +50,8 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: isNavigationVisible ? 40 : 0)
+                Color.clear
+                    .frame(height: 40)
             }
             
             // Custom Tab Bar - Hide when in chat screen
@@ -113,10 +114,10 @@ struct ContentView: View {
                 Color(.systemBackground)
                     .opacity(isNavigationVisible ? 1.0 : 0.0)
             )
-            .shadow(color: Color(.systemBlue).opacity(0.3), radius: 1, x: 0, y: -1)
+            .shadow(color: Color(.systemBlue).opacity(isNavigationVisible ? 0.3 : 0.0), radius: 1, x: 0, y: -1)
             .opacity(isNavigationVisible ? 1.0 : 0.3)
             .allowsHitTesting(true)
-            .animation(.easeInOut(duration: 0.3), value: isNavigationVisible)
+            .animation(.easeInOut(duration: 0.25), value: isNavigationVisible)
         }
         }
         .sheet(isPresented: $showComposeSheet) {
@@ -151,7 +152,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .navigationVisibilityChanged)) { notification in
             if let isVisible = notification.userInfo?["isVisible"] as? Bool {
                 print("[ContentView] Navigation visibility changed to: \(isVisible)")
-                isNavigationVisible = isVisible
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isNavigationVisible = isVisible
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .newTweetCreated)) { notification in

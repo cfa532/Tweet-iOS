@@ -56,13 +56,16 @@ class MemoryWarningManager: ObservableObject {
         // Release 20% of video caches (preserve current playing videos)
         SharedAssetCache.shared.releasePartialCache(percentage: 20)
         
+        // CRITICAL: Also clean up disk cache (video segments) to free memory
+        DiskCacheCleanupManager.shared.performScheduledCleanup()
+        
         // Release 20% of image caches
         ImageCacheManager.shared.releasePartialCache(percentage: 20)
         
         // Release 20% of tweet caches
         TweetCacheManager.shared.releasePartialCache(percentage: 20)
         
-        print("DEBUG: [MemoryWarningManager] Memory cache release completed")
+        print("DEBUG: [MemoryWarningManager] Memory cache + disk cache release completed")
     }
     
     /// Get current memory usage in bytes
