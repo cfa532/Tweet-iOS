@@ -719,7 +719,7 @@ struct ProfileView: View {
         } catch {
             // Show error message
             await MainActor.run {
-                showToastMessage(String(format: NSLocalizedString("Failed to block user: %@", comment: "Block user error message"), error.localizedDescription), type: .error)
+                showToastMessage(String(format: NSLocalizedString("Failed to block user: %@", comment: "Block user error message"), ErrorMessageHelper.userFriendlyMessage(from: error)), type: .error)
             }
         }
     }
@@ -777,7 +777,7 @@ struct ProfileView: View {
         } catch {
             // Show error message
             await MainActor.run {
-                showToastMessage(String(format: NSLocalizedString("Failed to delete account: %@", comment: "Delete account error message"), error.localizedDescription), type: .error)
+                showToastMessage(String(format: NSLocalizedString("Failed to delete account: %@", comment: "Delete account error message"), ErrorMessageHelper.userFriendlyMessage(from: error)), type: .error)
             }
         }
     }

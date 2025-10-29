@@ -145,7 +145,7 @@ struct UserListView: View {
                     // Check if task was cancelled before updating UI
                     guard !Task.isCancelled else { return }
                     isLoading = false
-                    errorMessage = error.localizedDescription
+                    errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                 }
             }
         }

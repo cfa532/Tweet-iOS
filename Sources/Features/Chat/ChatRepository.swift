@@ -93,7 +93,7 @@ class ChatRepository: ObservableObject {
                     timestamp: message.timestamp,
                     attachments: message.attachments,
                     success: false,
-                    errorMsg: error.localizedDescription
+                    errorMsg: ErrorMessageHelper.userFriendlyMessage(from: error)
                 )
                 
                 // Replace the original message with the failed message

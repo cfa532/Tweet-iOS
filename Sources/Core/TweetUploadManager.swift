@@ -246,7 +246,7 @@ class TweetUploadManager {
             } catch {
                 print("❌ [Comment Upload] Failed to upload attachments: \(error)")
                 await MainActor.run {
-                    UploadProgressManager.shared.failUpload(message: error.localizedDescription)
+                    UploadProgressManager.shared.failUpload(message: ErrorMessageHelper.userFriendlyMessage(from: error))
                     
                     guard let hproseInstance = self.hproseInstance else { return }
                     if !hproseInstance.isAppInitializing {

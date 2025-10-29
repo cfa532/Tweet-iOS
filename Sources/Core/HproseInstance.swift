@@ -3224,7 +3224,7 @@ final class HproseInstance: ObservableObject {
                             throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload timed out. Please try again.", comment: "Timeout error")])
                         default:
                             print("ERROR: Chunk \(chunkCount) upload failed - network error: \(error.localizedDescription)")
-                            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Network error: %@", comment: "Network error"), error.localizedDescription)])
+                            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Network error: %@", comment: "Network error"), ErrorMessageHelper.userFriendlyMessage(from: error))])
                         }
                     } else {
                         // Re-throw other errors
@@ -3412,7 +3412,7 @@ final class HproseInstance: ObservableObject {
                 }
             } catch {
                 print("DEBUG: Failed to parse upload response: \(error)")
-                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse upload response: \(error.localizedDescription)"])
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Unable to process data. Please try again.", comment: "Parse error")])
             }
         }
         
@@ -3550,7 +3550,7 @@ final class HproseInstance: ObservableObject {
                 }
             } catch {
                 print("DEBUG: Failed to parse status response: \(error)")
-                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse status response: \(error.localizedDescription)"])
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Unable to process data. Please try again.", comment: "Parse error")])
             }
         }
         
@@ -3598,7 +3598,7 @@ final class HproseInstance: ObservableObject {
                 }
             } catch {
                 print("DEBUG: Failed to parse response: \(error)")
-                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse response: \(error.localizedDescription)"])
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Unable to process data. Please try again.", comment: "Parse error")])
             }
         }
         
@@ -4168,7 +4168,7 @@ final class HproseInstance: ObservableObject {
                 cid: cid
             )
         } catch {
-            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse video status response: \(error.localizedDescription)"])
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Unable to process data. Please try again.", comment: "Parse error")])
         }
     }
     
@@ -4319,7 +4319,7 @@ final class HproseInstance: ObservableObject {
                         NotificationCenter.default.post(
                             name: .backgroundUploadFailed,
                             object: nil,
-                            userInfo: ["error": error.localizedDescription]
+                            userInfo: ["error": ErrorMessageHelper.userFriendlyMessage(from: error)]
                         )
                     } else {
                         print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")

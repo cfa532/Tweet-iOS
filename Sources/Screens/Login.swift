@@ -204,7 +204,7 @@ struct LoginView: View {
             }
         } catch {
             print("DEBUG: [Login] Login error - username: \(username), error: \(error.localizedDescription)")
-            errorMessage = error.localizedDescription
+            errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
         }
         
         isLoading = false

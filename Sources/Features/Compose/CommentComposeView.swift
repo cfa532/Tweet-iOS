@@ -203,7 +203,7 @@ struct CommentComposeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .errorOccurred)) { notification in
             if let error = notification.object as? Error {
-                showToastMessage(error.localizedDescription, type: .error)
+                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
             }
         }
         .alert(NSLocalizedString("Discard Comment?", comment: "Cancel confirmation title"), isPresented: $showCancelConfirmation) {

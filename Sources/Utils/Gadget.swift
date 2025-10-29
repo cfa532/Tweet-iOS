@@ -248,3 +248,116 @@ class Gadget {
     
 
 }
+
+// MARK: - Error Message Helper
+/// Converts technical error messages into user-friendly messages
+struct ErrorMessageHelper {
+    
+    /// Convert a technical error to a user-friendly message
+    static func userFriendlyMessage(from error: Error) -> String {
+        let errorDescription = error.localizedDescription.lowercased()
+        
+        // Network connectivity issues
+        if errorDescription.contains("network connection was lost") ||
+           errorDescription.contains("connection was lost") ||
+           errorDescription.contains("network is down") ||
+           errorDescription.contains("not connected to the internet") {
+            return NSLocalizedString("Network connection lost. Please check your internet connection.", comment: "Network connection lost error")
+        }
+        
+        if errorDescription.contains("timed out") ||
+           errorDescription.contains("timeout") ||
+           errorDescription.contains("request timed out") {
+            return NSLocalizedString("The request took too long. Please try again.", comment: "Timeout error")
+        }
+        
+        if errorDescription.contains("could not connect to the server") ||
+           errorDescription.contains("server is not responding") ||
+           errorDescription.contains("cannot find the server") ||
+           errorDescription.contains("host") ||
+           errorDescription.contains("dns") {
+            return NSLocalizedString("Cannot reach the server. Please try again later.", comment: "Server unreachable error")
+        }
+        
+        if errorDescription.contains("connection reset") ||
+           errorDescription.contains("connection was reset") ||
+           errorDescription.contains("broken pipe") {
+            return NSLocalizedString("Connection interrupted. Please try again.", comment: "Connection reset error")
+        }
+        
+        if errorDescription.contains("ssl") ||
+           errorDescription.contains("certificate") ||
+           errorDescription.contains("secure connection") {
+            return NSLocalizedString("Secure connection failed. Please check your network settings.", comment: "SSL error")
+        }
+        
+        if errorDescription.contains("address already in use") ||
+           errorDescription.contains("eaddrinuse") {
+            return NSLocalizedString("Service temporarily unavailable. Please try again.", comment: "Port in use error")
+        }
+        
+        // HTTP errors
+        if errorDescription.contains("404") ||
+           errorDescription.contains("not found") {
+            return NSLocalizedString("Content not found.", comment: "404 error")
+        }
+        
+        if errorDescription.contains("401") ||
+           errorDescription.contains("unauthorized") {
+            return NSLocalizedString("Session expired. Please log in again.", comment: "401 error")
+        }
+        
+        if errorDescription.contains("403") ||
+           errorDescription.contains("forbidden") {
+            return NSLocalizedString("You don't have permission to access this.", comment: "403 error")
+        }
+        
+        if errorDescription.contains("500") ||
+           errorDescription.contains("internal server error") ||
+           errorDescription.contains("server error") {
+            return NSLocalizedString("Server error. Please try again later.", comment: "500 error")
+        }
+        
+        if errorDescription.contains("503") ||
+           errorDescription.contains("service unavailable") {
+            return NSLocalizedString("Service temporarily unavailable. Please try again later.", comment: "503 error")
+        }
+        
+        // Data/parsing errors
+        if errorDescription.contains("parse") ||
+           errorDescription.contains("decode") ||
+           errorDescription.contains("json") {
+            return NSLocalizedString("Unable to process data. Please try again.", comment: "Parse error")
+        }
+        
+        // File/disk errors
+        if errorDescription.contains("disk") ||
+           errorDescription.contains("storage") ||
+           errorDescription.contains("no space") {
+            return NSLocalizedString("Not enough storage space available.", comment: "Storage error")
+        }
+        
+        // Generic fallback for other network errors
+        if errorDescription.contains("nsurlsession") ||
+           errorDescription.contains("nsurlerror") ||
+           errorDescription.contains("domain error") {
+            return NSLocalizedString("Network error. Please check your connection and try again.", comment: "Generic network error")
+        }
+        
+        // If no specific match, return a generic friendly message
+        // But avoid showing raw technical details
+        return NSLocalizedString("Something went wrong. Please try again.", comment: "Generic error")
+    }
+    
+    /// Convert a technical error to a user-friendly message with optional context
+    static func userFriendlyMessage(from error: Error, context: String?) -> String {
+        let baseMessage = userFriendlyMessage(from: error)
+        
+        // If context is provided, prepend it
+        if let context = context, !context.isEmpty {
+            return "\(context): \(baseMessage)"
+        }
+        
+        return baseMessage
+    }
+}

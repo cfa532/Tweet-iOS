@@ -183,7 +183,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .backgroundUploadFailed)) { notification in
             if let error = notification.userInfo?["error"] as? Error {
-                toastMessage = error.localizedDescription
+                toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                 toastType = .error
                 showToast = true
                 

@@ -461,3 +461,20 @@
 "Failed to update pinned tweet" = "固定ツイートの更新に失敗しました";
 "Failed to get pinned tweets" = "固定ツイートの取得に失敗しました";
 "Failed to report tweet" = "ツイートの報告に失敗しました";
+
+// MARK: - User-Friendly Error Messages
+"Network connection lost. Please check your internet connection." = "ネットワーク接続が失われました。インターネット接続を確認してください。";
+"The request took too long. Please try again." = "リクエストがタイムアウトしました。もう一度お試しください。";
+"Cannot reach the server. Please try again later." = "サーバーに接続できません。後でもう一度お試しください。";
+"Connection interrupted. Please try again." = "接続が中断されました。もう一度お試しください。";
+"Secure connection failed. Please check your network settings." = "セキュア接続に失敗しました。ネットワーク設定を確認してください。";
+"Service temporarily unavailable. Please try again." = "サービスが一時的に利用できません。もう一度お試しください。";
+"Content not found." = "コンテンツが見つかりません。";
+"Session expired. Please log in again." = "セッションが期限切れです。再度ログインしてください。";
+"You don't have permission to access this." = "このコンテンツにアクセスする権限がありません。";
+"Server error. Please try again later." = "サーバーエラーです。後でもう一度お試しください。";
+"Service temporarily unavailable. Please try again later." = "サービスが一時的に利用できません。後でもう一度お試しください。";
+"Unable to process data. Please try again." = "データを処理できません。もう一度お試しください。";
+"Not enough storage space available." = "ストレージ容量が不足しています。";
+"Network error. Please check your connection and try again." = "ネットワークエラーです。接続を確認してもう一度お試しください。";
+"Something went wrong. Please try again." = "問題が発生しました。もう一度お試しください。";

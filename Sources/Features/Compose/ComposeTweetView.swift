@@ -90,7 +90,7 @@ struct ComposeTweetView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .errorOccurred)) { notification in
                 if let error = notification.object as? Error {
-                    viewModel.toastMessage = error.localizedDescription
+                    viewModel.toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                     viewModel.toastType = .error
                     viewModel.showToast = true
                     

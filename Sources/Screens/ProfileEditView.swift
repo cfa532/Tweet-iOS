@@ -409,7 +409,7 @@ struct ProfileEditView: View {
                     onAvatarUploadFailure?(errorMessage)
                 }
             } catch {
-                let errorMessage = error.localizedDescription
+                let errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                 await MainActor.run {
                     avatarUploadError = errorMessage
                     isUploadingAvatar = false
@@ -502,7 +502,7 @@ struct ProfileEditView: View {
             } catch {
                 // Handle profile update failure with toast
                 await MainActor.run {
-                    let errorMessage = error.localizedDescription
+                    let errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                     showToastMessage(errorMessage, type: .error)
                     onProfileUpdateFailure?(errorMessage)
                     isSubmitting = false

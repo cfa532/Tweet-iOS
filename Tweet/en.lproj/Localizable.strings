@@ -549,3 +549,20 @@
 "Failed to update pinned tweet" = "Failed to update pinned tweet";
 "Failed to get pinned tweets" = "Failed to get pinned tweets";
 "Failed to report tweet" = "Failed to report tweet";
+
+// MARK: - User-Friendly Error Messages
+"Network connection lost. Please check your internet connection." = "Network connection lost. Please check your internet connection.";
+"The request took too long. Please try again." = "The request took too long. Please try again.";
+"Cannot reach the server. Please try again later." = "Cannot reach the server. Please try again later.";
+"Connection interrupted. Please try again." = "Connection interrupted. Please try again.";
+"Secure connection failed. Please check your network settings." = "Secure connection failed. Please check your network settings.";
+"Service temporarily unavailable. Please try again." = "Service temporarily unavailable. Please try again.";
+"Content not found." = "Content not found.";
+"Session expired. Please log in again." = "Session expired. Please log in again.";
+"You don't have permission to access this." = "You don't have permission to access this.";
+"Server error. Please try again later." = "Server error. Please try again later.";
+"Service temporarily unavailable. Please try again later." = "Service temporarily unavailable. Please try again later.";
+"Unable to process data. Please try again." = "Unable to process data. Please try again.";
+"Not enough storage space available." = "Not enough storage space available.";
+"Network error. Please check your connection and try again." = "Network error. Please check your connection and try again.";
+"Something went wrong. Please try again." = "Something went wrong. Please try again.";

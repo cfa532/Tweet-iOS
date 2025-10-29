@@ -138,7 +138,7 @@ struct CommentListView<RowView: View>: View {
                 initialLoadComplete = true
             }
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
             await MainActor.run {
                 initialLoadComplete = true
             }

@@ -903,7 +903,7 @@ class SharedAssetCache: ObservableObject {
         loadingTasks.removeAll()
         
         // Cancel all preload tasks
-        for (key, task) in preloadTasks {
+        for (_, task) in preloadTasks {
             task.cancel()
         }
         preloadTasks.removeAll()

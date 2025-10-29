@@ -285,7 +285,7 @@ struct TweetMenu: View {
                 // Send notification for global error toast
                 NotificationCenter.default.post(
                     name: .errorOccurred,
-                    object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(error.localizedDescription)"])
+                    object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
                 )
             }
         }

@@ -324,7 +324,7 @@ struct RegistrationView: View {
             } catch {
                 // Handle registration failure with toast
                 await MainActor.run {
-                    let errorMessage = error.localizedDescription
+                    let errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                     showToastMessage(errorMessage, type: .error)
                     onRegistrationFailure?(errorMessage)
                     isSubmitting = false

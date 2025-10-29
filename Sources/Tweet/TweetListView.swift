@@ -337,7 +337,7 @@ struct TweetListView<RowView: View>: View {
             
         } catch {
             print("[TweetListView] Error during initial load: \(error)")
-            errorMessage = error.localizedDescription
+            errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
             await MainActor.run {
                 isLoading = false
                 initialLoadComplete = true

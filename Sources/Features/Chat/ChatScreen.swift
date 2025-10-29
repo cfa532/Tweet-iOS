@@ -236,7 +236,7 @@ struct ChatScreen: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .chatMessageSendFailed)) { notification in
             if let error = notification.userInfo?["error"] as? Error {
-                showToastMessage(error.localizedDescription, type: .error)
+                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
             } else {
                 showToastMessage(NSLocalizedString("Failed to send message", comment: "Chat error"), type: .error)
             }
@@ -356,7 +356,7 @@ struct ChatScreen: View {
                         timestamp: message.timestamp,
                         attachments: message.attachments,
                         success: false,
-                        errorMsg: error.localizedDescription
+                        errorMsg: ErrorMessageHelper.userFriendlyMessage(from: error)
                     )
                     
                     // Replace the original message with the failed message
@@ -454,7 +454,7 @@ struct ChatScreen: View {
                         content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
                         attachments: nil,
                         success: false,
-                        errorMsg: error.localizedDescription
+                        errorMsg: ErrorMessageHelper.userFriendlyMessage(from: error)
                     )
                     
                     // Add failed message to UI and save to Core Data
@@ -475,6 +475,9 @@ struct ChatScreen: View {
             }
         } catch {
             print("[ChatScreen] Error loading user: \(error)")
+            await MainActor.run {
+                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
+            }
         }
     }
     

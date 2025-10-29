@@ -107,7 +107,7 @@ struct StartChatView: View {
             }
         } catch {
             await MainActor.run {
-                errorMessage = error.localizedDescription
+                errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                 isLoading = false
             }
         }

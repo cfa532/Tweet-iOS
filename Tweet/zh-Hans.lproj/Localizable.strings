@@ -555,3 +555,20 @@
 "Failed to update pinned tweet" = "置顶推文更新失败";
 "Failed to get pinned tweets" = "获取置顶推文失败";
 "Failed to report tweet" = "举报推文失败";
+
+// MARK: - User-Friendly Error Messages
+"Network connection lost. Please check your internet connection." = "网络连接中断。请检查您的网络连接。";
+"The request took too long. Please try again." = "请求超时。请重试。";
+"Cannot reach the server. Please try again later." = "无法连接到服务器。请稍后重试。";
+"Connection interrupted. Please try again." = "连接中断。请重试。";
+"Secure connection failed. Please check your network settings." = "安全连接失败。请检查您的网络设置。";
+"Service temporarily unavailable. Please try again." = "服务暂时不可用。请重试。";
+"Content not found." = "未找到内容。";
+"Session expired. Please log in again." = "会话已过期。请重新登录。";
+"You don't have permission to access this." = "您没有权限访问此内容。";
+"Server error. Please try again later." = "服务器错误。请稍后重试。";
+"Service temporarily unavailable. Please try again later." = "服务暂时不可用。请稍后重试。";
+"Unable to process data. Please try again." = "无法处理数据。请重试。";
+"Not enough storage space available." = "存储空间不足。";
+"Network error. Please check your connection and try again." = "网络错误。请检查您的连接并重试。";
+"Something went wrong. Please try again." = "出现问题。请重试。";

@@ -171,7 +171,7 @@ struct TweetApp: App {
                 }
             } message: {
                 if let error = appState.error {
-                    Text(error.localizedDescription)
+                    Text(ErrorMessageHelper.userFriendlyMessage(from: error))
                 }
             }
         }
