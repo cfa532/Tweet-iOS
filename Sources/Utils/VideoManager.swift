@@ -28,7 +28,6 @@ class VideoManager: ObservableObject {
         videoMids = []
         currentVideoIndex = -1
         isSequentialPlaybackEnabled = false
-        print("DEBUG: [VideoManager] Stopped sequential playback")
     }
     
     func forceReset() {
@@ -76,7 +75,6 @@ class VideoManager: ObservableObject {
         // it means we have a single video that should play
         if !videoMids.isEmpty && videoMids.contains(mid) {
             let shouldPlay = videoMids[0] == mid // Single video should always be the first one
-            print("DEBUG: [VideoManager] Single video playback - video \(mid) should play: \(shouldPlay)")
             return shouldPlay
         }
         return false

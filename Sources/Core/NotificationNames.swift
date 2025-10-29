@@ -2,6 +2,8 @@ import Foundation
 
 extension Notification.Name {
     // MARK: - User Related
+    /// Posted when a user's avatar changes
+    static let avatarDidChange = Notification.Name("avatarDidChange")
     /// Posted when a user successfully logs in
     static let userDidLogin = Notification.Name("UserDidLogin")
     static let userDidLogout = Notification.Name("UserDidLogout")
@@ -61,6 +63,10 @@ extension Notification.Name {
     static let commentPublishFailed = Notification.Name("CommentPublishFailed")
     static let commentDeleteFailed = Notification.Name("CommentDeleteFailed")
     
+    // MARK: - Memory Management
+    /// Posted when memory usage is critically high
+    static let memoryWarningCritical = Notification.Name("MemoryWarningCritical")
+    
     // MARK: - Chat Related
     /// Posted when a new chat message is received
     static let newChatMessageReceived = Notification.Name("NewChatMessageReceived")
@@ -73,9 +79,17 @@ extension Notification.Name {
     /// Posted when the app becomes active (returns from background)
     static let appDidBecomeActive = Notification.Name("AppDidBecomeActive")
     
+    // MARK: - Cache Related
+    /// Posted when all cache is cleared (manual or on signout) to trigger media reload
+    static let cacheCleared = Notification.Name("CacheCleared")
+    /// Posted when video infrastructure is restarted after background recovery
+    static let videoInfrastructureRestarted = Notification.Name("VideoInfrastructureRestarted")
+    
     // MARK: - Video Related
     /// Posted to stop all videos in the tweet list when entering full screen
     static let stopAllVideos = Notification.Name("StopAllVideos")
+    /// Posted to force video layer refresh after screen lock recovery
+    static let videoLayerRefresh = Notification.Name("VideoLayerRefresh")
     
     // MARK: - Error Handling
     /// Posted when an error occurs that should be displayed as a toast

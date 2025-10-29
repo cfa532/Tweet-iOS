@@ -12,10 +12,11 @@ class MemoryCapManager {
     }
     
     // MARK: - Configuration
-    private let maxMemoryLimit: UInt64 = 2 * 1024 * 1024 * 1024 // 2GB in bytes
-    private let warningThreshold: Double = 0.8 // 80% of limit
-    private let criticalThreshold: Double = 0.9 // 90% of limit
-    private let monitoringInterval: TimeInterval = 5.0 // Check every 5 seconds
+    private let maxMemoryLimit: UInt64 = 2 * 1024 * 1024 * 1024 // 2GB in bytes - HARD CAP
+    private let warningThreshold: Double = 0.70 // 70% of limit (start cleanup earlier)
+    private let criticalThreshold: Double = 0.85 // 85% of limit (aggressive cleanup)
+    private let emergencyThreshold: Double = 0.95 // 95% of limit (emergency cleanup)
+    private let monitoringInterval: TimeInterval = 3.0 // Check every 3 seconds (more frequent)
     
     // MARK: - State
     private var monitoringTimer: Timer?
@@ -101,7 +102,18 @@ class MemoryCapManager {
     @MainActor
     @objc private func handleMemoryWarning() {
         logger.warning("System memory warning received")
-        forceMemoryCleanup()
+        
+        // Check memory usage before cleanup (don't cleanup at low usage)
+        let memoryUsageMB = currentMemoryUsage / (1024 * 1024)
+        logger.info("Current memory usage: \(memoryUsageMB)MB")
+        
+        // Only cleanup if usage exceeds 1.4GB (preventive cleanup threshold)
+        if memoryUsageMB > 1400 {
+            logger.warning("Memory usage exceeds 1.4GB, performing cleanup")
+            forceMemoryCleanup()
+        } else {
+            logger.info("Memory usage under 1.4GB, ignoring system warning (likely false alarm)")
+        }
     }
     
     @MainActor
@@ -120,13 +132,24 @@ class MemoryCapManager {
         updateMemoryUsage()
         
         let percentage = memoryUsagePercentage
-        logger.debug("Memory usage: \(percentage * 100, privacy: .public)% (\(self.formatBytes(self.currentMemoryUsage)))")
         
-        if percentage >= criticalThreshold {
-            logger.error("CRITICAL: Memory usage at \(percentage * 100, privacy: .public)% - forcing immediate cleanup")
-            forceMemoryCleanup()
+        // Only log when memory usage is 60% or higher
+        if percentage >= 0.6 {
+            logger.debug("Memory usage: \(percentage * 100, privacy: .public)% (\(self.formatBytes(self.currentMemoryUsage)))")
+        }
+        
+        // Only log when above warning threshold
+        if percentage >= emergencyThreshold {
+            logger.error("EMERGENCY: Memory at \(percentage * 100, privacy: .public)% - HARD CAP enforcement")
+            print("⚠️ EMERGENCY: Memory at \(String(format: "%.1f", percentage * 100))% - performing emergency cleanup")
+            performEmergencyCleanup()
+        } else if percentage >= criticalThreshold {
+            logger.error("CRITICAL: Memory at \(percentage * 100, privacy: .public)% - aggressive cleanup")
+            print("⚠️ CRITICAL: Memory at \(String(format: "%.1f", percentage * 100))% - performing aggressive cleanup")
+            performAggressiveCleanup()
         } else if percentage >= warningThreshold {
-            logger.warning("WARNING: Memory usage at \(percentage * 100, privacy: .public)% - performing cleanup")
+            logger.warning("WARNING: Memory at \(percentage * 100, privacy: .public)% - preventive cleanup")
+            print("⚠️ WARNING: Memory at \(String(format: "%.1f", percentage * 100))% - performing preventive cleanup")
             performPreventiveCleanup()
         }
     }
@@ -156,7 +179,7 @@ class MemoryCapManager {
     private func performPreventiveCleanup() {
         logger.info("Performing preventive memory cleanup")
         
-        // Clean up video caches
+        // Clean up video caches (memory)
         SharedAssetCache.shared.releasePartialCache(percentage: 30)
         
         // Clean up image caches
@@ -172,7 +195,10 @@ class MemoryCapManager {
     private func performAggressiveCleanup() {
         logger.info("Performing aggressive memory cleanup")
         
-        // Clean up more video caches
+        // CRITICAL: Cancel active downloads first to stop memory growth
+        SharedAssetCache.shared.cancelAllLoadingTasks()
+        
+        // Clean up more video caches (memory)
         SharedAssetCache.shared.releasePartialCache(percentage: 60)
         
         // Clean up more image caches
@@ -184,6 +210,14 @@ class MemoryCapManager {
         // Clear chat cache
         ChatCacheManager.shared.clearMemoryCache()
         
+        // Notify user about memory pressure
+        let memoryMB = currentMemoryUsage / (1024 * 1024)
+        NotificationCenter.default.post(
+            name: .memoryWarningCritical,
+            object: nil,
+            userInfo: ["memoryMB": memoryMB, "severity": "high"]
+        )
+        
         // Force garbage collection
         DispatchQueue.global(qos: .utility).async {
             // This helps trigger ARC cleanup
@@ -191,20 +225,69 @@ class MemoryCapManager {
     }
     
     @MainActor
+    private func performEmergencyCleanup() {
+        logger.error("Performing EMERGENCY memory cleanup to enforce 2GB hard cap")
+        
+        // CRITICAL: Cancel ALL active downloads IMMEDIATELY to stop memory growth
+        SharedAssetCache.shared.cancelAllLoadingTasks()
+        
+        // Clear 80% of video caches - keep only most recent
+        SharedAssetCache.shared.releasePartialCache(percentage: 80)
+        
+        // Clear image caches aggressively
+        ImageCacheManager.shared.cleanupOldCache()
+        
+        // Clear ALL memory caches
+        TweetCacheManager.shared.clearMemoryCache()
+        ChatCacheManager.shared.clearMemoryCache()
+        
+        // Clear video state cache
+        VideoStateCache.shared.clearAllCache()
+        
+        // Notify user about critical memory situation
+        let memoryMB = currentMemoryUsage / (1024 * 1024)
+        NotificationCenter.default.post(
+            name: .memoryWarningCritical,
+            object: nil,
+            userInfo: ["memoryMB": memoryMB, "severity": "critical"]
+        )
+        
+        // Force garbage collection
+        DispatchQueue.global(qos: .utility).async {
+            autoreleasepool {
+                // Force memory reclamation
+            }
+        }
+        
+        print("⚠️ EMERGENCY CLEANUP COMPLETE - cancelled all downloads, cleared 80% of caches to stay under 2GB cap")
+    }
+    
+    @MainActor
     private func performBackgroundCleanup() {
         logger.info("Performing background cleanup")
         
-        // Clean up video caches
-        SharedAssetCache.shared.releasePartialCache(percentage: 50)
+        // Check current memory usage
+        let percentage = memoryUsagePercentage
+        logger.info("Memory usage at background: \(percentage * 100, privacy: .public)%")
         
-        // Clean up image caches
-        ImageCacheManager.shared.cleanupOldCache()
-        
-        // Clear tweet cache
-        TweetCacheManager.shared.clearMemoryCache()
-        
-        // Clear chat cache
-        ChatCacheManager.shared.clearMemoryCache()
+        // Only perform aggressive cleanup if memory usage is high
+        if percentage >= warningThreshold {
+            logger.info("Memory above warning threshold, performing cleanup")
+            
+            // Clean up video caches
+            SharedAssetCache.shared.releasePartialCache(percentage: 30)
+            
+            // Clean up image caches
+            ImageCacheManager.shared.cleanupOldCache()
+            
+            // Clear tweet cache
+            TweetCacheManager.shared.clearMemoryCache()
+            
+            // Clear chat cache
+            ChatCacheManager.shared.clearMemoryCache()
+        } else {
+            logger.info("Memory usage normal, skipping background cleanup to preserve caches")
+        }
     }
     
     private func formatBytes(_ bytes: UInt64) -> String {
@@ -250,3 +333,4 @@ extension MemoryCapManager {
         return "\(formatBytes(stats.currentUsage)) / \(formatBytes(stats.limit)) (\(Int(stats.percentage * 100))%)"
     }
 }
+

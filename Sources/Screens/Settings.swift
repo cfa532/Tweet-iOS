@@ -6,8 +6,6 @@
 //
 
 import SwiftUI
-
-
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -105,4 +103,3 @@ struct SettingsView: View {
         }
     }
 }
-

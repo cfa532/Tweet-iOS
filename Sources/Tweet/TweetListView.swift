@@ -36,9 +36,94 @@ struct TweetListView<RowView: View>: View {
     @State private var deletedTweetIds = Set<String>()
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
+    @State private var scrollAnchorId: String? = nil  // Track scroll position
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
+    
+    // MARK: - Video Navigation for Fullscreen
+    
+    /// Find next video in tweet list starting from given SOURCE tweet (visible in feed) and video index
+    /// sourceTweetId: The visible tweet in feed (could be retweet)
+    /// currentVideoIndex: The current video index in the tweet's attachments
+    func findNextVideoInList(sourceTweetId: String, currentVideoIndex: Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)? {
+        print("DEBUG: [TweetListView] Finding next video - sourceTweetId: \(sourceTweetId), currentVideoIndex: \(currentVideoIndex)")
+        
+        // Find source tweet (the visible tweet in feed)
+        guard let sourceTweetIdx = await MainActor.run(body: { tweets.firstIndex(where: { $0.mid == sourceTweetId }) }) else {
+            print("DEBUG: [TweetListView] Source tweet not found in feed")
+            return nil
+        }
+        
+        let sourceTweet = await MainActor.run { tweets[sourceTweetIdx] }
+        
+        // Get media tweet (handle retweets)
+        let mediaTweet: Tweet
+        if let originalTweetId = sourceTweet.originalTweetId,
+           let originalAuthorId = sourceTweet.originalAuthorId {
+            // This is a retweet - fetch original tweet
+            print("DEBUG: [TweetListView] Source tweet is retweet, fetching original tweet")
+            if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                mediaTweet = original
+            } else {
+                mediaTweet = sourceTweet
+            }
+        } else {
+            mediaTweet = sourceTweet
+        }
+        
+        // Find all video attachments in media tweet
+        if let attachments = mediaTweet.attachments {
+            let videoIndices = attachments.enumerated().compactMap { index, attachment in
+                (attachment.type == .video || attachment.type == .hls_video) ? index : nil
+            }
+            
+            print("DEBUG: [TweetListView] Media tweet has \(videoIndices.count) videos at indices: \(videoIndices)")
+            
+            // Check if there are more videos in current media tweet
+            if let currentPosInVideoList = videoIndices.firstIndex(of: currentVideoIndex),
+               currentPosInVideoList + 1 < videoIndices.count {
+                let nextVideoIdx = videoIndices[currentPosInVideoList + 1]
+                print("DEBUG: [TweetListView] ✅ Found next video in same tweet at index \(nextVideoIdx)")
+                return (mediaTweet, nextVideoIdx, sourceTweetId) // Same source tweet
+            }
+        }
+        
+        // No more videos in current tweet, search next VISIBLE tweets in feed
+        print("DEBUG: [TweetListView] Searching next visible tweets for videos... (from index \(sourceTweetIdx + 1) to \(await MainActor.run { tweets.count - 1}))")
+        let tweetCount = await MainActor.run { tweets.count }
+        for idx in (sourceTweetIdx + 1)..<tweetCount {
+            let nextTweet = await MainActor.run { tweets[idx] }
+            print("DEBUG: [TweetListView] Checking visible tweet \(idx): \(nextTweet.mid), isRetweet: \(nextTweet.originalTweetId != nil)")
+            
+            // Get media tweet (handle retweets)
+            let nextMediaTweet: Tweet
+            if let originalTweetId = nextTweet.originalTweetId,
+               let originalAuthorId = nextTweet.originalAuthorId {
+                print("DEBUG: [TweetListView] Tweet \(idx) is retweet, fetching original")
+                if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                    nextMediaTweet = original
+                } else {
+                    nextMediaTweet = nextTweet
+                }
+            } else {
+                nextMediaTweet = nextTweet
+            }
+            
+            if let attachments = nextMediaTweet.attachments {
+                let videoTypes = attachments.map { $0.type }
+                print("DEBUG: [TweetListView] Tweet \(idx) attachment types: \(videoTypes)")
+                
+                if let firstVideoIdx = attachments.firstIndex(where: { $0.type == .video || $0.type == .hls_video }) {
+                    print("DEBUG: [TweetListView] ✅ Found next video at visible tweet index \(idx), video index \(firstVideoIdx)")
+                    return (nextMediaTweet, firstVideoIdx, nextTweet.mid) // Return source tweet ID
+                }
+            }
+        }
+        
+        print("DEBUG: [TweetListView] ❌ No more videos found")
+        return nil
+    }
 
     // MARK: - Initialization
     init(
@@ -154,8 +239,11 @@ struct TweetListView<RowView: View>: View {
                         if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
                             if notification.name == .tweetDeleted {
                                 // For tweet deletion, handle directly in TweetListView
-                                tweets.removeAll { $0.id == tweetId }
+                                let countBefore = tweets.count
+                                tweets.removeAll { $0.mid == tweetId }
+                                let countAfter = tweets.count
                                 TweetCacheManager.shared.deleteTweet(mid: tweetId)
+                                print("DEBUG: [TweetListView] Removed deleted tweet \(tweetId) from list (title: \(title), count: \(countBefore) -> \(countAfter))")
                             } else {
                                 // For other notifications (like privacy changes), call the custom handler
                                 // Find the actual tweet in the list and pass it to the handler
@@ -179,12 +267,22 @@ struct TweetListView<RowView: View>: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            // Set up fullscreen video search function for auto-advance
+            // Each TweetListView overwrites the previous one's function
+            print("DEBUG: [TweetListView] Registering video search function - title: \(title), tweets count: \(tweets.count)")
+            FullScreenVideoManager.shared.setVideoSearchFunction(
+                findNextVideoInList,
+                onNavigate: { tweet, videoIndex, sourceTweetId in
+                    print("DEBUG: [TweetListView] Fullscreen navigation callback - tweet: \(tweet.mid), videoIndex: \(videoIndex), sourceTweetId: \(sourceTweetId)")
+                    // MediaBrowserView will handle the actual navigation
+                }
+            )
+        }
     }
 
     // MARK: - Methods
     func performInitialLoad() async {
-        isLoading = true
-        initialLoadComplete = false
         currentPage = 0
         let page: UInt = 0
 
@@ -193,23 +291,39 @@ struct TweetListView<RowView: View>: View {
             let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
             let validCachedTweets = tweetsFromCache.compactMap { $0 }
             
+            let hasCachedContent = !validCachedTweets.isEmpty
+            
             await MainActor.run {
-                tweets.mergeTweets(validCachedTweets)
-                
-                // Update VideoLoadingManager with new tweet list
-                let tweetIds = tweets.map { $0.mid }
-                videoLoadingManager.updateTweetList(tweetIds)
-                
-                // Mark as loaded immediately after cache load for instant UX
-                isLoading = false
-                initialLoadComplete = true
+                if hasCachedContent {
+                    // If we have cached content, show it immediately without loading spinner
+                    tweets.mergeTweets(validCachedTweets)
+                    
+                    // Update VideoLoadingManager with new tweet list
+                    let tweetIds = tweets.map { $0.mid }
+                    videoLoadingManager.updateTweetList(tweetIds)
+                    
+                    // Mark as loaded immediately after cache load for instant UX
+                    isLoading = false
+                    initialLoadComplete = true
+                } else {
+                    // No cached content - show loading spinner and wait for server
+                    isLoading = true
+                    initialLoadComplete = false
+                }
             }
             
-            // Step 2: Load from server in background to get the most up-to-date data
-            // This happens asynchronously and won't block the UI
-            Task.detached(priority: .background) {
-                await self.loadFromServer(page: page, pageSize: self.pageSize) { _ in
-                    // Server load completion handled separately
+            // Step 2: Load from server to get the most up-to-date data
+            if hasCachedContent {
+                // If we have cache, load server data in background (non-blocking)
+                Task.detached(priority: .background) {
+                    await self.loadFromServer(page: page, pageSize: self.pageSize) { _ in
+                        // Server load completion handled separately
+                    }
+                }
+            } else {
+                // No cache - wait for server load to complete before marking as loaded
+                await loadFromServer(page: page, pageSize: pageSize) { _ in
+                    // Server load completed
                 }
             }
             
@@ -382,11 +496,23 @@ struct TweetListView<RowView: View>: View {
             let hasValidTweet = !validServerTweets.isEmpty
             
             await MainActor.run {
+                // Capture scroll position before updating content
+                if !tweets.isEmpty {
+                    // Save the first visible tweet to maintain scroll position
+                    scrollAnchorId = tweets.first?.mid
+                }
+                
                 // Update tweets with server data (existing mergeTweets already preserves cached tweets for failed IDs)
                 if hasValidTweet {
                     if page == 0 {
-                        // For first page, replace all tweets with server data
-                        tweets = validServerTweets
+                        // For first page, MERGE instead of replace to prevent scroll jumps
+                        // Only replace if we have NO cached content
+                        if tweets.isEmpty {
+                            tweets = validServerTweets
+                        } else {
+                            // Merge server data with cached data to maintain scroll position
+                            tweets.mergeTweets(validServerTweets)
+                        }
                     } else {
                         // For subsequent pages, merge server data
                         tweets.mergeTweets(validServerTweets)
@@ -399,10 +525,25 @@ struct TweetListView<RowView: View>: View {
                     currentPage = page
                 } else if tweetsFromServer.count < pageSize {
                     hasMoreTweets = false
+                    // Update VideoLoadingManager even when no tweets
+                    if page == 0 && tweets.isEmpty {
+                        videoLoadingManager.updateTweetList([])
+                    }
                 } else {
                     // All tweets are nil but we got a full page, continue to next page
                     currentPage = page
                     // Don't call loadMoreTweets recursively here, let the normal flow continue
+                }
+                
+                // Mark initial load as complete for page 0
+                if page == 0 {
+                    isLoading = false
+                    initialLoadComplete = true
+                }
+                
+                // Clear scroll anchor after a brief delay to allow layout to settle
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    scrollAnchorId = nil
                 }
             }
             
@@ -411,6 +552,11 @@ struct TweetListView<RowView: View>: View {
             
             await MainActor.run {
                 errorMessage = "Unable to load fresh content. Showing cached data."
+                // Mark initial load as complete even on error for page 0
+                if page == 0 {
+                    isLoading = false
+                    initialLoadComplete = true
+                }
                 // Don't modify tweets array - keep cached data intact
             }
         }
@@ -489,6 +635,7 @@ struct TweetListContentView<RowView: View>: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
+                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             } else if initialLoadComplete && tweets.compactMap({ $0 }).isEmpty {
                 // Show empty state when loading is complete but no tweets
                 VStack(spacing: 16) {
@@ -522,7 +669,6 @@ struct TweetListContentView<RowView: View>: View {
                             .onAppear {
                                 // Update VideoLoadingManager when tweet becomes visible
                                 videoLoadingManager.updateVisibleTweetIndex(index)
-                                print("DEBUG: [TweetListContentView] Tweet \(tweet.mid) at index \(index) became visible")
                             }
                     }
                 }
@@ -556,4 +702,3 @@ struct TweetListContentView<RowView: View>: View {
         }
     }
 }
-

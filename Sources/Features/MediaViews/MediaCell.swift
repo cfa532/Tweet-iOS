@@ -38,6 +38,7 @@ struct MediaCell: View, Equatable {
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
+    let visibleTweetId: String? // The ID of the visible tweet in feed (for retweets)
     
     @State private var image: UIImage?
     @State private var isLoading = false
@@ -47,14 +48,16 @@ struct MediaCell: View, Equatable {
     @State private var onVideoFinished: (() -> Void)?
     @State private var preloadTask: Task<Void, Never>?
     @State private var isPreloading = false
+    @State private var isOpeningFullScreen = false
     let showMuteButton: Bool
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, visibleTweetId: String? = nil) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
+        self.visibleTweetId = visibleTweetId
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
         self.showMuteButton = showMuteButton
@@ -73,7 +76,11 @@ struct MediaCell: View, Equatable {
     }
     
     private var baseUrl: URL {
-        return parentTweet.author?.baseUrl ?? HproseInstance.baseUrl
+        // Use author's baseUrl if available, otherwise use appUser's baseUrl
+        // If both are nil, use real IP from HproseInstance (resolved at app start)
+        return parentTweet.author?.baseUrl 
+            ?? HproseInstance.shared.appUser.baseUrl 
+            ?? HproseInstance.baseUrl
     }
     
     private var isVideoAttachment: Bool {
@@ -85,66 +92,8 @@ struct MediaCell: View, Equatable {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
-                    
-                    if shouldLoadVideo {
-                        videoPlayerView(url: url)
-                    } else {
-                        // Show placeholder for videos that haven't been loaded yet
-                        ZStack {
-                            Color.gray.opacity(0.3)
-                                .aspectRatio(contentMode: .fill)
-                                .overlay(
-                                    Group {
-                                        if isPreloading {
-                                            // Show loading indicator during preload
-                                            ProgressView()
-                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                                .scaleEffect(0.8)
-                                                .background(Color.gray.opacity(0.4))
-                                                .clipShape(Circle())
-                                                .padding(4)
-                                        } else {
-                                            // Show play button when not preloading
-                                            Image(systemName: "play.circle")
-                                                .font(.system(size: 40))
-                                                .foregroundColor(.white)
-                                        }
-                                    }
-                                )
-                                .onTapGesture {
-                                    // Open full screen for video placeholders
-                                    handleTap()
-                                }
-                            
-                            // Invisible overlay to prevent tap propagation to parent views and add long press
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    // This prevents the tap from reaching parent views
-                                    handleTap()
-                                }
-                                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                                    // FIRST: Clear all caches immediately
-                                    print("DEBUG: [VIDEO RELOAD] Long press load triggered for \(attachment.mid)")
-                                    
-                                    if let url = attachment.getUrl(baseUrl) {
-                                        // Clear player cache
-                                        SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? attachment.mid)
-                                        
-                                        // Clear asset cache
-                                        Task {
-                                            await MainActor.run {
-                                                SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? attachment.mid)
-                                                print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Note: shouldLoadVideo is controlled by VideoLoadingManager, not overridden here
-                                }
-                        }
-                    }
-                    // #endif
+                    // Always show video player, no placeholder
+                    videoPlayerView(url: url)
                 case .audio:
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
@@ -212,10 +161,8 @@ struct MediaCell: View, Equatable {
             }
         }
         .onAppear {
-            print("DEBUG: [MediaCell] onAppear called for \(attachment.mid)")
             // Set visibility to true immediately when cell appears
             isVisible = true
-            print("DEBUG: [MediaCell] isVisible set to true for \(attachment.mid)")
             
             // Load image if not already loaded - ONLY for image attachments
             if attachment.type == .image && image == nil {
@@ -252,13 +199,16 @@ struct MediaCell: View, Equatable {
         .fullScreenCover(isPresented: $showFullScreen) {
             MediaBrowserView(
                 tweet: parentTweet,
-                initialIndex: attachmentIndex
+                initialIndex: attachmentIndex,
+                sourceTweetId: visibleTweetId ?? parentTweet.mid // Use visibleTweetId if available
             )
         }
         .onChange(of: showFullScreen) { _, newValue in
             if newValue {
                 // Video is going into full-screen mode
                 VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
+                // Reset loading state once fullscreen is presented
+                isOpeningFullScreen = false
             } else {
                 // Video is exiting full-screen mode
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)
@@ -288,8 +238,13 @@ struct MediaCell: View, Equatable {
         // Use internal full screen logic
         switch attachment.type {
         case .video, .hls_video:
-            // Open full screen for videos
-            showFullScreen = true
+            // Show loading spinner for videos
+            isOpeningFullScreen = true
+            // Delay opening fullscreen to allow spinner to render
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                showFullScreen = true
+            }
         case .audio:
             // Toggle audio playback - handled by SimpleAudioPlayer
             break
@@ -341,8 +296,7 @@ struct MediaCell: View, Equatable {
     // MARK: - Video Player View
     @ViewBuilder
     private func videoPlayerView(url: URL) -> some View {
-        ZStack {
-            SimpleVideoPlayer(
+        SimpleVideoPlayer(
                 url: url,
                 mid: attachment.mid,
                 parentTweetId: parentTweet.mid,
@@ -356,25 +310,32 @@ struct MediaCell: View, Equatable {
                 showNativeControls: false,
                 isMuted: muteState.isMuted,
                 onVideoTap: {
-                    showFullScreen = true
+                    isOpeningFullScreen = true
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                        showFullScreen = true
+                    }
                 },
                 disableAutoRestart: true,
                 shouldLoadVideo: shouldLoadVideo,
                 mode: .mediaCell
             )
-            
-            // Invisible overlay to prevent tap propagation to parent views and add long press
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    showFullScreen = true
-                }
-                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                    handleVideoReload()
-                }
-        }
-        // Note: SimpleVideoPlayer handles its own lifecycle internally
-        .overlay(
+            .overlay(
+                // Invisible overlay to prevent tap propagation to parent views and add long press
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        isOpeningFullScreen = true
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                            showFullScreen = true
+                        }
+                    }
+                    .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
+                        handleVideoReload()
+                    }
+            )
+            .overlay(
             // Video controls overlay
             Group {
                 VStack {
@@ -390,11 +351,30 @@ struct MediaCell: View, Equatable {
                 }
             }
         )
+        .overlay(
+            // Loading spinner overlay when opening fullscreen
+            Group {
+                if isOpeningFullScreen {
+                    ZStack {
+                        Color.black.opacity(0.4)
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.5)
+                    }
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: isOpeningFullScreen)
+                }
+            }
+        )
     }
     
     private func handleVideoReload() {
+        // Provide haptic feedback
+        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+        impactFeedback.impactOccurred()
+        
         // Clear all caches and force reload by toggling shouldLoadVideo
-        print("DEBUG: [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
+        print("🔄 [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
         
         if let url = attachment.getUrl(baseUrl) {
             // Clear player cache
@@ -417,7 +397,9 @@ struct MediaCell: View, Equatable {
         shouldLoadVideo = false
         // Use Task to avoid blocking
         Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second delay
             shouldLoadVideo = true
+            print("✅ [VIDEO RELOAD] Video reload initiated")
         }
     }
 }
@@ -440,7 +422,3 @@ struct MuteButton: View {
         }
     }
 }
-
-
-
-

@@ -11,6 +11,7 @@ import AVKit
 struct MediaGridView: View {
     let parentTweet: Tweet
     let attachments: [MimeiFileType]
+    let visibleTweetId: String? // The ID of the visible tweet in feed (for retweets)
     let maxImages: Int = 4
     @State private var shouldLoadVideo = true
     @State private var videoLoadTimer: Timer?
@@ -22,9 +23,10 @@ struct MediaGridView: View {
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
     private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32)
     
-    init(parentTweet: Tweet, attachments: [MimeiFileType]) {
+    init(parentTweet: Tweet, attachments: [MimeiFileType], visibleTweetId: String? = nil) {
         self.parentTweet = parentTweet
         self.attachments = attachments
+        self.visibleTweetId = visibleTweetId
     }
     
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
@@ -90,7 +92,8 @@ struct MediaGridView: View {
                         aspectRatio: Float(gridAspectRatio),
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
-                        videoManager: videoManager
+                        videoManager: videoManager,
+                        visibleTweetId: visibleTweetId
                     )
                     .frame(width: actualWidth, height: gridHeight)
                     .clipped()
@@ -115,7 +118,8 @@ struct MediaGridView: View {
                                     aspectRatio: Float((actualWidth/2 - 1) / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -132,7 +136,8 @@ struct MediaGridView: View {
                                     aspectRatio: Float(actualWidth / (gridHeight/2 - 1)),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -150,7 +155,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -162,7 +168,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                    visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -175,7 +182,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -187,7 +195,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -219,7 +228,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth * 0.618 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -254,7 +264,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth, height: gridHeight * 0.618 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -288,7 +299,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -319,7 +331,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -359,7 +372,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -394,7 +408,8 @@ struct MediaGridView: View {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager
+                                    videoManager: videoManager,
+                                        visibleTweetId: visibleTweetId
                                 )
                                 .frame(width: actualWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -437,7 +452,6 @@ struct MediaGridView: View {
         // Fix the height to prevent layout shifts during scrolling
         .frame(height: gridHeight)
         .onAppear {
-            print("DEBUG: [MediaGridView] onAppear called for tweet \(parentTweet.mid)")
             // Mark the grid as visible
             isVisible = true
             
@@ -484,22 +498,16 @@ struct MediaGridView: View {
             let hasMedia = hasVideos || hasAudio
             
             if hasMedia {
-                print("DEBUG: [MediaGridView] Grid contains media (videos: \(hasVideos), audio: \(hasAudio), attachments: \(attachments.count)) - checking VideoLoadingManager")
                 
                 // Register this tweet as containing media (videos or audio)
                 // This is important for tweets with multiple attachments to be tracked
                 videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
                 
                 // Check if this tweet should load media based on VideoLoadingManager
-                if videoLoadingManager.shouldLoadVideos(for: parentTweet.mid) {
-                    shouldLoadVideo = true
-                    print("DEBUG: [MediaGridView] VideoLoadingManager approved loading for tweet \(parentTweet.mid) with \(attachments.count) attachments")
-                } else {
-                    shouldLoadVideo = false
-                    print("DEBUG: [MediaGridView] VideoLoadingManager denied loading for tweet \(parentTweet.mid) with \(attachments.count) attachments")
+                let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
+                if shouldLoadVideo != shouldLoad {
+                    shouldLoadVideo = shouldLoad
                 }
-            } else {
-                print("DEBUG: [MediaGridView] Grid contains no media")
             }
         }
         .onDisappear {
@@ -514,7 +522,6 @@ struct MediaGridView: View {
             // Handle visibility changes
             if !newVisibility {
                 // Grid became invisible - stop video playback
-                print("DEBUG: [MediaGridView] Grid became invisible - stopping playback")
                 videoManager.stopSequentialPlayback()
             }
         }
@@ -535,7 +542,6 @@ struct MediaGridView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
-            print("DEBUG: [MediaGridView] Received stopAllVideos notification for tweet \(parentTweet.mid)")
             shouldLoadVideo = false
             videoManager.stopSequentialPlayback()
         }
@@ -607,8 +613,6 @@ struct ZoomableView<Content: View>: View {
     }
 }
 
-
-
 // MARK: - MediaGridViewModel
 struct MediaGridViewModel {
     static func aspectRatio(for attachments: [MimeiFileType]) -> CGFloat {
@@ -637,46 +641,8 @@ struct MediaGridViewModel {
             } else {
                 return 2.0      // One portrait, one landscape: horizontal, aspect 2:1
             }
-        case 3:
-            return calculateOptimalAspectRatioForThreeItems(attachments)
         default:
             return 1.0
         }
-    }
-    
-    /// Calculates optimal aspect ratio for 3 items based on their characteristics
-    private static func calculateOptimalAspectRatioForThreeItems(_ attachments: [MimeiFileType]) -> CGFloat {
-        let ar0 = attachments[0].aspectRatio ?? 1
-        let ar1 = attachments[1].aspectRatio ?? 1
-        let ar2 = attachments[2].aspectRatio ?? 1
-        
-        // Count portrait and landscape images
-        let portraitCount = [ar0, ar1, ar2].filter { $0 < 1 }.count
-        let landscapeCount = [ar0, ar1, ar2].filter { $0 > 1 }.count
-        
-        // Decision algorithm:
-        // 1. If all images are portrait (aspect ratio < 1), use square grid with golden ratio layout
-        if portraitCount == 3 {
-            return 1.0 // Square grid for golden ratio layout
-        }
-        
-        // 2. If all images are landscape (aspect ratio > 1), use square grid with golden ratio layout
-        if landscapeCount == 3 {
-            return 1.0 // Square grid for golden ratio layout
-        }
-        
-        // 3. If there's a mix of orientations, analyze the distribution
-        if portraitCount == 2 && landscapeCount == 1 {
-            // Two portraits, one landscape - prefer portrait layout
-            return 4.0/6.0 // 0.67
-        }
-        
-        if portraitCount == 1 && landscapeCount == 2 {
-            // One portrait, two landscapes - prefer square layout for better balance
-            return 1.0 // Square layout
-        }
-        
-        // 4. Default to square layout for better visual balance
-        return 1.0 // Square layout
     }
 }

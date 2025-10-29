@@ -22,11 +22,6 @@ struct CommentComposeView: View {
     @FocusState private var isEditorFocused: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
     
-    // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
-    private var identifiableItems: [IdentifiablePhotosPickerItem] {
-        selectedItems.map { IdentifiablePhotosPickerItem(item: $0) }
-    }
-    
     // Check if there's content or attachments that would be lost
     private var hasContentOrAttachments: Bool {
         !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty
@@ -37,48 +32,27 @@ struct CommentComposeView: View {
             ZStack {
                 ScrollView {
                     VStack(spacing: 0) {
-                        // Quote checkbox
+                        // Quote checkbox with larger tappable area
                         HStack {
-                            Button(action: { isQuoting.toggle() }) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: isQuoting ? "checkmark.square.fill" : "square")
-                                        .foregroundColor(isQuoting ? .blue : .secondary)
-                                    Text(LocalizedStringKey("Quote Tweet"))
-                                        .font(.subheadline)
-                                        .foregroundColor(.primary)
-                                }
+                            HStack(spacing: 8) {
+                                Image(systemName: isQuoting ? "checkmark.square.fill" : "square")
+                                    .foregroundColor(isQuoting ? .blue : .secondary)
+                                    .font(.system(size: 20))
+                                Text(LocalizedStringKey("Quote Tweet"))
+                                    .font(.subheadline)
+                                    .foregroundColor(.primary)
                             }
-                            .buttonStyle(PlainButtonStyle())
+                            .padding(.vertical, 12)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                isQuoting.toggle()
+                            }
                             Spacer()
                         }
-                        .padding()
+                        .padding(.horizontal)
                         .background(Color(.systemBackground))
                         
-                        // Original tweet preview when quoting
-                        if isQuoting {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text(tweet.author?.name ?? "Unknown")
-                                        .font(.headline)
-                                        .foregroundColor(.themeText)
-                                    Text("@\(tweet.author?.username ?? NSLocalizedString("username", comment: "Default username"))")
-                                        .font(.subheadline)
-                                        .foregroundColor(.themeSecondaryText)
-                                }
-                                
-                                if let content = tweet.content {
-                                    Text(content)
-                                        .font(.body)
-                                        .foregroundColor(.themeText)
-                                        .lineLimit(3)
-                                }
-                            }
-                            .padding()
-                            .background(Color.themeSecondaryBackground)
-                            .cornerRadius(8)
-                            .padding(.horizontal)
-                            .frame(maxHeight: 150)
-                        }
+                        // Don't show quoted content preview
                         
                         TextEditor(text: $commentText)
                             .frame(minHeight: 150, maxHeight: 250) // Max height for ~10 lines
@@ -181,13 +155,8 @@ struct CommentComposeView: View {
                         let selectedItems = selectedItems
                         let selectedImages = selectedImages
                         let selectedVideos = selectedVideos
+                        let isQuotingCaptured = isQuoting
                         
-                        // Send notification for toast on presenting screen and dismiss immediately
-                        NotificationCenter.default.post(
-                            name: .tweetSubmitted,
-                            object: nil,
-                            userInfo: ["message": NSLocalizedString("Comment submitted", comment: "Comment submitted message")]
-                        )
                         dismiss()
                         
                         // Submit comment in background after dismissing using captured data
@@ -196,7 +165,8 @@ struct CommentComposeView: View {
                                 text: commentText,
                                 selectedItems: selectedItems,
                                 selectedImages: selectedImages,
-                                selectedVideos: selectedVideos
+                                selectedVideos: selectedVideos,
+                                isQuoting: isQuotingCaptured
                             )
                         }
                     }
@@ -282,77 +252,12 @@ struct CommentComposeView: View {
         }
     }
     
-    private func submitComment() async {
-        let trimmedContent = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Allow empty content if there are attachments
-        guard MediaUploadHelper.validateContent(
-            content: commentText,
-            selectedItems: selectedItems,
-            selectedImages: selectedImages,
-            selectedVideos: selectedVideos
-        ) else {
-            print("DEBUG: Comment validation failed - empty content and no attachments")
-            await MainActor.run {
-                showToastMessage(NSLocalizedString("Comment cannot be empty.", comment: "Empty comment error"), type: .error)
-            }
-            return
-        }
-        
-        
-        // Create comment object with a temporary UUID
-        let comment = Tweet(
-            mid: UUID().uuidString,         // temporary ID that will be replaced by server
-            authorId: hproseInstance.appUser.mid,
-            content: trimmedContent,
-            timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
-            originalTweetId: isQuoting ? tweet.mid : nil,
-            originalAuthorId: isQuoting ? tweet.authorId : nil
-        )
-        
-        // Prepare item data using helper
-        print("DEBUG: Preparing item data for \(selectedItems.count) items")
-        let itemData: [HproseInstance.PendingTweetUpload.ItemData]
-        
-        do {
-            itemData = try await MediaUploadHelper.prepareItemData(
-                selectedItems: selectedItems,
-                selectedImages: selectedImages,
-                selectedVideos: selectedVideos
-            )
-        } catch {
-            print("DEBUG: Error preparing item data: \(error)")
-            await MainActor.run {
-                showToastMessage(NSLocalizedString("Failed to upload comment. Please try again.", comment: "Comment upload failed error"), type: .error)
-            }
-            return
-        }
-        
-        print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")
-        hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
-        
-        // Reset form and dismiss
-        await MainActor.run {
-            commentText = ""
-            selectedItems = []
-            selectedImages = []
-            selectedVideos = []
-            
-            // Show success toast before dismissing
-            showToastMessage(NSLocalizedString("Comment submitted", comment: "Comment submitted message"), type: .success)
-            
-            // Dismiss after a short delay to show the toast
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                dismiss()
-            }
-        }
-    }
-    
     private func submitCommentInBackground(
         text: String,
         selectedItems: [PhotosPickerItem],
         selectedImages: [UIImage],
-        selectedVideos: [URL]
+        selectedVideos: [URL],
+        isQuoting: Bool = false
     ) async {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         
@@ -362,7 +267,8 @@ struct CommentComposeView: View {
             return
         }
         
-        // Create comment object (Tweet, not ChatMessage)
+        // Create comment object WITHOUT originalTweetId/originalAuthorId
+        // Those will be set in TweetUploadManager if isQuoting is true
         let comment = Tweet(
             mid: UUID().uuidString,
             authorId: hproseInstance.appUser.mid,
@@ -385,8 +291,8 @@ struct CommentComposeView: View {
             return
         }
         
-        print("DEBUG: Scheduling comment upload with \(itemData.count) attachments")
-        hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData)
+        print("DEBUG: Scheduling comment upload with \(itemData.count) attachments, isQuoting: \(isQuoting)")
+        hproseInstance.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData, isQuoting: isQuoting)
     }
     
 } 

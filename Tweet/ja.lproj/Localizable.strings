@@ -13,6 +13,49 @@
 "Followings" = "フォロー中";
 "Recommendation" = "おすすめ";
 
+// MARK: - Upload Progress
+"Preparing upload..." = "アップロードを準備中...アプリを閉じないでください";
+"Preparing attachments..." = "添付ファイルを準備中...";
+"Converting video..." = "動画を変換中...";
+"Uploading attachments..." = "添付ファイルをアップロード中...";
+"Submitting tweet..." = "ツイートを送信中...";
+"Retrying upload..." = "アップロードを再試行中...";
+"Upload completed" = "アップロード完了";
+"Posting Tweet" = "ツイートを投稿中";
+"Posting Comment" = "コメントを投稿中";
+"Sending Message" = "メッセージを送信中";
+"Uploading" = "アップロード中";
+"Please keep the app open until upload completes" = "アップロードが完了するまでアプリを開いたままにしてください";
+"Video uploaded to server" = "動画をサーバーにアップロード完了";
+"Checking video status..." = "動画ステータスを確認中...";
+"Processing on server..." = "サーバーで処理中...";
+"Your tweet will be posted when ready" = "準備が整い次第ツイートが投稿されます";
+"Uploading %@ %d/%d..." = "%@ %d/%d をアップロード中...";
+"Processing video %d/%d" = "動画を処理中 %d/%d";
+"Uploading image %d/%d" = "画像をアップロード中 %d/%d";
+"Tweet posted successfully" = "ツイートが正常に投稿されました";
+"Failed to check video status" = "動画ステータスの確認に失敗しました";
+"Video processing completed but no ID returned" = "動画処理は完了しましたがIDが返されませんでした";
+"Video processing failed" = "動画処理に失敗しました";
+"Video processing timed out" = "動画処理がタイムアウトしました";
+"Failed to prepare attachments" = "添付ファイルの準備に失敗しました";
+"Failed to post tweet" = "ツイートの投稿に失敗しました";
+"Unknown video status" = "不明な動画ステータス";
+
+// MARK: - Pending Upload Dialog
+"Upload Interrupted" = "アップロードが中断されました";
+"Your upload was interrupted, possibly because the app was closed. Would you like to retry the upload or discard it?" = "アプリが閉じられたため、アップロードが中断されました。アップロードを再試行しますか、それとも破棄しますか？";
+"Your upload was interrupted and %d retry attempts have failed. Would you like to try again or discard it?" = "アップロードが中断され、%d回の再試行が失敗しました。もう一度試しますか、それとも破棄しますか？";
+"Type:" = "種類：";
+"Date:" = "日付：";
+"Attachments:" = "添付ファイル：";
+"Content:" = "内容：";
+"Comment" = "コメント";
+"Tweet" = "ツイート";
+"Retry Upload" = "アップロードを再試行";
+"Discard" = "破棄";
+"Upload discarded" = "アップロードを破棄しました";
+
 // MARK: - Login Screen
 "Welcome to dTweet" = "dTweetへようこそ";
 "Username" = "ユーザー名";
@@ -232,11 +275,15 @@
 "Video" = "動画";
 "Audio" = "音声";
 "File" = "ファイル";
+"Image" = "画像";
 "Camera" = "カメラ";
 "Photo Library" = "写真ライブラリ";
 "Choose Photo" = "写真を選択";
 "Take Photo" = "写真を撮影";
 "Record Video" = "動画を録画";
+"Select a photo" = "写真を選択";
+"Choose" = "選択";
+"%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB." = "%@ファイルが大きすぎます（%.1fMB）。最大サイズは%.0fMBです。";
 
 // MARK: - Settings
 "Settings" = "設定";
@@ -400,3 +447,17 @@
 "Cannot extract mediaID from URL" = "URLからメディアIDを抽出できません";
 "Failed to initialize app entry with any URL" = "いずれのURLでもアプリエントリの初期化に失敗しました";
 "Writable URL not available" = "書き込み可能なURLが利用できません";
+"Target user not found" = "ユーザーが見つかりません";
+"You cannot follow this user because you are blocked" = "ブロックされているため、このユーザーをフォローできません";
+"You cannot comment on this tweet because you are blocked by the author" = "投稿者にブロックされているため、このツイートにコメントできません";
+"Recipient user not found" = "受信者が見つかりません";
+"You cannot send a message to this user because you are blocked" = "ブロックされているため、このユーザーにメッセージを送信できません";
+"Tweet not found" = "ツイートが見つかりません";
+"Upload client not available" = "アップロードサービスが利用できません";
+"Failed to upload file" = "ファイルのアップロードに失敗しました";
+"Failed to upload tweet" = "ツイートのアップロードに失敗しました";
+"Failed to upload attachment" = "添付ファイルのアップロードに失敗しました";
+"Failed to post comment" = "コメントの投稿に失敗しました";
+"Failed to update pinned tweet" = "固定ツイートの更新に失敗しました";
+"Failed to get pinned tweets" = "固定ツイートの取得に失敗しました";
+"Failed to report tweet" = "ツイートの報告に失敗しました";

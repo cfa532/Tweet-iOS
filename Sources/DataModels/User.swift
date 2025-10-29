@@ -1,4 +1,4 @@
-import Foundation
+ import Foundation
 import Combine
 import hprose
 
@@ -19,17 +19,20 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var profile: String?
     @Published var timestamp: Date
     @Published var lastLogin: Date?
-    @Published var cloudDrivePort: Int? = 8010
+    @Published var cloudDrivePort: Int = 0
     
     @Published var tweetCount: Int? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when tweetCount changes
                 if let newValue = tweetCount, newValue != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.tweetCount = newValue
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.tweetCount = newValue
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -38,13 +41,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var followingCount: Int? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when followingCount changes
                 if let newValue = followingCount, newValue != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.followingCount = newValue
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.followingCount = newValue
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -53,13 +59,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var followersCount: Int? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when followersCount changes
                 if let newValue = followersCount, newValue != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.followersCount = newValue
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.followersCount = newValue
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -68,13 +77,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var bookmarksCount: Int? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when bookmarksCount changes
                 if let newValue = bookmarksCount, newValue != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.bookmarksCount = newValue
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.bookmarksCount = newValue
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -83,13 +95,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var favoritesCount: Int? {
         didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when favoritesCount changes
                 if let newValue = favoritesCount, newValue != oldValue {
-                    // Update the singleton instance in the cache
-                    User.userInstances[mid]?.favoritesCount = newValue
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.favoritesCount = newValue
+                    }
                     // Also update Core Data cache if this is the app user
-                    if mid == HproseInstance.shared.appUser.mid {
+                    if userId == HproseInstance.shared.appUser.mid {
                         TweetCacheManager.shared.saveUser(self)
                     }
                 }
@@ -159,8 +174,42 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     @Published var fansList: [MimeiId]? // List of MimeiId
     @Published var followingList: [MimeiId]? // List of MimeiId
-    @Published var bookmarkedTweets: [MimeiId]? // List of MimeiId
-    @Published var favoriteTweets: [MimeiId]? // List of MimeiId
+    @Published var bookmarkedTweets: [MimeiId]? {
+        didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
+            Task { @MainActor in
+                // Update cached version when bookmarkedTweets changes
+                if bookmarkedTweets != oldValue {
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.bookmarkedTweets = bookmarkedTweets
+                    }
+                    // Also update Core Data cache if this is the app user
+                    if userId == HproseInstance.shared.appUser.mid {
+                        TweetCacheManager.shared.saveUser(self)
+                    }
+                }
+            }
+        }
+    }
+    @Published var favoriteTweets: [MimeiId]? {
+        didSet {
+            let userId = mid  // Capture mid before Task to avoid race conditions
+            Task { @MainActor in
+                // Update cached version when favoriteTweets changes
+                if favoriteTweets != oldValue {
+                    // Update the singleton instance in the cache (thread-safe)
+                    User.userInstancesQueue.sync {
+                        User.userInstances[userId]?.favoriteTweets = favoriteTweets
+                    }
+                    // Also update Core Data cache if this is the app user
+                    if userId == HproseInstance.shared.appUser.mid {
+                        TweetCacheManager.shared.saveUser(self)
+                    }
+                }
+            }
+        }
+    }
     @Published var repliedTweets: [MimeiId]? // List of MimeiId
     @Published var commentsList: [MimeiId]? // List of MimeiId
     @Published var topTweets: [MimeiId]? // List of MimeiId
@@ -181,7 +230,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         avatar: MimeiId? = nil,
         email: String? = nil,
         profile: String? = nil,
-        cloudDrivePort: Int? = nil,
+        cloudDrivePort: Int = 0,
         hostIds: [MimeiId]? = nil,
         publicKey: String? = nil,
         hasAcceptedTerms: Bool = false
@@ -283,6 +332,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         // Try to decode the full user object from cache.
         if let userData = cdUser.userData,
            let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
+            // baseUrl and writableUrl are not persisted to Core Data
+            // They will be nil and resolved fresh on first use
             updateUserInstance(with: decodedUser)
         }
         return getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
@@ -299,18 +350,39 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.avatar = user.avatar
             instance.email = user.email
             instance.profile = user.profile
+            instance.timestamp = user.timestamp
             instance.lastLogin = user.lastLogin
             instance.cloudDrivePort = user.cloudDrivePort
             instance.hostIds = user.hostIds
-            instance.baseUrl = user.baseUrl
-            instance.writableUrl = user.writableUrl
             
+            // Only update baseUrl/writableUrl if the new value is non-nil
+            // This preserves memory-cached IPs when loading from disk (where IPs are not persisted)
+            if let newBaseUrl = user.baseUrl {
+                instance.baseUrl = newBaseUrl
+            }
+            if let newWritableUrl = user.writableUrl {
+                instance.writableUrl = newWritableUrl
+            }
+            
+            if instance.tweetCount != user.tweetCount {
+                print("DEBUG: [User.updateUserInstance] Updating tweetCount from \(instance.tweetCount ?? 0) to \(user.tweetCount ?? 0) for user \(instance.mid)")
+            }
             instance.tweetCount = user.tweetCount
             instance.followingCount = user.followingCount
             instance.followersCount = user.followersCount
             instance.bookmarksCount = user.bookmarksCount
             instance.favoritesCount = user.favoritesCount
             instance.commentsCount = user.commentsCount
+            
+            // Update array properties
+            instance.fansList = user.fansList
+            instance.followingList = user.followingList
+            instance.bookmarkedTweets = user.bookmarkedTweets
+            instance.favoriteTweets = user.favoriteTweets
+            instance.repliedTweets = user.repliedTweets
+            instance.commentsList = user.commentsList
+            instance.topTweets = user.topTweets
+            instance.userBlackList = user.userBlackList
         } else {
             DispatchQueue.main.async {
                 instance.name = user.name
@@ -319,18 +391,39 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.avatar = user.avatar
                 instance.email = user.email
                 instance.profile = user.profile
+                instance.timestamp = user.timestamp
                 instance.lastLogin = user.lastLogin
                 instance.cloudDrivePort = user.cloudDrivePort
                 instance.hostIds = user.hostIds
-                instance.baseUrl = user.baseUrl
-                instance.writableUrl = user.writableUrl
                 
+                // Only update baseUrl/writableUrl if the new value is non-nil
+                // This preserves memory-cached IPs when loading from disk (where IPs are not persisted)
+                if let newBaseUrl = user.baseUrl {
+                    instance.baseUrl = newBaseUrl
+                }
+                if let newWritableUrl = user.writableUrl {
+                    instance.writableUrl = newWritableUrl
+                }
+                
+                if instance.tweetCount != user.tweetCount {
+                    print("DEBUG: [User.updateUserInstance] Updating tweetCount from \(instance.tweetCount ?? 0) to \(user.tweetCount ?? 0) for user \(instance.mid)")
+                }
                 instance.tweetCount = user.tweetCount
                 instance.followingCount = user.followingCount
                 instance.followersCount = user.followersCount
                 instance.bookmarksCount = user.bookmarksCount
                 instance.favoritesCount = user.favoritesCount
                 instance.commentsCount = user.commentsCount
+                
+                // Update array properties
+                instance.fansList = user.fansList
+                instance.followingList = user.followingList
+                instance.bookmarkedTweets = user.bookmarkedTweets
+                instance.favoriteTweets = user.favoriteTweets
+                instance.repliedTweets = user.repliedTweets
+                instance.commentsList = user.commentsList
+                instance.topTweets = user.topTweets
+                instance.userBlackList = user.userBlackList
             }
         }
     }
@@ -357,7 +450,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         profile = try container.decodeIfPresent(String.self, forKey: .profile)
         timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date.now
         lastLogin = try container.decodeIfPresent(Date.self, forKey: .lastLogin)
-        cloudDrivePort = try container.decodeIfPresent(Int.self, forKey: .cloudDrivePort)
+        cloudDrivePort = try container.decodeIfPresent(Int.self, forKey: .cloudDrivePort) ?? 0
         
         tweetCount = try container.decodeIfPresent(Int.self, forKey: .tweetCount)
         followingCount = try container.decodeIfPresent(Int.self, forKey: .followingCount)
@@ -384,8 +477,10 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         
         try container.encode(mid, forKey: .mid)
-        try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
-        try container.encodeIfPresent(writableUrl, forKey: .writableUrl)
+        // Don't encode baseUrl/writableUrl - IP addresses should be resolved fresh each session
+        // to handle cases where server IPs have changed
+        // try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
+        // try container.encodeIfPresent(writableUrl, forKey: .writableUrl)
         try container.encodeIfPresent(name, forKey: .name)
         try container.encodeIfPresent(username, forKey: .username)
         try container.encodeIfPresent(password, forKey: .password)
@@ -394,7 +489,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         try container.encodeIfPresent(profile, forKey: .profile)
         try container.encode(timestamp, forKey: .timestamp)
         try container.encodeIfPresent(lastLogin, forKey: .lastLogin)
-        try container.encodeIfPresent(cloudDrivePort, forKey: .cloudDrivePort)
+        try container.encode(cloudDrivePort, forKey: .cloudDrivePort)
         
         try container.encodeIfPresent(tweetCount, forKey: .tweetCount)
         try container.encodeIfPresent(followingCount, forKey: .followingCount)
@@ -430,17 +525,20 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     
     var avatarUrl: String? {
-        if let avatar = avatar, let baseUrl = baseUrl {
-            return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(baseUrl)/ipfs/\(avatar)" :  "\(baseUrl)/mm/\(avatar)"
+        if let avatar = avatar {
+            // Use user's baseUrl if available, otherwise fallback to HproseInstance.baseUrl
+            // This ensures avatarUrl is available even when user.baseUrl is temporarily nil (e.g., after cache load)
+            let effectiveBaseUrl = baseUrl ?? HproseInstance.baseUrl
+            return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(effectiveBaseUrl)/ipfs/\(avatar)" :  "\(effectiveBaseUrl)/mm/\(avatar)"
         }
         return nil
     }
     
-    /// Computed property that determines if the user's cached data has expired
-    /// Returns true if the user is not cached or if the cache has expired (30 minutes)
-    var hasExpired: Bool {
+    /// Checks if the user's cached data has expired (30 minutes)
+    /// Returns true if the user is not cached or if the cache has expired
+    func hasExpired() async -> Bool {
         // Check if user exists in cache and if cache has expired
-        return TweetCacheManager.shared.hasExpired(mid: mid)
+        return await TweetCacheManager.shared.hasExpired(mid: mid)
     }
 
     // MARK: - Hashable

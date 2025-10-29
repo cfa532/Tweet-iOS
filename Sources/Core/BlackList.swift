@@ -129,40 +129,61 @@ class BlackList {
     
     // MARK: - Persistence
     
-    /// Load blacklist data from UserDefaults
+    /// Load blacklist data preferring UserDefaults, with iCloud as backup
+    /// UserDefaults is the source of truth; iCloud is only a secondary backup
     private func loadFromStorage() {
-        let defaults = UserDefaults.standard
+        let localStore = UserDefaults.standard
+        let iCloudStore = NSUbiquitousKeyValueStore.default
         
-        // Load blacklist
-        if let blacklistData = defaults.data(forKey: "BlackList.blacklist"),
+        // Sync iCloud in background; we still read local first
+        iCloudStore.synchronize()
+        
+        // Load blacklist - prefer UserDefaults, fallback to iCloud
+        if let blacklistData = localStore.data(forKey: "BlackList.blacklist"),
            let blacklistArray = try? JSONDecoder().decode([String].self, from: blacklistData) {
             blacklist = Set(blacklistArray.map { MimeiId($0) })
+            print("[BlackList] Loaded \(blacklist.count) blacklisted items from UserDefaults")
+        } else if let blacklistData = iCloudStore.data(forKey: "BlackList.blacklist"),
+                  let blacklistArray = try? JSONDecoder().decode([String].self, from: blacklistData) {
+            blacklist = Set(blacklistArray.map { MimeiId($0) })
+            print("[BlackList] Loaded \(blacklist.count) blacklisted items from iCloud (local missing)")
         }
         
-        // Load candidates
-        if let candidatesData = defaults.data(forKey: "BlackList.candidates"),
+        // Load candidates - prefer UserDefaults, fallback to iCloud
+        if let candidatesData = localStore.data(forKey: "BlackList.candidates"),
            let candidatesArray = try? JSONDecoder().decode([CandidateEntry].self, from: candidatesData) {
             candidates = Dictionary(uniqueKeysWithValues: candidatesArray.map { ($0.mimeiId, $0) })
+            print("[BlackList] Loaded \(candidates.count) candidates from UserDefaults")
+        } else if let candidatesData = iCloudStore.data(forKey: "BlackList.candidates"),
+                  let candidatesArray = try? JSONDecoder().decode([CandidateEntry].self, from: candidatesData) {
+            candidates = Dictionary(uniqueKeysWithValues: candidatesArray.map { ($0.mimeiId, $0) })
+            print("[BlackList] Loaded \(candidates.count) candidates from iCloud (local missing)")
         }
-        
-        print("[BlackList] Loaded \(blacklist.count) blacklisted items and \(candidates.count) candidates")
     }
     
-    /// Save blacklist data to UserDefaults
+    /// Save blacklist data to UserDefaults first, then mirror to iCloud as backup
+    /// UserDefaults is the authoritative store; iCloud is best-effort backup
     private func saveToStorage() {
-        let defaults = UserDefaults.standard
-        
-        // Save blacklist
         let blacklistArray = Array(blacklist).map { $0 }
-        if let blacklistData = try? JSONEncoder().encode(blacklistArray) {
-            defaults.set(blacklistData, forKey: "BlackList.blacklist")
+        let candidatesArray = Array(candidates.values)
+        
+        // Encode data
+        guard let blacklistData = try? JSONEncoder().encode(blacklistArray),
+              let candidatesData = try? JSONEncoder().encode(candidatesArray) else {
+            print("[BlackList] Failed to encode data for storage")
+            return
         }
         
-        // Save candidates
-        let candidatesArray = Array(candidates.values)
-        if let candidatesData = try? JSONEncoder().encode(candidatesArray) {
-            defaults.set(candidatesData, forKey: "BlackList.candidates")
-        }
+        // Save to UserDefaults first (authoritative)
+        let localStore = UserDefaults.standard
+        localStore.set(blacklistData, forKey: "BlackList.blacklist")
+        localStore.set(candidatesData, forKey: "BlackList.candidates")
+        
+        // Mirror to iCloud as backup (best-effort; survives reinstallation)
+        let iCloudStore = NSUbiquitousKeyValueStore.default
+        iCloudStore.set(blacklistData, forKey: "BlackList.blacklist")
+        iCloudStore.set(candidatesData, forKey: "BlackList.candidates")
+        iCloudStore.synchronize()
     }
 }
 

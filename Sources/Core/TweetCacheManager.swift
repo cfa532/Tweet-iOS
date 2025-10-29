@@ -184,8 +184,15 @@ extension TweetCacheManager {
                         do {
                             let tweet = try Tweet.from(cdTweet: cdTweet)
                             
-                            // Populate author from cached User data if available
-                            tweet.author = self.fetchUser(mid: tweet.authorId)
+                            // Load author from memory singleton only (no Core Data cache for user)
+                            // This ensures all tweets share the same User singleton
+                            if tweet.author == nil {
+                                // Get singleton - don't load from CDUser cache as it can be stale
+                                let authorSingleton = User.getInstance(mid: tweet.authorId)
+                                tweet.author = authorSingleton
+                            }
+                            
+                            // NOTE: baseUrl will be assigned on MainActor after all tweets are collected
                             
                             // Filter out tweets with invalid timestamps
                             if tweet.timestamp.timeIntervalSince1970 <= 0 {
@@ -205,6 +212,7 @@ extension TweetCacheManager {
                             tweets.append(nil)
                         }
                     }
+                    
                     continuation.resume(returning: tweets)
                 } else {
                     continuation.resume(returning: [])
@@ -215,19 +223,35 @@ extension TweetCacheManager {
 
     func fetchTweet(mid: String) async -> Tweet? {
         return await withCheckedContinuation { continuation in
+            // First check in-memory singleton
+            if let tweetInstance = Tweet.getInstance(for: mid) {
+                // Tweet is already in memory, return it immediately
+                continuation.resume(returning: tweetInstance)
+                return
+            }
+            
+            // Otherwise, load from Core Data cache
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                 request.predicate = NSPredicate(format: "tid == %@", mid)
                 
-                // First, get the tweet and convert it
+                // Get the tweet and convert it
                 if let cdTweet = try? self.context.fetch(request).first {
                     do {
                         let tweet = try Tweet.from(cdTweet: cdTweet)
-                        // Populate author from cached User data if available
-                        tweet.author = self.fetchUser(mid: tweet.authorId)
+                        
+                        // Load author from memory singleton only (no Core Data cache for user)
+                        // This ensures all tweets share the same User singleton
+                        if tweet.author == nil {
+                            // Get singleton - don't load from CDUser cache as it can be stale
+                            let authorSingleton = User.getInstance(mid: tweet.authorId)
+                            tweet.author = authorSingleton
+                        }
+                        
                         // Then update the cache time in a separate operation
                         cdTweet.timeCached = Date()
                         try? self.context.save()
+                        
                         continuation.resume(returning: tweet)
                     } catch {
                         print("Error processing tweet: \(error)")
@@ -278,15 +302,17 @@ extension TweetCacheManager {
         }
     }
 
-    /// Update a tweet in both main_feed cache and appUser's profile cache if the tweet belongs to the appUser
-    /// This ensures that tweet updates (like count changes) are reflected in both caches
+    /// Update a tweet using unified cache strategy:
+    /// - AppUser's public tweets → "main_feed" cache (appear in feed and profile)
+    /// - AppUser's private tweets → appUser.mid cache only (profile-only visibility)
+    /// - Other users' tweets → "main_feed" cache
     func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
-        // Always update in main_feed cache
-        saveTweet(tweet, userId: "main_feed")
-        
-        // Also update in appUser's profile cache if the tweet belongs to the appUser
-        if tweet.authorId == appUserId {
+        if tweet.authorId == appUserId && tweet.isPrivate == true {
+            // AppUser's private tweet - save only to profile cache
             saveTweet(tweet, userId: appUserId)
+        } else {
+            // Public tweet (any user) or other users' tweets - save to main_feed
+            saveTweet(tweet, userId: "main_feed")
         }
     }
 
@@ -359,8 +385,14 @@ extension TweetCacheManager {
         context.performAndWait {
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             request.predicate = NSPredicate(format: "tid == %@", mid)
-            if let cdTweet = try? context.fetch(request).first {
-                context.delete(cdTweet)
+            // Delete ALL instances of this tweet (might be in multiple caches)
+            if let cdTweets = try? context.fetch(request) {
+                for cdTweet in cdTweets {
+                    context.delete(cdTweet)
+                }
+                if !cdTweets.isEmpty {
+                    print("DEBUG: [TweetCacheManager] Deleted \(cdTweets.count) cache entries for tweet: \(mid)")
+                }
                 try? context.save()
             }
         }
@@ -432,57 +464,114 @@ extension Tweet {
         if let tweetData = cdTweet.tweetData {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .millisecondsSince1970
-            return try decoder.decode(Tweet.self, from: tweetData)
+            let tweet = try decoder.decode(Tweet.self, from: tweetData)
+            
+            // CRITICAL: Replace decoded author with singleton instance
+            // When decoding, a new User instance is created, but we need to use the singleton
+            if let decodedAuthor = tweet.author {
+                // Get the singleton instance
+                let authorSingleton = User.getInstance(mid: decodedAuthor.mid)
+                
+                // Update singleton with decoded data (preserves existing baseUrl if present)
+                User.updateUserInstance(with: decodedAuthor)
+                
+                // Replace tweet's author with the singleton
+                tweet.author = authorSingleton
+                
+                NSLog("DEBUG: [Tweet.from(cdTweet)] Tweet \(tweet.mid) using author singleton for user \(authorSingleton.mid), baseUrl: \(authorSingleton.baseUrl?.absoluteString ?? "NIL")")
+                
+                // Trigger fetchUser if baseUrl is nil to resolve IP
+                // SKIP appUser - app initialization will handle it
+                if authorSingleton.baseUrl == nil
+                    && authorSingleton.mid != HproseInstance.shared.appUser.mid {
+                    Task {
+                        _ = try? await HproseInstance.shared.fetchUser(authorSingleton.mid)
+                    }
+                }
+            }
+            return tweet
         }
-        
-        throw NSError(domain: "TweetCacheManager", code: -1, 
-                     userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])
+        throw NSError(domain: "TweetCacheManager", code: -1,
+                      userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])
     }
-    
 }
 
 // MARK: - User Caching
 /// Might need to update baseUrl of cached user, which might be outdated.
 extension TweetCacheManager {
-    func fetchUser(mid: String) -> User {
-        var user: User?
-        context.performAndWait {
-            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-            request.predicate = NSPredicate(format: "mid == %@", mid)
+    func fetchUser(mid: String) async -> User {
+        return await withCheckedContinuation { continuation in
+            // First check in-memory singleton
+            let userSingleton = User.getInstance(mid: mid)
             
-            if let cdUser = try? context.fetch(request).first {
-                user = User.from(cdUser: cdUser)
+            // If singleton has data (username is not nil), return it immediately
+            if userSingleton.username != nil {
+                continuation.resume(returning: userSingleton)
+                return
+            }
+            
+            // Otherwise, load from Core Data cache
+            // Capture only mid (Sendable) instead of userSingleton (non-Sendable)
+            context.perform {
+                let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                request.predicate = NSPredicate(format: "mid == %@", mid)
+                
+                if let cdUser = try? self.context.fetch(request).first {
+                    // Update singleton with cached data
+                    _ = User.from(cdUser: cdUser)
+                }
+                // Always return the singleton (updated or not)
+                continuation.resume(returning: User.getInstance(mid: mid))
             }
         }
-        return user ?? User.getInstance(mid: mid)
     }
     
     /// Internal method used by User.hasExpired computed property
     /// Checks if a user's cache has expired (30 minutes)
-    func hasExpired(mid: String) -> Bool {
-        var hasExpired = true
-        context.performAndWait {
-            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-            request.predicate = NSPredicate(format: "mid == %@", mid)
-            if let cdUser = try? context.fetch(request).first {
-                hasExpired = cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -1800 // 30 minutes
+    func hasExpired(mid: String) async -> Bool {
+        return await withCheckedContinuation { continuation in
+            context.perform {
+                let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                request.predicate = NSPredicate(format: "mid == %@", mid)
+                if let cdUser = try? self.context.fetch(request).first {
+                    let hasExpired = cdUser.timeCached?.timeIntervalSinceNow ?? 0 < -1800 // 30 minutes
+                    continuation.resume(returning: hasExpired)
+                } else {
+                    // If no cached user found, hasExpired is true
+                    continuation.resume(returning: true)
+                }
             }
-            // If no cached user found, hasExpired remains true
         }
-        return hasExpired
     }
 
     func saveUser(_ user: User) {
-        context.performAndWait {
+        // Use async perform to avoid blocking the main thread
+        context.perform {
             let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
             request.predicate = NSPredicate(format: "mid == %@", user.mid)
-            let cdUser = (try? context.fetch(request).first) ?? CDUser(context: context)
+            let cdUser = (try? self.context.fetch(request).first) ?? CDUser(context: self.context)
             cdUser.mid = user.mid
             cdUser.timeCached = Date()
             if let userData = try? JSONEncoder().encode(user) {
                 cdUser.userData = userData
             }
-            try? context.save()
+            try? self.context.save()
+        }
+    }
+    
+    /// Synchronous save - blocks until complete (use for critical updates like avatar)
+    func saveUserAndWait(_ user: User) {
+        context.performAndWait {
+            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+            request.predicate = NSPredicate(format: "mid == %@", user.mid)
+            let cdUser = (try? self.context.fetch(request).first) ?? CDUser(context: self.context)
+            cdUser.mid = user.mid
+            cdUser.timeCached = Date()
+            if let userData = try? JSONEncoder().encode(user) {
+                cdUser.userData = userData
+                NSLog("DEBUG: [saveUserAndWait] Saved user \(user.mid) with avatar: \(user.avatar ?? "nil")")
+            }
+            try? self.context.save()
         }
     }
 

@@ -9,10 +9,10 @@ struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     
     /// Navigation state
-    @State private var selectedUser: User? = nil
     @State private var showUserList = false
     @State private var showTweetList = false
     @State private var selectedTweetForNavigation: Tweet? = nil
+    @State private var selectedUserForNavigation: User? = nil
     
     @State private var userListType: UserListType = .FOLLOWER
     @State private var tweetListType: TweetListType = .BOOKMARKS
@@ -63,7 +63,7 @@ struct ProfileView: View {
                     pinnedTweetIds: pinnedTweetIds,
                     user: user,
                     hproseInstance: hproseInstance,
-                    onUserSelect: { user in selectedUser = user },
+                    onUserSelect: { _ in }, // Not used - NavigationLink handles user navigation
                     onTweetTap: { tweet in
                         // This should never be called since we'll use NavigationLink directly
                         print("DEBUG: [ProfileView] onTweetTap called - this should not happen")
@@ -216,12 +216,13 @@ struct ProfileView: View {
                 }
             }
         }
+        .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
         .sheet(isPresented: $showEditSheet) {
             ProfileEditView(
                 onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
                     // Set submission state
                     isSubmittingProfile = true
-                    print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort?.description ?? "nil")")
+                    print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort)")
                     
                     let success = try await hproseInstance.updateUserCore(
                         password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort
@@ -242,10 +243,8 @@ struct ProfileView: View {
                             hproseInstance.appUser.hostIds = [hostId]
                             print("DEBUG: Updated hostIds to: [\(hostId)]")
                         }
-                        if let cloudDrivePort = cloudDrivePort {
-                            hproseInstance.appUser.cloudDrivePort = cloudDrivePort
-                            print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
-                        }
+                        hproseInstance.appUser.cloudDrivePort = cloudDrivePort
+                        print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
                         
                         // Clear user cache to ensure fresh data is loaded on next app launch
                         TweetCacheManager.shared.deleteUser(mid: hproseInstance.appUser.mid)
@@ -291,17 +290,37 @@ struct ProfileView: View {
         .task {
             if !didLoad {
                 isLoading = true
-                _ = try? await hproseInstance.fetchUser(user.mid, baseUrl: "") // force user to reload from server
+                
+                // Fetch fresh user data from server
+                do {
+                    let refreshedUser = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
+                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server")
+                    
+                    // Save updated user to cache if fetch was successful
+                    if let refreshedUser = refreshedUser {
+                        TweetCacheManager.shared.saveUser(refreshedUser)
+                        print("DEBUG: [ProfileView] Saved fetched user to cache")
+                    }
+                } catch {
+                    print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): \(error)")
+                }
+                
+                // Refresh pinned tweets
                 await refreshPinnedTweets()
+                
                 isLoading = false
                 didLoad = true
                 
-                // Resync user data in detached task to update user object in memory
+                // Resync user data on server in background (long-running operation)
                 let userId = user.mid
                 Task.detached {
                     do {
-                        _ = try await hproseInstance.resyncUser(userId: userId)
-                        print("DEBUG: [ProfileView] Successfully resynced user \(userId) - user object updated in memory")
+                        let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
+                        print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
+                        
+                        // Save resynced user to cache
+                        TweetCacheManager.shared.saveUser(resyncedUser)
+                        print("DEBUG: [ProfileView] Saved resynced user to cache")
                     } catch {
                         print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
                     }
@@ -355,14 +374,19 @@ struct ProfileView: View {
             )
         }
         .navigationDestination(isPresented: $showTweetList) {
-            bookmarksOrFavoritesListView()
+            print("🔵 [ProfileView] navigationDestination(showTweetList) TRIGGERED - type: \(tweetListType), user: \(user.username ?? "nil")")
+            return bookmarksOrFavoritesListView()
                 .onAppear {
+                    print("🔵 [ProfileView] Bookmarks/Favorites list appeared - type: \(tweetListType), user: \(user.username ?? "nil")")
                     // Clear tweets when view appears to ensure fresh data
                     if tweetListType == .BOOKMARKS {
                         bookmarksTweets.removeAll()
                     } else {
                         favoritesTweets.removeAll()
                     }
+                }
+                .onDisappear {
+                    print("🔵 [ProfileView] Bookmarks/Favorites list disappeared - type: \(tweetListType)")
                 }
         }
         .navigationDestination(item: $selectedTweetForNavigation) { tweet in
@@ -375,9 +399,30 @@ struct ProfileView: View {
                 TweetDetailView(tweet: tweet)
             }
         }
-        
-        
-        
+        .navigationDestination(item: $selectedUserForNavigation) { user in
+            print("🟢 [ProfileView] navigationDestination(selectedUser) TRIGGERED - navigating to user: \(user.username ?? "nil"), mid: \(user.mid)")
+            print("🟢 [ProfileView] Current showTweetList value: \(showTweetList)")
+            // Navigate to user's profile when avatar is tapped from favorites/bookmarks
+            return ProfileView(user: user, onLogout: onLogout, navigationPath: $navigationPath)
+                .onAppear {
+                    print("🟢 [ProfileView] NEW user profile appeared: \(user.username ?? "nil")")
+                }
+        }
+        .onChange(of: selectedUserForNavigation) { oldValue, newValue in
+            print("🟡 [ProfileView] selectedUserForNavigation changed from \(oldValue?.username ?? "nil") to \(newValue?.username ?? "nil")")
+            print("🟡 [ProfileView] Current showTweetList: \(showTweetList), will set to false")
+            // When navigating to a user profile, dismiss the favorites/bookmarks list
+            if newValue != nil {
+                showTweetList = false
+                print("🟡 [ProfileView] Set showTweetList = false")
+            }
+        }
+        .onChange(of: showTweetList) { oldValue, newValue in
+            print("🟠 [ProfileView] showTweetList changed from \(oldValue) to \(newValue) - user: \(user.username ?? "nil")")
+        }
+        .onChange(of: navigationPath.count) { oldCount, newCount in
+            print("🟣 [ProfileView] navigationPath.count changed from \(oldCount) to \(newCount) - user: \(user.username ?? "nil")")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .bookmarkAdded)) { notification in
             if let tweet = notification.userInfo?["tweet"] as? Tweet,
                isAppUser {
@@ -444,9 +489,6 @@ struct ProfileView: View {
                 object: nil,
                 userInfo: ["isVisible": true]
             )
-            // Clean up timer
-            scrollEndTimer?.invalidate()
-            scrollEndTimer = nil
             print("DEBUG: [ProfileView] View disappeared, navigation reset to visible")
         }
         .alert(NSLocalizedString("Are you sure you want to logout?", comment: "Logout confirmation alert title"), isPresented: $showLogoutConfirmation) {
@@ -473,76 +515,50 @@ struct ProfileView: View {
     }
     
     // MARK: - Scroll Handling
-    @State private var scrollEndTimer: Timer?
-    @State private var consecutiveSmallMovements: Int = 0
-    @State private var isInertiaScrolling: Bool = false
+    @State private var lastSignificantDelta: CGFloat = 0
     
     private func handleScroll(offset: CGFloat, delta: CGFloat) {
-        // Cancel any existing timer
-        scrollEndTimer?.invalidate()
+        // Threshold for detecting intentional scroll
+        let scrollThreshold: CGFloat = 15
         
-        // Calculate scroll direction and threshold
-        let scrollDelta = delta
-        let scrollThreshold: CGFloat = 30
+        // DON'T force show based on offset - ProfileView offset is often negative
+        // Just rely on scroll direction (delta)
         
-        // Track consecutive small movements to detect inertia scrolling
-        if abs(scrollDelta) > scrollThreshold {
-            consecutiveSmallMovements = 0
-            isInertiaScrolling = false
-        } else {
-            consecutiveSmallMovements += 1
-            // If we have many consecutive small movements, we're likely in inertia scrolling
-            if consecutiveSmallMovements > 3 {
-                isInertiaScrolling = true
-            }
-        }
+        // Ignore very small deltas (noise from rendering/layout)
+        guard abs(delta) > 2 else { return }
         
-        // Only change navigation state if we're not in inertia scrolling
-        if !isInertiaScrolling {
-            // Determine scroll direction
-            let isScrollingDown = scrollDelta < -scrollThreshold
-            let isScrollingUp = scrollDelta > scrollThreshold
-            
-            // Determine if we should show navigation
-            let shouldShowNavigation: Bool
-            
-            if offset >= 0 {
-                // Always show when at the top
-                shouldShowNavigation = true
-            } else if isScrollingDown && isNavigationVisible {
-                // Scrolling down and navigation is visible - hide it
-                shouldShowNavigation = false
-            } else if isScrollingUp && !isNavigationVisible {
-                // Scrolling up and navigation is hidden - show it
-                shouldShowNavigation = true
-            } else {
-                // Keep current state
-                shouldShowNavigation = isNavigationVisible
+        // Detect significant scroll direction changes
+        // Positive delta = scrolling down (content moves up)
+        // Negative delta = scrolling up (content moves down)
+        let isScrollingDown = delta > scrollThreshold
+        let isScrollingUp = delta < -scrollThreshold
+        
+        // Update navigation visibility based on scroll direction
+        if isScrollingDown && isNavigationVisible {
+            // Scrolling down significantly - hide bottom bar
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isNavigationVisible = false
             }
-            
-            // Only update if the state actually changed
-            if shouldShowNavigation != isNavigationVisible {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    isNavigationVisible = shouldShowNavigation
-                }
-                NotificationCenter.default.post(
-                    name: .navigationVisibilityChanged,
-                    object: nil,
-                    userInfo: ["isVisible": shouldShowNavigation]
-                )
-                print("[ProfileView] Navigation visibility changed to: \(shouldShowNavigation)")
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": false]
+            )
+            lastSignificantDelta = delta
+        } else if isScrollingUp && !isNavigationVisible {
+            // Scrolling up significantly - show bottom bar
+            withAnimation(.easeInOut(duration: 0.4)) {
+                isNavigationVisible = true
             }
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
+            lastSignificantDelta = delta
         }
         
         previousScrollOffset = offset
-        
-        // Reset inertia scrolling state after 0.3 seconds of no scroll activity
-        scrollEndTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
-            Task { @MainActor in
-                consecutiveSmallMovements = 0
-                isInertiaScrolling = false
-            }
-        }
     }
     
     // MARK: - Helper Methods
@@ -789,7 +805,11 @@ struct ProfileView: View {
                     TweetItemView(
                         tweet: tweet,
                         showDeleteButton: isAppUser,
-                        onAvatarTap: { user in selectedUser = user },
+                        onAvatarTap: { tappedUser in
+                            print("🔴 [ProfileView-Bookmarks] Avatar tapped - user: \(tappedUser.username ?? "nil"), mid: \(tappedUser.mid)")
+                            print("🔴 [ProfileView-Bookmarks] Current showTweetList: \(showTweetList), current user: \(user.username ?? "nil")")
+                            selectedUserForNavigation = tappedUser
+                        },
                         onTap: { selectedTweet in
                             selectedTweetForNavigation = selectedTweet
                         }
@@ -817,7 +837,11 @@ struct ProfileView: View {
                     TweetItemView(
                         tweet: tweet,
                         showDeleteButton: isAppUser,
-                        onAvatarTap: { user in selectedUser = user },
+                        onAvatarTap: { tappedUser in
+                            print("🔴 [ProfileView-Favorites] Avatar tapped - user: \(tappedUser.username ?? "nil"), mid: \(tappedUser.mid)")
+                            print("🔴 [ProfileView-Favorites] Current showTweetList: \(showTweetList), current user: \(user.username ?? "nil")")
+                            selectedUserForNavigation = tappedUser
+                        },
                         onTap: { selectedTweet in
                             selectedTweetForNavigation = selectedTweet
                         }

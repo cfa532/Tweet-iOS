@@ -2,14 +2,7 @@ import Foundation
 import hprose
 import PhotosUI
 import AVFoundation
-
-// MARK: - Video Conversion Status
-struct VideoConversionStatus {
-    let status: String
-    let progress: Int
-    let message: String?
-    let cid: String?
-}
+import ffmpegkit
 
 @objc protocol HproseService {
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
@@ -34,7 +27,9 @@ final class HproseInstance: ObservableObject {
         get { 
             // Refresh appUser from server if expired (every 30 minutes) - but not for guest users
             // fetchUser will handle invalid users (nil username) automatically
-            if !_appUser.isGuest && (_appUser.hasExpired || _appUser.username == nil) {
+            // Note: hasExpired check removed from synchronous getter to prevent blocking
+            // Cache expiry is now handled in fetchUser() which is called async
+            if !_appUser.isGuest && _appUser.username == nil {
                 Task {
                     do {
                         if let refreshedUser = try await fetchUser(_appUser.mid, baseUrl: _appUser.baseUrl?.absoluteString ?? "") {
@@ -82,13 +77,18 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    private var appId: String = Constants.GUEST_ID      // placeholder mimei id
+    var appId: String = Constants.GUEST_ID      // placeholder mimei id (internal for TweetUploadManager access)
     var preferenceHelper: PreferenceHelper?
+    
+    // MARK: - Upload Management
+    lazy var uploadManager: TweetUploadManager = {
+        return TweetUploadManager(hproseInstance: self)
+    }()
     
     // MARK: - BlackList Management
     private let blackList = BlackList.shared
     
-    private lazy var client: HproseClient = {
+    lazy var client: HproseClient = {
         let client = HproseHttpClient()
         client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
         client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
@@ -131,7 +131,7 @@ final class HproseInstance: ObservableObject {
         print("Avatar: \(appUser.avatar ?? "nil")")
         print("Base URL: \(appUser.baseUrl?.absoluteString ?? "nil")")
         print("Writable URL: \(appUser.writableUrl?.absoluteString ?? "nil")")
-        print("Cloud Drive Port: \(appUser.cloudDrivePort?.description ?? "nil")")
+        print("Cloud Drive Port: \(appUser.cloudDrivePort)")
         print("Host IDs: \(appUser.hostIds ?? [])")
         print("Tweet Count: \(appUser.tweetCount?.description ?? "nil")")
         print("Following Count: \(appUser.followingCount?.description ?? "nil")")
@@ -158,7 +158,7 @@ final class HproseInstance: ObservableObject {
     private init() {}
     
     // Flag to track if app is still initializing to prevent error dialogs during startup
-    private var isAppInitializing = true
+    var isAppInitializing = true  // Changed from private to internal for TweetUploadManager access
     
     // Global flag to track if app initialization is complete
     @Published private var isInitializationComplete = false
@@ -175,10 +175,10 @@ final class HproseInstance: ObservableObject {
         // Step 1: Initialize preference helper first
         self.preferenceHelper = PreferenceHelper()
         
-        // Step 2: Initialize app user with default values
-        await initializeAppUser()
+        // Step 2: Initialize app user (now handled by TweetApp.AppState.initialize())
+        // await initializeAppUser()
         
-        // Step 3: Try to initialize app entry and update user if successful
+        // Step 3: Try to initialize app entry and update user if successful (baseUrl will be set once here)
         do {
             try await initAppEntry()
         } catch {
@@ -195,20 +195,31 @@ final class HproseInstance: ObservableObject {
     
     /// Initialize app user with cached or default values
     func initializeAppUser() async {
+        // Get user ID from preferences or use guest ID
+        let userId = await MainActor.run {
+            preferenceHelper?.getUserId() ?? Constants.GUEST_ID
+        }
+        
+        // Try to load cached user first (async, non-blocking)
+        // IMPORTANT: fetchUser() ALWAYS returns a valid User instance (never nil)
+        // - If cached: returns User from CoreData
+        // - If cache empty: returns User.getInstance(mid) as fallback
+        // This ensures safe operation even after cache is completely cleared
+        let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+        
+        NSLog("🔍 [initializeAppUser] Loaded cached user: \(userId), avatar: \(cachedUser.avatar ?? "nil")")
+        
         await MainActor.run {
-            // Get user ID from preferences or use guest ID
-            let userId = preferenceHelper?.getUserId() ?? Constants.GUEST_ID
-            
-            // Try to load cached user first, then fall back to new instance
-            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
-            _appUser = cachedUser
-            
-            // Set base URL from preferences or use default
-//            _appUser.baseUrl = nil
+            // CRITICAL: Update the singleton instance instead of replacing _appUser
+            // This ensures all references to this user get the cached data
+            // Safe to call even after cache clear because fetchUser never returns nil
+            User.updateUserInstance(with: cachedUser)
+            _appUser = User.getInstance(mid: userId)
             
             // Set following list
             _appUser.followingList = Gadget.getAlphaIds()
             
+            NSLog("✅ [initializeAppUser] AppUser singleton avatar: \(appUser.avatar ?? "nil")")
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
             
             // Mark initialization as complete so error messages can be shown
@@ -245,8 +256,9 @@ final class HproseInstance: ObservableObject {
             // Check for domain updates
             await self.checkAndUpdateDomain()
             
-            // Recover any pending uploads (function handles errors internally)
-            await self.recoverPendingUploads()
+            // NOTE: Pending upload recovery is now handled by ContentView's dialog system
+            // This gives users control over retry/discard instead of automatic retry
+            // await self.recoverPendingUploads()  // Disabled - now using dialog-based recovery
         }
     }
     
@@ -292,46 +304,51 @@ final class HproseInstance: ObservableObject {
                     HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     
-                    // Update appUser's baseUrl to IP address as well
-                    await MainActor.run {
-                        _appUser.baseUrl = HproseInstance.baseUrl
-                    }
-                    print("DEBUG: [initAppEntry] Updated appUser baseUrl to IP: \(firstIp)")
-                    
-                    // App is now initialized since appUser has IP address
-                    await MainActor.run {
-                        isInitializationComplete = true
-                    }
-                    
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
                         print("provider ip:  \(providerIp)")
+                        print("🔄 [INIT] Fetching user data for appUser...")
                         // Try to fetch user (retry logic is now built into fetchUser method)
                         let user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
+                        print("✅ [INIT] User data fetched, got user: \(user != nil)")
                         
                         if let user = user {
                             // Valid login user is found, use its provider IP as base.
                             HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
                             client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                            let followings = (try? await getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
-                            let blackList = (try? await getListByType(user: user, entry: .BLACK_LIST)) ?? []
+                            
+                            // CRITICAL: Set user.baseUrl on MainActor to avoid publishing warnings
+                            let realIP = HproseInstance.baseUrl
                             await MainActor.run {
-                                // Update the appUser to the fetched user with all properties
-                                user.baseUrl = HproseInstance.baseUrl
-                                user.followingList = followings
-                                user.userBlackList = blackList
-                                
-                                // CRITICAL: Update _appUser.baseUrl immediately and synchronously
-                                // so that fetchUser calls with default parameter use the IP-based URL
-                                _appUser.baseUrl = HproseInstance.baseUrl
-                                
-                                self.appUser = user
-                                
-                                // Print detailed app user content after successful login
-                                self.printAppUserContent("After successful login")
-                                
-                                // Notify FollowingsTweetView to refresh for logged-in user
+                                user.baseUrl = realIP
+                            }
+                            
+                            // App is now initialized with base connectivity
+                            await MainActor.run {
+                                isInitializationComplete = true
+                                User.updateUserInstance(with: user)
+                                _appUser = User.getInstance(mid: user.mid)
+                            }
+                            print("✅ [INIT] App initialized with real IP: \(providerIp)")
+                            
+                            // Notify UI that app is ready (tweets can now render with real IP)
+                            await MainActor.run {
                                 NotificationCenter.default.post(name: .appUserReady, object: nil)
                             }
+                            
+                            // Fetch followings and blacklist in background (non-blocking)
+                            print("🔄 [INIT] Fetching followings and blacklist in background...")
+                            Task.detached(priority: .background) {
+                                let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                                print("✅ [INIT] Followings fetched: \(followings.count)")
+                                let blackList = (try? await self.getListByType(user: user, entry: .BLACK_LIST)) ?? []
+                                print("✅ [INIT] Blacklist fetched: \(blackList.count)")
+                                await MainActor.run {
+                                    user.followingList = followings
+                                    user.userBlackList = blackList
+                                    self.printAppUserContent("After background data loaded")
+                                }
+                            }
+                            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(providerIp)")
                         } else {
                             print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
                             let user = User.getInstance(mid: Constants.GUEST_ID)
@@ -339,7 +356,11 @@ final class HproseInstance: ObservableObject {
                                 user.baseUrl = HproseInstance.baseUrl
                                 user.followingList = Gadget.getAlphaIds()
                                 _appUser = user
+                                
+                                // App is now initialized since appUser has IP address
+                                isInitializationComplete = true
                             }
+                            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(firstIp)")
                         }
                     } else {
                         let user = User.getInstance(mid: Constants.GUEST_ID)
@@ -347,15 +368,16 @@ final class HproseInstance: ObservableObject {
                             user.baseUrl = HproseInstance.baseUrl
                             user.followingList = Gadget.getAlphaIds()
                             _appUser = user
+                            
+                            // App is now initialized since appUser has IP address
+                            isInitializationComplete = true
                         }
+                        print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(firstIp)")
                         
                         // For guest users, fetch the alphaId user from backend now that we have proper IP
                         await fetchAlphaIdUserForGuest()
                     }
-                    // Step 6: Clean up any problematic pending uploads that might cause startup issues
-                    await cleanupProblematicPendingUploads()
-                    
-                    // Step 7: Schedule background tasks
+                    // Step 6: Schedule background tasks
                     scheduleBackgroundTasks()
                     return
                 }
@@ -384,7 +406,18 @@ final class HproseInstance: ObservableObject {
         guard let client = appUser.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]?] else {
+        
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        
+        // Handle empty array case - server returns empty array when tweet has no comments
+        let response: [[String: Any]?]
+        if let arrayResponse = rawResponse as? [[String: Any]?] {
+            response = arrayResponse
+        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+            // Server returned empty array - handle gracefully
+            response = []
+            print("DEBUG: [HproseInstance] fetchComments - Server returned empty array (no comments)")
+        } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
         }
         
@@ -472,7 +505,11 @@ final class HproseInstance: ObservableObject {
             if let dict = originalTweetDict {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                    originalTweet.author = try? await fetchUser(originalTweet.authorId)
+                    if let author = try? await fetchUser(originalTweet.authorId) {
+                        await MainActor.run {
+                            originalTweet.author = author  // Set on main thread since author is @Published
+                        }
+                    }
                     TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: appUser.mid)
                     print("[fetchTweetFeed] Cached original tweet: \(originalTweet.mid)")
                 } catch {
@@ -487,7 +524,10 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = item {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                    tweet.author = try await fetchUser(tweet.authorId)
+                    let author = try await fetchUser(tweet.authorId)
+                    await MainActor.run {
+                        tweet.author = author  // Set on main thread since author is @Published
+                    }
                     
                     // Skip private tweets in feed
                     if tweet.isPrivate == true {
@@ -572,7 +612,10 @@ final class HproseInstance: ObservableObject {
                 if let dict = originalTweetDict {
                     do {
                         let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                        originalTweet.author = try? await fetchUser(originalTweet.authorId)
+                        let author = try? await fetchUser(originalTweet.authorId)
+                        await MainActor.run {
+                            originalTweet.author = author
+                        }
                         TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: appUser.mid)
                         print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid)")
                     } catch {
@@ -586,8 +629,11 @@ final class HproseInstance: ObservableObject {
         for item in tweetsData {
             if let tweetDict = item {
                 do {
-                    let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                    tweet.author = user
+                    let tweet = try await MainActor.run { 
+                        let tweet = try Tweet.from(dict: tweetDict)
+                        tweet.author = user  // Set on main thread since author is @Published
+                        return tweet
+                    }
                     print("DEBUG: [fetchUserTweets] Set tweet.author: userId=\(user.mid), name=\(user.name ?? "nil"), username=\(user.username ?? "nil"), tweetId=\(tweet.mid)")
                     
                     // Only show private tweets if the current user is the author
@@ -643,7 +689,11 @@ final class HproseInstance: ObservableObject {
         if let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] {
             do {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                tweet.author = try? await fetchUser(authorId)
+                if let author = try? await fetchUser(authorId) {
+                    await MainActor.run {
+                        tweet.author = author  // Set on main thread since author is @Published
+                    }
+                }
                 
                 // Update cached data for main feed
                 TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
@@ -653,7 +703,7 @@ final class HproseInstance: ObservableObject {
                 print("Error processing tweet: \(error)")
             }
         }
-        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tweet not found"])
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Tweet not found", comment: "Tweet lookup error")])
     }
     
     func getUserId(_ username: String) async throws -> String? {
@@ -684,22 +734,44 @@ final class HproseInstance: ObservableObject {
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
-        // Step 0: Check if userId is blacklisted
-        if blackList.isBlacklisted(userId) {
-            print("DEBUG: [fetchUser] userId \(userId) is blacklisted, returning cached user only")
-            return TweetCacheManager.shared.fetchUser(mid: userId)
+        // Step 0: Never make network calls for GUEST_ID (broken tweets with null user)
+        if userId == Constants.GUEST_ID {
+            print("DEBUG: [fetchUser] Skipping GUEST_ID, returning guest user instance")
+            return User.getInstance(mid: Constants.GUEST_ID)
         }
         
-        // Step 1: Check user cache in Core Data first
-        let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+        // Step 1: Check if userId is blacklisted
+        if blackList.isBlacklisted(userId) {
+            print("DEBUG: [fetchUser] userId \(userId) is blacklisted, returning cached user only")
+            return await TweetCacheManager.shared.fetchUser(mid: userId)
+        }
+        
+        // Step 1: Check user cache in Core Data first (async, non-blocking)
+        let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+        
+        // Check if cached user has expired (async, non-blocking)
+        let hasExpired = await cachedUser.hasExpired()
         
         // If we have a valid cached user that hasn't expired, return it
-        if cachedUser.username != nil && !cachedUser.hasExpired {
-            print("DEBUG: [fetchUser] Using cached user for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(cachedUser.hasExpired)")
+        // BUT: If baseUrl is nil (cleared after loading from disk cache), we need to re-resolve IP
+        // ALSO: If baseUrl is empty string, force refresh to re-resolve provider IP
+        if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil && !baseUrl.isEmpty {
+            print("DEBUG: [fetchUser] ✅ Returning cached user for \(userId), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
             return cachedUser
         }
         
-        print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(cachedUser.hasExpired)")
+        // If baseUrl is empty, force update from server to re-resolve provider IP
+        if baseUrl.isEmpty && cachedUser.username != nil {
+            print("DEBUG: [fetchUser] 🔄 baseUrl is empty, forcing IP re-evaluation for userId: \(userId), current baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
+        }
+        
+        // If cached user has nil baseUrl (loaded from disk), re-resolve IP even if cache hasn't expired
+        if cachedUser.username != nil && cachedUser.baseUrl == nil {
+            print("DEBUG: [fetchUser] Cached user has nil baseUrl, re-resolving IP for userId: \(userId)")
+            // Fall through to updateUserFromServer to resolve IP
+        }
+        
+        print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
         
         // If current object is invalid (nil username), return cached value and update in background
         if cachedUser.username == nil {
@@ -716,10 +788,66 @@ final class HproseInstance: ObservableObject {
             return cachedUser
         }
         
-        // If app is not initialized, only return cached users
+        // CRITICAL: If cached user has nil baseUrl, ALWAYS resolve it (even if app not initialized)
+        // This prevents videos from using domain URLs that timeout
+        if cachedUser.username != nil && cachedUser.baseUrl == nil {
+            print("DEBUG: [fetchUser] User has nil baseUrl, resolving IP for userId: \(userId)")
+            
+            // Check if another task is already resolving this user's baseUrl
+            let shouldResolve = baseUrlResolutionQueue.sync {
+                if ongoingBaseUrlResolutions.contains(userId) {
+                    return false
+                }
+                ongoingBaseUrlResolutions.insert(userId)
+                return true
+            }
+            
+            if !shouldResolve {
+                print("DEBUG: [fetchUser] Another task is already resolving baseUrl for userId: \(userId), returning cached user")
+                return cachedUser
+            }
+            
+            // Ensure cleanup happens even if we return early
+            defer {
+                _ = baseUrlResolutionQueue.sync {
+                    ongoingBaseUrlResolutions.remove(userId)
+                }
+            }
+            
+            // SPECIAL CASE: If this is the appUser, use appUser's baseUrl directly
+            if userId == appUser.mid {
+                if let appUserBaseUrl = appUser.baseUrl {
+                    await MainActor.run {
+                        cachedUser.baseUrl = appUserBaseUrl
+                        print("DEBUG: [fetchUser] ✅ Using appUser's baseUrl for userId: \(userId) -> \(appUserBaseUrl.absoluteString)")
+                    }
+                    return cachedUser
+                } else {
+                    print("DEBUG: [fetchUser] AppUser also has nil baseUrl, returning cached user for userId: \(userId)")
+                    return cachedUser
+                }
+            }
+            
+            // For other users, resolve provider IP
+            do {
+                guard let providerIP = try await self.getProviderIP(userId) else {
+                    print("DEBUG: [fetchUser] Failed to get provider IP for userId: \(userId)")
+                    return cachedUser
+                }
+                await MainActor.run {
+                    cachedUser.baseUrl = URL(string: "http://\(providerIP)")
+                    print("DEBUG: [fetchUser] ✅ Resolved baseUrl for userId: \(userId) to \(providerIP)")
+                }
+                return cachedUser
+            } catch {
+                print("DEBUG: [fetchUser] Error resolving baseUrl for userId: \(userId): \(error)")
+                return cachedUser
+            }
+        }
+        
+        // If app is not initialized, return cached users (with valid baseUrl from above)
         if !isInitializationComplete {
-            print("DEBUG: [fetchUser] App not initialized, returning cached user only for userId: \(userId)")
-            let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+            print("DEBUG: [fetchUser] App not initialized, returning cached user for userId: \(userId)")
             return cachedUser
         }
         
@@ -743,11 +871,21 @@ final class HproseInstance: ObservableObject {
     private var ongoingUserUpdates: Set<String> = []
     private let userUpdateQueue = DispatchQueue(label: "user.update.queue")
     
+    // Track ongoing baseUrl resolutions to prevent concurrent calls for the same user
+    private var ongoingBaseUrlResolutions: Set<String> = []
+    private let baseUrlResolutionQueue = DispatchQueue(label: "baseurl.resolution.queue")
+    
     /// Updates user from server with baseUrl resolution and retry logic
     func updateUserFromServer(
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
     ) async throws -> User? {
+        // Never update GUEST_ID from server
+        if userId == Constants.GUEST_ID {
+            print("DEBUG: [updateUserFromServer] Skipping GUEST_ID, returning guest instance")
+            return User.getInstance(mid: Constants.GUEST_ID)
+        }
+        
         // Check if we're already updating this user
         let shouldProceed = userUpdateQueue.sync {
             if ongoingUserUpdates.contains(userId) {
@@ -760,7 +898,7 @@ final class HproseInstance: ObservableObject {
         // If another update is in progress, wait for it and return cached result
         if !shouldProceed {
             print("DEBUG: [updateUserFromServer] Update already in progress for userId: \(userId), returning cached user")
-            return TweetCacheManager.shared.fetchUser(mid: userId)
+            return await TweetCacheManager.shared.fetchUser(mid: userId)
         }
         
         defer {
@@ -772,21 +910,16 @@ final class HproseInstance: ObservableObject {
         let user = User.getInstance(mid: userId)
         
         return try await retryOperation(maxRetries: 3) {
-            // Handle baseUrl resolution
-            if baseUrl.isEmpty {
-                print("DEBUG: [updateUserFromServer] baseUrl is empty, getting provider IP for userId: \(userId)")
-                guard let providerIP = try await self.getProviderIP(userId) else {
-                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
-                }
-                print("DEBUG: [updateUserFromServer] Setting baseUrl to provider IP: \(providerIP) for userId: \(userId)")
-                await MainActor.run {
-                    user.baseUrl = URL(string: "http://\(providerIP)")!
-                }
-            } else {
-                print("DEBUG: [updateUserFromServer] Setting baseUrl to provided URL: \(baseUrl) for userId: \(userId)")
-                await MainActor.run {
-                    user.baseUrl = URL(string: baseUrl)!
-                }
+            // Always re-resolve IP address from provider to handle cases where the node's IP has changed
+            // Even if we have a cached baseUrl, the hostId might now resolve to a different IP
+            let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
+            print("DEBUG: [updateUserFromServer] 🔍 Re-resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl)")
+            guard let providerIP = try await self.getProviderIP(userId) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
+            }
+            print("DEBUG: [updateUserFromServer] ✅ Setting baseUrl to provider IP: \(providerIP) for userId: \(userId) (was: \(oldBaseUrl))")
+            await MainActor.run {
+                user.baseUrl = URL(string: "http://\(providerIP)")!
             }
             
             // Perform the actual server communication
@@ -1048,7 +1181,17 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         
-        guard let response = client.invoke("runMApp", withArgs: [entry.rawValue, params]) as? [[String: Any]] else {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry.rawValue, params])
+        
+        // Handle empty array case - server returns empty array when user has no followers/following
+        let response: [[String: Any]]
+        if let arrayResponse = rawResponse as? [[String: Any]] {
+            response = arrayResponse
+        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+            // Server returned empty array - handle gracefully
+            response = []
+            print("DEBUG: [HproseInstance] getListByType - Server returned empty array for \(entry.rawValue)")
+        } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
         }
         
@@ -1078,7 +1221,17 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
             
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            
+            // Handle empty array case - server returns empty array when user has no followings
+            let response: [[String: Any]]
+            if let arrayResponse = rawResponse as? [[String: Any]] {
+                response = arrayResponse
+            } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+                // Server returned empty array - handle gracefully
+                response = []
+                print("DEBUG: [HproseInstance] getFollowings - Server returned empty array (no followings)")
+            } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
             }
             
@@ -1156,7 +1309,17 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
             
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            
+            // Handle empty array case - server returns empty array when user has no fans
+            let response: [[String: Any]]
+            if let arrayResponse = rawResponse as? [[String: Any]] {
+                response = arrayResponse
+            } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+                // Server returned empty array - handle gracefully
+                response = []
+                print("DEBUG: [HproseInstance] getFans - Server returned empty array (no fans)")
+            } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
             }
             
@@ -1206,7 +1369,17 @@ final class HproseInstance: ObservableObject {
             newClient = newHproseClient
         }
         
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]?] else {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        
+        // Handle empty array case - server returns empty array when user has no bookmarks/favorites
+        let response: [[String: Any]?]
+        if let arrayResponse = rawResponse as? [[String: Any]?] {
+            response = arrayResponse
+        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+            // Server returned empty array - handle gracefully
+            response = []
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Server returned empty array (no bookmarks/favorites)")
+        } else {
             newClient?.close()
             print("DEBUG: [HproseInstance] getUserTweetsByType - Invalid response format")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
@@ -1220,7 +1393,11 @@ final class HproseInstance: ObservableObject {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: item) }
                     if (tweet.author == nil) {
-                        tweet.author = try? await fetchUser(tweet.authorId)
+                        if let author = try? await fetchUser(tweet.authorId) {
+                            await MainActor.run {
+                                tweet.author = author  // Set on main thread since author is @Published
+                            }
+                        }
                     }
                     // Don't cache tweets from bookmarks/favorites - only cache from main feed
                     tweetsWithAuthors.append(tweet)
@@ -1263,10 +1440,10 @@ final class HproseInstance: ObservableObject {
         
         // Check if app user is blacklisted by the target user
         guard let targetUser = try await fetchUser(followingId) else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Target user not found"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Target user not found", comment: "User lookup error")])
         }
         if targetUser.isUserBlacklisted(effectiveUserId) {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot follow this user because you are blocked"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot follow this user because you are blocked", comment: "Follow blocked error")])
         }
         
         return try await withRetry {
@@ -1530,6 +1707,12 @@ final class HproseInstance: ObservableObject {
             guard let deletedTweetId = response["tweetid"] as? String else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
+            
+            print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId), refreshing appUser from server...")
+            // Refresh appUser from server to get updated tweetCount and other properties
+            try? await self.refreshAppUserFromServer()
+            print("DEBUG: [deleteTweet] Finished refreshing appUser, new tweetCount: \(appUser.tweetCount ?? 0)")
+            
             return deletedTweetId
         } else {
             // Failure case: extract error message
@@ -1542,7 +1725,7 @@ final class HproseInstance: ObservableObject {
         // Check if app user is blacklisted by the tweet author
         if let tweetAuthor = tweet.author {
             if tweetAuthor.isUserBlacklisted(appUser.mid) {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot comment on this tweet because you are blocked by the author"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot comment on this tweet because you are blocked by the author", comment: "Comment blocked error")])
             }
         }
         
@@ -1706,19 +1889,13 @@ final class HproseInstance: ObservableObject {
         noResample: Bool = false,
         progressCallback: ((String, Int) -> Void)? = nil
     ) async throws -> (MimeiFileType?, String?) {
-        _ = try await appUser.resolveWritableUrl()
-        print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
-        
-        // Use MediaProcessor to determine media type and handle upload
-        let mediaProcessor = MediaProcessor()
-        return try await mediaProcessor.processAndUpload(
+        // Delegate to upload manager
+        return try await uploadManager.uploadToIPFS(
             data: data,
             typeIdentifier: typeIdentifier,
             fileName: fileName,
             referenceId: referenceId,
             noResample: noResample,
-            appUser: appUser,
-            appId: appId,
             progressCallback: progressCallback
         )
     }
@@ -1777,27 +1954,21 @@ final class HproseInstance: ObservableObject {
             
             /// Detect file type using multiple methods
             static func detectFromData(_ data: Data) async -> MediaType {
-                print("DEBUG: [FILE TYPE] Starting file type detection for \(data.count) bytes")
-                
                 // Method 1: Try iOS UniformTypeIdentifiers first (most reliable)
                 if let mediaType = detectUsingUTType(data) {
-                    print("DEBUG: [FILE TYPE] Detected using UTType: \(mediaType.rawValue)")
                     return mediaType
                 }
                 
                 // Method 2: Try comprehensive file signature detection
                 if let mediaType = detectUsingFileSignatures(data) {
-                    print("DEBUG: [FILE TYPE] Detected using file signatures: \(mediaType.rawValue)")
                     return mediaType
                 }
                 
                 // Method 3: Try AVFoundation for media files
                 if let mediaType = await detectUsingAVFoundation(data) {
-                    print("DEBUG: [FILE TYPE] Detected using AVFoundation: \(mediaType.rawValue)")
                     return mediaType
                 }
                 
-                print("DEBUG: [FILE TYPE] Could not determine file type")
                 return .unknown
             }
             
@@ -1812,11 +1983,8 @@ final class HproseInstance: ObservableObject {
                     try data.write(to: tempURL)
                     defer { try? FileManager.default.removeItem(at: tempURL) }
                     
-                    // Try to determine the UTI
                     let resourceValues = try tempURL.resourceValues(forKeys: [.typeIdentifierKey])
                     if let typeIdentifier = resourceValues.typeIdentifier {
-                        print("DEBUG: [FILE TYPE] UTType identifier: \(typeIdentifier)")
-                        
                         // Map UTI to MediaType
                         if typeIdentifier.hasPrefix("public.image") || 
                             typeIdentifier.contains("jpeg") || 
@@ -1859,7 +2027,7 @@ final class HproseInstance: ObservableObject {
                         }
                     }
                 } catch {
-                    print("DEBUG: [FILE TYPE] UTType detection failed: \(error)")
+                    // Silent fail - try next method
                 }
                 
                 return nil
@@ -1874,8 +2042,6 @@ final class HproseInstance: ObservableObject {
                 // Check basic signatures first
                 for (signature, mediaType, name) in fileSignatures {
                     if bytes.starts(with: signature) {
-                        print("DEBUG: [FILE TYPE] Found signature for \(name)")
-                        
                         // Refine detection for complex formats
                         switch mediaType {
                         case .image where name == "WebP/RIFF":
@@ -1898,7 +2064,6 @@ final class HproseInstance: ObservableObject {
                     if ftypString.hasPrefix("ftyp") && (ftypString.contains("heic") || ftypString.contains("heix") || 
                                                         ftypString.contains("heis") || ftypString.contains("heim") ||
                                                         ftypString.contains("hevc") || ftypString.contains("hevx")) {
-                        print("DEBUG: [FILE TYPE] Detected HEIC/HEIF from ftyp")
                         return .image
                     }
                 }
@@ -1907,7 +2072,6 @@ final class HproseInstance: ObservableObject {
                 if data.count >= 512 {
                     let textCheck = data.prefix(512)
                     if !textCheck.contains(0) && textCheck.allSatisfy({ $0 >= 32 || $0 == 9 || $0 == 10 || $0 == 13 }) {
-                        print("DEBUG: [FILE TYPE] Detected as plain text")
                         return .txt
                     }
                 }
@@ -1927,22 +2091,18 @@ final class HproseInstance: ObservableObject {
                     
                     let asset = AVURLAsset(url: tempURL)
                     
-                    // Check if it has video tracks
                     let videoTracks = try await asset.loadTracks(withMediaType: .video)
                     if !videoTracks.isEmpty {
-                        print("DEBUG: [FILE TYPE] AVFoundation detected video tracks")
                         return .video
                     }
                     
-                    // Check if it has audio tracks
                     let audioTracks = try await asset.loadTracks(withMediaType: .audio)
                     if !audioTracks.isEmpty {
-                        print("DEBUG: [FILE TYPE] AVFoundation detected audio tracks")
                         return .audio
                     }
                     
                 } catch {
-                    print("DEBUG: [FILE TYPE] AVFoundation detection failed: \(error)")
+                    // Silent fail
                 }
                 
                 return nil
@@ -1970,7 +2130,6 @@ final class HproseInstance: ObservableObject {
                 guard bytes.count >= 12 else { return .video }
                 
                 let codecString = String(bytes: bytes[8...11], encoding: .ascii) ?? ""
-                print("DEBUG: [FILE TYPE] MP4 codec string: \(codecString)")
                 
                 // Video codecs
                 if codecString.contains("mp4") || codecString.contains("M4V") || codecString.contains("isom") ||
@@ -2024,14 +2183,10 @@ final class HproseInstance: ObservableObject {
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
             
-            // Determine media type
             let mediaType = await detectMediaType(from: typeIdentifier, fileName: fileName, data: data)
-            print("DEBUG: Detected media type: \(mediaType.rawValue)")
             
-            // Route to appropriate media type handler
             switch mediaType {
             case .video:
-                print("Processing video with backend conversion")
                 return try await processVideo(
                     data: data,
                     typeIdentifier: typeIdentifier,
@@ -2039,10 +2194,10 @@ final class HproseInstance: ObservableObject {
                     referenceId: referenceId,
                     noResample: noResample,
                     appUser: appUser,
+                    appId: appId,
                     progressCallback: progressCallback
                 )
             case .image:
-                print("Processing image file")
                 return try await processImage(
                     data: data,
                     typeIdentifier: typeIdentifier,
@@ -2054,7 +2209,6 @@ final class HproseInstance: ObservableObject {
                     progressCallback: progressCallback
                 )
             case .audio:
-                print("Processing audio file")
                 return try await processAudio(
                     data: data,
                     typeIdentifier: typeIdentifier,
@@ -2065,7 +2219,6 @@ final class HproseInstance: ObservableObject {
                     progressCallback: progressCallback
                 )
             default:
-                print("Processing document file: \(mediaType.rawValue)")
                 return try await processDocument(
                     data: data,
                     typeIdentifier: typeIdentifier,
@@ -2092,7 +2245,6 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing image file")
             let result = try await uploadRegularFile(
                 data: data,
                 typeIdentifier: typeIdentifier,
@@ -2113,17 +2265,46 @@ final class HproseInstance: ObservableObject {
             referenceId: String?,
             noResample: Bool,
             appUser: User,
+            appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing video file with local FFmpeg HLS conversion (size: \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB)")
-            return try await uploadVideoWithLocalHLSConversion(
-                data: data,
-                fileName: fileName,
-                referenceId: referenceId,
-                noResample: noResample,
-                appUser: appUser,
-                progressCallback: progressCallback
-            )
+            
+            let cloudPort = appUser.cloudDrivePort
+            if cloudPort <= 0 {
+                print("Video upload: MP4 fallback (no cloud drive configured)")
+                return try await uploadVideoWithMp4Fallback(
+                    data: data,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    appUser: appUser,
+                    appId: appId,
+                    progressCallback: progressCallback
+                )
+            }
+            
+            progressCallback?("Checking video service availability...", 5)
+            let isCloudDriveAvailable = await checkCloudDriveServiceAvailability(appUser: appUser)
+            
+            if isCloudDriveAvailable {
+                print("Video upload: HLS conversion (cloud drive available)")
+                return try await uploadVideoWithLocalHLSConversion(
+                    data: data,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    noResample: noResample,
+                    appUser: appUser,
+                    progressCallback: progressCallback
+                )
+            } else {
+                return try await uploadVideoWithMp4Fallback(
+                    data: data,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    appUser: appUser,
+                    appId: appId,
+                    progressCallback: progressCallback
+                )
+            }
         }
         
         /// Process and upload audio files
@@ -2136,7 +2317,6 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing audio file")
             let result = try await uploadRegularFile(
                 data: data,
                 typeIdentifier: typeIdentifier,
@@ -2160,7 +2340,6 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Processing document file: \(mediaType.rawValue)")
             let result = try await uploadRegularFile(
                 data: data,
                 typeIdentifier: typeIdentifier,
@@ -2212,11 +2391,9 @@ final class HproseInstance: ObservableObject {
             case "html", "htm":
                 return .html
             default:
-                // If type identifier and file extension cannot determine the type,
-                // try to read file header to figure out the file type
-                print("DEBUG: Type identifier and file extension cannot determine file type, analyzing file header...")
+                // Analyze file header for unknown types
                 let detectedType = await FileTypeDetector.detectFromData(data)
-                print("DEBUG: File header analysis detected type: \(detectedType.rawValue)")
+                print("Detected type via file header: \(detectedType.rawValue)")
                 return detectedType
             }
         }
@@ -2297,38 +2474,224 @@ final class HproseInstance: ObservableObject {
                 appUser: appUser
             )
             
-            progressCallback?("HLS uploaded, waiting for processing...", 70)
+            print("✅ [HLS Upload] Uploaded to server, job ID: \(jobId)")
+            progressCallback?("Video uploaded to server", 100)
             
-            // Poll for processing completion
-            let cid = try await pollProcessZipStatus(
-                jobId: jobId,
-                appUser: appUser,
-                progressCallback: progressCallback
-            )
+            // OPTIMIZATION: Return immediately with job ID instead of waiting for processing
+            // The polling will happen in the background via TweetUploadManager
             
-            progressCallback?("HLS processing completed", 90)
-            
-            print("DEBUG: Received CID from processing: \(cid)")
-            
-            // Create result with the CID we received and the correct aspect ratio
+            // Create placeholder result with job ID (CID will be filled in later)
             let mimeiFileType = MimeiFileType(
-                mid: cid, 
+                mid: jobId,  // Temporarily use jobId as mid, will be replaced with CID after processing
                 mediaType: .hls_video,
-                size: Int64(data.count), // Use original video data size
+                size: Int64(data.count),
                 fileName: fileName,
-                timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970), // Use current time as Date object (will be encoded as Unix timestamp in milliseconds)
+                timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
                 aspectRatio: videoAspectRatio,
                 url: nil
             )
-            let result: (MimeiFileType?, String?) = (mimeiFileType, cid)
             
             // Clean up temp files
             try? FileManager.default.removeItem(at: tempDir)
             try? FileManager.default.removeItem(at: compressedURL)
             
-            progressCallback?("HLS conversion completed", 100)
+            // Return (placeholder MimeiFileType, jobId)
+            // The jobId will be used for background polling
+            return (mimeiFileType, jobId)
+        }
+        
+        /// Check if cloud drive service is available at clouddriveport
+        private func checkCloudDriveServiceAvailability(appUser: User) async -> Bool {
+            do {
+                let writableUrl = try await appUser.resolveWritableUrl()
+                guard let writableUrl = writableUrl else {
+                    return false
+                }
+                
+                guard let host = writableUrl.host else {
+                    return false
+                }
+                
+                guard appUser.cloudDrivePort > 0 else {
+                    return false
+                }
+                
+                guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
+                    return false
+                }
+                let healthCheckURL = cloudBaseURL.appendingPathComponent("health")
+                
+                var request = URLRequest(url: healthCheckURL)
+                request.httpMethod = "GET"
+                request.timeoutInterval = 3.0
+                
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    print("Cloud drive service unavailable (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))")
+                    return false
+                }
+                
+                // Parse JSON response to verify service is actually running
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let status = json["status"] as? String,
+                   status == "ok" {
+                    print("✅ Cloud drive service available - using HLS conversion")
+                    return true
+                } else {
+                    print("Cloud drive service health check failed - invalid response")
+                    return false
+                }
+            } catch {
+                print("Cloud drive service unavailable - using MP4 fallback (\(error.localizedDescription))")
+                return false
+            }
+        }
+        
+        /// Upload video with MP4 resampling fallback when cloud drive service is not available
+        private func uploadVideoWithMp4Fallback(
+            data: Data,
+            fileName: String?,
+            referenceId: String?,
+            appUser: User,
+            appId: String,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async throws -> (MimeiFileType?, String?) {
+            print("Starting MP4 conversion (\(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB)")
+            progressCallback?("Converting video to MP4...", 10)
             
-            return result
+            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            
+            defer {
+                try? FileManager.default.removeItem(at: tempDir)
+            }
+            
+            let originalFileName = fileName ?? "video.mp4"
+            let tempFileName = (originalFileName as NSString).deletingPathExtension + ".mp4"
+            let originalVideoURL = tempDir.appendingPathComponent(tempFileName)
+            try data.write(to: originalVideoURL)
+            
+            let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: originalVideoURL.path)
+            let videoAspectRatio: Float?
+            let targetResolution: Int
+            
+            if let info = videoInfo {
+                videoAspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
+                let minDimension = min(info.displayWidth, info.displayHeight)
+                targetResolution = minDimension > 720 ? 720 : minDimension
+                print("Converting \(info.displayWidth)x\(info.displayHeight) → \(targetResolution)p (aspect: \(String(format: "%.2f", videoAspectRatio ?? 0)))")
+            } else {
+                videoAspectRatio = await getVideoAspectRatioWithFallback(from: data)
+                targetResolution = 720
+                print("Using fallback settings: \(targetResolution)p")
+            }
+            
+            progressCallback?("Converting to MP4 format...", 30)
+            
+            // Ensure output has .mp4 extension for FFmpeg
+            let outputVideoName = "resampled_" + (originalFileName as NSString).deletingPathExtension + ".mp4"
+            let outputVideoURL = tempDir.appendingPathComponent(outputVideoName)
+            
+            let conversionSuccess = await convertVideoToMp4(
+                inputURL: originalVideoURL,
+                outputURL: outputVideoURL,
+                targetResolution: targetResolution,
+                aspectRatio: videoAspectRatio,
+                progressCallback: progressCallback
+            )
+            
+            guard conversionSuccess else {
+                print("ERROR: Video conversion to MP4 failed")
+                progressCallback?(NSLocalizedString("Video conversion failed", comment: "Video processing error"), 0)
+                throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to MP4"])
+            }
+            
+            progressCallback?("Uploading video via IPFS...", 70)
+            
+            let convertedData = try Data(contentsOf: outputVideoURL)
+            let outputFileName = outputVideoName
+            print("Converted: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB → uploading to IPFS...")
+            
+            let result = try await uploadRegularFile(
+                data: convertedData,
+                typeIdentifier: "public.mpeg-4",
+                fileName: outputFileName,
+                referenceId: referenceId,
+                mediaType: .video,
+                appUser: appUser,
+                appId: appId
+            )
+            
+            progressCallback?("Video upload completed", 100)
+            print("✅ Video uploaded: CID \(result.mid)")
+            
+            return (result, nil)
+        }
+        
+        /// Convert video to MP4 with target resolution
+        private func convertVideoToMp4(
+            inputURL: URL,
+            outputURL: URL,
+            targetResolution: Int,
+            aspectRatio: Float?,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async -> Bool {
+            return await withCheckedContinuation { continuation in
+                // Determine scaling filter based on aspect ratio
+                let scaleFilter: String
+                if let aspectRatio = aspectRatio {
+                    if aspectRatio < 1.0 {
+                        // Portrait: scale to target width
+                        scaleFilter = "scale=\(targetResolution):-2"
+                    } else {
+                        // Landscape: scale to target height
+                        scaleFilter = "scale=-2:\(targetResolution)"
+                    }
+                } else {
+                    // Fallback to height-based scaling
+                    scaleFilter = "scale=-2:\(targetResolution)"
+                }
+                
+                let command = """
+                    -i "\(inputURL.path)" \
+                    -c:v libx264 \
+                    -c:a aac \
+                    -vf "\(scaleFilter)" \
+                    -preset fast \
+                    -crf 23 \
+                    -b:a 128k \
+                    -movflags +faststart \
+                    -metadata:s:v:0 rotate=0 \
+                    "\(outputURL.path)"
+                    """
+                
+                FFmpegKit.executeAsync(command) { session in
+                    guard let session = session else {
+                        print("ERROR: Failed to create FFmpeg session")
+                        continuation.resume(returning: false)
+                        return
+                    }
+                    
+                    let returnCode = session.getReturnCode()
+                    let success = ReturnCode.isSuccess(returnCode)
+                    
+                    if success {
+                        if FileManager.default.fileExists(atPath: outputURL.path) {
+                            let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
+                            print("✅ Converted to \(targetResolution)p MP4 (\(fileSize / 1024)KB)")
+                            continuation.resume(returning: true)
+                        } else {
+                            print("ERROR: Output file missing")
+                            continuation.resume(returning: false)
+                        }
+                    } else {
+                        print("ERROR: FFmpeg conversion failed (code: \(String(describing: returnCode)))")
+                        continuation.resume(returning: false)
+                    }
+                }
+            }
         }
         
         
@@ -2395,10 +2758,19 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
-            // Use the cloud drive port for HLS uploads
-            let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
-            let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            // Get host from writableUrl - no fallback, must succeed
+            guard let host = writableUrl.host else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
+            }
+            
+            // Get cloud drive port - no fallback, must be configured
+            guard appUser.cloudDrivePort > 0 else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
+            }
+            
+            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
+            }
             let uploadURL = cloudBaseURL.appendingPathComponent("process-zip").absoluteString
             
             print("DEBUG: Constructed process-zip URL: \(uploadURL)")
@@ -2442,6 +2814,9 @@ final class HproseInstance: ObservableObject {
             request.httpBody = body
             request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
             
+            // Set timeout for large video uploads (10 minutes)
+            request.timeoutInterval = 600
+            
             // Upload the file
             let (responseData, response) = try await URLSession.shared.data(for: request)
             
@@ -2482,10 +2857,19 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
-            // Use the cloud drive port for HLS status polling
-            let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
-            let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            // Get host from writableUrl - no fallback, must succeed
+            guard let host = writableUrl.host else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
+            }
+            
+            // Get cloud drive port - no fallback, must be configured
+            guard appUser.cloudDrivePort > 0 else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
+            }
+            
+            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
+            }
             let statusURL = cloudBaseURL.appendingPathComponent("process-zip/status/\(jobId)")
             print("DEBUG: Polling status at: \(statusURL)")
             
@@ -2648,10 +3032,19 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
-            // For HLS video uploads, use the cloud drive port instead of writableUrl port
-            let host = writableUrl.host ?? HproseInstance.baseUrl.host ?? "localhost"
-            let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
+            // Get host from writableUrl - no fallback, must succeed
+            guard let host = writableUrl.host else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
+            }
+            
+            // Get cloud drive port - no fallback, must be configured
+            guard appUser.cloudDrivePort > 0 else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
+            }
+            
+            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
+            }
             let convertVideoURL = cloudBaseURL.appendingPathComponent("convert-video").absoluteString
             print("DEBUG: Constructed convert-video URL: \(convertVideoURL)")
             guard let url = URL(string: convertVideoURL) else {
@@ -2754,15 +3147,12 @@ final class HproseInstance: ObservableObject {
             do {
                 let aspectRatio = try await getVideoAspectRatio(from: data)
                 if let ratio = aspectRatio, ratio > 0 {
-                    print("DEBUG: Successfully determined aspect ratio: \(ratio)")
                     return ratio
                 } else {
-                    print("DEBUG: Aspect ratio detection failed, using default 16:9")
-                    return 16.0 / 9.0 // Default to 16:9 aspect ratio
+                    return 16.0 / 9.0
                 }
             } catch {
-                print("DEBUG: Aspect ratio detection failed with error: \(error), using default 16:9")
-                return 16.0 / 9.0 // Default to 16:9 aspect ratio
+                return 16.0 / 9.0
             }
         }
         
@@ -2776,20 +3166,17 @@ final class HproseInstance: ObservableObject {
             appUser: User,
             appId: String
         ) async throws -> MimeiFileType {
-            print("Uploading regular file: type=\(mediaType.rawValue), size=\(data.count) bytes")
+            print("Uploading \(mediaType.rawValue): \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
             
-            // Always resolve writableUrl to ensure we have the correct IP address
             _ = try await appUser.resolveWritableUrl()
             guard let uploadClient = appUser.uploadClient else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload client not available"])
+                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
             }
             
-            // Create temporary file
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try data.write(to: tempURL)
             defer { try? FileManager.default.removeItem(at: tempURL) }
             
-            // Upload in chunks
             var offset: Int64 = 0
             let chunkSize = 1024 * 1024 // 1MB chunks
             var request: [String: Any] = [
@@ -2809,23 +3196,45 @@ final class HproseInstance: ObservableObject {
                 chunkCount += 1
                 
                 let nsData = chunkData as NSData
-                let response = try await uploadChunk(
-                    uploadClient: uploadClient,
-                    request: request,
-                    data: nsData,
-                    chunkNumber: chunkCount
-                )
-                
-                if let fsid = response as? String {
-                    offset += Int64(chunkData.count)
-                    request["offset"] = offset
-                    request["fsid"] = fsid
-                } else {
-                    throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload chunk \(chunkCount)"])
+                do {
+                    let response = try await uploadChunk(
+                        uploadClient: uploadClient,
+                        request: request,
+                        data: nsData,
+                        chunkNumber: chunkCount
+                    )
+                    
+                    if let fsid = response as? String {
+                        offset += Int64(chunkData.count)
+                        request["offset"] = offset
+                        request["fsid"] = fsid
+                    } else {
+                        print("ERROR: Chunk \(chunkCount) upload failed - invalid response type: \(type(of: response))")
+                        throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Server returned invalid response", comment: "Upload error")])
+                    }
+                } catch let error as NSError {
+                    // Provide more specific error message based on the error
+                    if error.domain == NSURLErrorDomain {
+                        switch error.code {
+                        case NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet:
+                            print("ERROR: Chunk \(chunkCount) upload failed - network connection lost")
+                            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Network connection lost. Please check your connection and try again.", comment: "Network error")])
+                        case NSURLErrorTimedOut:
+                            print("ERROR: Chunk \(chunkCount) upload failed - timeout")
+                            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload timed out. Please try again.", comment: "Timeout error")])
+                        default:
+                            print("ERROR: Chunk \(chunkCount) upload failed - network error: \(error.localizedDescription)")
+                            throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Network error: %@", comment: "Network error"), error.localizedDescription)])
+                        }
+                    } else {
+                        // Re-throw other errors
+                        throw error
+                    }
                 }
             }
             
-            // Mark upload as finished
+            print("Uploaded \(chunkCount) chunks, finalizing...")
+            
             request["finished"] = "true"
             if let referenceId = referenceId {
                 request["referenceid"] = referenceId
@@ -2834,7 +3243,8 @@ final class HproseInstance: ObservableObject {
             let finalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
             
             guard let cid = finalResponse as? String else {
-                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get CID from final upload response"])
+                print("ERROR: Upload finalization failed - invalid CID response")
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload file", comment: "Upload error")])
             }
             
             // Get file attributes
@@ -3019,11 +3429,20 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid base URL for status polling"])
             }
             
-            // For HLS video status polling, use the cloud drive port
-            let host = baseURL.host ?? HproseInstance.baseUrl.host ?? "localhost"
-            let cloudPort = HproseInstance.shared.appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-            let cloudBaseURL = URL(string: "http://\(host):\(cloudPort)")!
-            let statusURL = cloudBaseURL.appendingPathComponent("convert-video/status/\(jobId)")
+            // Get host from baseURL - no fallback, must succeed
+            guard let host = baseURL.host else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from base URL"])
+            }
+            
+            // Get cloud drive port - no fallback, must be configured
+            guard HproseInstance.shared.appUser.cloudDrivePort > 0 else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
+            }
+            
+            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
+                throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
+            }
+            let statusURL = cloudBaseURL.appendingPathComponent("process-zip/status/\(jobId)")
             print("DEBUG: Polling status at: \(statusURL)")
             
             let config = URLSessionConfiguration.default
@@ -3190,8 +3609,22 @@ final class HproseInstance: ObservableObject {
             data: NSData,
             chunkNumber: Int
         ) async throws -> Any {
-            let response = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]]) as Any
-            return response
+            // Add 3 minute timeout for each chunk upload (handles slow connections)
+            return try await withThrowingTaskGroup(of: Any.self) { group in
+                group.addTask {
+                    uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]]) as Any
+                }
+                
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 180_000_000_000) // 180 seconds (3 minutes)
+                    throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload timeout - chunk \(chunkNumber) took too long"])
+                }
+                
+                // Return the first result (either success or timeout)
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            }
         }
     }
     
@@ -3351,46 +3784,35 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /// Start periodic refresh of appUser every 30 minutes
+    func startPeriodicAppUserRefresh() {
+        Task.detached(priority: .background) { [weak self] in
+            guard let self = self else { return }
+            
+            print("DEBUG: [HproseInstance] Started periodic appUser refresh (every 30 minutes)")
+            
+            while true {
+                // Wait 30 minutes
+                try? await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000)
+                
+                // Refresh appUser from server
+                do {
+                    try await self.refreshAppUserFromServer()
+                } catch {
+                    print("DEBUG: [HproseInstance] Periodic refresh failed: \(error)")
+                    // Continue with next iteration even if this one failed
+                }
+            }
+        }
+    }
+    
     // MARK: - Background Upload
     // Background task approach removed - using immediate upload with persistence instead
     
     // MARK: - Persistence and Retry
-    struct PendingTweetUpload: Codable {
-        let tweet: Tweet
-        let itemData: [ItemData]
-        let timestamp: Date
-        let retryCount: Int
-        let videoJobId: String? // Store job ID for video uploads
-        
-        struct ItemData: Codable {
-            let identifier: String
-            let typeIdentifier: String
-            let data: Data
-            let fileName: String
-            let noResample: Bool
-            let videoJobId: String? // Store job ID for individual video items
-            
-            init(identifier: String, typeIdentifier: String, data: Data, fileName: String, noResample: Bool = false, videoJobId: String? = nil) {
-                self.identifier = identifier
-                self.typeIdentifier = typeIdentifier
-                self.data = data
-                self.fileName = fileName
-                self.noResample = noResample
-                self.videoJobId = videoJobId
-            }
-        }
-        
-        init(tweet: Tweet, itemData: [ItemData], retryCount: Int = 0, videoJobId: String? = nil) {
-            self.tweet = tweet
-            self.itemData = itemData
-            self.timestamp = Date(timeIntervalSince1970: Date().timeIntervalSince1970)
-            self.retryCount = retryCount
-            self.videoJobId = videoJobId
-        }
-    }
-    
-    // Retry mechanism removed to prevent duplicate uploads
-    // Keeping persistence for unfinished uploads only
+    // NOTE: PendingTweetUpload is now defined in TweetUploadManager.swift
+    // Keeping type alias for compatibility
+    typealias PendingTweetUpload = TweetUploadManager.PendingTweetUpload
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
         return try await withRetry {
@@ -3486,6 +3908,10 @@ final class HproseInstance: ObservableObject {
                 let uploadedTweet = tweet
                 uploadedTweet.mid = newTweetId
                 uploadedTweet.author = try? await self.fetchUser(tweet.authorId)
+                
+                // Refresh appUser from server to get updated tweetCount and other properties
+                try? await self.refreshAppUserFromServer()
+                
                 return uploadedTweet
             } else {
                 // Failure case: extract error message
@@ -3526,7 +3952,7 @@ final class HproseInstance: ObservableObject {
             }
             
             if uploadResults.contains(where: { $0 == nil }) {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment upload failure in pair"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload attachment", comment: "Attachment upload error")])
             }
             
             return uploadResults.compactMap { $0 }
@@ -3534,16 +3960,13 @@ final class HproseInstance: ObservableObject {
     }
     
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
-        Task.detached(priority: .background) {
-            await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
-        }
+        // Delegate to upload manager
+        uploadManager.scheduleTweetUpload(tweet: tweet, itemData: itemData)
     }
     
     func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
-        Task.detached(priority: .background) {
-            var mutableMessage = message
-            await self.uploadChatMessageWithPersistenceAndRetry(message: &mutableMessage, itemData: itemData)
-        }
+        // Delegate to upload manager
+        uploadManager.scheduleChatMessageUpload(message: message, itemData: itemData)
     }
     
     private func uploadTweetWithPersistenceAndRetry(tweet: Tweet, itemData: [PendingTweetUpload.ItemData], retryCount: Int = 0, videoJobId: String? = nil) async {
@@ -3565,9 +3988,8 @@ final class HproseInstance: ObservableObject {
                 // Success - remove pending upload and notify
                 await removePendingUpload()
                 
-                // Update user's tweet count and post notification
+                // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                 await MainActor.run {
-                    self.appUser.tweetCount = (self.appUser.tweetCount ?? 0) + 1
                     NotificationCenter.default.post(
                         name: .newTweetCreated,
                         object: nil,
@@ -3575,7 +3997,7 @@ final class HproseInstance: ObservableObject {
                     )
                 }
             } else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
             }
         } catch {
             print("Error uploading tweet: \(error)")
@@ -3698,7 +4120,7 @@ final class HproseInstance: ObservableObject {
         }
         
         if itemData.count != uploadedAttachments.count {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload attachment", comment: "Attachment upload error")])
         }
         
         return (uploadedAttachments, videoJobId)
@@ -3753,7 +4175,7 @@ final class HproseInstance: ObservableObject {
     private func checkVideoJobStatus(jobId: String, baseURL: URL?) async -> VideoConversionStatus? {
         guard let baseURL = baseURL else { return nil }
         
-        let statusURL = baseURL.appendingPathComponent("convert-video/status/\(jobId)")
+        let statusURL = baseURL.appendingPathComponent("process-zip/status/\(jobId)")
         print("DEBUG: Checking video job status at: \(statusURL)")
         
         let config = URLSessionConfiguration.default
@@ -3877,9 +4299,8 @@ final class HproseInstance: ObservableObject {
                     // Success - remove pending upload and notify
                     await removePendingUpload()
                     
-                    // Update user's tweet count and post notification
+                    // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                     await MainActor.run {
-                        self.appUser.tweetCount = (self.appUser.tweetCount ?? 0) + 1
                         NotificationCenter.default.post(
                             name: .newTweetCreated,
                             object: nil,
@@ -3887,7 +4308,7 @@ final class HproseInstance: ObservableObject {
                         )
                     }
                 } else {
-                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload tweet"])
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
                 }
             } catch {
                 print("Error uploading tweet: \(error)")
@@ -3925,10 +4346,22 @@ final class HproseInstance: ObservableObject {
         _ = try? await appUser.resolveWritableUrl()
         let originalBaseURL = appUser.writableUrl?.deletingLastPathComponent()
         
-        // For HLS video polling, use the cloud drive port
-        let host = originalBaseURL?.host ?? HproseInstance.baseUrl.host ?? "localhost"
-        let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-        let baseURL = URL(string: "http://\(host):\(cloudPort)")
+        // Get host - must succeed
+        guard let host = originalBaseURL?.host else {
+            print("ERROR: No host available for video job polling")
+            return
+        }
+        
+        // Get cloud drive port - must be configured
+        guard appUser.cloudDrivePort > 0 else {
+            print("ERROR: Cloud drive port not configured for video job polling")
+            return
+        }
+        
+        guard let baseURL = URL(string: "http://\(host):\(appUser.cloudDrivePort)") else {
+            print("ERROR: Failed to construct cloud drive URL")
+            return
+        }
         
         // Find the video item to get its data
         guard let videoItem = pendingUpload.itemData.first(where: { 
@@ -3940,7 +4373,7 @@ final class HproseInstance: ObservableObject {
         
         // Resume polling with the stored job ID
         do {
-            let mediaProcessor = MediaProcessor()
+            let mediaProcessor = HproseInstance.MediaProcessor()
             let result = try await mediaProcessor.pollVideoConversionStatus(
                 jobId: jobId,
                 baseURL: baseURL,
@@ -3993,233 +4426,22 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - Recovery Methods
     
-    /// Clean up any problematic pending uploads that might cause startup issues
-    private func cleanupProblematicPendingUploads() async {
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-        
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return
-        }
-        
-        do {
-            let data = try Data(contentsOf: fileURL)
-            let pendingUpload = try JSONDecoder().decode(PendingTweetUpload.self, from: data)
-            
-            // Check if the pending upload is too old (older than 7 days) or has too many retries
-            let maxAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days
-            let isTooOld = Date().timeIntervalSince(pendingUpload.timestamp) > maxAge
-            let hasTooManyRetries = pendingUpload.retryCount >= 2
-            
-            if isTooOld || hasTooManyRetries {
-                print("DEBUG: Cleaning up problematic pending upload (age: \(Date().timeIntervalSince(pendingUpload.timestamp))s, retries: \(pendingUpload.retryCount))")
-                try FileManager.default.removeItem(at: fileURL)
-                print("DEBUG: Removed problematic pending upload file")
-            }
-        } catch {
-            print("DEBUG: Failed to check/cleanup pending upload during initialization: \(error)")
-            // If we can't even read the file, remove it to prevent future issues
-            try? FileManager.default.removeItem(at: fileURL)
-        }
-    }
+    // REMOVED: cleanupProblematicPendingUploads(), recoverPendingUploads(), recoverPendingUploads_old()
+    // Pending upload recovery is now handled by ContentView's dialog system
     
-    func recoverPendingUploads() async {
-        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
-        
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            print("DEBUG: No pending upload file found")
-            return
-        }
-        
-        do {
-            let data = try Data(contentsOf: fileURL)
-            let pendingUpload = try JSONDecoder().decode(PendingTweetUpload.self, from: data)
-            
-            // Check if the pending upload is not too old (e.g., within 24 hours)
-            let maxAge: TimeInterval = 24 * 60 * 60 // 24 hours
-            if Date().timeIntervalSince(pendingUpload.timestamp) < maxAge {
-                print("DEBUG: Found valid pending upload from \(pendingUpload.timestamp), attempting recovery...")
-                print("Recovering pending upload from \(pendingUpload.timestamp)")
-                
-                // Check if we have video job IDs to check first
-                if let videoJobId = pendingUpload.videoJobId {
-                    print("DEBUG: Found video job ID: \(videoJobId), checking status...")
-                    
-                    // Get base URL for status checking - ensure writableUrl is resolved
-                    _ = try? await appUser.resolveWritableUrl()
-                    let originalBaseURL = appUser.writableUrl?.deletingLastPathComponent()
-                    
-                    // For HLS video status checking, use the cloud drive port
-                    let host = originalBaseURL?.host ?? HproseInstance.baseUrl.host ?? "localhost"
-                    let cloudPort = appUser.cloudDrivePort ?? Constants.DEFAULT_CLOUD_PORT
-                    let baseURL = URL(string: "http://\(host):\(cloudPort)")
-                    
-                    if let status = await checkVideoJobStatus(jobId: videoJobId, baseURL: baseURL) {
-                        switch status.status {
-                        case "completed":
-                            print("DEBUG: Video job completed while app was backgrounded, CID: \(status.cid ?? "unknown")")
-                            // Job completed - we need to create MimeiFileType with the CID
-                            // and continue with tweet upload
-                            await handleCompletedVideoJob(pendingUpload: pendingUpload, cid: status.cid)
-                            return
-                            
-                        case "failed":
-                            print("DEBUG: Video job failed: \(status.message ?? "Unknown error")")
-                            // Job failed - fall through to re-upload
-                            
-                        case "uploading", "processing":
-                            print("DEBUG: Video job still in progress, resuming polling...")
-                            // Job still in progress - resume polling
-                            await resumeVideoJobPolling(pendingUpload: pendingUpload, jobId: videoJobId)
-                            return
-                            
-                        default:
-                            print("DEBUG: Unknown video job status: \(status.status)")
-                            // Unknown status - fall through to re-upload
-                        }
-                    } else {
-                        print("DEBUG: Could not check video job status, job may have expired")
-                        // Job not found or error - fall through to re-upload
-                    }
-                }
-                
-                // Increment retry count for the next attempt
-                let newRetryCount = pendingUpload.retryCount + 1
-                let maxBackgroundRetries = 2
-                
-                print("DEBUG: Background retry attempt \(newRetryCount)/\(maxBackgroundRetries)")
-                
-                // If this will be the final attempt, the upload function will show the error
-                if newRetryCount > maxBackgroundRetries {
-                    print("DEBUG: Max retries exceeded (\(pendingUpload.retryCount) attempts made), removing pending upload without retrying")
-                    try? FileManager.default.removeItem(at: fileURL)
-                    return
-                }
-                
-                // Show toast message for retry attempt
-                await MainActor.run {
-                    let retryMessage = String(format: NSLocalizedString("Upload failed, retrying... (attempt %d of %d)", comment: "Background upload retry message"), newRetryCount, maxBackgroundRetries)
-                    NotificationCenter.default.post(
-                        name: .backgroundUploadRetrying,
-                        object: nil,
-                        userInfo: ["message": retryMessage]
-                    )
-                }
-                
-                // Add delay before background retry (exponential backoff)
-                let delay = UInt64(newRetryCount) * 2_000_000_000 // 2, 4 seconds
-                print("DEBUG: Background retry delay: \(delay / 1_000_000_000) seconds")
-                try? await Task.sleep(nanoseconds: delay)
-                
-                await uploadTweetWithPersistenceAndRetry(
-                    tweet: pendingUpload.tweet,
-                    itemData: pendingUpload.itemData,
-                    retryCount: newRetryCount,
-                    videoJobId: pendingUpload.videoJobId
-                )
-            } else {
-                // Remove old pending upload
-                try? FileManager.default.removeItem(at: fileURL)
-                print("Removed old pending upload from \(pendingUpload.timestamp)")
-            }
-        } catch {
-            print("DEBUG: Failed to recover pending upload: \(error)")
-            // Remove corrupted file to prevent future issues
-            do {
-                try FileManager.default.removeItem(at: fileURL)
-                print("DEBUG: Removed corrupted pending upload file")
-            } catch {
-                print("DEBUG: Failed to remove corrupted pending upload file: \(error)")
-            }
-        }
-    }
+    // The old recoverPendingUploads_old function code removed (was 130+ lines)
+    // All retry logic is preserved in uploadTweetWithPersistenceAndRetry()
+    // New system: User sees dialog with retry/discard options instead of auto-retry
+    
     
     func scheduleCommentUpload(
         comment: Tweet,
         to tweet: Tweet,
-        itemData: [PendingTweetUpload.ItemData]
+        itemData: [PendingTweetUpload.ItemData],
+        isQuoting: Bool = false
     ) {
-        Task.detached(priority: .background) {
-            do {
-                let comment = comment
-                var uploadedAttachments: [MimeiFileType] = []
-                
-                let itemPairs = itemData.chunked(into: 2)
-                for (pairIndex, pair) in itemPairs.enumerated() {
-                    do {
-                        let pairAttachments = try await self.uploadItemPair(pair)   // Upload attachments to IPFS
-                        uploadedAttachments.append(contentsOf: pairAttachments)
-                    } catch {
-                        print("Error uploading pair \(pairIndex + 1): \(error)")
-                        await MainActor.run {
-                            if !self.isAppInitializing {
-                                NotificationCenter.default.post(
-                                    name: .backgroundUploadFailed,
-                                    object: nil,
-                                    userInfo: ["error": error]
-                                )
-                            } else {
-                                print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
-                            }
-                        }
-                        return
-                    }
-                }
-                
-                if itemData.count != uploadedAttachments.count {
-                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Attachment count mismatch. Expected: \(itemData.count), Got: \(uploadedAttachments.count)"])
-                    await MainActor.run {
-                        if !self.isAppInitializing {
-                            NotificationCenter.default.post(
-                                name: .backgroundUploadFailed,
-                                object: nil,
-                                userInfo: ["error": error]
-                            )
-                        } else {
-                            print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
-                        }
-                    }
-                    return
-                }
-                
-                comment.attachments = uploadedAttachments
-                
-                if let newComment = try await self.addComment(comment, to: tweet) {
-                    await MainActor.run {
-                        print("[HproseInstance] Comment upload completed successfully")
-                        print("[HproseInstance] New comment mid: \(newComment.mid)")
-                        print("[HproseInstance] Parent tweet mid: \(tweet.mid)")
-                        
-                        // The addComment method now handles both comment and retweet notifications
-                        // No need to post notifications here as they're handled in addComment
-                    }
-                } else {
-                    let error = NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "addComment returned nil"])
-                    await MainActor.run {
-                        if !self.isAppInitializing {
-                            NotificationCenter.default.post(
-                                name: .backgroundUploadFailed,
-                                object: nil,
-                                userInfo: ["error": error]
-                            )
-                        } else {
-                            print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
-                        }
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    if !self.isAppInitializing {
-                        NotificationCenter.default.post(
-                            name: .backgroundUploadFailed,
-                            object: nil,
-                            userInfo: ["error": error.localizedDescription]
-                        )
-                    } else {
-                        print("DEBUG: Skipping background upload error dialog during app initialization: \(error)")
-                    }
-                }
-            }
-        }
+        // Delegate to upload manager
+        uploadManager.scheduleCommentUpload(comment: comment, to: tweet, itemData: itemData, isQuoting: isQuoting)
     }
     
     /**
@@ -4234,7 +4456,7 @@ final class HproseInstance: ObservableObject {
             "appuserid": appUser.mid,
         ]
         guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "togglePinnedTweet: No response"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")])
         }
         return response
     }
@@ -4251,14 +4473,34 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "appuserid": appUser.mid
         ]
-        guard let response = user.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "getPinnedTweets: No response"])
+        
+        guard let client = user.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
+        
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        
+        // Handle empty array case - server returns empty array when user has no pinned tweets
+        let response: [[String: Any]]
+        if let arrayResponse = rawResponse as? [[String: Any]] {
+            response = arrayResponse
+        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+            // Server returned empty array - handle gracefully
+            response = []
+            print("DEBUG: [HproseInstance] getPinnedTweets - Server returned empty array (no pinned tweets)")
+        } else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to get pinned tweets", comment: "Get pinned tweets error")])
+        }
+        
         var result: [[String: Any]] = []
         for dict in response {
             if let tweetDict = dict["tweet"] as? [String: Any] {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                tweet.author = try? await fetchUser(tweet.authorId)
+                if let author = try? await fetchUser(tweet.authorId) {
+                    await MainActor.run {
+                        tweet.author = author  // Set on main thread since author is @Published
+                    }
+                }
                 let timePinned = dict["timestamp"]
                 result.append([
                     "tweet": tweet,
@@ -4275,7 +4517,7 @@ final class HproseInstance: ObservableObject {
         alias: String?,
         profile: String,
         hostId: String? = nil,
-        cloudDrivePort: Int? = nil
+        cloudDrivePort: Int = 0
     ) async throws -> Bool {
         var hosts: [String]? = nil
         if let hostId = hostId, !hostId.isEmpty {
@@ -4314,9 +4556,9 @@ final class HproseInstance: ObservableObject {
         alias: String? = nil,
         profile: String? = nil,
         hostId: String? = nil,
-        cloudDrivePort: Int? = nil
+        cloudDrivePort: Int = 0
     ) async throws -> Bool {
-        print("DEBUG: updateUserCore called with - alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort?.description ?? "nil")")
+        print("DEBUG: updateUserCore called with - alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort)")
         
         let updatedUser = User(mid: appUser.mid, name: alias, password: password, profile: profile, cloudDrivePort: cloudDrivePort)
         if let hostId = hostId, !hostId.isEmpty {
@@ -4345,6 +4587,22 @@ final class HproseInstance: ObservableObject {
             if result == "success" {
                 print("DEBUG: updateUserCore - server returned success")
                 
+                // Update in-memory appUser with new values on MainActor (User has @Published properties)
+                await MainActor.run {
+                    if let alias = alias {
+                        self.appUser.name = alias
+                    }
+                    if let profile = profile {
+                        self.appUser.profile = profile
+                    }
+                    if let hostId = hostId, !hostId.isEmpty {
+                        self.appUser.hostIds = [hostId]
+                    }
+                    // CRITICAL: Update cloudDrivePort
+                    self.appUser.cloudDrivePort = cloudDrivePort
+                    print("DEBUG: updateUserCore - updated in-memory appUser, cloudDrivePort: \(cloudDrivePort)")
+                }
+                
                 // Clear user cache to ensure fresh data is loaded
                 TweetCacheManager.shared.deleteUser(mid: appUser.mid)
                 print("DEBUG: updateUserCore - cleared user cache for: \(appUser.mid)")
@@ -4362,8 +4620,8 @@ final class HproseInstance: ObservableObject {
     }
     
     // MARK: - User Avatar
-    /// Sets the user's avatar on the server
-    func setUserAvatar(user: User, avatar: MimeiId) async throws {
+    /// Sets the user's avatar on the server and returns confirmed avatar
+    func setUserAvatar(user: User, avatar: MimeiId) async throws -> String {
         let entry = "set_user_avatar"
         let params: [String: Any] = [
             "aid": appId,
@@ -4371,10 +4629,26 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
             "avatar": avatar
         ]
-        _ = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+        
+        guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
+        }
+        
+        // Server returns avatar MimeiId directly as a String
+        if let confirmedAvatar = response as? String {
+            return confirmedAvatar
+        }
+        
+        throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected server response"])
     }
     
-    private func getProviderIP(_ mid: String) async throws -> String? {
+    func getProviderIP(_ mid: String) async throws -> String? {
+        // Safety check: never try to get provider IP for GUEST_ID
+        if mid == Constants.GUEST_ID {
+            print("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot get provider IP for GUEST_ID"])
+        }
+        
         let params = [
             "aid": appId,
             "ver": "last",
@@ -4383,11 +4657,11 @@ final class HproseInstance: ObservableObject {
         
         return try await retryOperation(maxRetries: 3) {
             guard let response = self.client.invoke("runMApp", withArgs: ["get_provider_ip", params]) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for get_provider_ip"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for get_provider_ip: \(mid)"])
             }
             
             guard let ipAddress = response as? String else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format for get_provider_ip"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format for get_provider_ip: \(mid)"])
             }
             
             return ipAddress
@@ -4414,10 +4688,10 @@ final class HproseInstance: ObservableObject {
     func sendMessage(receiptId: String, message: ChatMessage) async throws -> ChatMessage {
         // Check if app user is blacklisted by the recipient
         guard let recipient = try await fetchUser(receiptId) else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Recipient user not found"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Recipient user not found", comment: "User lookup error")])
         }
         if recipient.isUserBlacklisted(appUser.mid) {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "You cannot send a message to this user because you are blocked"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot send a message to this user because you are blocked", comment: "Message blocked error")])
         }
         
         let entry = "message_outgoing"
@@ -4734,7 +5008,7 @@ final class HproseInstance: ObservableObject {
             print("[reportTweet] Successfully deleted tweet from backend: \(deletedTweetId)")
         } else {
             print("[reportTweet] Failed to delete tweet from backend: \(tweetId)")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete reported tweet from backend"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to report tweet", comment: "Report tweet error")])
         }
         
         // Send notification to system admin about the reported and deleted content
@@ -4785,12 +5059,4 @@ final class HproseInstance: ObservableObject {
     }
 }
 
-
-// MARK: - Array Extension
-extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        return stride(from: 0, to: count, by: size).map {
-            Array(self[$0 ..< Swift.min($0 + size, count)])
-        }
-    }
-}
+// NOTE: Array.chunked extension is now in TweetUploadManager.swift

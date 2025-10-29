@@ -13,6 +13,49 @@
 "Followings" = "Followings";
 "Recommendation" = "Recommendation";
 
+// MARK: - Upload Progress
+"Preparing upload..." = "Preparing upload... Don't close the app";
+"Preparing attachments..." = "Preparing attachments...";
+"Converting video..." = "Converting video...";
+"Uploading attachments..." = "Uploading attachments...";
+"Submitting tweet..." = "Submitting tweet...";
+"Retrying upload..." = "Retrying upload...";
+"Upload completed" = "Upload completed";
+"Posting Tweet" = "Posting Tweet";
+"Posting Comment" = "Posting Comment";
+"Sending Message" = "Sending Message";
+"Uploading" = "Uploading";
+"Please keep the app open until upload completes" = "Please keep the app open until upload completes";
+"Video uploaded to server" = "Video uploaded to server";
+"Checking video status..." = "Checking video status...";
+"Processing on server..." = "Processing on server...";
+"Your tweet will be posted when ready" = "Your tweet will be posted when ready";
+"Uploading %@ %d/%d..." = "Uploading %@ %d/%d...";
+"Processing video %d/%d" = "Processing video %d/%d";
+"Uploading image %d/%d" = "Uploading image %d/%d";
+"Tweet posted successfully" = "Tweet posted successfully";
+"Failed to check video status" = "Failed to check video status";
+"Video processing completed but no ID returned" = "Video processing completed but no ID returned";
+"Video processing failed" = "Video processing failed";
+"Video processing timed out" = "Video processing timed out";
+"Failed to prepare attachments" = "Failed to prepare attachments";
+"Failed to post tweet" = "Failed to post tweet";
+"Unknown video status" = "Unknown video status";
+
+// MARK: - Pending Upload Dialog
+"Upload Interrupted" = "Upload Interrupted";
+"Your upload was interrupted, possibly because the app was closed. Would you like to retry the upload or discard it?" = "Your upload was interrupted, possibly because the app was closed. Would you like to retry the upload or discard it?";
+"Your upload was interrupted and %d retry attempts have failed. Would you like to try again or discard it?" = "Your upload was interrupted and %d retry attempts have failed. Would you like to try again or discard it?";
+"Type:" = "Type:";
+"Date:" = "Date:";
+"Attachments:" = "Attachments:";
+"Content:" = "Content:";
+"Comment" = "Comment";
+"Tweet" = "Tweet";
+"Retry Upload" = "Retry Upload";
+"Discard" = "Discard";
+"Upload discarded" = "Upload discarded";
+
 // MARK: - Login Screen
 "Welcome to dTweet" = "Welcome to dTweet";
 "Username" = "Username";
@@ -252,6 +295,8 @@
 "Choose Photo" = "Choose Photo";
 "Take Photo" = "Take Photo";
 "Record Video" = "Record Video";
+"Select a photo" = "Select a photo";
+"Choose" = "Choose";
 
 // MARK: - Settings
 "Settings" = "Settings";
@@ -490,3 +535,17 @@
 "Cannot extract mediaID from URL" = "Cannot extract mediaID from URL";
 "Failed to initialize app entry with any URL" = "Failed to initialize app entry with any URL";
 "Writable URL not available" = "Writable URL not available";
+"Target user not found" = "User not found";
+"You cannot follow this user because you are blocked" = "You cannot follow this user because you are blocked";
+"You cannot comment on this tweet because you are blocked by the author" = "You cannot comment on this tweet because you are blocked by the author";
+"Recipient user not found" = "Recipient not found";
+"You cannot send a message to this user because you are blocked" = "You cannot send a message to this user because you are blocked";
+"Tweet not found" = "Tweet not found";
+"Upload client not available" = "Upload service unavailable";
+"Failed to upload file" = "Failed to upload file";
+"Failed to upload tweet" = "Failed to upload tweet";
+"Failed to upload attachment" = "Failed to upload attachment";
+"Failed to post comment" = "Failed to post comment";
+"Failed to update pinned tweet" = "Failed to update pinned tweet";
+"Failed to get pinned tweets" = "Failed to get pinned tweets";
+"Failed to report tweet" = "Failed to report tweet";

@@ -13,6 +13,49 @@
 "Followings" = "关注";
 "Recommendation" = "推荐";
 
+// MARK: - Upload Progress
+"Preparing upload..." = "正在准备上传...请勿关闭应用";
+"Preparing attachments..." = "正在准备附件...";
+"Converting video..." = "正在转换视频...";
+"Uploading attachments..." = "正在上传附件...";
+"Submitting tweet..." = "正在提交推文...";
+"Retrying upload..." = "正在重试上传...";
+"Upload completed" = "上传完成";
+"Posting Tweet" = "正在发布推文";
+"Posting Comment" = "正在发布评论";
+"Sending Message" = "正在发送消息";
+"Uploading" = "上传中";
+"Please keep the app open until upload completes" = "请保持应用打开直到上传完成";
+"Video uploaded to server" = "视频已上传到服务器";
+"Checking video status..." = "正在检查视频状态...";
+"Processing on server..." = "服务器处理中...";
+"Your tweet will be posted when ready" = "准备就绪后将发布您的推文";
+"Uploading %@ %d/%d..." = "正在上传%@ %d/%d...";
+"Processing video %d/%d" = "正在处理视频 %d/%d";
+"Uploading image %d/%d" = "正在上传图片 %d/%d";
+"Tweet posted successfully" = "推文发布成功";
+"Failed to check video status" = "检查视频状态失败";
+"Video processing completed but no ID returned" = "视频处理完成但未返回ID";
+"Video processing failed" = "视频处理失败";
+"Video processing timed out" = "视频处理超时";
+"Failed to prepare attachments" = "准备附件失败";
+"Failed to post tweet" = "发布推文失败";
+"Unknown video status" = "未知视频状态";
+
+// MARK: - Pending Upload Dialog
+"Upload Interrupted" = "上传已中断";
+"Your upload was interrupted, possibly because the app was closed. Would you like to retry the upload or discard it?" = "您的上传已中断，可能是因为应用被关闭。您想重试上传还是放弃？";
+"Your upload was interrupted and %d retry attempts have failed. Would you like to try again or discard it?" = "您的上传已中断，%d 次重试尝试失败。您想再试一次还是放弃？";
+"Type:" = "类型：";
+"Date:" = "日期：";
+"Attachments:" = "附件：";
+"Content:" = "内容：";
+"Comment" = "评论";
+"Tweet" = "推文";
+"Retry Upload" = "重试上传";
+"Discard" = "放弃";
+"Upload discarded" = "已放弃上传";
+
 // MARK: - Login Screen
 "Welcome to dTweet" = "欢迎使用 dTweet";
 "Username" = "用户名";
@@ -235,11 +278,15 @@
 "Video" = "视频";
 "Audio" = "音频";
 "File" = "文件";
+"Image" = "图片";
 "Camera" = "相机";
 "Photo Library" = "照片库";
 "Choose Photo" = "选择照片";
 "Take Photo" = "拍照";
 "Record Video" = "录制视频";
+"Select a photo" = "选择照片";
+"Choose" = "选择";
+"%@ file is too large (%.1fMB). Maximum allowed size is %.0fMB." = "%@文件太大（%.1fMB）。最大允许大小为%.0fMB。";
 
 // MARK: - Settings
 "Settings" = "设置";
@@ -494,3 +541,17 @@
 "Cannot extract mediaID from URL" = "无法从URL中提取媒体ID";
 "Failed to initialize app entry with any URL" = "无法使用任何URL初始化应用入口";
 "Writable URL not available" = "可写入URL不可用";
+"Target user not found" = "未找到用户";
+"You cannot follow this user because you are blocked" = "您已被屏蔽，无法关注此用户";
+"You cannot comment on this tweet because you are blocked by the author" = "您已被作者屏蔽，无法评论此推文";
+"Recipient user not found" = "未找到收件人";
+"You cannot send a message to this user because you are blocked" = "您已被屏蔽，无法向此用户发送消息";
+"Tweet not found" = "未找到推文";
+"Upload client not available" = "上传服务不可用";
+"Failed to upload file" = "文件上传失败";
+"Failed to upload tweet" = "推文上传失败";
+"Failed to upload attachment" = "附件上传失败";
+"Failed to post comment" = "评论发布失败";
+"Failed to update pinned tweet" = "置顶推文更新失败";
+"Failed to get pinned tweets" = "获取置顶推文失败";
+"Failed to report tweet" = "举报推文失败";

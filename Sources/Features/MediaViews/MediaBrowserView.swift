@@ -12,8 +12,11 @@ import Photos
 struct MediaBrowserView: View {
     let tweet: Tweet
     let initialIndex: Int
+    let sourceTweetId: String? // The tweet ID where user tapped (could be retweet)
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
+    @State private var currentTweet: Tweet // Allow changing tweet for auto-advance
+    @State private var currentSourceTweetId: String // Track position in visible feed
     @State private var showVideoPlayer = false
     @State private var play = false
     @State private var isVisible = true
@@ -25,43 +28,126 @@ struct MediaBrowserView: View {
     @State private var isDragging = false
     @State private var previousIndex: Int = -1 // Track previous index for video management
     @State private var isImageZoomed = false // Track if current image is zoomed
-
-
+    @State private var isTransitioning = false // Track transition animation
+    @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     private var attachments: [MimeiFileType] {
-        return tweet.attachments ?? []
+        return currentTweet.attachments ?? []
     }
 
     private var baseUrl: URL {
-        return tweet.author?.baseUrl ?? HproseInstance.baseUrl
+        // Use author's baseUrl if available, otherwise use appUser's baseUrl
+        // If both are nil, use real IP from HproseInstance (resolved at app start)
+        return currentTweet.author?.baseUrl 
+            ?? HproseInstance.shared.appUser.baseUrl 
+            ?? HproseInstance.baseUrl
     }
 
-    init(tweet: Tweet, initialIndex: Int) {
+    init(tweet: Tweet, initialIndex: Int, sourceTweetId: String? = nil) {
         self.tweet = tweet
         self.initialIndex = initialIndex
+        self.sourceTweetId = sourceTweetId
         self._currentIndex = State(initialValue: initialIndex)
+        self._currentTweet = State(initialValue: tweet)
+        self._currentSourceTweetId = State(initialValue: sourceTweetId ?? tweet.mid)
         self._previousIndex = State(initialValue: initialIndex)
-        print("MediaBrowserView init - attachments count: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
+        print("MediaBrowserView init - tweet: \(tweet.mid), sourceTweet: \(sourceTweetId ?? tweet.mid), attachments: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
     }
 
     var body: some View {
         MediaBrowserContentView(
-            attachments: attachments,
-            currentIndex: $currentIndex,
-            previousIndex: $previousIndex,
-            showControls: $showControls,
-            dragOffset: $dragOffset,
-            isDragging: $isDragging,
-            isVisible: $isVisible,
-            baseUrl: baseUrl,
-            imageStates: $imageStates,
-            isImageZoomed: $isImageZoomed,
-            dismiss: { dismiss() },
-            startControlsTimer: startControlsTimer,
-            resetControlsTimer: resetControlsTimer,
-            loadImageIfNeededClosure: { attachment, index in
-                loadImageIfNeeded(for: attachment, at: index)
+                attachments: attachments,
+                currentIndex: $currentIndex,
+                previousIndex: $previousIndex,
+                showControls: $showControls,
+                dragOffset: $dragOffset,
+                isDragging: $isDragging,
+                isVisible: $isVisible,
+                baseUrl: baseUrl,
+                imageStates: $imageStates,
+                isImageZoomed: $isImageZoomed,
+                isTransitioning: $isTransitioning,
+                transitionOffset: $transitionOffset,
+                currentTweet: currentTweet,
+                currentSourceTweetId: currentSourceTweetId,
+                dismiss: { dismiss() },
+                startControlsTimer: startControlsTimer,
+                resetControlsTimer: resetControlsTimer,
+                loadImageIfNeededClosure: { attachment, index in
+                    loadImageIfNeeded(for: attachment, at: index)
+                }
+            )
+            .onAppear {
+                setupFullScreenManager()
             }
-        )
+            .onDisappear {
+                FullScreenVideoManager.shared.clearSingletonPlayer()
+            }
+    }
+    
+    private func setupFullScreenManager() {
+        // Set up navigation callback for auto-advance and swipe up
+        FullScreenVideoManager.shared.onNavigateToNextVideo = { [self] nextTweet, videoIndex, nextSourceTweetId in
+            print("DEBUG: [MediaBrowserView] Navigating to tweet: \(nextTweet.mid), videoIndex: \(videoIndex), sourceTweetId: \(nextSourceTweetId)")
+            
+            // Animate transition: slide current video up and next video in from bottom
+            Task { @MainActor in
+                // Start transition - slide current content up (only 30% of screen for tight transition)
+                let slideDistance = UIScreen.main.bounds.height * 0.3
+                isTransitioning = true
+                withAnimation(.easeOut(duration: 0.25)) {
+                    transitionOffset = -slideDistance
+                }
+                
+                // Wait for slide-out to complete
+                try? await Task.sleep(nanoseconds: 125_000_000) // 0.125 seconds (halfway)
+                
+                // Load the next video
+                if let attachments = nextTweet.attachments,
+                   videoIndex < attachments.count {
+                    let attachment = attachments[videoIndex]
+                    let baseUrl = nextTweet.author?.baseUrl 
+                        ?? HproseInstance.shared.appUser.baseUrl 
+                        ?? HproseInstance.baseUrl
+                    
+                    if let url = attachment.getUrl(baseUrl) {
+                        print("DEBUG: [MediaBrowserView] Loading next video: \(url)")
+                        FullScreenVideoManager.shared.loadVideo(
+                            url: url,
+                            mid: attachment.mid,
+                            tweetId: nextTweet.mid,
+                            sourceTweetId: nextSourceTweetId,
+                            videoIndex: videoIndex,
+                            mediaType: attachment.type
+                        )
+                    }
+                }
+                
+                // Update UI state
+                self.currentTweet = nextTweet
+                self.currentIndex = videoIndex
+                self.previousIndex = videoIndex
+                self.currentSourceTweetId = nextSourceTweetId
+                self.imageStates = [:]
+                
+                // Reset to bottom position for slide-in (30% for tight transition)
+                transitionOffset = slideDistance
+                
+                // Slide in from bottom
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    transitionOffset = 0
+                }
+                
+                // Wait for slide-in to complete
+                try? await Task.sleep(nanoseconds: 250_000_000) // 0.25 seconds
+                isTransitioning = false
+            }
+        }
+        
+        // Set up exit fullscreen callback (when no more videos)
+        FullScreenVideoManager.shared.onExitFullScreen = { [self] in
+            print("DEBUG: [MediaBrowserView] Exiting fullscreen - no more videos")
+            dismiss()
+        }
     }
     
     // MARK: - MediaBrowserContentView
@@ -76,6 +162,10 @@ struct MediaBrowserView: View {
         let baseUrl: URL
         @Binding var imageStates: [Int: ImageState]
         @Binding var isImageZoomed: Bool
+        @Binding var isTransitioning: Bool
+        @Binding var transitionOffset: CGFloat
+        let currentTweet: Tweet
+        let currentSourceTweetId: String
         let dismiss: () -> Void
         let startControlsTimer: () -> Void
         let resetControlsTimer: () -> Void
@@ -83,77 +173,107 @@ struct MediaBrowserView: View {
         
         var body: some View {
             ZStack {
+                // Background layer - stays in place (not affected by offset)
                 Color.black
                     .ignoresSafeArea(.all, edges: .all)
                 
-                TabView(selection: $currentIndex) {
-                    ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
-                        Group {
-                            if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                videoView(for: attachment, url: url, index: index)
-                            } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                audioView(for: attachment, url: url, index: index)
-                            } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
-                                imageView(for: attachment, url: url, index: index)
+                // Content layer - slides during transition
+                ZStack {
+                    TabView(selection: $currentIndex) {
+                        ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
+                            Group {
+                                if isVideoAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                    videoView(for: attachment, url: url, index: index)
+                                } else if isAudioAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                    audioView(for: attachment, url: url, index: index)
+                                } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
+                                    imageView(for: attachment, url: url, index: index)
+                                }
                             }
+                            .background(Color.black)
+                            .tag(index)
                         }
-                        .tag(index)
                     }
-                }
-                .tabViewStyle(.page)
-                .indexViewStyle(.page(backgroundDisplayMode: .always))
-                .onChange(of: currentIndex) { _, newIndex in
-                    print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
-                    previousIndex = newIndex
+                    .background(Color.black)
+                    .tabViewStyle(.page)
+                    .indexViewStyle(.page(backgroundDisplayMode: .always))
+                    .onChange(of: currentIndex) { _, newIndex in
+                        print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
+                        previousIndex = newIndex
+                        
+                        // Clean up non-visible images to free memory
+                        cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
+                    }
                     
-                    // Clean up non-visible images to free memory
-                    cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
-                }
-                
-                // Close button overlay
-                if showControls {
-                    VStack {
-                        HStack {
-                            Button(action: { dismiss() }) {
-                                Image(systemName: "xmark")
-                                    .font(.title2)
-                                    .foregroundColor(.white)
-                                    .padding()
-                                    .background(Color.black.opacity(0.5))
-                                    .clipShape(Circle())
+                    // Close button overlay
+                    if showControls {
+                        VStack {
+                            HStack {
+                                Button(action: { dismiss() }) {
+                                    Image(systemName: "xmark")
+                                        .font(.title2)
+                                        .foregroundColor(.white)
+                                        .padding()
+                                        .background(Color.black.opacity(0.5))
+                                        .clipShape(Circle())
+                                }
+                                Spacer()
                             }
                             Spacer()
                         }
-                        Spacer()
+                        .transition(.opacity)
                     }
-                    .transition(.opacity)
                 }
+                .offset(y: isTransitioning ? transitionOffset : dragOffset.height)
+                .scaleEffect(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 1000.0))
+                .opacity(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 500.0))
             }
             .statusBar(hidden: true)
-            .offset(y: dragOffset.height)
-            .scaleEffect(1.0 - abs(dragOffset.height) / 1000.0)
-            .opacity(1.0 - abs(dragOffset.height) / 500.0)
             .gesture(
                 DragGesture()
                     .onChanged { value in
-                        // Only allow drag-down-to-exit if no image is zoomed
-                        if value.translation.height > 0 && !isImageZoomed {
+                        // Disable gestures during transition
+                        if isTransitioning {
+                            return
+                        }
+                        
+                        // Allow vertical swipes if no image is zoomed
+                        if !isImageZoomed {
                             dragOffset = value.translation
                             isDragging = true
                             showControls = true
                         }
                     }
                     .onEnded { value in
-                        // Only allow exit if no image is zoomed
-                        if !isImageZoomed && (value.translation.height > 100 || value.velocity.height > 500) {
-                            dismiss()
-                        } else {
-                            withAnimation(.spring()) {
-                                dragOffset = .zero
-                            }
-                            isDragging = false
-                            resetControlsTimer()
+                        // Disable gestures during transition
+                        if isTransitioning {
+                            return
                         }
+                        
+                        // Only handle gestures if no image is zoomed
+                        if !isImageZoomed {
+                            let swipeThreshold: CGFloat = 100
+                            let velocityThreshold: CGFloat = 500
+                            
+                            // Swipe down - exit fullscreen
+                            if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
+                                dismiss()
+                                return
+                            }
+                            
+                            // Swipe up - next video
+                            if value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold {
+                                print("DEBUG: [SWIPE] Swipe up detected - navigating to next video")
+                                FullScreenVideoManager.shared.navigateToNext()
+                            }
+                        }
+                        
+                        // Reset drag offset
+                        withAnimation(.spring()) {
+                            dragOffset = .zero
+                        }
+                        isDragging = false
+                        resetControlsTimer()
                     }
             )
             .onTapGesture {
@@ -212,26 +332,43 @@ struct MediaBrowserView: View {
         private func videoView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
             let shouldAutoPlay = index == currentIndex
             
-            return SimpleVideoPlayer(
+            return SingletonVideoPlayerView(
                 url: url,
                 mid: attachment.mid,
-                parentTweetId: nil, // Not needed for fullscreen
-                isVisible: true,
+                tweetId: currentTweet.mid,
+                videoIndex: index,
                 mediaType: attachment.type,
-                autoPlay: shouldAutoPlay,
-                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-                showNativeControls: true,
-                isMuted: false, // Unmuted in fullscreen
-                onVideoTap: {
-                    // Handle video tap if needed
-                },
-                mode: .mediaBrowser // Use mediaBrowser mode to share state with MediaCell
+                aspectRatio: attachment.aspectRatio
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .onChange(of: currentIndex) { _, newIndex in
                 print("DEBUG: [MediaBrowserView] TabView index changed to \(newIndex)")
-                // The SimpleVideoPlayer will handle play/pause based on isVisible and autoPlay
+                
+                // Load new video when user swipes
+                if newIndex == index && isVideoAttachment(attachment) {
+                    FullScreenVideoManager.shared.loadVideo(
+                        url: url,
+                        mid: attachment.mid,
+                        tweetId: currentTweet.mid,
+                        sourceTweetId: currentSourceTweetId,
+                        videoIndex: index,
+                        mediaType: attachment.type
+                    )
+                }
+            }
+            .onAppear {
+                // Load video when it appears
+                if shouldAutoPlay && isVideoAttachment(attachment) {
+                    FullScreenVideoManager.shared.loadVideo(
+                        url: url,
+                        mid: attachment.mid,
+                        tweetId: currentTweet.mid,
+                        sourceTweetId: currentSourceTweetId,
+                        videoIndex: index,
+                        mediaType: attachment.type
+                    )
+                }
             }
         }
         
@@ -603,6 +740,147 @@ struct ImageViewWithPlaceholder: View {
                 isImageZoomed = scale > 1.0
             } else {
                 isImageZoomed = false
+            }
+        }
+    }
+}
+
+// MARK: - Singleton Video Player View
+struct SingletonVideoPlayerView: View {
+    let url: URL
+    let mid: String
+    let tweetId: String
+    let videoIndex: Int
+    let mediaType: MediaType
+    let aspectRatio: Float?
+    
+    @ObservedObject private var manager = FullScreenVideoManager.shared
+    
+    var body: some View {
+        GeometryReader { geometry in
+            if let player = manager.singletonPlayer, manager.currentVideoMid == mid {
+                // Show player
+                SimplerAVPlayerViewController(player: player, aspectRatio: aspectRatio)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Loading placeholder
+                ZStack {
+                    Color.black
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.5)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Simple AVPlayerViewController Wrapper
+private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
+    let player: AVPlayer
+    let aspectRatio: Float?
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    class Coordinator: NSObject {
+        var statusObserver: NSKeyValueObservation?
+        var currentItemObserver: NSKeyValueObservation?
+        
+        deinit {
+            statusObserver?.invalidate()
+            currentItemObserver?.invalidate()
+        }
+    }
+    
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.showsPlaybackControls = true
+        controller.videoGravity = .resizeAspect
+        controller.view.backgroundColor = .black
+        
+        // Rotate landscape videos (aspectRatio > 1) by -90 degrees
+        if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
+            print("DEBUG: [SingletonVideoPlayer] Landscape video detected (aspectRatio: \(aspectRatio)), rotating -90 degrees")
+            controller.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
+        }
+        
+        // Setup observer to auto-play when ready
+        setupPlayerItemObserver(player: player, context: context)
+        
+        // Observe currentItem changes to set up observer for new items
+        context.coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { player, _ in
+            print("DEBUG: [SingletonVideoPlayer] Player currentItem changed, setting up new observer")
+            setupPlayerItemObserver(player: player, context: context)
+        }
+        
+        return controller
+    }
+    
+    private func setupPlayerItemObserver(player: AVPlayer, context: Context) {
+        context.coordinator.statusObserver?.invalidate()
+        
+        if let playerItem = player.currentItem {
+            if playerItem.status == .readyToPlay {
+                print("DEBUG: [SingletonVideoPlayer] Player already ready, playing immediately")
+                DispatchQueue.main.async {
+                    player.play()
+                }
+            } else {
+                print("DEBUG: [SingletonVideoPlayer] Player not ready yet, setting up observer")
+                context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
+                    if item.status == .readyToPlay {
+                        print("DEBUG: [SingletonVideoPlayer] Player became ready, playing now")
+                        DispatchQueue.main.async {
+                            player.play()
+                        }
+                        context.coordinator.statusObserver?.invalidate()
+                        context.coordinator.statusObserver = nil
+                    } else if item.status == .failed {
+                        print("ERROR: [SingletonVideoPlayer] Player item failed")
+                    }
+                }
+            }
+        }
+    }
+    
+    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
+        // Update rotation based on aspect ratio
+        if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
+            if uiViewController.view.transform == .identity {
+                print("DEBUG: [SingletonVideoPlayer] Applying rotation on update (aspectRatio: \(aspectRatio))")
+                uiViewController.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
+            }
+        } else {
+            if uiViewController.view.transform != .identity {
+                print("DEBUG: [SingletonVideoPlayer] Removing rotation on update")
+                uiViewController.view.transform = .identity
+            }
+        }
+        
+        if uiViewController.player !== player {
+            uiViewController.player = player
+            
+            // Setup observer for new player
+            context.coordinator.statusObserver?.invalidate()
+            if let playerItem = player.currentItem {
+                if playerItem.status == .readyToPlay {
+                    print("DEBUG: [SingletonVideoPlayer] Player ready on update, playing")
+                    player.play()
+                } else {
+                    context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
+                        if item.status == .readyToPlay {
+                            print("DEBUG: [SingletonVideoPlayer] Player ready after update, playing")
+                            DispatchQueue.main.async {
+                                player.play()
+                            }
+                            context.coordinator.statusObserver?.invalidate()
+                            context.coordinator.statusObserver = nil
+                        }
+                    }
+                }
             }
         }
     }

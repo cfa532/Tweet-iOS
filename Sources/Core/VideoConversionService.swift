@@ -330,7 +330,8 @@ class VideoConversionService {
     }
     
     // MARK: - Convert to HLS with specific resolution
-    /// Determines if COPY preset should be used based on video resolution
+    
+    /// Determines if COPY codec should be used based on video resolution
     private func shouldUseCopyPreset(inputURL: URL, aspectRatio: Float?) async -> Bool {
         // Get video info using FFmpeg to get accurate dimensions with rotation handling
         if let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: inputURL.path) {
@@ -359,11 +360,11 @@ class VideoConversionService {
             return shouldUseCopy
         }
 
-        // Fallback: if we can't get video info, use veryfast preset
-        print("DEBUG: [VIDEO CONVERSION] Could not get video info, using veryfast preset")
+        // Fallback: if we can't get video info, don't use copy
+        print("DEBUG: [VIDEO CONVERSION] Could not get video info, using libx264")
         return false
     }
-
+    
     private func convertToHLS(
         inputURL: URL,
         outputURL: URL,
@@ -372,10 +373,9 @@ class VideoConversionService {
         aspectRatio: Float?,
         completion: @escaping (Bool) -> Void
     ) {
-        // Get original video resolution to determine if COPY preset should be used
         Task {
-            let shouldUseCopyPreset = await shouldUseCopyPreset(inputURL: inputURL, aspectRatio: aspectRatio)
-
+            let shouldUseCopy = await shouldUseCopyPreset(inputURL: inputURL, aspectRatio: aspectRatio)
+            
             // Use the same logic as the server: determine scaling based on orientation
             let scaleFilter: String
             if let aspectRatio = aspectRatio {
@@ -394,53 +394,30 @@ class VideoConversionService {
                 scaleFilter = "scale=-2:\(resolution)"
             }
 
-            // Try COPY codec first if conditions are met, then fallback to libx264
-            if shouldUseCopyPreset {
-                print("DEBUG: [VIDEO CONVERSION] Attempting conversion with COPY codec for resolution: \(resolution)")
+            // Use COPY codec for videos that are already at target resolution
+            if shouldUseCopy {
+                print("DEBUG: [VIDEO CONVERSION] Using COPY codec for resolution: \(resolution)")
                 
+                // COPY codec - no re-encoding, just remux to HLS
                 let copyCommand = """
                     -i "\(inputURL.path)" \
                     -c:v copy \
                     -c:a aac \
-                    -vf "\(scaleFilter)" \
-                    -b:v \(bitrate) \
                     -b:a 128k \
-                    -tune zerolatency \
-                    -threads 2 \
-                    -max_muxing_queue_size 512 \
-                    -fflags +genpts+igndts \
-                    -avoid_negative_ts make_zero \
-                    -max_interleave_delta 0 \
-                    -bufsize \(bitrate) \
-                    -maxrate \(bitrate) \
-                    -metadata:s:v:0 rotate=0 \
                     -f hls \
-                    -hls_time 10 \
+                    -hls_time 4 \
                     -hls_list_size 0 \
                     -hls_segment_filename "\(outputURL.deletingLastPathComponent().path)/segment%03d.ts" \
-                    -hls_flags delete_segments+independent_segments \
+                    -hls_playlist_type vod \
+                    -start_number 0 \
                     "\(outputURL.path)"
                     """
                 
                 await MainActor.run {
-                    self.executeFFmpegCommandWithFallback(
-                        primaryCommand: copyCommand,
-                        fallbackCommand: self.buildLibx264Command(
-                            inputURL: inputURL,
-                            outputURL: outputURL,
-                            resolution: resolution,
-                            bitrate: bitrate,
-                            scaleFilter: scaleFilter
-                        ),
-                        outputURL: outputURL,
-                        resolution: resolution,
-                        primaryCodec: "COPY",
-                        fallbackCodec: "libx264",
-                        completion: completion
-                    )
+                    self.executeFFmpegCommand(command: copyCommand, outputURL: outputURL, resolution: resolution, completion: completion)
                 }
             } else {
-                // Use libx264 directly
+                // Use libx264 for videos that need scaling
                 let libx264Command = buildLibx264Command(
                     inputURL: inputURL,
                     outputURL: outputURL,
@@ -449,7 +426,7 @@ class VideoConversionService {
                     scaleFilter: scaleFilter
                 )
                 
-                print("DEBUG: [VIDEO CONVERSION] Using libx264 codec directly for resolution: \(resolution)")
+                print("DEBUG: [VIDEO CONVERSION] Using libx264 codec for resolution: \(resolution)")
                 
                 await MainActor.run {
                     self.executeFFmpegCommand(command: libx264Command, outputURL: outputURL, resolution: resolution, completion: completion)
@@ -458,7 +435,7 @@ class VideoConversionService {
         }
     }
     
-    /// Builds FFmpeg command for libx264 codec
+    /// Builds FFmpeg command for libx264 codec - standard HLS configuration
     private func buildLibx264Command(
         inputURL: URL,
         outputURL: URL,
@@ -469,132 +446,27 @@ class VideoConversionService {
         return """
             -i "\(inputURL.path)" \
             -c:v libx264 \
+            -profile:v main \
+            -level 4.0 \
+            -pix_fmt yuv420p \
             -c:a aac \
+            -ar 44100 \
             -vf "\(scaleFilter)" \
             -b:v \(bitrate) \
             -b:a 128k \
             -preset fast \
-            -tune zerolatency \
-            -threads 2 \
-            -max_muxing_queue_size 512 \
-            -fflags +genpts+igndts \
-            -avoid_negative_ts make_zero \
-            -max_interleave_delta 0 \
-            -bufsize \(bitrate) \
-            -maxrate \(bitrate) \
-            -metadata:s:v:0 rotate=0 \
+            -g 48 \
+            -keyint_min 48 \
+            -sc_threshold 0 \
+            -threads 0 \
             -f hls \
-            -hls_time 10 \
+            -hls_time 4 \
             -hls_list_size 0 \
             -hls_segment_filename "\(outputURL.deletingLastPathComponent().path)/segment%03d.ts" \
-            -hls_flags delete_segments+independent_segments \
+            -hls_playlist_type vod \
+            -start_number 0 \
             "\(outputURL.path)"
             """
-    }
-    
-    /// Executes FFmpeg command with fallback support
-    private func executeFFmpegCommandWithFallback(
-        primaryCommand: String,
-        fallbackCommand: String,
-        outputURL: URL,
-        resolution: String,
-        primaryCodec: String,
-        fallbackCodec: String,
-        completion: @escaping (Bool) -> Void
-    ) {
-        print("DEBUG: [VIDEO CONVERSION] Attempting \(primaryCodec) codec conversion for \(resolution)")
-        
-        FFmpegKit.executeAsync(primaryCommand) { session in
-            guard let session = session else {
-                print("DEBUG: [VIDEO CONVERSION] Failed to create FFmpeg session for \(primaryCodec)")
-                self.tryFallbackConversion(
-                    fallbackCommand: fallbackCommand,
-                    outputURL: outputURL,
-                    resolution: resolution,
-                    fallbackCodec: fallbackCodec,
-                    completion: completion
-                )
-                return
-            }
-            
-            let returnCode = session.getReturnCode()
-            let logs = session.getLogs()
-            
-            print("DEBUG: [VIDEO CONVERSION] \(primaryCodec) conversion completed with return code: \(String(describing: returnCode))")
-            
-            // Log FFmpeg output for debugging
-            if let logs = logs {
-                for log in logs {
-                    if let logObj = log as? Log, let message = logObj.getMessage() {
-                        print("DEBUG: [FFMPEG LOG] \(message)")
-                    }
-                }
-            }
-            
-            let success = ReturnCode.isSuccess(returnCode)
-            
-            if success {
-                // Verify output file exists
-                if FileManager.default.fileExists(atPath: outputURL.path) {
-                    let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
-                    print("DEBUG: [VIDEO CONVERSION] Successfully converted to \(resolution) using \(primaryCodec)")
-                    print("DEBUG: [VIDEO CONVERSION] Output file exists: \(outputURL.lastPathComponent), size: \(fileSize) bytes")
-                    completion(true)
-                } else {
-                    print("DEBUG: [VIDEO CONVERSION] Output file does not exist after \(primaryCodec) conversion: \(outputURL.path)")
-                    self.tryFallbackConversion(
-                        fallbackCommand: fallbackCommand,
-                        outputURL: outputURL,
-                        resolution: resolution,
-                        fallbackCodec: fallbackCodec,
-                        completion: completion
-                    )
-                }
-            } else {
-                print("DEBUG: [VIDEO CONVERSION] \(primaryCodec) conversion failed for \(resolution), trying \(fallbackCodec) fallback")
-                self.tryFallbackConversion(
-                    fallbackCommand: fallbackCommand,
-                    outputURL: outputURL,
-                    resolution: resolution,
-                    fallbackCodec: fallbackCodec,
-                    completion: completion
-                )
-            }
-        }
-    }
-    
-    /// Attempts fallback conversion with different codec
-    private func tryFallbackConversion(
-        fallbackCommand: String,
-        outputURL: URL,
-        resolution: String,
-        fallbackCodec: String,
-        completion: @escaping (Bool) -> Void
-    ) {
-        print("DEBUG: [VIDEO CONVERSION] Attempting \(fallbackCodec) fallback conversion for \(resolution)")
-        
-        // Clean up any partial output from the failed attempt
-        if FileManager.default.fileExists(atPath: outputURL.path) {
-            try? FileManager.default.removeItem(at: outputURL)
-        }
-        
-        // Also clean up any segment files
-        let segmentFiles = (try? FileManager.default.contentsOfDirectory(at: outputURL.deletingLastPathComponent(), includingPropertiesForKeys: nil))?
-            .filter { $0.lastPathComponent.hasPrefix("segment") && $0.pathExtension == "ts" } ?? []
-        
-        for segmentFile in segmentFiles {
-            try? FileManager.default.removeItem(at: segmentFile)
-        }
-        
-        // Execute fallback command
-        self.executeFFmpegCommand(command: fallbackCommand, outputURL: outputURL, resolution: resolution) { success in
-            if success {
-                print("DEBUG: [VIDEO CONVERSION] Fallback \(fallbackCodec) conversion succeeded for \(resolution)")
-            } else {
-                print("DEBUG: [VIDEO CONVERSION] Fallback \(fallbackCodec) conversion also failed for \(resolution)")
-            }
-            completion(success)
-        }
     }
     
     private func executeFFmpegCommand(

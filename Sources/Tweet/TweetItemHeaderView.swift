@@ -1,9 +1,5 @@
 import SwiftUI
 
-
-
-
-
 struct TweetItemHeaderView: View {
     @ObservedObject var tweet: Tweet
     
@@ -245,34 +241,40 @@ struct TweetMenu: View {
     }
     
     private func deleteTweet(_ tweet: Tweet) async throws {
+        print("DEBUG: [TweetItemHeaderView] Starting tweet deletion for: \(tweet.mid)")
+        
         // Post notification for optimistic UI update
         NotificationCenter.default.post(
             name: .tweetDeleted,
             object: nil,
             userInfo: ["tweetId": tweet.mid]
         )
+        print("DEBUG: [TweetItemHeaderView] Posted .tweetDeleted notification for: \(tweet.mid)")
         
         // Attempt actual deletion
-        if let tweetId = try? await hproseInstance.deleteTweet(tweet.mid) {
-            print("Successfully deleted tweet: \(tweetId)")
-            
-            // Update user's tweet count
-            await MainActor.run {
-                hproseInstance.appUser.tweetCount = max(0, (hproseInstance.appUser.tweetCount ?? 0) - 1)
+        do {
+            if let tweetId = try await hproseInstance.deleteTweet(tweet.mid) {
+                print("DEBUG: [TweetItemHeaderView] Successfully deleted tweet: \(tweetId)")
+                
+                // Note: tweetCount is updated by refreshAppUserFromServer() inside deleteTweet()
+                
+                if let originalTweetId = tweet.originalTweetId,
+                   let originalAuthorId = tweet.originalAuthorId,
+                   let originalTweet = try? await hproseInstance.getTweet(
+                    tweetId: originalTweetId,
+                    authorId: originalAuthorId)
+                {
+                    // originalTweet is loaded in cache, which is visible to user.
+                    let currentCount = originalTweet.retweetCount ?? 0
+                    originalTweet.retweetCount = max(0, currentCount - 1)
+                    try? await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false)
+                }
+            } else {
+                print("DEBUG: [TweetItemHeaderView] deleteTweet returned nil for: \(tweet.mid)")
+                throw NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server returned nil"])
             }
-            
-            if let originalTweetId = tweet.originalTweetId,
-               let originalAuthorId = tweet.originalAuthorId,
-               let originalTweet = try? await hproseInstance.getTweet(
-                tweetId: originalTweetId,
-                authorId: originalAuthorId)
-            {
-                // originalTweet is loaded in cache, which is visible to user.
-                let currentCount = originalTweet.retweetCount ?? 0
-                originalTweet.retweetCount = max(0, currentCount - 1)
-                try? await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false)
-            }
-        } else {
+        } catch {
+            print("DEBUG: [TweetItemHeaderView] Tweet deletion failed for \(tweet.mid): \(error)")
             // If deletion fails, post restoration notification
             NotificationCenter.default.post(
                 name: .tweetRestored,
@@ -283,7 +285,7 @@ struct TweetMenu: View {
                 // Send notification for global error toast
                 NotificationCenter.default.post(
                     name: .errorOccurred,
-                    object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet."])
+                    object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(error.localizedDescription)"])
                 )
             }
         }

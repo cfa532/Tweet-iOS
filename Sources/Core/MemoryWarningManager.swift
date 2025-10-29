@@ -30,22 +30,22 @@ class MemoryWarningManager: ObservableObject {
     @objc private func handleMemoryWarning() {
         print("DEBUG: [MemoryWarningManager] System memory warning received")
         
-        // Check if memory usage exceeds 1GB before taking action
+        // Check if memory usage exceeds 1.4GB before taking action
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
         
         print("DEBUG: [MemoryWarningManager] Current memory usage: \(memoryUsageMB)MB")
         
-        // Only release caches if memory usage exceeds 1GB
-        if memoryUsageMB > 1024 {
-            print("DEBUG: [MemoryWarningManager] Memory usage exceeds 1GB, releasing 20% of caches")
+        // Only release caches if memory usage exceeds 1.4GB (preventive cleanup threshold)
+        if memoryUsageMB > 1400 {
+            print("DEBUG: [MemoryWarningManager] Memory usage exceeds 1.4GB, releasing 20% of caches")
             
             // Release 20% of all caches to free memory (less aggressive)
             Task {
                 await releaseMemoryCaches()
             }
         } else {
-            print("DEBUG: [MemoryWarningManager] Memory usage under 1GB, no action needed")
+            print("DEBUG: [MemoryWarningManager] Memory usage under 1.4GB, no action needed")
         }
     }
     
@@ -103,4 +103,3 @@ class MemoryWarningManager: ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
 }
-

@@ -35,9 +35,47 @@ struct TweetItemView: View, Equatable {
             if let attachments = tweet.attachments, !attachments.isEmpty {
                 MediaGridView(
                     parentTweet: tweet,
-                    attachments: attachments
+                    attachments: attachments,
+                    visibleTweetId: tweet.mid
                 )
                 .padding(.top, 8)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func avatarView(for user: User, context: String) -> some View {
+        if isInProfile {
+            // Check if this is the same user as the profile being viewed
+            if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
+                // Same user - scroll to top
+                Avatar(user: user)
+                    .onTapGesture {
+                        onAvatarTapInProfile?(user)
+                    }
+            } else {
+                // Different user - navigate to their profile
+                NavigationLink(value: user) {
+                    Avatar(user: user)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        } else {
+            if onAvatarTap != nil {
+                // Use callback when provided
+                Button {
+                    print("⭐ [TweetItemView] Avatar button tapped (\(context)) - user: \(user.username ?? "nil")")
+                    onAvatarTap?(user)
+                } label: {
+                    Avatar(user: user)
+                }
+                .buttonStyle(PlainButtonStyle())
+            } else {
+                // Use NavigationLink when no callback
+                NavigationLink(value: user) {
+                    Avatar(user: user)
+                }
+                .buttonStyle(PlainButtonStyle())
             }
         }
     }
@@ -56,8 +94,6 @@ struct TweetItemView: View, Equatable {
                     tweetContent
                 }
                 .buttonStyle(PlainButtonStyle())
-
-
             } else {
                 // Use tap gesture when onTap callback is provided
                 tweetContent
@@ -72,13 +108,15 @@ struct TweetItemView: View, Equatable {
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
                 tweet: tweet,
-                initialIndex: selectedMediaIndex
+                initialIndex: selectedMediaIndex,
+                sourceTweetId: tweet.mid // Pass visible tweet ID for feed navigation
             )
         }
         .fullScreenCover(isPresented: $showEmbeddedBrowser) {
             MediaBrowserView(
                 tweet: originalTweet ?? tweet,
-                initialIndex: selectedEmbeddedMediaIndex
+                initialIndex: selectedEmbeddedMediaIndex,
+                sourceTweetId: tweet.mid // Pass visible tweet ID (the retweet)
             )
         }
         .task {
@@ -86,6 +124,35 @@ struct TweetItemView: View, Equatable {
             tweet.isVisible = true
             // Usually TweetDetailView is not orignalTweet
             detailTweet = tweet
+            
+            // Load author if not already loaded
+            if tweet.author == nil {
+                // No author at all - create placeholder and fetch in background
+                await MainActor.run {
+                    tweet.author = User.getInstance(mid: tweet.authorId)
+                }
+                print("⚡ [RENDER] Tweet rendering with placeholder (no author), fetching in background")
+                Task.detached(priority: .background) {
+                    _ = try? await hproseInstance.fetchUser(tweet.authorId)
+                }
+            } else if tweet.author?.username == nil {
+                print("⚡ [RENDER] Tweet rendering with placeholder (no username), fetching in background")
+                // Author exists but has no username - render with placeholder and fetch in background
+                Task.detached(priority: .background) {
+                    _ = try? await hproseInstance.fetchUser(tweet.authorId)
+                }
+            } else if tweet.author?.baseUrl == nil {
+                print("⚡ [RENDER] Tweet rendering immediately (@\(tweet.author?.username ?? "?")) - fetching baseUrl in background")
+                // Author exists with username but no baseUrl - resolve IP in background
+                Task.detached(priority: .background) {
+                    _ = try? await hproseInstance.fetchUser(tweet.authorId)
+                }
+            } else {
+                // Tweet has complete author data (username + baseUrl)
+                // This happens when app init completed before tweet started rendering
+                // Comment out in production to reduce log noise
+                // print("⚡ [RENDER] Tweet ready (@\(tweet.author?.username ?? "?"))")
+            }
         }
         .onAppear {
             // Defer original tweet loading to reduce async operations during scrolling
@@ -133,29 +200,15 @@ struct TweetItemView: View, Equatable {
             if let originalTweet = originalTweet {
                 // This is a retweet
                 if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
-                    if let user = originalTweet.author {
-                        if isInProfile {
-                            // Check if this is the same user as the profile being viewed
-                            if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
-                                // Same user - scroll to top (handled by onAvatarTapInProfile)
-                                Avatar(user: user)
-                                    .onTapGesture {
-                                        onAvatarTapInProfile?(user)
-                                    }
-                            } else {
-                                // Different user - navigate to their profile
-                                NavigationLink(value: user) {
-                                    Avatar(user: user)
-                                }
-                                .buttonStyle(PlainButtonStyle())
-                            }
+                    // Use Group to force re-evaluation when originalTweet.author changes (@Published)
+                    Group {
+                        if let user = originalTweet.author {
+                            avatarView(for: user, context: "retweet-no-content")
                         } else {
-                            Button {
-                                onAvatarTap?(user)
-                            } label: {
-                                Avatar(user: user)
-                            }
-                            .buttonStyle(PlainButtonStyle())
+                            // Show placeholder while author loads
+                            Circle()
+                                .fill(Color.gray.opacity(0.3))
+                                .frame(width: 40, height: 40)
                         }
                     }
                     
@@ -177,7 +230,7 @@ struct TweetItemView: View, Equatable {
                                 .padding(.top, -8)
                         }
                         
-                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
+                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, visibleTweetId: tweet.mid)
                             .padding(.top, -12)
                         
                         TweetActionButtonsView(tweet: originalTweet)
@@ -185,17 +238,15 @@ struct TweetItemView: View, Equatable {
                     }
                 } else {
                     // Show retweet with content and embedded original tweet
-                    if let user = tweet.author {
-                        if isInProfile {
-                            Avatar(user: user)
-                                .onTapGesture {
-                                    onAvatarTapInProfile?(user)
-                                }
+                    // Use Group to force re-evaluation when tweet.author changes (@Published)
+                    Group {
+                        if let user = tweet.author {
+                            avatarView(for: user, context: "retweet-with-content")
                         } else {
-                            NavigationLink(value: user) {
-                                Avatar(user: user)
-                            }
-                            .buttonStyle(PlainButtonStyle())
+                            // Show placeholder while author loads
+                            Circle()
+                                .fill(Color.gray.opacity(0.3))
+                                .frame(width: 40, height: 40)
                         }
                     }
                     
@@ -205,7 +256,7 @@ struct TweetItemView: View, Equatable {
                             TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
                         }
                         .padding(.top, -8)
-                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
                             .padding(.top, -12)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
@@ -226,17 +277,20 @@ struct TweetItemView: View, Equatable {
                 }
             } else {
                 // Regular tweet
-                if let user = tweet.author {
-                    if isInProfile {
-                        Avatar(user: user)
-                            .onTapGesture {
-                                onAvatarTapInProfile?(user)
-                            }
+                // Use Group to force re-evaluation when tweet.author changes (@Published)
+                Group {
+                    if let user = tweet.author {
+                        avatarView(for: user, context: "regular-tweet")
                     } else {
-                        NavigationLink(value: user) {
-                            Avatar(user: user)
-                        }
-                        .buttonStyle(PlainButtonStyle())
+                        // Show placeholder while author loads
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 40, height: 40)
+                            .overlay(
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .tint(.white)
+                            )
                     }
                 }
                 VStack(alignment: .leading) {
@@ -245,7 +299,7 @@ struct TweetItemView: View, Equatable {
                         TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
                     }
                     .padding(.top, -8)
-                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
                         .padding(.top, -12)
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
@@ -320,8 +374,16 @@ struct EmbeddedTweetView: View, Equatable {
     
     private var embeddedContent: some View {
         HStack(alignment: .top, spacing: 8) {
-            if let user = tweet.author {
-                Avatar(user: user)
+            // Use Group to force re-evaluation when tweet.author changes (@Published)
+            Group {
+                if let user = tweet.author {
+                    Avatar(user: user)
+                } else {
+                    // Placeholder (same size as Avatar default: 40)
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 40, height: 40)
+                }
             }
             VStack(alignment: .leading) {
                 HStack {
@@ -330,7 +392,7 @@ struct EmbeddedTweetView: View, Equatable {
                 }
                 .padding(.top, 0)
                 
-                TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
                 .padding(.top, 0)
             }
         }

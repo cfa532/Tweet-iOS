@@ -55,10 +55,16 @@ struct Avatar: View {
                         loadAvatar(from: avatarUrl)
                     }
                 }
-                .onChange(of: user.avatarUrl) { _, _ in
-                    // Reset and reload when avatar URL changes
+                .onReceive(NotificationCenter.default.publisher(for: .avatarDidChange)) { notification in
+                    // Only reload for this specific user, and only if not already loading
+                    guard let userId = notification.userInfo?["userId"] as? String,
+                          userId == user.mid,
+                          !isLoading else { return }
+                    
+                    // Clear cached state and reload (loadAvatar will manage isLoading flag)
                     cachedImage = nil
                     loadFailed = false
+                    
                     if let avatarUrl = user.avatarUrl {
                         loadAvatar(from: avatarUrl)
                     }
@@ -72,16 +78,23 @@ struct Avatar: View {
                     .clipShape(Circle())
             }
         }
-        .id(user.mid) // Force view update when user changes
+        .id(user.mid) // Stable ID - notification handles avatar changes
     }
     
     private func loadAvatar(from urlString: String) {
-        guard !isLoading else { return }
+        NSLog("DEBUG: [Avatar.loadAvatar] Called for user \(user.mid), avatar: \(user.avatar ?? "nil")")
         
-        // Use the filename from URL as the cache key - this is simpler and matches user's expectation
-        let cacheKey = URL(string: urlString)?.lastPathComponent ?? urlString
+        guard !isLoading else { 
+            NSLog("DEBUG: [Avatar.loadAvatar] Already loading, skipping")
+            return 
+        }
         
-        // Create a MimeiFileType with the filename as mid so existing cache logic works
+        // IMPORTANT: Use user's avatar MimeiId as the cache key (stable identifier)
+        // NOT the URL which can change when baseUrl changes
+        let cacheKey = user.avatar ?? (URL(string: urlString)?.lastPathComponent ?? urlString)
+        NSLog("DEBUG: [Avatar.loadAvatar] Using cache key: \(cacheKey)")
+        
+        // Create a MimeiFileType with the user's avatar MimeiId so caching works correctly
         let avatarAttachment = MimeiFileType(
             mid: cacheKey,
             mediaType: .image
@@ -91,49 +104,33 @@ struct Avatar: View {
         
         // Check cache first
         if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
+            NSLog("DEBUG: [Avatar.loadAvatar] Found in cache: \(cacheKey)")
             cachedImage = cached
             return
         }
         
-        // Load from network if not cached, with timeout
+        NSLog("DEBUG: [Avatar.loadAvatar] Not in cache, loading from network: \(cacheKey)")
+        
+        // Load from network using regular image loading (no special avatar treatment)
         isLoading = true
         Task {
-            // Create the load task
-            let loadTask = Task { () -> UIImage? in
-                if let url = URL(string: urlString),
-                   let image = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment, baseUrl: baseUrl) {
-                    return image
+            // Use standard image loading with deduplication
+            guard let url = URL(string: urlString) else {
+                await MainActor.run {
+                    loadFailed = true
+                    isLoading = false
                 }
-                return nil
+                return
             }
             
-            // Create a timeout task
-            let timeoutTask = Task {
-                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds timeout
-            }
-            
-            // Wait for either the load to complete or timeout
-            let result = await withTaskGroup(of: UIImage?.self) { group in
-                group.addTask {
-                    await loadTask.value
-                }
-                group.addTask {
-                    await timeoutTask.value
-                    return nil // Timeout returns nil
-                }
-                
-                // Return the first completed task result
-                let firstResult = await group.next()
-                group.cancelAll() // Cancel the other task
-                return firstResult ?? nil
-            }
+            let result = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment, baseUrl: baseUrl)
             
             await MainActor.run {
                 if let image = result {
                     cachedImage = image
                     loadFailed = false
                 } else {
-                    // Timeout or load failure - mark as failed to show default avatar
+                    // Load failure - mark as failed to show default avatar
                     loadFailed = true
                 }
                 isLoading = false

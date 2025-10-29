@@ -112,6 +112,24 @@ struct ThumbnailView: View {
         let itemId = item.itemIdentifier ?? UUID().uuidString
         print("DEBUG: [\(itemId)] Starting thumbnail generation")
         
+        // CRITICAL: Check file size BEFORE generating thumbnail
+        // Thumbnail generation (especially for videos) can take a long time
+        // If file is too large, MediaPicker.filterOversizedFiles() will remove it from selection
+        // So we just skip thumbnail generation to save time - the view will disappear anyway
+        do {
+            if let data = try? await item.loadTransferable(type: Data.self) {
+                if data.count > Constants.MAX_FILE_SIZE {
+                    let fileSizeMB = Double(data.count) / (1024 * 1024)
+                    print("DEBUG: [\(itemId)] File too large (\(String(format: "%.1f", fileSizeMB))MB), skipping thumbnail generation (will be removed by MediaPicker)")
+                    await MainActor.run {
+                        self.isLoading = false
+                    }
+                    return
+                }
+                print("DEBUG: [\(itemId)] File size OK (\(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB)")
+            }
+        }
+        
         // First, detect the media type to create a proper cache key
         mediaType = detectMediaType()
         print("DEBUG: [\(itemId)] Detected media type: \(mediaType.rawValue)")

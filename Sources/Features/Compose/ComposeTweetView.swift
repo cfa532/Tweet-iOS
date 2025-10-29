@@ -14,11 +14,6 @@ struct ComposeTweetView: View {
     @State private var showLoginView = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     
-    // Convert PhotosPickerItem array to IdentifiablePhotosPickerItem array
-    private var identifiableItems: [IdentifiablePhotosPickerItem] {
-        viewModel.selectedItems.map { IdentifiablePhotosPickerItem(item: $0) }
-    }
-    
     // Check if there's content or attachments that would be lost
     private var hasContentOrAttachments: Bool {
         !viewModel.tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !viewModel.selectedItems.isEmpty || !viewModel.selectedImages.isEmpty || !viewModel.selectedVideos.isEmpty
@@ -65,12 +60,9 @@ struct ComposeTweetView: View {
                         let selectedVideos = viewModel.selectedVideos
                         let isPrivate = viewModel.isPrivate
                         
-                        // Send notification for toast on presenting screen and dismiss immediately
-                        NotificationCenter.default.post(
-                            name: .tweetSubmitted,
-                            object: nil,
-                            userInfo: ["message": NSLocalizedString("Tweet submitted", comment: "Tweet submitted message")]
-                        )
+                        // Show upload dialog IMMEDIATELY before any heavy work
+                        UploadProgressManager.shared.startUpload(type: "tweet")
+                        
                         viewModel.clearForm()
                         dismiss()
                         
@@ -209,25 +201,29 @@ struct ComposeTweetView: View {
         }
         
         // Create tweet object
-        #if DEBUG
-        let isPrivateValue = isPrivate
-        #else
-        let isPrivateValue = false
-        #endif
-        
         let tweet = Tweet(
             mid: Constants.GUEST_ID,        // placeholder Mimei Id
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
             attachments: nil,
-            isPrivate: isPrivateValue
+            isPrivate: isPrivate
         )
         
         // Prepare item data using helper
         let itemData: [HproseInstance.PendingTweetUpload.ItemData]
         
         do {
+            // Show "Preparing..." in dialog while loading media data
+            await MainActor.run {
+                UploadProgressManager.shared.updateProgress(
+                    stage: .preparing,
+                    message: NSLocalizedString("Preparing attachments...", comment: "Preparing attachments"),
+                    progress: 0.1,
+                    detail: ""
+                )
+            }
+            
             itemData = try await MediaUploadHelper.prepareItemData(
                 selectedItems: selectedItems,
                 selectedImages: selectedImages,
@@ -235,6 +231,11 @@ struct ComposeTweetView: View {
             )
         } catch {
             print("DEBUG: Error preparing item data: \(error)")
+            await MainActor.run {
+                UploadProgressManager.shared.failUpload(
+                    message: NSLocalizedString("Failed to prepare attachments", comment: "Failed to prepare attachments")
+                )
+            }
             return
         }
         

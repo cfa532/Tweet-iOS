@@ -24,6 +24,9 @@ class FollowingsTweetViewModel: ObservableObject {
     }
     
     func fetchTweets(page: UInt, pageSize: UInt, shouldCache: Bool = true) async -> [Tweet?] {
+        let startTime = Date()
+        print("🌐 [SERVER FETCH] fetchTweets START - page: \(page), pageSize: \(pageSize)")
+        
         // fetch tweets from server
         // Load tweets of alphaId if appUser is a guest user
         if hproseInstance.appUser.isGuest {
@@ -85,9 +88,13 @@ class FollowingsTweetViewModel: ObservableObject {
                     }
                 }
             }
+            
+            let elapsed = Date().timeIntervalSince(startTime) * 1000
+            print("✅ [SERVER FETCH] fetchTweets COMPLETE - loaded \(serverTweets.compactMap{$0}.count) tweets in \(String(format: "%.1f", elapsed))ms")
             return serverTweets     // including nil
         } catch {
-            print("[FollowingsTweetViewModel] Error fetching tweets: \(error)")
+            let elapsed = Date().timeIntervalSince(startTime) * 1000
+            print("❌ [SERVER FETCH] fetchTweets FAILED in \(String(format: "%.1f", elapsed))ms: \(error)")
             return []
         }
     }

@@ -39,6 +39,10 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             return handleHLSRequest(loadingRequest, url: originalURL, cachePath: dynamicCachePath)
         } else if originalURL.pathExtension == "ts" {
             return handleSegmentRequest(loadingRequest, url: originalURL)
+        } else if originalURL.pathExtension == "mp4" || originalURL.pathExtension == "mov" || originalURL.pathExtension == "m4v" {
+            // Handle progressive video files (MP4, MOV, M4V)
+            NSLog("DEBUG: [CachingPlayerItem] resourceLoader: Handling progressive video: \(originalURL.pathExtension)")
+            return handleProgressiveVideoRequest(loadingRequest, url: originalURL)
         } else {
             NSLog("DEBUG: [CachingPlayerItem] resourceLoader: Unknown file type: \(originalURL.pathExtension)")
             return false
@@ -322,6 +326,136 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             loadingRequest.finishLoading()
             
             NSLog("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirected to LocalHTTPServer for downloaded segment: \(localURL.absoluteString)")
+        }
+        
+        task.resume()
+        return true
+    }
+    
+    private func handleProgressiveVideoRequest(_ loadingRequest: AVAssetResourceLoadingRequest, url: URL) -> Bool {
+        guard let requestURL = loadingRequest.request.url else {
+            NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: No request URL")
+            return false
+        }
+        
+        NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: requestURL = \(requestURL.absoluteString)")
+        NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: resolvedURL = \(url.absoluteString)")
+        
+        // Check if we have a cached video file
+        let cachePath = saveFilePath.isEmpty ? getCachePath(for: url) : saveFilePath
+        
+        if FileManager.default.fileExists(atPath: cachePath) {
+            do {
+                let cachedData = try Data(contentsOf: URL(fileURLWithPath: cachePath))
+                
+                // Validate that the cached file is not empty or too small
+                if cachedData.count < 10000 { // Less than 10KB is likely incomplete
+                    NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Cached file too small (\(cachedData.count) bytes), likely incomplete - will re-download")
+                } else {
+                    NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Serving cached video DIRECTLY (no redirect!)")
+                    
+                    // CRITICAL: Serve data DIRECTLY for progressive videos
+                    // Provide ContentInformationRequest for metadata
+                    if let contentRequest = loadingRequest.contentInformationRequest {
+                        contentRequest.contentType = "video/mp4"
+                        contentRequest.contentLength = Int64(cachedData.count)
+                        contentRequest.isByteRangeAccessSupported = true
+                    }
+                    
+                    // Serve the data directly, respecting byte-range requests
+                    if let dataRequest = loadingRequest.dataRequest {
+                        let requestedOffset = dataRequest.requestedOffset
+                        let requestedLength = dataRequest.requestedLength
+                        let currentOffset = dataRequest.currentOffset
+                        
+                        NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: dataRequest - requestedOffset=\(requestedOffset), requestedLength=\(requestedLength), currentOffset=\(currentOffset)")
+                        
+                        // Calculate the range to serve
+                        let startOffset = Int(currentOffset)
+                        let endOffset: Int
+                        if dataRequest.requestsAllDataToEndOfResource {
+                            endOffset = cachedData.count
+                        } else {
+                            endOffset = min(Int(requestedOffset) + requestedLength, cachedData.count)
+                        }
+                        
+                        let rangeLength = endOffset - startOffset
+                        if rangeLength > 0 && startOffset < cachedData.count {
+                            let range = startOffset..<min(startOffset + rangeLength, cachedData.count)
+                            let subdata = cachedData.subdata(in: range)
+                            dataRequest.respond(with: subdata)
+                            NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Served \(subdata.count) bytes instantly (range \(startOffset)-\(endOffset))")
+                        }
+                    }
+                    
+                    loadingRequest.finishLoading()
+                    return true
+                }
+            } catch {
+                NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Failed to read cached video: \(error.localizedDescription)")
+            }
+        }
+        
+        // If not cached, download and cache the video
+        NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Downloading video from \(url.absoluteString)")
+        
+        // Create a custom URLSession with longer timeout for video files
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30.0  // 30 seconds per request
+        config.timeoutIntervalForResource = 300.0  // 5 minutes for the whole file
+        let session = URLSession(configuration: config)
+        
+        let task = session.dataTask(with: url) { [weak self] data, response, error in
+            guard let self = self else { return }
+            
+            if let error = error {
+                NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Download error: \(error.localizedDescription)")
+                loadingRequest.finishLoading(with: error)
+                return
+            }
+            
+            guard let data = data else {
+                NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: No data received")
+                let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data received"])
+                loadingRequest.finishLoading(with: error)
+                return
+            }
+            
+            NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Successfully downloaded video, size: \(data.count) bytes")
+            
+            // Cache the video file
+            do {
+                // Ensure the directory exists
+                let cacheURL = URL(fileURLWithPath: cachePath)
+                let cacheDir = cacheURL.deletingLastPathComponent()
+                try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+                
+                try data.write(to: cacheURL)
+                NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Cached video to \(cachePath)")
+                
+                // Notify owner that download completed
+                if let owner = self.owner {
+                    DispatchQueue.main.async {
+                        owner.delegate?.playerItem?(owner, didFinishDownloadingFileAt: cachePath)
+                    }
+                }
+            } catch {
+                NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Failed to cache video: \(error.localizedDescription)")
+            }
+            
+            // Serve the downloaded data directly
+            if let contentRequest = loadingRequest.contentInformationRequest {
+                contentRequest.contentType = "video/mp4"
+                contentRequest.contentLength = Int64(data.count)
+                contentRequest.isByteRangeAccessSupported = true
+            }
+            
+            if let dataRequest = loadingRequest.dataRequest {
+                dataRequest.respond(with: data)
+                NSLog("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Served \(data.count) bytes after download")
+            }
+            
+            loadingRequest.finishLoading()
         }
         
         task.resume()

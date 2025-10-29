@@ -9,7 +9,7 @@ import AVFoundation
 import CryptoKit
 
 // MARK: - Image Cache Manager
-class ImageCacheManager {
+class ImageCacheManager: @unchecked Sendable {
     static let shared = ImageCacheManager()
     private let cache = NSCache<NSString, UIImage>()
     private let fileManager = FileManager.default
@@ -17,6 +17,16 @@ class ImageCacheManager {
     private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days in seconds
     private let maxDiskCacheSize: Int64 = 5000 * 1024 * 1024 // 500MB
     private let maxCompressedImageSize: Int = 300 * 1024 // 300KB for compressed images
+    
+    // Request deduplication: Track ongoing requests to prevent duplicate downloads
+    private var ongoingRequests: [String: Task<UIImage?, Never>] = [:]
+    private let requestsQueue = DispatchQueue(label: "com.tweet.imagecache.requests", attributes: .concurrent)
+    
+    // Avatar loading throttling
+    private let maxConcurrentAvatarLoads = 4 // Balanced for stable network performance
+    private var activeAvatarLoads: [String: Task<UIImage?, Never>] = [:]
+    private var pendingAvatarRequests: [(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL, continuation: CheckedContinuation<UIImage?, Never>)] = []
+    private let avatarQueue = DispatchQueue(label: "com.tweet.imagecache.avatars", attributes: .concurrent)
     
     private init() {
         // Get the cache directory
@@ -181,9 +191,15 @@ class ImageCacheManager {
     }
     
     private func getCacheKey(for attachment: MimeiFileType, baseUrl: URL) -> String {
+        // ALWAYS use mid as the cache key (stable identifier)
+        // If mid is somehow empty, this is a programming error that should be fixed at the source
         if !attachment.mid.isEmpty {
             return attachment.mid
         }
+        
+        // Fallback: This should never happen in production
+        // If it does, log a warning so we can fix the root cause
+        print("WARNING: [ImageCacheManager] MimeiFileType has empty mid! Using URL fallback. This should be fixed.")
         if let url = attachment.getUrl(baseUrl) {
             return url.lastPathComponent
         }
@@ -205,6 +221,29 @@ class ImageCacheManager {
         
         // Check disk cache
         let fileURL = getCompressedCacheFileURL(for: key)
+        if let data = try? Data(contentsOf: fileURL),
+           let image = UIImage(data: data) {
+            // Add to memory cache
+            cache.setObject(image, forKey: cacheKey as NSString)
+            return image
+        }
+        
+        return nil
+    }
+    
+    /// Get cached compressed image by mid alone (for when baseUrl is not yet available)
+    func getCachedCompressedImage(forMid mid: String) -> UIImage? {
+        guard !mid.isEmpty else { return nil }
+        
+        let cacheKey = "\(mid)_compressed"
+        
+        // Check memory cache first
+        if let cachedImage = cache.object(forKey: cacheKey as NSString) {
+            return cachedImage
+        }
+        
+        // Check disk cache
+        let fileURL = getCompressedCacheFileURL(for: mid)
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data) {
             // Add to memory cache
@@ -289,28 +328,217 @@ class ImageCacheManager {
     }
     
     func loadAndCacheImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            
-            // Cache the compressed version
-            cacheImageData(data, for: attachment, baseUrl: baseUrl)
-            
-            // Return the compressed image for thumbnail use
-            return getCompressedImage(for: attachment, baseUrl: baseUrl)
-        } catch {
-            print("Error loading image: \(error)")
-            return nil
+        let cacheKey = getCacheKey(for: attachment, baseUrl: baseUrl)
+        
+        // Check if there's already an ongoing request for this image
+        let existingTask: Task<UIImage?, Never>? = requestsQueue.sync {
+            return ongoingRequests[cacheKey]
         }
+        
+        if let existingTask = existingTask {
+            print("DEBUG: [ImageCacheManager] Reusing existing request for \(cacheKey)")
+            return await existingTask.value
+        }
+        
+        // Create new request task
+        let task = Task<UIImage?, Never> {
+            do {
+                // Create URLRequest with timeout
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 10.0 // 10 second timeout
+                request.cachePolicy = .returnCacheDataElseLoad
+                
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                // Check if response is valid
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    print("Error: Invalid response for image at \(url)")
+                    return nil
+                }
+                
+                // Cache the compressed version
+                cacheImageData(data, for: attachment, baseUrl: baseUrl)
+                
+                // Return the compressed image for thumbnail use
+                return getCompressedImage(for: attachment, baseUrl: baseUrl)
+            } catch {
+                print("Error loading image from \(url): \(error.localizedDescription)")
+                return nil
+            }
+        }
+        
+        // Store the task to prevent duplicate requests
+        requestsQueue.async(flags: .barrier) {
+            self.ongoingRequests[cacheKey] = task
+        }
+        
+        // Wait for result
+        let result = await task.value
+        
+        // Remove completed task
+        requestsQueue.async(flags: .barrier) {
+            self.ongoingRequests.removeValue(forKey: cacheKey)
+        }
+        
+        return result
     }
     
     func loadOriginalImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
-        // Load original image directly from network (no caching)
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            return UIImage(data: data)
-        } catch {
-            print("Error loading original image: \(error)")
-            return nil
+        let cacheKey = getCacheKey(for: attachment, baseUrl: baseUrl) + "_original"
+        
+        // Check if there's already an ongoing request for this original image
+        let existingTask: Task<UIImage?, Never>? = requestsQueue.sync {
+            return ongoingRequests[cacheKey]
+        }
+        
+        if let existingTask = existingTask {
+            print("DEBUG: [ImageCacheManager] Reusing existing request for original image \(cacheKey)")
+            return await existingTask.value
+        }
+        
+        // Create new request task
+        let task = Task<UIImage?, Never> {
+            do {
+                // Create URLRequest with timeout
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 15.0 // 15 second timeout for original images (larger files)
+                request.cachePolicy = .returnCacheDataElseLoad
+                
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                // Check if response is valid
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    print("Error: Invalid response for original image at \(url)")
+                    return nil
+                }
+                
+                return UIImage(data: data)
+            } catch {
+                print("Error loading original image from \(url): \(error.localizedDescription)")
+                return nil
+            }
+        }
+        
+        // Store the task to prevent duplicate requests
+        requestsQueue.async(flags: .barrier) {
+            self.ongoingRequests[cacheKey] = task
+        }
+        
+        // Wait for result
+        let result = await task.value
+        
+        // Remove completed task
+        requestsQueue.async(flags: .barrier) {
+            self.ongoingRequests.removeValue(forKey: cacheKey)
+        }
+        
+        return result
+    }
+    
+    // MARK: - Avatar Loading with Throttling
+    
+    /// Load avatar with concurrency throttling to prevent network congestion
+    func loadAndCacheAvatar(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
+        let cacheKey = getCacheKey(for: attachment, baseUrl: baseUrl)
+        
+        // Check memory cache first (fast path)
+        if let cached = getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            return cached
+        }
+        
+        // Check if already loading this avatar
+        let existingTask: Task<UIImage?, Never>? = avatarQueue.sync {
+            return activeAvatarLoads[cacheKey]
+        }
+        
+        if let existingTask = existingTask {
+            print("DEBUG: [ImageCacheManager] Avatar already loading, waiting: \(cacheKey)")
+            return await existingTask.value
+        }
+        
+        // Check if we can start loading immediately
+        let canStartImmediately = avatarQueue.sync {
+            return activeAvatarLoads.count < maxConcurrentAvatarLoads
+        }
+        
+        if canStartImmediately {
+            return await startAvatarLoad(cacheKey: cacheKey, url: url, attachment: attachment, baseUrl: baseUrl)
+        } else {
+            // Queue the request
+            return await withCheckedContinuation { continuation in
+                avatarQueue.async(flags: .barrier) {
+                    self.pendingAvatarRequests.append((cacheKey: cacheKey, url: url, attachment: attachment, baseUrl: baseUrl, continuation: continuation))
+                    print("DEBUG: [ImageCacheManager] Avatar queued (\(self.pendingAvatarRequests.count) pending): \(cacheKey)")
+                }
+            }
+        }
+    }
+    
+    private func startAvatarLoad(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
+        let task = Task<UIImage?, Never> {
+            do {
+                // Create URLRequest with timeout
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 10.0
+                request.cachePolicy = .returnCacheDataElseLoad
+                
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                // Check if response is valid
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    print("DEBUG: [ImageCacheManager] Invalid response for avatar at \(url)")
+                    return nil
+                }
+                
+                // Cache the compressed version
+                cacheImageData(data, for: attachment, baseUrl: baseUrl)
+                
+                // Return the compressed image
+                return getCompressedImage(for: attachment, baseUrl: baseUrl)
+            } catch {
+                print("DEBUG: [ImageCacheManager] Error loading avatar from \(url): \(error.localizedDescription)")
+                return nil
+            }
+        }
+        
+        // Register active load
+        avatarQueue.async(flags: .barrier) {
+            self.activeAvatarLoads[cacheKey] = task
+        }
+        
+        // Wait for result
+        let result = await task.value
+        
+        // Unregister and process next
+        avatarQueue.async(flags: .barrier) {
+            self.activeAvatarLoads.removeValue(forKey: cacheKey)
+            self.processNextPendingAvatar()
+        }
+        
+        return result
+    }
+    
+    private func processNextPendingAvatar() {
+        guard activeAvatarLoads.count < maxConcurrentAvatarLoads,
+              !pendingAvatarRequests.isEmpty else {
+            return
+        }
+        
+        let nextRequest = pendingAvatarRequests.removeFirst()
+        print("DEBUG: [ImageCacheManager] Processing queued avatar (\(pendingAvatarRequests.count) remaining): \(nextRequest.cacheKey)")
+        
+        // Start loading the next avatar
+        Task {
+            let result = await startAvatarLoad(
+                cacheKey: nextRequest.cacheKey,
+                url: nextRequest.url,
+                attachment: nextRequest.attachment,
+                baseUrl: nextRequest.baseUrl
+            )
+            nextRequest.continuation.resume(returning: result)
         }
     }
 }

@@ -26,7 +26,7 @@ class VideoLoadingManager: ObservableObject {
     
     // MARK: - Performance Management
     private var activeLoadingCount: Int = 0
-    private let maxConcurrentLoads: Int = 5 // Increased from 3 to 5 for better performance
+    private let maxConcurrentLoads: Int = 8 // Increased from 5 to 8 for better network utilization
     private var loadingQueue: [String] = [] // Queue for pending video loads
     private var isProcessingQueue = false
     
@@ -49,7 +49,6 @@ class VideoLoadingManager: ObservableObject {
     /// Update the list of all tweet IDs (called when tweet list changes)
     func updateTweetList(_ tweetIds: [String]) {
         allTweetIds = tweetIds
-        print("DEBUG: [VideoLoadingManager] Updated tweet list with \(tweetIds.count) tweets")
     }
     
     /// Register a tweet as containing videos or audio (or other loadable media)
@@ -69,10 +68,8 @@ class VideoLoadingManager: ObservableObject {
     func updateVisibleTweetIndex(_ index: Int) {
         guard index >= 0 && index < allTweetIds.count else { return }
         
-        let previousIndex = currentVisibleTweetIndex
         currentVisibleTweetIndex = index
         
-        print("DEBUG: [VideoLoadingManager] Visible tweet changed from index \(previousIndex) to \(index)")
         
         // Update visible tweet IDs
         updateVisibleTweetIds()
@@ -87,8 +84,6 @@ class VideoLoadingManager: ObservableObject {
     /// Check if a tweet should load videos/audio (with performance throttling and cache awareness)
     /// Note: Despite the method name, this handles all media types (video, audio, etc.)
     func shouldLoadVideos(for tweetId: String) -> Bool {
-        print("DEBUG: [VideoLoadingManager] shouldLoadVideos called for tweetId: \(tweetId)")
-        print("DEBUG: [VideoLoadingManager] allTweetIds count: \(allTweetIds.count), currentVisibleTweetIndex: \(currentVisibleTweetIndex)")
         
         // CRITICAL: Check if this tweet is the original tweet of a currently visible retweet
         // This ensures videos in original tweets load immediately when their retweet is visible
@@ -102,9 +97,7 @@ class VideoLoadingManager: ObservableObject {
             print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) not found in allTweetIds - denying loading")
             return false 
         }
-        
-        print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) found at index \(index)")
-        
+                
         // HIGHEST PRIORITY: Current visible tweet should always load regardless of any constraints
         if index == currentVisibleTweetIndex {
             print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is current visible tweet, highest priority - allowing loading")
@@ -227,10 +220,9 @@ class VideoLoadingManager: ObservableObject {
     
     /// Queue tweets for background cancellation instead of immediate cancellation
     private func queueTweetsForCancellation() {
-        for (index, tweetId) in allTweetIds.enumerated() {
+        for tweetId in allTweetIds {
             if shouldCancelVideoLoading(for: tweetId) {
                 tweetsToCancel.insert(tweetId)
-                print("DEBUG: [VideoLoadingManager] Queued tweet \(tweetId) at index \(index) for background cancellation")
             }
         }
     }
@@ -311,11 +303,9 @@ class VideoLoadingManager: ObservableObject {
         }
         
         visibleTweetIds = newVisibleIds
-        print("DEBUG: [VideoLoadingManager] Updated visible tweet IDs: \(visibleTweetIds)")
     }
     
     private func manageVideoLoadingWithPerformance() {
-        print("DEBUG: [VideoLoadingManager] Managing video loading for visible tweet index: \(currentVisibleTweetIndex)")
         
         // Note: Cancellations are now handled by background timer, not here
         
@@ -327,7 +317,6 @@ class VideoLoadingManager: ObservableObject {
                 if shouldPreloadVideos(for: tweetId) {
                     if activeLoadingCount < maxConcurrentLoads {
                         triggerVideoPreloading(for: tweetId)
-                        print("DEBUG: [VideoLoadingManager] Triggered video preloading for tweet \(tweetId)")
                     } else {
                         // Add to queue if we're at capacity
                         if !loadingQueue.contains(tweetId) {

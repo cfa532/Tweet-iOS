@@ -3,11 +3,20 @@ import SwiftUI
 import BackgroundTasks
 import UserNotifications
 import AVFoundation
+import ffmpegkit
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
+    static var isVideoInfrastructureReady = true // Public flag for videos to check
+    
+    // Loading overlay window for server restart
+    private var loadingWindow: UIWindow?
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        // Configure FFmpegKit to suppress verbose logs (only show errors)
+        // AV_LOG_ERROR = 16 - only show fatal errors, suppress INFO/WARNING/DEBUG
+        FFmpegKitConfig.setLogLevel(16)
+        
         // Lock app to portrait orientation by default
         AppDelegate.lockOrientation(.portrait)
         
@@ -19,6 +28,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         // Initialize memory warning manager
         _ = MemoryWarningManager.shared
+        
+        // CRITICAL: Initialize MuteState early to ensure it's ready before videos load
+        // This prevents race condition where videos play unmuted at app startup
+        _ = MuteState.shared
+        print("[AppDelegate] MuteState initialized early")
+        
+        // Start LocalHTTPServer early to ensure it's ready before videos load
+        LocalHTTPServer.shared.start()
+        print("[AppDelegate] LocalHTTPServer started on app launch")
         
         // Request notification permissions
         Task {
@@ -120,11 +138,71 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppWillResignActive() {
-        print("[AppDelegate] App will resign active")
+        print("[AppDelegate] App will resign active - storing timestamp for screen lock detection")
+        
+        // Store timestamp when app loses focus (screen lock or background)
+        // This helps distinguish between screen lock and background scenarios
+        UserDefaults.standard.set(Date(), forKey: "lastResignActiveTimestamp")
     }
     
     @objc private func handleAppDidBecomeActive() {
-        print("[AppDelegate] App did become active - posting notification")
+        print("[AppDelegate] App did become active - checking for screen lock recovery")
+        
+        // Check if this is a screen lock recovery (not background recovery)
+        if let resignActiveDate = UserDefaults.standard.object(forKey: "lastResignActiveTimestamp") as? Date,
+           let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
+            
+            // If resignActive was more recent than background, this is screen lock recovery
+            if resignActiveDate > backgroundDate {
+                let timeInactive = Date().timeIntervalSince(resignActiveDate)
+                print("[AppDelegate] Screen lock recovery detected - inactive for \(Int(timeInactive))s")
+                
+                // Use same time-based threshold as background recovery (5 minutes)
+                if timeInactive > 300 {
+                    // LONG screen lock (>5min) - full restart needed
+                    print("[AppDelegate] Long screen lock (\(Int(timeInactive))s) - forcing full restart")
+                    
+                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                    
+                    showLoadingOverlay()
+                    Thread.sleep(forTimeInterval: 0.05)
+                    
+                    restartVideoInfrastructure()
+                    
+                    hideLoadingOverlay()
+                    
+                    NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                    print("[AppDelegate] Posted videoInfrastructureRestarted notification for long screen lock")
+                } else {
+                    // SHORT screen lock (<5min) - gentle refresh, keep players intact
+                    print("[AppDelegate] Short screen lock (\(Int(timeInactive))s) - gentle refresh (keeping players)")
+                    
+                    if LocalHTTPServer.shared.isRunning {
+                        // Server still alive - just refresh, don't clear players
+                        SharedAssetCache.shared.refreshVideoLayersForShortBackground()
+                        LocalHTTPServer.shared.resetConnectionPool()
+                        print("[AppDelegate] Short screen lock recovery complete - videos kept intact")
+                        // Post notification to trigger video recovery (fixes profile video black screens)
+                        NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                        print("[AppDelegate] Posted videoInfrastructureRestarted notification for short screen lock recovery")
+                    } else {
+                        // Server killed during screen lock - restart it
+                        print("[AppDelegate] Server killed during screen lock, restarting...")
+                        SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                        
+                        showLoadingOverlay()
+                        Thread.sleep(forTimeInterval: 0.05)
+                        
+                        LocalHTTPServer.shared.startAndWait()
+                        
+                        hideLoadingOverlay()
+                        print("[AppDelegate] Server restarted after screen lock")
+                        
+                        NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                    }
+                }
+            }
+        }
         
         // Clear stale video state cache
         VideoStateCache.shared.clearStaleCache()
@@ -138,61 +216,133 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppDidEnterBackground() {
-        print("[AppDelegate] App did enter background")
-        
-        // Stop LocalHTTPServer and release the port to free system resources
-        LocalHTTPServer.shared.stop()
+        NSLog("🌙🌙🌙 [AppDelegate] ===== DID ENTER BACKGROUND =====")
         
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
+        
+        // DON'T stop LocalHTTPServer - iOS keeps network listeners alive for short backgrounds
+        // Only stop for long backgrounds (>5 min) to avoid race conditions and port changes
         
         // Background handling is now done by SimpleVideoPlayer's notification observers
     }
     
     @objc private func handleAppWillEnterForeground() {
-        print("[AppDelegate] App will enter foreground")
+        NSLog("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND =====")
         
-        // Restart LocalHTTPServer (it was stopped when app went to background)
-        LocalHTTPServer.shared.start()
+        // Proactively refresh appUser's IP address when returning from background
+        // This ensures we don't use stale IPs if the server changed while app was suspended
+        Task {
+            await refreshAppUserIP()
+        }
         
         // Check how long app was in background
         if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
-            print("[AppDelegate] App was in background for \(timeInBackground) seconds")
+            NSLog("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background")
             
-            // If app was in background for more than 5 minutes, reset connection pool
-            // and clear video player caches to force fresh initialization
-            if timeInBackground > 300 { // 5 minutes
-                print("[AppDelegate] Long background period detected, resetting connection pool")
+            // CRITICAL: Use DURATION-based recovery, not isRunning check
+            // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
+            if timeInBackground > 300 {  // 5 minutes
+                // LONG background - ALWAYS do full restart with BLOCKING
+                // Even if isRunning=true, the listener may be suspended and unresponsive
+                NSLog("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - forcing full restart")
                 
-                // Reset connection pool to recover from long background suspension
+                // Show loading indicator and wait for it to render
+                showLoadingOverlay()
+                Thread.sleep(forTimeInterval: 0.1) // Give UI time to render
+                
+                // Restart infrastructure - this is synchronous and blocks until complete
+                restartVideoInfrastructure()
+                
+                // Hide loading indicator
+                hideLoadingOverlay()
+                
+                NSLog("✅ [AppDelegate] Server fully restarted - videos ready")
+            } else {
+                // SHORT background (<5min) - simple approach: always clear and let videos recreate
+                NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - clearing players for clean state")
+                
+                // Always clear players for predictable recovery
+                // Trying to keep them "intact" creates too many edge cases
+                SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                
+                // Reset connection pool
                 LocalHTTPServer.shared.resetConnectionPool()
                 
-                // Restart video infrastructure
-                Task {
-                    await restartVideoInfrastructure()
+                // Ensure server is running
+                if !LocalHTTPServer.shared.isRunning {
+                    NSLog("⚠️ [AppDelegate] Server not running, restarting...")
+                    LocalHTTPServer.shared.startAndWait()
                 }
+                
+                NSLog("✅ [AppDelegate] Short background recovery complete - players cleared")
+                
+                // Notify views to reload videos
+                NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
             }
+        } else {
+            NSLog("⚠️ [AppDelegate] No background timestamp, starting server")
+            LocalHTTPServer.shared.start()
         }
         
         // Foreground handling is now done by SimpleVideoPlayer's notification observers
     }
     
-    private func restartVideoInfrastructure() async {
+    /// Refresh appUser's provider IP when app returns from background
+    /// This prevents using stale IPs if the server moved while app was suspended
+    private func refreshAppUserIP() async {
+        let appUser = HproseInstance.shared.appUser
+        
+        // Only refresh for logged-in users
+        guard !appUser.isGuest else {
+            print("[AppDelegate] Skipping IP refresh for guest user")
+            return
+        }
+        
+        let hproseInstance = HproseInstance.shared
+        
+        // Refresh provider IP in background (non-blocking)
+        Task.detached {
+            do {
+                print("[AppDelegate] Refreshing appUser provider IP...")
+                
+                // Force IP re-evaluation by passing empty baseUrl
+                let refreshedUser = try await hproseInstance.fetchUser(appUser.mid, baseUrl: "")
+                print("[AppDelegate] Successfully refreshed appUser provider IP")
+                
+                // Save updated user to cache if fetch was successful
+                if let refreshedUser = refreshedUser {
+                    TweetCacheManager.shared.saveUser(refreshedUser)
+                    print("[AppDelegate] Saved refreshed appUser to cache")
+                }
+            } catch {
+                print("[AppDelegate] ⚠️ Failed to refresh appUser IP: \(error)")
+                // Non-fatal - we'll continue with cached IP and retry on next API call
+            }
+        }
+    }
+    
+    private func restartVideoInfrastructure() {
         print("[AppDelegate] Restarting video infrastructure after long background")
+        
+        // CRITICAL: Clear ALL video players FIRST to release their URLs
+        // This prevents players from trying to use old port numbers after server restart
+        // Note: We're already on main thread (called from willEnterForeground), so just call directly
+        SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+        
+        // DON'T clear VideoStateCache - it stores playback position/state
+        // Preserving it allows videos to resume from where they left off after reload
         
         // Reset LocalHTTPServer connection pool
         LocalHTTPServer.shared.resetConnectionPool()
         
-        // Restart the server
+        // Stop the server completely and wait for cleanup
         LocalHTTPServer.shared.stop()
-        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-        LocalHTTPServer.shared.start()
+        Thread.sleep(forTimeInterval: 0.5) // BLOCKING sleep - ensure port is released
         
-        // Clear video player caches to force fresh initialization
-        await MainActor.run {
-            SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-        }
+        // Restart the server SYNCHRONOUSLY - wait until ready
+        LocalHTTPServer.shared.startAndWait()
         
         print("[AppDelegate] Video infrastructure restart complete")
     }
@@ -207,6 +357,54 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("[AppDelegate] Notification permission granted: \(granted)")
         } catch {
             print("[AppDelegate] Error requesting notification permission: \(error)")
+        }
+    }
+    
+    // MARK: - Loading Overlay
+    
+    private func showLoadingOverlay() {
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            return
+        }
+        
+        // Create loading view
+        let loadingView = LoadingOverlayView()
+        let hostingController = UIHostingController(rootView: loadingView)
+        hostingController.view.backgroundColor = .clear
+        
+        // Create window
+        let window = UIWindow(windowScene: windowScene)
+        window.rootViewController = hostingController
+        window.windowLevel = .alert + 1
+        window.backgroundColor = .clear
+        window.makeKeyAndVisible()
+        
+        loadingWindow = window
+    }
+    
+    private func hideLoadingOverlay() {
+        UIView.animate(withDuration: 0.2, animations: {
+            self.loadingWindow?.alpha = 0
+        }) { _ in
+            self.loadingWindow?.isHidden = true
+            self.loadingWindow = nil
+        }
+    }
+}
+
+// MARK: - Loading Overlay View
+
+private struct LoadingOverlayView: View {
+    var body: some View {
+        ZStack {
+            // Semi-transparent background
+            Color.black.opacity(0.3)
+                .edgesIgnoringSafeArea(.all)
+            
+            // Just a spinner
+            ProgressView()
+                .scaleEffect(1.5)
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
         }
     }
 } 

@@ -708,6 +708,3 @@ struct ChatMultipleAttachmentsLoader: View {
         }
     }
 }
-
-
-

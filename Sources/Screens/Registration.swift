@@ -11,7 +11,7 @@ import PhotosUI
 @available(iOS 16.0, *)
 struct RegistrationView: View {
     @Environment(\.dismiss) private var dismiss
-    var onSubmit: (String, String?, String?, String?, String?, Int?) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort
+    var onSubmit: (String, String?, String?, String?, String?, Int) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort
     var onSubmissionStateChange: ((Bool) -> Void)? = nil // Callback for submission state
     var onRegistrationFailure: ((String) -> Void)? = nil // Callback for registration failure
 
@@ -38,7 +38,7 @@ struct RegistrationView: View {
         case username, password, confirmPassword, alias, profile, hostId, cloudDrivePort
     }
 
-    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int?) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onRegistrationFailure: ((String) -> Void)? = nil) {
+    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onRegistrationFailure: ((String) -> Void)? = nil) {
         self.onSubmit = onSubmit
         self.onSubmissionStateChange = onSubmissionStateChange
         self.onRegistrationFailure = onRegistrationFailure
@@ -230,8 +230,7 @@ struct RegistrationView: View {
                 .animation(.easeInOut(duration: 0.3), value: showToast)
             )
             .onAppear {
-                // Initialize with default values for new registration
-                cloudDrivePort = "8010"
+                // No default cloudDrivePort - user must configure if needed
             }
             .onChange(of: username) { _, _ in checkForChanges() }
             .onChange(of: password) { _, _ in checkForChanges() }
@@ -314,7 +313,7 @@ struct RegistrationView: View {
                     alias.isEmpty ? nil : alias,
                     profile.isEmpty ? nil : profile,
                     hostId,
-                    Int(cloudDrivePort)
+                    Int(cloudDrivePort) ?? 0
                 )
                 
                 // Reset submission state after completion
@@ -355,10 +354,9 @@ struct RegistrationView: View {
                         !alias.isEmpty || 
                         !profile.isEmpty || 
                         !hostId.isEmpty || 
-                        cloudDrivePort != "8010" ||
+                        !cloudDrivePort.isEmpty ||
                         hasAcceptedTerms
         
         hasUnsavedChanges = hasChanges
     }
 }
-

@@ -137,7 +137,7 @@ struct LoginView: View {
             })
             .sheet(isPresented: $showRegistration) {
                 RegistrationView(
-                    onSubmit: { (username: String, password: String?, alias: String?, profile: String?, hostId: String?, cloudDrivePort: Int?) in
+                    onSubmit: { (username: String, password: String?, alias: String?, profile: String?, hostId: String?, cloudDrivePort: Int) in
                         let success = try await hproseInstance.registerUser(
                             username: username,
                             password: password ?? "",
@@ -210,4 +210,3 @@ struct LoginView: View {
         isLoading = false
     }
 }
-

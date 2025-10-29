@@ -79,7 +79,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
     var downloadable: Bool?
 
     // Display only properties
-    var author: User?
+    @Published var author: User?
     
     // User interaction flags
     @Published var favorites: [Bool]? // [favorite, bookmark, retweeted]
@@ -128,7 +128,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         case title
         case originalTweetId
         case originalAuthorId
-        case author
+        // author is NOT saved - always reconstructed from singleton
         case favorites
         case favoriteCount
         case bookmarkCount
@@ -148,7 +148,8 @@ class Tweet: Identifiable, Codable, ObservableObject {
         title = try container.decodeIfPresent(String.self, forKey: .title)
         originalTweetId = try container.decodeIfPresent(String.self, forKey: .originalTweetId)
         originalAuthorId = try container.decodeIfPresent(String.self, forKey: .originalAuthorId)
-        author = try container.decodeIfPresent(User.self, forKey: .author)
+        // author is NOT decoded - always reconstructed from singleton using authorId
+        author = nil
         favorites = try container.decodeIfPresent([Bool].self, forKey: .favorites)
         favoriteCount = try container.decodeIfPresent(Int.self, forKey: .favoriteCount)
         bookmarkCount = try container.decodeIfPresent(Int.self, forKey: .bookmarkCount)
@@ -191,7 +192,7 @@ class Tweet: Identifiable, Codable, ObservableObject {
         try container.encodeIfPresent(title, forKey: .title)
         try container.encodeIfPresent(originalTweetId, forKey: .originalTweetId)
         try container.encodeIfPresent(originalAuthorId, forKey: .originalAuthorId)
-        try container.encodeIfPresent(author, forKey: .author)
+        // author is NOT encoded - always reconstructed from singleton using authorId
         try container.encodeIfPresent(favorites, forKey: .favorites)
         try container.encodeIfPresent(favoriteCount, forKey: .favoriteCount)
         try container.encodeIfPresent(bookmarkCount, forKey: .bookmarkCount)
@@ -486,8 +487,6 @@ class Tweet: Identifiable, Codable, ObservableObject {
         }
     }
 }
-
-
 // MARK: - Tweet Array Extension
 extension Array where Element == Tweet {
     /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.

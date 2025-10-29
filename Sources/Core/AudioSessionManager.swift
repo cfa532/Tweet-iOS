@@ -47,8 +47,6 @@ class AudioSessionManager {
             if !audioSession.isOtherAudioPlaying {
                 try audioSession.setActive(true)
             }
-            
-            print("DEBUG: [AudioSessionManager] Audio session activated for video playback")
         } catch {
             print("DEBUG: [AudioSessionManager] Failed to activate audio session: \(error)")
         }
