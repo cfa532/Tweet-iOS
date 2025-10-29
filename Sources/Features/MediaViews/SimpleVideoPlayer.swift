@@ -447,6 +447,9 @@ struct SimpleVideoPlayer: View {
                     guard finished else { return }
                     NSLog("DEBUG: [VIDEO MODE CHANGE] Layer ready, resuming playback in MediaCell")
                     player.play()
+                    
+                    // Track video access for cache management
+                    DiskCacheCleanupManager.shared.recordAccess(mediaId: self.mid)
                 }
             }
         } else if newMode == .mediaCell {
@@ -590,6 +593,9 @@ struct SimpleVideoPlayer: View {
                         print("▶️ [VIDEO VISIBILITY] Starting playback for visible ready video: \(mid)")
                         player.play()
                         playbackState = .playing
+                        
+                        // Track video access for cache management
+                        DiskCacheCleanupManager.shared.recordAccess(mediaId: mid)
                     }
                     return
                 }

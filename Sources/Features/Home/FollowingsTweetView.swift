@@ -34,6 +34,7 @@ struct FollowingsTweetView: View {
             },
             showTitle: false,
             shouldCacheServerTweets: true,
+            feedId: "main_feed",
             notifications: [
                 TweetListNotification(
                     name: .newTweetCreated,

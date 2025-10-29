@@ -51,6 +51,11 @@ class AppState: ObservableObject {
                 
                 // Cleanup caches after a delay
                 Task.detached(priority: .background) {
+                    // Load cached video playlist immediately for instant full-screen browsing
+                    await MainActor.run {
+                        FeedVideoPlaylistManager.shared.loadPlaylist(feedId: "main_feed")
+                    }
+                    
                     // Wait 30 seconds after app initialization
                     try? await Task.sleep(nanoseconds: 30_000_000_000)
                     // Clean up image cache

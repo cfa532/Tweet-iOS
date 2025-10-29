@@ -232,6 +232,7 @@ struct ProfileTweetsSection<Header: View>: View {
                 }
             },
             showTitle: false, shouldCacheServerTweets: true,  // Enable caching for appUser's profile
+            feedId: user.mid,  // Use user's mid as feedId for profile-specific playlists
             notifications: [
                 TweetListNotification(
                     name: .newTweetCreated,

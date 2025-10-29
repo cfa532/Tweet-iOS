@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import SwiftUI
 
 // MARK: - String Extension for getIP
 extension String {
@@ -247,6 +248,294 @@ class Gadget {
     }
     
 
+}
+
+// MARK: - Environment Keys for Video Playlist
+
+struct VideoPlaylistKey: EnvironmentKey {
+    static let defaultValue: [FeedVideoPlaylistManager.VideoItem] = []
+}
+
+struct FeedIdKey: EnvironmentKey {
+    static let defaultValue: String = "default"
+}
+
+extension EnvironmentValues {
+    var videoPlaylist: [FeedVideoPlaylistManager.VideoItem] {
+        get { self[VideoPlaylistKey.self] }
+        set { self[VideoPlaylistKey.self] = newValue }
+    }
+    
+    var feedId: String {
+        get { self[FeedIdKey.self] }
+        set { self[FeedIdKey.self] = newValue }
+    }
+}
+
+// MARK: - Feed Video Playlist Manager
+/// Manages a cached playlist of all videos in the tweet feed for full-screen browsing
+class FeedVideoPlaylistManager: ObservableObject {
+    static let shared = FeedVideoPlaylistManager()
+    
+    // MARK: - Video Item
+    struct VideoItem: Codable, Identifiable {
+        let id: String  // Unique ID for this video item
+        let tweetId: String
+        let videoMediaId: String
+        let videoIndex: Int  // Index within the tweet's attachments
+        let tweetAuthorId: String
+        let tweetTimestamp: Date
+        let videoType: VideoType
+        let aspectRatio: Double?
+        let duration: TimeInterval?
+        let isPrivate: Bool
+        
+        enum VideoType: String, Codable {
+            case video
+            case hls_video
+            case audio
+        }
+        
+        // Unique identifier combining tweet and video
+        var uniqueId: String {
+            return "\(tweetId)_\(videoIndex)_\(videoMediaId)"
+        }
+    }
+    
+    // MARK: - State
+    @Published private(set) var playlist: [VideoItem] = []
+    private let playlistQueue = DispatchQueue(label: "FeedVideoPlaylistManager", qos: .userInitiated)
+    
+    // Track which feeds we've loaded
+    private var loadedFeeds: Set<String> = []
+    
+    private init() {}
+    
+    // MARK: - Cache Keys
+    private func playlistCacheKey(for feedId: String) -> String {
+        return "feed_video_playlist_\(feedId)"
+    }
+    
+    // MARK: - Public API
+    
+    /// Build playlist from tweets (called when tweets are first loaded)
+    /// Returns the playlist immediately for the current feed
+    func buildPlaylist(from tweets: [Tweet], feedId: String) -> [VideoItem] {
+        var videoItems: [VideoItem] = []
+        
+        for tweet in tweets {
+            guard let attachments = tweet.attachments, !attachments.isEmpty else { continue }
+            
+            for (index, attachment) in attachments.enumerated() {
+                if attachment.type == .video || attachment.type == .hls_video || attachment.type == .audio {
+                    let videoItem = VideoItem(
+                        id: "\(tweet.mid)_\(index)",
+                        tweetId: tweet.mid,
+                        videoMediaId: attachment.mid,
+                        videoIndex: index,
+                        tweetAuthorId: tweet.authorId,
+                        tweetTimestamp: tweet.timestamp,
+                        videoType: attachment.type == .audio ? .audio : (attachment.type == .hls_video ? .hls_video : .video),
+                        aspectRatio: attachment.aspectRatio != nil ? Double(attachment.aspectRatio!) : nil,
+                        duration: nil,
+                        isPrivate: tweet.isPrivate ?? false
+                    )
+                    print("🎬 [Playlist Build] Added video: tweetId=\(tweet.mid), index=\(index), type=\(attachment.type), mediaId=\(attachment.mid)")
+                    videoItems.append(videoItem)
+                }
+            }
+        }
+        
+        // Update playlist only for main_feed
+        if feedId == "main_feed" {
+            DispatchQueue.main.async {
+                self.playlist = videoItems
+                self.loadedFeeds.insert(feedId)
+                print("📹 [VideoPlaylist] Built main_feed playlist with \(videoItems.count) videos from \(tweets.count) tweets")
+            }
+        } else {
+            print("📹 [VideoPlaylist] Built \(feedId) playlist with \(videoItems.count) videos from \(tweets.count) tweets")
+        }
+        
+        // Save to cache asynchronously
+        playlistQueue.async { [weak self] in
+            self?.savePlaylist(videoItems, feedId: feedId)
+        }
+        
+        return videoItems
+    }
+    
+    /// Add new videos to playlist (called when new tweets arrive)
+    func addVideos(from newTweets: [Tweet], feedId: String = "main_feed") {
+        playlistQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            var newVideoItems: [VideoItem] = []
+            
+            for tweet in newTweets {
+                guard let attachments = tweet.attachments, !attachments.isEmpty else { continue }
+                
+                for (index, attachment) in attachments.enumerated() {
+                    if attachment.type == .video || attachment.type == .hls_video || attachment.type == .audio {
+                        let videoItem = VideoItem(
+                            id: "\(tweet.mid)_\(index)",
+                            tweetId: tweet.mid,
+                            videoMediaId: attachment.mid,
+                            videoIndex: index,
+                            tweetAuthorId: tweet.authorId,
+                            tweetTimestamp: tweet.timestamp,
+                            videoType: attachment.type == .audio ? .audio : (attachment.type == .hls_video ? .hls_video : .video),
+                            aspectRatio: attachment.aspectRatio != nil ? Double(attachment.aspectRatio!) : nil,
+                            duration: nil,
+                            isPrivate: tweet.isPrivate ?? false
+                        )
+                        
+                        if !self.playlist.contains(where: { $0.uniqueId == videoItem.uniqueId }) {
+                            newVideoItems.append(videoItem)
+                        }
+                    }
+                }
+            }
+            
+            guard !newVideoItems.isEmpty else { return }
+            
+            DispatchQueue.main.async {
+                self.playlist.append(contentsOf: newVideoItems)
+                self.playlist.sort { $0.tweetTimestamp > $1.tweetTimestamp }
+                print("📹 [VideoPlaylist] Added \(newVideoItems.count) new videos (total: \(self.playlist.count))")
+            }
+            
+            self.savePlaylist(self.playlist, feedId: feedId)
+        }
+    }
+    
+    /// Remove videos from deleted tweet
+    func removeVideos(tweetId: String, feedId: String = "main_feed") {
+        playlistQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            DispatchQueue.main.async {
+                let countBefore = self.playlist.count
+                self.playlist.removeAll { $0.tweetId == tweetId }
+                let countAfter = self.playlist.count
+                
+                if countBefore != countAfter {
+                    print("📹 [VideoPlaylist] Removed \(countBefore - countAfter) videos from tweet: \(tweetId)")
+                }
+            }
+            
+            self.savePlaylist(self.playlist, feedId: feedId)
+        }
+    }
+    
+    /// Find video index in a specific playlist
+    func findVideoIndex(tweetId: String, videoIndex: Int, in playlist: [VideoItem]) -> Int? {
+        return playlist.firstIndex { $0.tweetId == tweetId && $0.videoIndex == videoIndex }
+    }
+    
+    /// Get video at index from a playlist
+    func getVideo(at index: Int, from playlist: [VideoItem]) -> VideoItem? {
+        guard index >= 0 && index < playlist.count else { return nil }
+        return playlist[index]
+    }
+    
+    /// Get next video in playlist
+    func getNextVideo(after index: Int, from playlist: [VideoItem]) -> VideoItem? {
+        let nextIndex = index + 1
+        return getVideo(at: nextIndex, from: playlist)
+    }
+    
+    /// Get previous video in playlist
+    func getPreviousVideo(before index: Int, from playlist: [VideoItem]) -> VideoItem? {
+        let prevIndex = index - 1
+        return getVideo(at: prevIndex, from: playlist)
+    }
+    
+    /// Clear playlist
+    func clearPlaylist(feedId: String = "main_feed") {
+        playlistQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            DispatchQueue.main.async {
+                self.playlist.removeAll()
+                print("📹 [VideoPlaylist] Cleared playlist")
+            }
+            
+            let key = self.playlistCacheKey(for: feedId)
+            UserDefaults.standard.removeObject(forKey: key)
+            self.loadedFeeds.remove(feedId)
+        }
+    }
+    
+    // MARK: - Persistence
+    
+    private func savePlaylist(_ items: [VideoItem], feedId: String) {
+        let key = playlistCacheKey(for: feedId)
+        
+        do {
+            let data = try JSONEncoder().encode(items)
+            UserDefaults.standard.set(data, forKey: key)
+            print("💾 [VideoPlaylist] Saved \(items.count) videos to storage")
+        } catch {
+            print("❌ [VideoPlaylist] Failed to encode: \(error)")
+        }
+    }
+    
+    func loadPlaylist(feedId: String = "main_feed") {
+        playlistQueue.async { [weak self] in
+            guard let self = self else { return }
+            guard !self.loadedFeeds.contains(feedId) else { return }
+            
+            let key = self.playlistCacheKey(for: feedId)
+            guard let data = UserDefaults.standard.data(forKey: key) else {
+                print("📹 [VideoPlaylist] No cached playlist found")
+                return
+            }
+            
+            do {
+                let items = try JSONDecoder().decode([VideoItem].self, from: data)
+                
+                DispatchQueue.main.async {
+                    self.playlist = items
+                    self.loadedFeeds.insert(feedId)
+                    print("📦 [VideoPlaylist] Loaded \(items.count) videos from storage")
+                }
+            } catch {
+                print("❌ [VideoPlaylist] Failed to decode: \(error)")
+            }
+        }
+    }
+    
+    func getPlaylistStats() -> (totalVideos: Int, hlsCount: Int, progressiveCount: Int, audioCount: Int) {
+        let total = playlist.count
+        let hls = playlist.filter { $0.videoType == .hls_video }.count
+        let progressive = playlist.filter { $0.videoType == .video }.count
+        let audio = playlist.filter { $0.videoType == .audio }.count
+        return (total, hls, progressive, audio)
+    }
+    
+    /// Clear all cached playlists (useful for debugging or after updates)
+    func clearAllCaches() {
+        playlistQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            let defaults = UserDefaults.standard
+            let allKeys = defaults.dictionaryRepresentation().keys
+            
+            // Clear video playlist caches
+            let playlistKeys = allKeys.filter { $0.hasPrefix("feed_video_playlist_") }
+            for key in playlistKeys {
+                defaults.removeObject(forKey: key)
+                print("🗑️ Cleared playlist cache: \(key)")
+            }
+            
+            DispatchQueue.main.async {
+                self.playlist.removeAll()
+                self.loadedFeeds.removeAll()
+                print("✅ [VideoPlaylist] All caches cleared")
+            }
+        }
+    }
 }
 
 // MARK: - Error Message Helper
