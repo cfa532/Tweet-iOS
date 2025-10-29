@@ -65,7 +65,8 @@ class FollowingsTweetViewModel: ObservableObject {
             }
             
             await MainActor.run {
-                tweets.mergeTweets(filteredTweets)
+                // Use mergeTweetsSmoothly to prevent layout shifts
+                tweets.mergeTweetsSmoothly(filteredTweets)
             }
             
             // Cache tweets if shouldCache is true - use "main_feed" as special user ID for main feed cache
@@ -84,7 +85,8 @@ class FollowingsTweetViewModel: ObservableObject {
                         entry: "update_following_tweets"    // check for new tweets have not been synced.
                     )
                     await MainActor.run {
-                        tweets.mergeTweets(newTweets.compactMap{ $0 })
+                        // Use mergeTweetsSmoothly to prevent layout shifts from background updates
+                        tweets.mergeTweetsSmoothly(newTweets.compactMap{ $0 })
                     }
                 }
             }
@@ -104,7 +106,7 @@ class FollowingsTweetViewModel: ObservableObject {
         if let tweet = tweet {
             // Don't show private tweets in the home feed
             if !(tweet.isPrivate ?? false) {
-                // Use mergeTweets to maintain proper chronological ordering
+                // For new tweets, use mergeTweets (with sorting) since they should appear at the top
                 tweets.mergeTweets([tweet])
                 
                 // Cache the new tweet so it persists across app restarts

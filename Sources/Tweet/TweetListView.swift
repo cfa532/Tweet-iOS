@@ -296,7 +296,8 @@ struct TweetListView<RowView: View>: View {
             await MainActor.run {
                 if hasCachedContent {
                     // If we have cached content, show it immediately without loading spinner
-                    tweets.mergeTweets(validCachedTweets)
+                    // Use direct assignment (not merge) to avoid re-sorting cached content
+                    tweets = validCachedTweets
                     
                     // Update VideoLoadingManager with new tweet list
                     let tweetIds = tweets.map { $0.mid }
@@ -510,12 +511,12 @@ struct TweetListView<RowView: View>: View {
                         if tweets.isEmpty {
                             tweets = validServerTweets
                         } else {
-                            // Merge server data with cached data to maintain scroll position
-                            tweets.mergeTweets(validServerTweets)
+                            // Use mergeTweetsSmoothly to prevent layout shifts when updating cached content
+                            tweets.mergeTweetsSmoothly(validServerTweets)
                         }
                     } else {
-                        // For subsequent pages, merge server data
-                        tweets.mergeTweets(validServerTweets)
+                        // For subsequent pages, use smooth merge to avoid re-sorting
+                        tweets.mergeTweetsSmoothly(validServerTweets)
                     }
                     
                     // Update VideoLoadingManager with new tweet list
