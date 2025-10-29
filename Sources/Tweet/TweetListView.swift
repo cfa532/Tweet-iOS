@@ -244,8 +244,25 @@ struct TweetListView<RowView: View>: View {
                                 let countAfter = tweets.count
                                 TweetCacheManager.shared.deleteTweet(mid: tweetId)
                                 print("DEBUG: [TweetListView] Removed deleted tweet \(tweetId) from list (title: \(title), count: \(countBefore) -> \(countAfter))")
+                            } else if notification.name == .tweetPrivacyChanged {
+                                // For privacy changes, handle removal directly here
+                                // Find the tweet first before removing it
+                                let tweetToRemove = tweets.first(where: { $0.mid == tweetId })
+                                let countBefore = tweets.count
+                                tweets.removeAll { $0.mid == tweetId }
+                                let countAfter = tweets.count
+                                
+                                if countBefore != countAfter {
+                                    print("DEBUG: [TweetListView] Removed privacy-changed tweet \(tweetId) from list (title: \(title), count: \(countBefore) -> \(countAfter))")
+                                    // Also call custom handler with the tweet that was removed
+                                    if let tweet = tweetToRemove {
+                                        notification.action(tweet)
+                                    }
+                                } else {
+                                    print("DEBUG: [TweetListView] Privacy-changed tweet \(tweetId) not found in list (title: \(title))")
+                                }
                             } else {
-                                // For other notifications (like privacy changes), call the custom handler
+                                // For other notifications, call the custom handler
                                 // Find the actual tweet in the list and pass it to the handler
                                 if let actualTweet = tweets.first(where: { $0.mid == tweetId }) {
                                     notification.action(actualTweet)
