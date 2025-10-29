@@ -814,11 +814,19 @@ public class LocalHTTPServer: @unchecked Sendable {
                 return
             }
             
-            // Cache this byte range for future requests (skip tiny probe requests)
-            if !isProbeRequest, let start = rangeStart, data.count >= 1024 {
-                let rangeStr = rangeEnd != nil ? "\(start)-\(rangeEnd!)" : "\(start)-end"
+            NSLog("DEBUG: [PROGRESSIVE FETCH SUCCESS] mediaID: \(mediaID), got \(data.count) bytes, isProbe: \(isProbeRequest), rangeStart: \(rangeStart?.description ?? "nil")")
+            
+            // Cache this byte range for future requests
+            // CRITICAL: Use effectiveStart (0) if rangeStart is nil (full file request)
+            let cacheStart = rangeStart ?? 0
+            if !isProbeRequest, data.count >= 1024 {
+                let rangeStr = rangeEnd != nil ? "\(cacheStart)-\(rangeEnd!)" : "\(cacheStart)-end"
                 NSLog("💾 [PROGRESSIVE CACHE WRITE] mediaID: \(mediaID), range: \(rangeStr), size: \(data.count) bytes")
-                self.cacheProgressiveRange(mediaID: mediaID, start: start, end: rangeEnd, data: data)
+                self.cacheProgressiveRange(mediaID: mediaID, start: cacheStart, end: rangeEnd, data: data)
+            } else if isProbeRequest {
+                NSLog("DEBUG: [PROGRESSIVE CACHE SKIP] Probe request (\(data.count) bytes), not caching")
+            } else {
+                NSLog("DEBUG: [PROGRESSIVE CACHE SKIP] Data too small (\(data.count) bytes), not caching")
             }
             
             // Record successful fetch for this mediaID

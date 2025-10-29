@@ -993,6 +993,16 @@ struct SimpleVideoPlayer: View {
                     )
                     self.player = newPlayer
                     configurePlayer(newPlayer)
+                    
+                    // CRITICAL: Force AVPlayer to start loading data by calling play() then pausing
+                    // Without this, progressive videos won't make network requests after recovery
+                    // Note: preroll() doesn't work because player status is still .unknown
+                    print("DEBUG: [APP USER READY] Forcing player to start loading for \(mid)")
+                    newPlayer.play()
+                    // Immediately pause - we only want to trigger loading, not actual playback
+                    // The KVO observers and normal visibility logic will handle playback
+                    newPlayer.pause()
+                    print("DEBUG: [APP USER READY] Triggered loading with play/pause for \(mid)")
                 } catch {
                     print("❌ [APP USER READY] Failed to reload player: \(error)")
                 }
@@ -1407,14 +1417,18 @@ struct SimpleVideoPlayer: View {
                 // If player has buffered data, it's transitioning and will be ready soon - use it!
                 if hasBufferedData {
                     NSLog("DEBUG: [VIDEO CACHE] ⚠️ Player status not ready yet (status: \(playerItem.status.rawValue)) but HAS buffered data - will use it for MediaCell")
-                } else {
-                    // No data and not ready - reject it
-                    NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item not ready (status: \(playerItem.status.rawValue)) and no buffered data for MediaCell, clearing cache and creating new player for \(mid)")
+                } else if playerItem.status == .failed {
+                    // Only clear cache if player has FAILED, not if it's just loading
+                    NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item FAILED for MediaCell, clearing cache and creating new player for \(mid)")
                     VideoStateCache.shared.clearCache(for: mid)
                     SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
                     loadingState = .idle  // Reset loading state before recreating
                     setupPlayer()
                     return
+                } else {
+                    // Status is .unknown (0) - for HLS videos with cached playlists, this is normal
+                    // The player needs time to fetch segments. Let KVO handle it.
+                    NSLog("DEBUG: [VIDEO CACHE] ⏳ Cached player item status: \(playerItem.status.rawValue), no buffer yet - giving it time to load segments for \(mid)")
                 }
             } else {
             }
