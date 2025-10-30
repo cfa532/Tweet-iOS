@@ -1106,13 +1106,21 @@ struct SimpleVideoPlayer: View {
                     .transition(.opacity)
                 }
                 
-                // Loading indicator
-                if loadingState.isLoading {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.5)
-                        .background(Color.black.opacity(0.3))
-                        .cornerRadius(8)
+                // Loading indicator - show until video starts playing in fullscreen
+                // Show spinner when: loading OR (fullscreen AND ready to play but not started yet)
+                let showInitialLoadingSpinner = loadingState.isLoading || 
+                    (mode == .mediaBrowser && 
+                     player.rate == 0 && 
+                     (player.currentItem?.currentTime().seconds ?? 0) < 0.1)
+                
+                if showInitialLoadingSpinner {
+                    ZStack {
+                        Color.black.opacity(0.3)
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.5)
+                    }
+                    .cornerRadius(8)
                 }
             }
         } else {
@@ -2170,6 +2178,7 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                                 context.coordinator.isBuffering = true
                             } else if observedPlayer.timeControlStatus == .playing {
                                 context.coordinator.isBuffering = false
+                                NSLog("✅ [AVPlayerViewController] Video started playing")
                             } else {
                                 // Paused
                                 context.coordinator.isBuffering = false
@@ -2228,6 +2237,7 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                                 context.coordinator.isBuffering = true
                             } else if observedPlayer.timeControlStatus == .playing {
                                 context.coordinator.isBuffering = false
+                                NSLog("✅ [AVPlayerViewController] Video started playing in updateUIViewController")
                             } else {
                                 context.coordinator.isBuffering = false
                             }
