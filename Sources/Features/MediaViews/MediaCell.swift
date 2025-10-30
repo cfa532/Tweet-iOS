@@ -50,10 +50,6 @@ struct MediaCell: View, Equatable {
     @State private var isPreloading = false
     @State private var isOpeningFullScreen = false
     let showMuteButton: Bool
-    
-    // Video playlist from environment
-    @Environment(\.videoPlaylist) private var videoPlaylist
-    @Environment(\.feedId) private var feedId
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
@@ -204,9 +200,7 @@ struct MediaCell: View, Equatable {
             MediaBrowserView(
                 tweet: parentTweet,
                 initialIndex: attachmentIndex,
-                sourceTweetId: visibleTweetId ?? parentTweet.mid, // Use visibleTweetId if available
-                videoPlaylist: videoPlaylist,
-                feedId: feedId
+                sourceTweetId: visibleTweetId ?? parentTweet.mid // Use visibleTweetId if available
             )
         }
         .onChange(of: showFullScreen) { _, newValue in

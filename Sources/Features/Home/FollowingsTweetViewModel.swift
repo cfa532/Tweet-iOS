@@ -75,11 +75,6 @@ class FollowingsTweetViewModel: ObservableObject {
                     TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
                 }
             }
-            
-            // Update video playlist with new tweets
-            if !filteredTweets.isEmpty {
-                FeedVideoPlaylistManager.shared.addVideos(from: filteredTweets, feedId: "main_feed")
-            }
             if page == 0 {
                 // only check for new tweets from followings on initial load.
                 Task {
@@ -116,9 +111,6 @@ class FollowingsTweetViewModel: ObservableObject {
                 
                 // Cache the new tweet so it persists across app restarts
                 TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
-                
-                // Add to video playlist if it contains videos
-                FeedVideoPlaylistManager.shared.addVideos(from: [tweet], feedId: "main_feed")
             }
         }
     }
@@ -128,9 +120,6 @@ class FollowingsTweetViewModel: ObservableObject {
         TweetCacheManager.shared.deleteTweet(mid: tweetId)
         // Also remove from main feed cache if it exists there
         // Note: deleteTweet removes by tweet ID, so it will remove from all caches
-        
-        // Remove from video playlist
-        FeedVideoPlaylistManager.shared.removeVideos(tweetId: tweetId, feedId: "main_feed")
     }
     
     func showTweetDetail(_ tweet: Tweet) {
@@ -143,9 +132,6 @@ class FollowingsTweetViewModel: ObservableObject {
         tweets.removeAll()
         // Clear main feed cache when user logs in/out
         TweetCacheManager.shared.clearCacheForUser(userId: "main_feed")
-        
-        // Clear video playlist
-        FeedVideoPlaylistManager.shared.clearPlaylist(feedId: "main_feed")
     }
     
     // Method to load page 0 tweets when app user is ready

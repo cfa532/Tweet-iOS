@@ -25,10 +25,6 @@ struct TweetItemView: View, Equatable {
     @State private var selectedEmbeddedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
     
-    // Video playlist from environment
-    @Environment(\.videoPlaylist) private var videoPlaylist
-    @Environment(\.feedId) private var feedId
-    
     // Check if this is a retweet or quoted tweet
     private var isRetweetOrQuotedTweet: Bool {
         return tweet.originalTweetId != nil && tweet.originalAuthorId != nil
@@ -113,18 +109,14 @@ struct TweetItemView: View, Equatable {
             MediaBrowserView(
                 tweet: tweet,
                 initialIndex: selectedMediaIndex,
-                sourceTweetId: tweet.mid, // Pass visible tweet ID for feed navigation
-                videoPlaylist: videoPlaylist,
-                feedId: feedId
+                sourceTweetId: tweet.mid // Pass visible tweet ID for feed navigation
             )
         }
         .fullScreenCover(isPresented: $showEmbeddedBrowser) {
             MediaBrowserView(
                 tweet: originalTweet ?? tweet,
                 initialIndex: selectedEmbeddedMediaIndex,
-                sourceTweetId: tweet.mid, // Pass visible tweet ID (the retweet)
-                videoPlaylist: videoPlaylist,
-                feedId: feedId
+                sourceTweetId: tweet.mid // Pass visible tweet ID (the retweet)
             )
         }
         .task {

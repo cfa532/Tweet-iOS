@@ -13,9 +13,6 @@ struct MediaBrowserView: View {
     let tweet: Tweet
     let initialIndex: Int
     let sourceTweetId: String? // The tweet ID where user tapped (could be retweet)
-    let videoPlaylist: [FeedVideoPlaylistManager.VideoItem] // Feed-specific playlist
-    let feedId: String // Which feed this browser is for
-    
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
     @State private var currentTweet: Tweet // Allow changing tweet for auto-advance
@@ -33,10 +30,6 @@ struct MediaBrowserView: View {
     @State private var isImageZoomed = false // Track if current image is zoomed
     @State private var isTransitioning = false // Track transition animation
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
-    
-    // TikTok-style playlist navigation
-    @State private var usePlaylistMode: Bool = false
-    @State private var playlistIndex: Int = 0
     private var attachments: [MimeiFileType] {
         return currentTweet.attachments ?? []
     }
@@ -49,258 +42,18 @@ struct MediaBrowserView: View {
             ?? HproseInstance.baseUrl
     }
 
-    init(tweet: Tweet, initialIndex: Int, sourceTweetId: String? = nil, videoPlaylist: [FeedVideoPlaylistManager.VideoItem] = [], feedId: String = "main_feed") {
+    init(tweet: Tweet, initialIndex: Int, sourceTweetId: String? = nil) {
         self.tweet = tweet
         self.initialIndex = initialIndex
         self.sourceTweetId = sourceTweetId
-        self.videoPlaylist = videoPlaylist
-        self.feedId = feedId
         self._currentIndex = State(initialValue: initialIndex)
         self._currentTweet = State(initialValue: tweet)
         self._currentSourceTweetId = State(initialValue: sourceTweetId ?? tweet.mid)
         self._previousIndex = State(initialValue: initialIndex)
-        
-        // Determine if we should use playlist mode
-        let hasPlaylist = !videoPlaylist.isEmpty
-        let attachmentIsVideo = tweet.attachments?.indices.contains(initialIndex) == true &&
-            (tweet.attachments?[initialIndex].type == .video ||
-             tweet.attachments?[initialIndex].type == .hls_video ||
-             tweet.attachments?[initialIndex].type == .audio)
-        
-        // Use playlist mode if available and tapped on a video
-        self._usePlaylistMode = State(initialValue: hasPlaylist && attachmentIsVideo)
-        
-        // Find initial playlist index
-        if hasPlaylist && attachmentIsVideo {
-            if let foundIndex = videoPlaylist.firstIndex(where: { $0.tweetId == tweet.mid && $0.videoIndex == initialIndex }) {
-                self._playlistIndex = State(initialValue: foundIndex)
-                self._usePlaylistMode = State(initialValue: true)
-                print("📹 [MediaBrowser] PLAYLIST MODE - tweet: \(tweet.mid), videoIndex: \(initialIndex), playlistIndex: \(foundIndex)/\(videoPlaylist.count)")
-            } else {
-                // Video not found in playlist - fall back to classic mode
-                self._playlistIndex = State(initialValue: 0)
-                self._usePlaylistMode = State(initialValue: false)
-                print("⚠️ [MediaBrowser] Video NOT in playlist (tweet: \(tweet.mid), index: \(initialIndex)) - falling back to CLASSIC MODE")
-                print("⚠️ [MediaBrowser] Playlist has \(videoPlaylist.count) videos:")
-                for (idx, item) in videoPlaylist.prefix(5).enumerated() {
-                    print("   [\(idx)] tweetId: \(item.tweetId), videoIndex: \(item.videoIndex), mediaId: \(item.videoMediaId)")
-                }
-            }
-        } else {
-            self._playlistIndex = State(initialValue: 0)
-            print("📹 [MediaBrowser] SINGLE TWEET MODE - tweet: \(tweet.mid), attachmentIndex: \(initialIndex)")
-        }
+        print("MediaBrowserView init - tweet: \(tweet.mid), sourceTweet: \(sourceTweetId ?? tweet.mid), attachments: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
     }
 
     var body: some View {
-        Group {
-            if usePlaylistMode {
-                // TikTok-style: Swipe through ALL videos in feed
-                playlistBrowserView()
-            } else {
-                // Classic: Swipe through attachments of ONE tweet
-                singleTweetBrowserView()
-            }
-        }
-        .onAppear {
-            if !usePlaylistMode {
-                setupFullScreenManager()
-            }
-        }
-        .onDisappear {
-            FullScreenVideoManager.shared.clearSingletonPlayer()
-        }
-    }
-    
-    // MARK: - TikTok-Style Playlist Browser
-    
-    @ViewBuilder
-    private func playlistBrowserView() -> some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            TabView(selection: $playlistIndex) {
-                ForEach(videoPlaylist.indices, id: \.self) { index in
-                    playlistVideoView(at: index)
-                        .tag(index)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .indexViewStyle(.page(backgroundDisplayMode: .never))
-            .onChange(of: playlistIndex) { oldIndex, newIndex in
-                handlePlaylistIndexChange(from: oldIndex, to: newIndex)
-            }
-            
-            // Close button overlay
-            VStack {
-                HStack {
-                    Button(action: { dismiss() }) {
-                        Image(systemName: "xmark")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(Circle().fill(Color.black.opacity(0.5)))
-                    }
-                    .padding()
-                    
-                    Spacer()
-                    
-                    // Playlist position indicator
-                    Text("\(playlistIndex + 1) / \(videoPlaylist.count)")
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(Color.black.opacity(0.5)))
-                        .padding()
-                }
-                
-                Spacer()
-            }
-        }
-    }
-    
-    @ViewBuilder
-    private func playlistVideoView(at index: Int) -> some View {
-        let videoItem = videoPlaylist[index]
-        
-        // Fetch the actual tweet to get author info and baseUrl
-        if let tweet = Tweet.getInstance(for: videoItem.tweetId),
-           let attachment = tweet.attachments?.first(where: { $0.mid == videoItem.videoMediaId }) {
-            
-            let baseUrl = tweet.author?.baseUrl 
-                ?? HproseInstance.shared.appUser.baseUrl 
-                ?? HproseInstance.baseUrl
-            
-            if let url = attachment.getUrl(baseUrl) {
-                VStack(spacing: 0) {
-                    Spacer()
-                    
-                    // Video player
-                    SingletonVideoPlayerView(
-                        url: url,
-                        mid: attachment.mid,
-                        tweetId: tweet.mid,
-                        videoIndex: videoItem.videoIndex,
-                        mediaType: attachment.type,
-                        aspectRatio: attachment.aspectRatio
-                    )
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(videoItem.aspectRatio ?? 16/9, contentMode: .fit)
-                    .onAppear {
-                        // Load video when it appears
-                        if index == playlistIndex {
-                            loadPlaylistVideo(at: index)
-                        }
-                    }
-                    
-                    // Tweet info overlay
-                    HStack(alignment: .bottom) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 8) {
-                                if let author = tweet.author {
-                                    // Build avatar URL from avatar MimeiId
-                                    let avatarURL = author.avatar != nil ? URL(string: "http://localhost:8080/\(author.avatar!)") : nil
-                                    
-                                    AsyncImage(url: avatarURL) { image in
-                                        image.resizable().scaledToFill()
-                                    } placeholder: {
-                                        Color.gray
-                                    }
-                                    .frame(width: 36, height: 36)
-                                    .clipShape(Circle())
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(author.name ?? "")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundColor(.white)
-                                        Text("@\(author.username ?? "")")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(.white.opacity(0.8))
-                                    }
-                                }
-                            }
-                            
-                            if let content = tweet.content, !content.isEmpty {
-                                Text(content)
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.white)
-                                    .lineLimit(3)
-                            }
-                        }
-                        
-                        Spacer()
-                    }
-                    .padding()
-                    .background(
-                        LinearGradient(
-                            colors: [Color.clear, Color.black.opacity(0.7)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    
-                    Spacer()
-                }
-            } else {
-                Color.black
-                    .overlay(
-                        Text("Video unavailable")
-                            .foregroundColor(.white)
-                    )
-            }
-        } else {
-            Color.black
-                .overlay(
-                    Text("Loading...")
-                        .foregroundColor(.white)
-                )
-        }
-    }
-    
-    private func loadPlaylistVideo(at index: Int) {
-        let videoItem = videoPlaylist[index]
-        
-        guard let tweet = Tweet.getInstance(for: videoItem.tweetId),
-              let attachment = tweet.attachments?.first(where: { $0.mid == videoItem.videoMediaId }) else {
-            return
-        }
-        
-        let baseUrl = tweet.author?.baseUrl 
-            ?? HproseInstance.shared.appUser.baseUrl 
-            ?? HproseInstance.baseUrl
-        
-        guard let url = attachment.getUrl(baseUrl) else { return }
-        
-        FullScreenVideoManager.shared.loadVideo(
-            url: url,
-            mid: attachment.mid,
-            tweetId: tweet.mid,
-            sourceTweetId: tweet.mid,
-            videoIndex: videoItem.videoIndex,
-            mediaType: attachment.type
-        )
-        
-        // Track access for cache management
-        DiskCacheCleanupManager.shared.recordAccess(mediaId: attachment.mid)
-    }
-    
-    private func handlePlaylistIndexChange(from oldIndex: Int, to newIndex: Int) {
-        print("📹 [MediaBrowser] Playlist index changed: \(oldIndex) → \(newIndex)")
-        
-        // Load the new video
-        loadPlaylistVideo(at: newIndex)
-        
-        // Clear old player to free memory
-        if abs(newIndex - oldIndex) > 2 {
-            FullScreenVideoManager.shared.clearSingletonPlayer()
-        }
-    }
-    
-    // MARK: - Single Tweet Browser (Classic Mode)
-    
-    @ViewBuilder
-    private func singleTweetBrowserView() -> some View {
         MediaBrowserContentView(
                 attachments: attachments,
                 currentIndex: $currentIndex,
@@ -323,6 +76,12 @@ struct MediaBrowserView: View {
                     loadImageIfNeeded(for: attachment, at: index)
                 }
             )
+            .onAppear {
+                setupFullScreenManager()
+            }
+            .onDisappear {
+                FullScreenVideoManager.shared.clearSingletonPlayer()
+            }
     }
     
     private func setupFullScreenManager() {

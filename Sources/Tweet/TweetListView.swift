@@ -18,7 +18,6 @@ struct TweetListView<RowView: View>: View {
     let notifications: [TweetListNotification]
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     let shouldCacheServerTweets: Bool
-    let feedId: String  // Feed identifier for playlist caching
     private let pageSize: UInt = 10
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -38,9 +37,6 @@ struct TweetListView<RowView: View>: View {
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
     @State private var scrollAnchorId: String? = nil  // Track scroll position
-    
-    // Video playlist for TikTok-style full-screen browsing
-    @State private var currentVideoPlaylist: [FeedVideoPlaylistManager.VideoItem] = []
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -136,7 +132,6 @@ struct TweetListView<RowView: View>: View {
         tweetFetcher: @escaping @Sendable (UInt, UInt, Bool, Bool) async throws -> [Tweet?],
         showTitle: Bool = true,
         shouldCacheServerTweets: Bool = false,
-        feedId: String = "default",  // Feed identifier
         notifications: [TweetListNotification]? = nil,
         onScroll: ((CGFloat, CGFloat) -> Void)? = nil,  // (offset, delta)
         header: (() -> AnyView)? = nil,
@@ -147,7 +142,6 @@ struct TweetListView<RowView: View>: View {
         self.tweetFetcher = tweetFetcher
         self.showTitle = showTitle
         self.shouldCacheServerTweets = shouldCacheServerTweets
-        self.feedId = feedId
         self.onScroll = onScroll
         self.header = header
         // Default: listen for newTweetCreated and insert at top
@@ -191,8 +185,6 @@ struct TweetListView<RowView: View>: View {
                             initialLoadComplete: initialLoadComplete,
                             loadMoreTweets: { loadMoreTweets() }
                        )
-                       .environment(\.videoPlaylist, currentVideoPlaylist)
-                       .environment(\.feedId, feedId)
                    }
                }
                .safeAreaInset(edge: .top) {
@@ -252,10 +244,6 @@ struct TweetListView<RowView: View>: View {
                                 let countAfter = tweets.count
                                 TweetCacheManager.shared.deleteTweet(mid: tweetId)
                                 print("DEBUG: [TweetListView] Removed deleted tweet \(tweetId) from list (title: \(title), count: \(countBefore) -> \(countAfter))")
-                                
-                                // Remove from video playlist and rebuild current list
-                                FeedVideoPlaylistManager.shared.removeVideos(tweetId: tweetId, feedId: feedId)
-                                currentVideoPlaylist = FeedVideoPlaylistManager.shared.buildPlaylist(from: tweets, feedId: feedId)
                             } else if notification.name == .tweetPrivacyChanged {
                                 // For privacy changes, handle removal directly here
                                 // Find the tweet first before removing it
@@ -270,10 +258,6 @@ struct TweetListView<RowView: View>: View {
                                     if let tweet = tweetToRemove {
                                         notification.action(tweet)
                                     }
-                                    
-                                    // Remove from video playlist if became private and rebuild current list
-                                    FeedVideoPlaylistManager.shared.removeVideos(tweetId: tweetId, feedId: feedId)
-                                    currentVideoPlaylist = FeedVideoPlaylistManager.shared.buildPlaylist(from: tweets, feedId: feedId)
                                 } else {
                                     print("DEBUG: [TweetListView] Privacy-changed tweet \(tweetId) not found in list (title: \(title))")
                                 }
@@ -335,15 +319,6 @@ struct TweetListView<RowView: View>: View {
                     // Update VideoLoadingManager with new tweet list
                     let tweetIds = tweets.map { $0.mid }
                     videoLoadingManager.updateTweetList(tweetIds)
-                    
-                    // Build video playlist for full-screen browsing
-                    currentVideoPlaylist = FeedVideoPlaylistManager.shared.buildPlaylist(from: validCachedTweets, feedId: feedId)
-                    print("📹 [TweetListView] Built playlist with \(currentVideoPlaylist.count) videos for feedId: \(feedId)")
-                    
-                    // Debug: Log first few videos
-                    for (idx, item) in currentVideoPlaylist.prefix(5).enumerated() {
-                        print("   [\(idx)] tweetId: \(item.tweetId), videoIndex: \(item.videoIndex), type: \(item.videoType)")
-                    }
                     
                     // Mark as loaded immediately after cache load for instant UX
                     isLoading = false
@@ -499,14 +474,6 @@ struct TweetListView<RowView: View>: View {
                     // Update VideoLoadingManager with new tweet list
                     let tweetIds = tweets.map { $0.mid }
                     videoLoadingManager.updateTweetList(tweetIds)
-                    
-                    // Add new videos to playlist and update current list
-                    let validTweets = tweetsFromCache.compactMap { $0 }
-                    if !validTweets.isEmpty {
-                        FeedVideoPlaylistManager.shared.addVideos(from: validTweets, feedId: feedId)
-                        // Rebuild current playlist from all tweets
-                        currentVideoPlaylist = FeedVideoPlaylistManager.shared.buildPlaylist(from: tweets, feedId: feedId)
-                    }
                     
                     // Clear loading state after minimum duration
                     isLoadingMore = false
