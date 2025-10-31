@@ -634,7 +634,6 @@ final class HproseInstance: ObservableObject {
                         tweet.author = user  // Set on main thread since author is @Published
                         return tweet
                     }
-                    print("DEBUG: [fetchUserTweets] Set tweet.author: userId=\(user.mid), name=\(user.name ?? "nil"), username=\(user.username ?? "nil"), tweetId=\(tweet.mid)")
                     
                     // Only show private tweets if the current user is the author
                     if tweet.isPrivate == true && tweet.authorId != appUser.mid {
@@ -756,7 +755,6 @@ final class HproseInstance: ObservableObject {
         // BUT: If baseUrl is nil (cleared after loading from disk cache), we need to re-resolve IP
         // ALSO: If baseUrl is empty string, force refresh to re-resolve provider IP
         if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil && !baseUrl.isEmpty {
-            print("DEBUG: [fetchUser] ✅ Returning cached user for \(userId), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
             return cachedUser
         }
         

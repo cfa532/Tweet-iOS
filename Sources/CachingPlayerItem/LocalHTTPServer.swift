@@ -725,8 +725,37 @@ public class LocalHTTPServer: @unchecked Sendable {
         let requestSize = rangeEnd != nil ? (rangeEnd! - (rangeStart ?? 0) + 1) : Int64.max
         let isProbeRequest = requestSize < 1024  // Requests < 1KB are just probes
         
+        // CRITICAL: For very large progressive videos (>100MB total), redirect to direct playback
+        // LocalHTTPServer caching doesn't work well for large files - AVPlayer gets confused with partial ranges
+        let maxCacheableSize: Int64 = 100 * 1024 * 1024  // 100MB
+        if let end = rangeEnd, let start = rangeStart {
+            let totalSize = end + 1  // Total file size indicated by the request
+            if totalSize > maxCacheableSize {
+                NSLog("⚠️ [PROGRESSIVE TOO LARGE] File size \(totalSize/1024/1024)MB exceeds cacheable limit (\(maxCacheableSize/1024/1024)MB) - redirecting to direct playback")
+                // Redirect to direct URL - AVPlayer will handle progressive streaming natively
+                let redirectHeaders: [String: String] = [
+                    "Location": fullRealURL.absoluteString,
+                    "Content-Length": "0"
+                ]
+                sendResponse(connection: connection, statusCode: 307, headers: redirectHeaders, body: nil)
+                return
+            }
+        }
+        
+        // CRITICAL: Cap range size to prevent memory outages (max 50MB per request)
+        let maxRangeSize: Int64 = 50 * 1024 * 1024  // 50MB
+        var cappedRangeEnd = rangeEnd
+        if let start = rangeStart, let end = rangeEnd {
+            let requestedSize = end - start + 1
+            if requestedSize > maxRangeSize {
+                cappedRangeEnd = start + maxRangeSize - 1
+                NSLog("⚠️ [PROGRESSIVE RANGE CAP] Requested range too large (\(requestedSize/1024/1024)MB), capping to \(maxRangeSize/1024/1024)MB - range: \(start)-\(cappedRangeEnd!)")
+            }
+        }
+        
         // Check cache for this specific range - ALWAYS check, even for probes
         // CRITICAL: If no range header, try to serve full file from cache (range 0-end)
+        // For cache operations, use ORIGINAL rangeEnd (not capped) - we can serve from cache without memory issues
         let effectiveStart = rangeStart ?? 0
         let effectiveEnd = rangeEnd
         
@@ -735,7 +764,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         if let cachedData = readCachedProgressiveRange(mediaID: mediaID, start: effectiveStart, end: effectiveEnd) {
             // CACHE HIT - serve from cache instantly (any size is valid, including probe requests)
-            let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(effectiveEnd?.description ?? "end")" : "full-file"
+            // Calculate the ACTUAL end byte we're serving (based on data size, not requested range)
+            let actualEndByte = effectiveStart + Int64(cachedData.count) - 1
+            
+            let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(actualEndByte)" : "full-file"
             NSLog("🎯 [PROGRESSIVE CACHE HIT] mediaID: \(mediaID), range: \(rangeStr), size: \(cachedData.count) bytes, total: \(totalSize ?? -1)")
             
             var headers: [String: String] = [
@@ -744,13 +776,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                 "Accept-Ranges": "bytes"
             ]
             
-            if rangeHeader != nil, let end = effectiveEnd {
-                // CRITICAL: Include total file size so AVPlayer knows there's more data
+            if rangeHeader != nil {
+                // CRITICAL: Use actualEndByte (what we're ACTUALLY serving) not requested end
                 if let total = totalSize {
-                    headers["Content-Range"] = "bytes \(effectiveStart)-\(end)/\(total)"
+                    headers["Content-Range"] = "bytes \(effectiveStart)-\(actualEndByte)/\(total)"
                 } else {
-                    headers["Content-Range"] = "bytes \(effectiveStart)-\(end)/*"
+                    headers["Content-Range"] = "bytes \(effectiveStart)-\(actualEndByte)/*"
                 }
+                NSLog("📦 [CACHE SERVE] Content-Range: bytes \(effectiveStart)-\(actualEndByte)/\(totalSize?.description ?? "*")")
             }
             
             let statusCode = rangeHeader != nil ? 206 : 200
@@ -773,7 +806,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         request.httpMethod = method
         request.timeoutInterval = 30
         
-        if let range = rangeHeader {
+        // Use capped range if it was modified
+        if cappedRangeEnd != rangeEnd, let start = rangeStart {
+            let cappedRangeHeader = "bytes=\(start)-\(cappedRangeEnd!)"
+            request.setValue(cappedRangeHeader, forHTTPHeaderField: "Range")
+            NSLog("🔧 [PROGRESSIVE RANGE CAP] Using capped range header: \(cappedRangeHeader)")
+        } else if let range = rangeHeader {
             request.setValue(range, forHTTPHeaderField: "Range")
         }
         
@@ -818,11 +856,12 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             // Cache this byte range for future requests
             // CRITICAL: Use effectiveStart (0) if rangeStart is nil (full file request)
+            // Use cappedRangeEnd since that's what we actually fetched
             let cacheStart = rangeStart ?? 0
             if !isProbeRequest, data.count >= 1024 {
-                let rangeStr = rangeEnd != nil ? "\(cacheStart)-\(rangeEnd!)" : "\(cacheStart)-end"
+                let rangeStr = cappedRangeEnd != nil ? "\(cacheStart)-\(cappedRangeEnd!)" : "\(cacheStart)-end"
                 NSLog("💾 [PROGRESSIVE CACHE WRITE] mediaID: \(mediaID), range: \(rangeStr), size: \(data.count) bytes")
-                self.cacheProgressiveRange(mediaID: mediaID, start: cacheStart, end: rangeEnd, data: data)
+                self.cacheProgressiveRange(mediaID: mediaID, start: cacheStart, end: cappedRangeEnd, data: data)
             } else if isProbeRequest {
                 NSLog("DEBUG: [PROGRESSIVE CACHE SKIP] Probe request (\(data.count) bytes), not caching")
             } else {
@@ -841,13 +880,19 @@ public class LocalHTTPServer: @unchecked Sendable {
                 "Accept-Ranges": "bytes"
             ]
             
-            // Preserve Content-Range if present
+            // Build or preserve Content-Range header
             if let contentRange = httpResponse.value(forHTTPHeaderField: "Content-Range") {
                 headers["Content-Range"] = contentRange
+            } else if cappedRangeEnd != rangeEnd, let start = rangeStart, let cappedEnd = cappedRangeEnd {
+                // We capped the range, so build a proper Content-Range header
+                // Use asterisk for total size since we don't know it yet
+                headers["Content-Range"] = "bytes \(start)-\(cappedEnd)/*"
+                NSLog("🔧 [PROGRESSIVE RANGE CAP] Added Content-Range header: bytes \(start)-\(cappedEnd)/*")
             }
             
-            // Send response
-            self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: headers, body: data)
+            // Send response - use 206 Partial Content if we have a range
+            let statusCode = rangeHeader != nil ? 206 : httpResponse.statusCode
+            self.sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: data)
         }
         
         task.resume()
@@ -924,11 +969,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                 continue
             }
             
-            // Check if cached range fully contains requested range
-            // CRITICAL: When end is nil (full file request), accept any cache starting at requested position
-            let containsRequest = cachedStart <= start && (end == nil ? true : cachedEnd >= requestEnd)
+            // Check if cached range overlaps with requested range (even partially)
+            // For progressive video, serve what we have and let AVPlayer request the rest
+            let overlapsRequest = cachedStart <= start && cachedEnd >= start
             
-            if containsRequest {
+            if overlapsRequest {
                 let cachePath = mediaDir.appendingPathComponent(file)
                 guard let fullData = try? Data(contentsOf: cachePath) else {
                     continue
@@ -936,17 +981,24 @@ public class LocalHTTPServer: @unchecked Sendable {
                 
                 // Calculate offset into cached file
                 let offset = Int(start - cachedStart)
-                let length = end != nil ? Int(requestEnd - start + 1) : fullData.count - offset
+                
+                // Calculate how much we can serve from this cached range
+                // If request asks for more than we have, serve only what we have
+                let availableLength = fullData.count - offset
+                let requestedLength = end != nil ? Int(requestEnd - start + 1) : availableLength
+                let actualLength = min(requestedLength, availableLength)
                 
                 // Validate bounds
-                guard offset >= 0, offset < fullData.count, offset + length <= fullData.count else {
+                guard offset >= 0, offset < fullData.count, actualLength > 0 else {
                     continue
                 }
                 
-                // Extract the requested subrange from cached data
-                let subrange = fullData.subdata(in: offset..<(offset + length))
+                // Extract what we have cached
+                let endIndex = min(offset + actualLength, fullData.count)
+                let subrange = fullData.subdata(in: offset..<endIndex)
                 
-                NSLog("🎯 [PROGRESSIVE CACHE] Found overlapping range - cached: \(cachedStart)-\(cachedEnd == Int64.max ? "end" : String(cachedEnd)), requested: \(start)-\(end?.description ?? "end"), offset: \(offset), length: \(length)")
+                let actualEndByte = start + Int64(subrange.count) - 1
+                NSLog("🎯 [PROGRESSIVE CACHE] Found overlapping range - cached: \(cachedStart)-\(cachedEnd == Int64.max ? "end" : String(cachedEnd)), requested: \(start)-\(end?.description ?? "end"), serving: \(start)-\(actualEndByte), size: \(subrange.count)")
                 
                 return subrange
             }

@@ -82,17 +82,14 @@ struct Avatar: View {
     }
     
     private func loadAvatar(from urlString: String) {
-        NSLog("DEBUG: [Avatar.loadAvatar] Called for user \(user.mid), avatar: \(user.avatar ?? "nil")")
         
         guard !isLoading else { 
-            NSLog("DEBUG: [Avatar.loadAvatar] Already loading, skipping")
             return 
         }
         
         // IMPORTANT: Use user's avatar MimeiId as the cache key (stable identifier)
         // NOT the URL which can change when baseUrl changes
         let cacheKey = user.avatar ?? (URL(string: urlString)?.lastPathComponent ?? urlString)
-        NSLog("DEBUG: [Avatar.loadAvatar] Using cache key: \(cacheKey)")
         
         // Create a MimeiFileType with the user's avatar MimeiId so caching works correctly
         let avatarAttachment = MimeiFileType(
@@ -104,12 +101,9 @@ struct Avatar: View {
         
         // Check cache first
         if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
-            NSLog("DEBUG: [Avatar.loadAvatar] Found in cache: \(cacheKey)")
             cachedImage = cached
             return
         }
-        
-        NSLog("DEBUG: [Avatar.loadAvatar] Not in cache, loading from network: \(cacheKey)")
         
         // Load from network using regular image loading (no special avatar treatment)
         isLoading = true

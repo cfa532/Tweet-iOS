@@ -76,7 +76,6 @@ class ProfileTweetsViewModel: ObservableObject {
                     } else {
                         // Public tweet - save to main_feed (unified cache)
                         TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
-                        print("DEBUG: [ProfileTweetsViewModel] Cached public tweet to main_feed: \(tweet.mid)")
                     }
                 }
             }
@@ -107,7 +106,6 @@ class ProfileTweetsViewModel: ObservableObject {
                         print("DEBUG: [ProfileTweetsViewModel] Cached private tweet to profile only: \(tweet.mid)")
                     } else {
                         TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
-                        print("DEBUG: [ProfileTweetsViewModel] Cached public tweet to main_feed: \(tweet.mid)")
                     }
                 }
             } else {

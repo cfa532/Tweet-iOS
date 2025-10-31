@@ -71,7 +71,6 @@ user.baseUrl = URL(string: "http://\(providerIP)")!
 // BUT: If baseUrl is nil (cleared after loading from disk cache), we need to re-resolve IP
 // ALSO: If baseUrl is empty string, force refresh to re-resolve provider IP
 if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil && !baseUrl.isEmpty {
-    print("DEBUG: [fetchUser] ✅ Returning cached user for \(userId), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
     return cachedUser
 }
 
