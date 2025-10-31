@@ -12,6 +12,7 @@ A Twitter-like iOS application built with SwiftUI, featuring real-time social me
 - **Real-time Chat**: Direct messaging between users
 - **Search & Discovery**: Find users and content
 - **Offline Support**: Cached content for offline viewing
+- **Web3 Node Management**: Tweet limit system for users without cloud drive nodes, encouraging self-hosting
 
 ## Architecture
 

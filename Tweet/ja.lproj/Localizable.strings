@@ -478,3 +478,8 @@
 "Not enough storage space available." = "ストレージ容量が不足しています。";
 "Network error. Please check your connection and try again." = "ネットワークエラーです。接続を確認してもう一度お試しください。";
 "Something went wrong. Please try again." = "問題が発生しました。もう一度お試しください。";
+
+// MARK: - Cloud Drive Limit
+"Tweet Limit Reached" = "ツイート制限に達しました";
+"This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "これはWeb3ツイートアプリです。善意でホストされているツイートの最大数に達しました。独自のノードを設定するか、友人に今後のツイートをホストしてもらってください。";
+"Learn More" = "詳細を見る";

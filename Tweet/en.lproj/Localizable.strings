@@ -566,3 +566,8 @@
 "Not enough storage space available." = "Not enough storage space available.";
 "Network error. Please check your connection and try again." = "Network error. Please check your connection and try again.";
 "Something went wrong. Please try again." = "Something went wrong. Please try again.";
+
+// MARK: - Cloud Drive Limit
+"Tweet Limit Reached" = "Tweet Limit Reached";
+"This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets.";
+"Learn More" = "Learn More";

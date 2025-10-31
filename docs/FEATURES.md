@@ -1,6 +1,6 @@
 # Tweet-iOS Features
 
-**Last Updated:** October 10, 2025
+**Last Updated:** October 31, 2025
 
 ## Core Social Media Features
 
@@ -210,6 +210,49 @@ See: [Video System Architecture](./VIDEO_SYSTEM_ARCHITECTURE.md)
 - In-app camera capture
 - Photo/video recording
 - Gallery picker integration
+
+## Web3 & Node Management
+
+### Tweet Limit System
+
+**ContentView** (`Sources/App/ContentView.swift`)
+- Validates cloud drive node configuration before allowing tweet composition
+- Limits users without cloud drive nodes to 5 tweets (configurable)
+- Shows educational alert when limit is reached
+- Direct navigation to @developer profile for support
+
+**Features:**
+- **Pre-Composition Validation:** Check happens when user taps the Tweet button in bottom navigation bar (before compose sheet opens)
+- **Smart Detection:** Validates if `cloudDrivePort <= 0` (no valid node configured)
+- **User Education:** Alert explains Web3 architecture and hosting options
+- **Graceful Onboarding:** Allows limited benevolent hosting before requiring node setup
+- **Support Path:** "Learn More" button navigates directly to @developer's profile for assistance
+
+**Alert Message:**
+```
+Title: "Tweet Limit Reached"
+Message: "This is a Web3 tweet app. You have reached the maximum number 
+         of benevolently hosted tweets. Please set up your own node or 
+         ask a friend to host your future tweets."
+Buttons: [Learn More] [Cancel]
+```
+
+**Localization:**
+- Fully localized in English, Japanese, and Chinese
+- Consistent messaging across all languages
+
+**Implementation Details:**
+- Limit: 5 tweets (testing), configurable to any value
+- Check location: Bottom navigation bar Compose button
+- Debug logging for troubleshooting
+- Direct profile navigation (no modal sheets)
+
+**Benefits:**
+- Educates users about Web3 architecture
+- Encourages node self-hosting
+- Prevents abuse of benevolent hosting
+- Smooth upgrade path to full platform participation
+- Better user experience vs failing at publish time
 
 ## Performance Optimizations
 

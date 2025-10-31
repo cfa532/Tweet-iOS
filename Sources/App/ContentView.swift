@@ -18,6 +18,7 @@ struct ContentView: View {
     @State private var toastType: ToastView.ToastType = .success
     @State private var pendingUpload: TweetUploadManager.PendingTweetUpload? = nil
     @State private var showPendingUploadDialog = false
+    @State private var showCloudDriveLimitAlert = false
     
     var body: some View {
         let _ = NSLog("DEBUG: [ContentView] ContentView body is being rendered")
@@ -90,7 +91,19 @@ struct ContentView: View {
                 
                 // Compose Tab
                 Button(action: {
-                    showComposeSheet = true
+                    // Check if user has no valid cloudDrivePort and has reached tweet limit
+                    let cloudDrivePort = hproseInstance.appUser.cloudDrivePort
+                    let tweetCount = hproseInstance.appUser.tweetCount ?? 0
+                    
+                    print("DEBUG: [Tweet Limit Check] cloudDrivePort: \(cloudDrivePort), tweetCount: \(tweetCount)")
+                    
+                    if (cloudDrivePort <= 0) && (tweetCount >= 5) {
+                        print("DEBUG: [Tweet Limit Check] ❌ LIMIT REACHED - Showing alert")
+                        showCloudDriveLimitAlert = true
+                    } else {
+                        print("DEBUG: [Tweet Limit Check] ✅ ALLOWED - cloudDrivePort: \(cloudDrivePort > 0 ? "valid" : "invalid"), tweetCount: \(tweetCount)/5")
+                        showComposeSheet = true
+                    }
                 }) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 24))
@@ -122,6 +135,18 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showComposeSheet) {
             ComposeTweetView()
+        }
+        .alert(NSLocalizedString("Tweet Limit Reached", comment: "Tweet limit alert title"), isPresented: $showCloudDriveLimitAlert) {
+            Button(NSLocalizedString("Learn More", comment: "Learn more button")) {
+                Task {
+                    await fetchDeveloperUserAndNavigate()
+                }
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) {
+                // Do nothing, just dismiss the alert
+            }
+        } message: {
+            Text(NSLocalizedString("This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets.", comment: "Tweet limit message"))
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetSubmitted)) { notification in
             if let message = notification.userInfo?["message"] as? String {
@@ -267,6 +292,28 @@ struct ContentView: View {
         }
         .environmentObject(hproseInstance)
         .environmentObject(themeManager)
+    }
+    
+    // MARK: - Developer Profile Navigation
+    
+    private func fetchDeveloperUserAndNavigate() async {
+        do {
+            // Fetch developer user by username
+            if let userId = try await hproseInstance.getUserId("developer"),
+               let user = try await hproseInstance.fetchUser(userId) {
+                await MainActor.run {
+                    // Switch to home tab and navigate to developer's profile
+                    selectedTab = 0
+                    // Clear any existing navigation and push developer user
+                    navigationPath = NavigationPath()
+                    navigationPath.append(user)
+                }
+            } else {
+                print("DEBUG: Could not find @developer user")
+            }
+        } catch {
+            print("DEBUG: Error fetching @developer user: \(error)")
+        }
     }
     
     // MARK: - Pending Upload Handling
