@@ -725,9 +725,9 @@ public class LocalHTTPServer: @unchecked Sendable {
         let requestSize = rangeEnd != nil ? (rangeEnd! - (rangeStart ?? 0) + 1) : Int64.max
         let isProbeRequest = requestSize < 1024  // Requests < 1KB are just probes
         
-        // CRITICAL: For very large progressive videos (>100MB total), redirect to direct playback
-        // LocalHTTPServer caching doesn't work well for large files - AVPlayer gets confused with partial ranges
-        let maxCacheableSize: Int64 = 100 * 1024 * 1024  // 100MB
+        // CRITICAL: For very large progressive videos (>200MB total), redirect to direct playback
+        // LocalHTTPServer caching doesn't work well for extremely large files - AVPlayer gets confused with partial ranges
+        let maxCacheableSize: Int64 = 200 * 1024 * 1024  // 200MB (cache limit is 2GB, so this is safe)
         if let end = rangeEnd, let start = rangeStart {
             let totalSize = end + 1  // Total file size indicated by the request
             if totalSize > maxCacheableSize {
