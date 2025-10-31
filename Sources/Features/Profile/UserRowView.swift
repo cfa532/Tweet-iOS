@@ -5,6 +5,7 @@
 //  Created by 超方 on 2025/6/10.
 //
 import SwiftUI
+import Combine
 
 @available(iOS 16.0, *)
 struct UserRowView: View {
@@ -13,7 +14,7 @@ struct UserRowView: View {
     let onFollowToggle: ((User) async -> Void)?
     let onTap: ((User) -> Void)?
     let onLoadFailed: ((String) -> Void)?
-    @State private var user: User?
+    @ObservedObject private var user: User
     @State private var isFollowing: Bool = false
     @State private var showFullProfile: Bool = false
     @State private var isLoading: Bool = true
@@ -21,9 +22,6 @@ struct UserRowView: View {
     @State private var loadingTask: Task<Void, Never>?
     @State private var currentCancellationToken: UUID
     @EnvironmentObject private var hproseInstance: HproseInstance
-    
-    // Sequential loading control
-    @State private var shouldStartLoading: Bool = false
     
     // MARK: - Initialization
     init(
@@ -39,6 +37,8 @@ struct UserRowView: View {
         self.onTap = onTap
         self.onLoadFailed = onLoadFailed
         self._currentCancellationToken = State(initialValue: cancellationToken)
+        // Initialize ObservedObject with singleton instance
+        self._user = ObservedObject(wrappedValue: User.getInstance(mid: userId))
     }
     
     private func formatRegistrationDate(_ date: Date) -> String {
@@ -63,7 +63,7 @@ struct UserRowView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-            } else if let user = user {
+            } else {
                 HStack(alignment: .top, spacing: 4) {
                     Avatar(user: user, size: 48)
                     
@@ -186,45 +186,14 @@ struct UserRowView: View {
                         return
                     }
                     
-                    // Accept user even if username is nil (it will be populated by background fetch)
+                    // The user singleton will be automatically updated by fetchUser's background task
+                    // @ObservedObject will cause view to refresh when singleton's @Published properties change
                     print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid), username: \(fetchedUser.username ?? "nil")")
                     await MainActor.run {
                         // Check if task was cancelled before updating UI
                         guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
-                        self.user = fetchedUser
                         self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
-                        // Always show the user row, even if username is nil (will update via background fetch)
                         self.isLoading = false
-                        
-                        // If username is nil, start a delayed check to verify background fetch succeeded
-                        if fetchedUser.username == nil || fetchedUser.username?.isEmpty == true {
-                            Task {
-                                // Wait 15 seconds for background fetch to complete
-                                // This accounts for:
-                                // - Network latency
-                                // - 3 retries with 1s and 2s delays = ~3s
-                                // - Server processing time
-                                // - IP resolution time
-                                try? await Task.sleep(nanoseconds: 15_000_000_000)
-                                
-                                // Check if username is still nil after background fetch
-                                // Fetch from singleton to get latest data
-                                let updatedUser = User.getInstance(mid: userId)
-                                
-                                await MainActor.run {
-                                    guard taskCancellationToken == currentCancellationToken else { return }
-                                    if updatedUser.username == nil || updatedUser.username?.isEmpty == true {
-                                        print("DEBUG: [UserRowView] Background fetch failed after 15s timeout for \(userId), hiding row")
-                                        self.loadFailed = true
-                                        self.onLoadFailed?(userId)
-                                    } else {
-                                        print("DEBUG: [UserRowView] Background fetch succeeded for \(userId): \(updatedUser.username ?? ""), updating view")
-                                        // Update the view with the populated user data
-                                        self.user = updatedUser
-                                    }
-                                }
-                            }
-                        }
                     }
                 } else {
                     print("DEBUG: [UserRowView] No user found for ID: \(userId)")
