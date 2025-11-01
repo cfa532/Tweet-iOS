@@ -617,10 +617,25 @@ class SharedAssetCache: ObservableObject {
         } else {
             NSLog("DEBUG: [SHARED ASSET CACHE] No cached playlist found, resolving HLS URL from network")
             let resolveStart = Date()
-            resolvedURL = await resolveHLSURL(url)
+            let networkResolvedURL = await resolveHLSURL(url)
             let resolveTime = Date().timeIntervalSince(resolveStart)
             NSLog("⏱️ [HLS RESOLVE] Took \(String(format: "%.2f", resolveTime))s for mediaID: \(mediaID)")
-            NSLog("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL from network: \(resolvedURL.absoluteString)")
+            
+            // If network resolution returns the base URL unchanged (resolution failed),
+            // try cache check ONE MORE TIME with more relaxed validation
+            if networkResolvedURL == url {
+                NSLog("⚠️ [HLS FALLBACK] Network resolution failed, retrying cache check for mediaID: \(mediaID)")
+                if let fallbackCachedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url) {
+                    NSLog("✅ [HLS FALLBACK] Found cached playlist on retry: \(fallbackCachedURL.absoluteString)")
+                    resolvedURL = fallbackCachedURL
+                } else {
+                    NSLog("❌ [HLS FALLBACK] Cache check retry also failed for mediaID: \(mediaID)")
+                    resolvedURL = networkResolvedURL
+                }
+            } else {
+                NSLog("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL from network: \(networkResolvedURL.absoluteString)")
+                resolvedURL = networkResolvedURL
+            }
         }
         
         // Start LocalHTTPServer for HLS video serving
@@ -756,10 +771,18 @@ class SharedAssetCache: ObservableObject {
             if possiblePlaylistNames.contains(fileName) {
                 // Validate that the cached playlist is not empty and contains valid content
                 if let data = try? Data(contentsOf: fileURL),
-                   let playlistString = String(data: data, encoding: .utf8),
-                   playlistString.contains("#EXTM3U") &&
-                   (playlistString.contains(".ts") || playlistString.contains(".m3u8")) {
-                    foundPlaylists.append((url: fileURL, name: fileName))
+                   let playlistString = String(data: data, encoding: .utf8) {
+                    
+                    // More lenient validation - just check for #EXTM3U header
+                    // Don't require .ts or .m3u8 in content since some playlists might use different formats
+                    if playlistString.contains("#EXTM3U") {
+                        foundPlaylists.append((url: fileURL, name: fileName))
+                        NSLog("DEBUG: [SHARED ASSET CACHE] Found valid cached playlist: \(fileName), size: \(data.count) bytes")
+                    } else {
+                        NSLog("DEBUG: [SHARED ASSET CACHE] Found playlist file but missing #EXTM3U: \(fileName)")
+                    }
+                } else {
+                    NSLog("DEBUG: [SHARED ASSET CACHE] Found playlist file but failed to read: \(fileName)")
                 }
             }
         }
@@ -781,7 +804,7 @@ class SharedAssetCache: ObservableObject {
             }
         }
         
-        NSLog("DEBUG: [SHARED ASSET CACHE] No valid cached playlist found for mediaID: \(mediaID)")
+        NSLog("DEBUG: [SHARED ASSET CACHE] No valid cached playlist found for mediaID: \(mediaID), searched playlists: \(foundPlaylists.map { $0.name })")
         return nil
     }
     
