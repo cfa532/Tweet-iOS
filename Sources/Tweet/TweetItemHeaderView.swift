@@ -6,13 +6,7 @@ struct TweetItemHeaderView: View {
     var body: some View {
         HStack {
             HStack(alignment: .top) {
-                Text(tweet.author?.name ?? "No one")
-                    .font(.headline)
-                    .foregroundColor(.themeText)
-                Text("@\(tweet.author?.username ?? NSLocalizedString("username", comment: "Default username"))")
-                    .font(.subheadline)
-                    .foregroundColor(.themeSecondaryText)
-                    .padding(.leading, -6)
+                AuthorNameView(author: tweet.author)
                 Text("•")
                     .font(.subheadline)
                     .foregroundColor(.themeSecondaryText)
@@ -298,5 +292,41 @@ struct TweetMenu: View {
         let prefix = String(id.prefix(8))
         let suffix = String(id.suffix(4))
         return "\(prefix)...\(suffix)"
+    }
+}
+
+/// Separate view to observe User singleton changes
+private struct AuthorNameView: View {
+    let author: User?
+    
+    var body: some View {
+        Group {
+            if let user = author {
+                ObservedAuthorNameView(user: user)
+            } else {
+                Text("No one")
+                    .font(.headline)
+                    .foregroundColor(.themeText)
+                Text("@\(NSLocalizedString("username", comment: "Default username"))")
+                    .font(.subheadline)
+                    .foregroundColor(.themeSecondaryText)
+                    .padding(.leading, -6)
+            }
+        }
+    }
+}
+
+/// Observes the User singleton to refresh when username/name updates
+private struct ObservedAuthorNameView: View {
+    @ObservedObject var user: User
+    
+    var body: some View {
+        Text(user.name ?? "No one")
+            .font(.headline)
+            .foregroundColor(.themeText)
+        Text("@\(user.username ?? NSLocalizedString("username", comment: "Default username"))")
+            .font(.subheadline)
+            .foregroundColor(.themeSecondaryText)
+            .padding(.leading, -6)
     }
 }
