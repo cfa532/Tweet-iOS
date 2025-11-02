@@ -143,7 +143,7 @@ struct TweetItemView: View, Equatable {
                 }
             } else if tweet.author?.baseUrl == nil {
                 print("⚡ [RENDER] Tweet rendering immediately (@\(tweet.author?.username ?? "?")) - fetching baseUrl in background")
-                // Author exists with username but no baseUrl - resolve IP in background
+                // Author exists but no baseUrl (old cache data or new user) - resolve IP in background
                 Task.detached(priority: .background) {
                     _ = try? await hproseInstance.fetchUser(tweet.authorId)
                 }

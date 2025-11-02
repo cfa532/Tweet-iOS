@@ -370,8 +370,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         // Try to decode the full user object from cache.
         if let userData = cdUser.userData,
            let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
-            // baseUrl and writableUrl are not persisted to Core Data
-            // They will be nil and resolved fresh on first use
+            // baseUrl is now persisted (since retry mechanism handles stale IPs)
+            // writableUrl is NOT persisted (resolved fresh from hostIds each time)
             updateUserInstance(with: decodedUser)
         }
         return getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
@@ -394,7 +394,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.hostIds = user.hostIds
             
             // Only update baseUrl/writableUrl if the new value is non-nil
-            // This preserves memory-cached IPs when loading from disk (where IPs are not persisted)
+            // This preserves memory-cached IPs when updating with partial data
+            // baseUrl: Now persisted, so will usually be non-nil
+            // writableUrl: Not persisted, resolved fresh from hostIds
             if let newBaseUrl = user.baseUrl {
                 instance.baseUrl = newBaseUrl
             }
@@ -435,7 +437,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.hostIds = user.hostIds
                 
                 // Only update baseUrl/writableUrl if the new value is non-nil
-                // This preserves memory-cached IPs when loading from disk (where IPs are not persisted)
+                // This preserves memory-cached IPs when updating with partial data
+                // baseUrl: Now persisted, so will usually be non-nil
+                // writableUrl: Not persisted, resolved fresh from hostIds
                 if let newBaseUrl = user.baseUrl {
                     instance.baseUrl = newBaseUrl
                 }
@@ -515,9 +519,10 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         
         try container.encode(mid, forKey: .mid)
-        // Don't encode baseUrl/writableUrl - IP addresses should be resolved fresh each session
-        // to handle cases where server IPs have changed
-        // try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
+        // NOW caching baseUrl for faster app restarts
+        // Safe because retry mechanism automatically re-resolves if IP changed
+        try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
+        // Don't cache writableUrl - resolved fresh from hostIds each time
         // try container.encodeIfPresent(writableUrl, forKey: .writableUrl)
         try container.encodeIfPresent(name, forKey: .name)
         try container.encodeIfPresent(username, forKey: .username)
@@ -565,7 +570,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     var avatarUrl: String? {
         if let avatar = avatar {
             // Use user's baseUrl if available, otherwise fallback to HproseInstance.baseUrl
-            // This ensures avatarUrl is available even when user.baseUrl is temporarily nil (e.g., after cache load)
+            // baseUrl now usually available (cached from disk), fallback for edge cases
             let effectiveBaseUrl = baseUrl ?? HproseInstance.baseUrl
             return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(effectiveBaseUrl)/ipfs/\(avatar)" :  "\(effectiveBaseUrl)/mm/\(avatar)"
         }

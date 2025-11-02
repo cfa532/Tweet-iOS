@@ -758,7 +758,7 @@ final class HproseInstance: ObservableObject {
         let hasExpired = await cachedUser.hasExpired()
         
         // If we have a valid cached user that hasn't expired, return it
-        // BUT: If baseUrl is nil (cleared after loading from disk cache), we need to re-resolve IP
+        // BUT: If baseUrl is nil (old cache data or new user), we need to resolve IP
         // ALSO: If baseUrl is empty string, force refresh to re-resolve provider IP
         if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil && !baseUrl.isEmpty {
             return cachedUser
@@ -769,9 +769,9 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [fetchUser] 🔄 baseUrl is empty, forcing IP re-evaluation for userId: \(userId), current baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
         }
         
-        // If cached user has nil baseUrl (loaded from disk), re-resolve IP even if cache hasn't expired
+        // If cached user has nil baseUrl (old cache data or newly created user), resolve IP
         if cachedUser.username != nil && cachedUser.baseUrl == nil {
-            print("DEBUG: [fetchUser] Cached user has nil baseUrl, re-resolving IP for userId: \(userId)")
+            print("DEBUG: [fetchUser] Cached user has nil baseUrl (old data or new user), resolving IP for userId: \(userId)")
             // Fall through to updateUserFromServer to resolve IP
         }
         
@@ -794,9 +794,9 @@ final class HproseInstance: ObservableObject {
         }
         
         // CRITICAL: If cached user has nil baseUrl, ALWAYS resolve it (even if app not initialized)
-        // This prevents videos from using domain URLs that timeout
+        // This handles old cache data (before IP caching) or newly created users
         if cachedUser.username != nil && cachedUser.baseUrl == nil {
-            print("DEBUG: [fetchUser] User has nil baseUrl, resolving IP for userId: \(userId)")
+            print("DEBUG: [fetchUser] User has nil baseUrl (old cache or new user), resolving IP for userId: \(userId)")
             
             // Check if another task is already resolving this user's baseUrl
             let shouldResolve = baseUrlResolutionQueue.sync {

@@ -481,6 +481,7 @@ extension Tweet {
                 NSLog("DEBUG: [Tweet.from(cdTweet)] Tweet \(tweet.mid) using author singleton for user \(authorSingleton.mid), baseUrl: \(authorSingleton.baseUrl?.absoluteString ?? "NIL")")
                 
                 // Trigger fetchUser if baseUrl is nil to resolve IP
+                // (Rare case: old cache data before IP caching, or newly created user)
                 // SKIP appUser - app initialization will handle it
                 if authorSingleton.baseUrl == nil
                     && authorSingleton.mid != HproseInstance.shared.appUser.mid {
