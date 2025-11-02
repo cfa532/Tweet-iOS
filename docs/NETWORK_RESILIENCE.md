@@ -177,6 +177,126 @@ private func loadFromServer(page: UInt, pageSize: UInt) async {
 }
 ```
 
+## 🔄 Smart IP Resolution with Retry Strategy
+
+### Overview
+
+The distributed Tweet network uses multiple server nodes. Users are dynamically assigned to nodes, and node IPs can change over time. The app uses a smart retry strategy to handle IP changes while minimizing unnecessary provider lookups.
+
+### The Problem with Old Code
+
+**Scenario: Server IP Changes**
+
+When a server node's IP changed (e.g., `183.156.84.30:8002` → `183.156.84.30:8003`), the old code would:
+1. Try cached IP (fails)
+2. Retry with same cached IP (fails)
+3. Retry again with same cached IP (fails)
+4. Give up - stuck for 30 minutes until cache expires
+
+**Root Cause:**
+```swift
+// Old code: Early return with stale IP
+if cachedUser.username != nil && !hasExpired && 
+   cachedUser.baseUrl != nil && !baseUrl.isEmpty {
+    return cachedUser  // ❌ Stale IP never refreshed!
+}
+```
+
+### New Strategy: Smart First-Attempt + Force-Retry
+
+**Implementation in `updateUserFromServer()`:**
+
+```swift
+func updateUserFromServer(_ userId: String, baseUrl: String = ...) async throws -> User? {
+    for attempt in 1...3 {
+        // First attempt: Use provided baseUrl (fast, usually works)
+        if attempt == 1 && !baseUrl.isEmpty {
+            user.baseUrl = URL(string: baseUrl)
+        } 
+        // Retry attempts: Force fresh IP resolution
+        else {
+            guard let providerIP = try await self.getProviderIP(userId) else {
+                throw NSError(...)
+            }
+            user.baseUrl = URL(string: "http://\(providerIP)")!
+        }
+        
+        try await updateUserFromServerInternal(user)
+        return user  // Success!
+    }
+}
+```
+
+### When to Use Empty String
+
+**Force IP Resolution from First Attempt** (pass `baseUrl: ""`):
+- ✅ App initialization (fresh start needs latest IP)
+- ✅ Explicit user refresh (pull-to-refresh)
+- ✅ After extended background (>30s)
+- ✅ Manual profile refresh
+
+**Use Cached IP First** (use default baseUrl):
+- ✅ Normal user fetches (author loading, etc.)
+- ✅ Background updates
+- ✅ Quick lookups
+
+### Flow Example
+
+**Attempt 1:**
+```
+fetchUser(userId) → uses cached IP "http://183.156.84.30:8002"
+└─ If cached IP still valid → Success (fast!) ✅
+└─ If cached IP stale → Fails, proceed to retry
+```
+
+**Attempt 2:**
+```
+Retry → getProviderIP(userId) → "183.156.84.30:8003" (new IP!)
+└─ Try with fresh IP → Success (recovered!) ✅
+```
+
+**Attempt 3:**
+```
+Retry → getProviderIP(userId) → "183.156.84.30:8003"
+└─ Last chance with fresh IP
+```
+
+### Benefits
+
+- ⚡ **Faster first attempts** - No unnecessary IP lookups
+- 🔄 **Automatic recovery** - IP changes handled on retry
+- 💰 **Reduced provider load** - Fewer IP resolution calls
+- 🎯 **Smart fallback** - Only re-resolve when needed
+- 🛡️ **Handles migrations** - Server moves detected and handled
+
+### Key Functions
+
+**fetchUser():**
+```swift
+/// - Parameters:
+///   - userId: The user ID to fetch
+///   - baseUrl: Initial baseUrl (use "" to skip cache and force IP resolution)
+/// - Note: First attempt uses provided baseUrl; retries automatically force fresh IP resolution
+```
+
+**updateUserFromServer():**
+```swift
+/// - Parameters:
+///   - userId: The user ID to fetch
+///   - baseUrl: BaseUrl to use for FIRST attempt. Retries always force fresh IP resolution.
+/// - Note: Pass empty string "" to force fresh IP resolution from first attempt
+```
+
+### Debug Logging
+
+```
+DEBUG: [updateUserFromServer] Attempt 1/3 - Using provided baseUrl: http://183.156.84.30:8002
+DEBUG: [updateUserFromServer] Attempt 1/3 failed: Connection reset by peer
+DEBUG: [updateUserFromServer] Attempt 2/3 - Re-resolving provider IP, old baseUrl: http://183.156.84.30:8002
+DEBUG: [updateUserFromServer] ✅ Setting baseUrl to provider IP: 183.156.84.30:8003
+DEBUG: [updateUserFromServer] Attempt 2/3 succeeded!
+```
+
 ## 🚨 Error Handling
 
 ### Graceful Degradation
@@ -184,7 +304,7 @@ private func loadFromServer(page: UInt, pageSize: UInt) async {
 1. **Network Failures**
    - Continue with cached data
    - Show user-friendly error messages
-   - No retry attempts to prevent server overload
+   - Smart retry with fresh IP resolution
 
 2. **Cache Misses**
    - Fallback to server-only loading

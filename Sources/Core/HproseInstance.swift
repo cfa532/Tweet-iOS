@@ -32,6 +32,7 @@ final class HproseInstance: ObservableObject {
             if !_appUser.isGuest && _appUser.username == nil {
                 Task {
                     do {
+                        // Use cached baseUrl for first attempt, retries will force IP re-resolution
                         if let refreshedUser = try await fetchUser(_appUser.mid, baseUrl: _appUser.baseUrl?.absoluteString ?? "") {
                             // Update appUser's baseUrl to match the refreshed user's baseUrl
                             await MainActor.run {
@@ -307,8 +308,8 @@ final class HproseInstance: ObservableObject {
                     if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
                         print("provider ip:  \(providerIp)")
                         print("🔄 [INIT] Fetching user data for appUser...")
-                        // Try to fetch user (retry logic is now built into fetchUser method)
-                        let user = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)")
+                        // Try to fetch user with empty baseUrl to force IP resolution on retries
+                        let user = try await fetchUser(appUser.mid, baseUrl: "")
                         print("✅ [INIT] User data fetched, got user: \(user != nil)")
                         
                         if let user = user {
@@ -728,6 +729,11 @@ final class HproseInstance: ObservableObject {
     /// If @baseUrl is omitted, an user object will be retrieved from cache or the default serving node of appUser.
     /// Otherwise, user object will be retrieved from the node of the given baseUrl.
     ///
+    /// - Parameters:
+    ///   - userId: The user ID to fetch
+    ///   - baseUrl: Initial baseUrl (use "" to skip cache and force IP resolution)
+    /// - Note: First attempt uses provided baseUrl; retries automatically force fresh IP resolution
+    ///
     /// Do not really need to return the user, for user instance with the same mid has been updated or created.
     func fetchUser(
         _ userId: String,
@@ -776,6 +782,7 @@ final class HproseInstance: ObservableObject {
             // Update in background coroutine
             Task {
                 do {
+                    // Background update: use cached baseUrl first, retries will force IP re-resolution
                     if (try await self.updateUserFromServer(userId, baseUrl: baseUrl)) != nil {
                         print("DEBUG: [fetchUser] Background update completed for userId: \(userId)")
                     }
@@ -851,6 +858,8 @@ final class HproseInstance: ObservableObject {
         
         // Step 2: Fetch from server with retry logic. No instance available in memory or cache.
         do {
+            // First attempt: use provided baseUrl (might be cached/valid)
+            // Retries: force fresh IP resolution (handled in updateUserFromServer)
             let user = try await updateUserFromServer(userId, baseUrl: baseUrl)
             // Successfully fetched user - remove from blacklist candidates if it was there
             if user != nil {
@@ -874,6 +883,10 @@ final class HproseInstance: ObservableObject {
     private let baseUrlResolutionQueue = DispatchQueue(label: "baseurl.resolution.queue")
     
     /// Updates user from server with baseUrl resolution and retry logic
+    /// - Parameters:
+    ///   - userId: The user ID to fetch
+    ///   - baseUrl: BaseUrl to use for FIRST attempt. Retries always force fresh IP resolution.
+    /// - Note: Pass empty string "" to force fresh IP resolution from first attempt (e.g., app init, explicit refresh)
     func updateUserFromServer(
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
@@ -907,22 +920,52 @@ final class HproseInstance: ObservableObject {
         
         let user = User.getInstance(mid: userId)
         
-        return try await retryOperation(maxRetries: 3) {
-            // Always re-resolve IP address from provider to handle cases where the node's IP has changed
-            // Even if we have a cached baseUrl, the hostId might now resolve to a different IP
-            let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
-            print("DEBUG: [updateUserFromServer] 🔍 Re-resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl)")
-            guard let providerIP = try await self.getProviderIP(userId) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
+        // Custom retry logic with baseUrl handling
+        var lastError: Error?
+        
+        for attempt in 1...3 {
+            do {
+                // First attempt: Use provided baseUrl if not empty (might be cached/valid)
+                // Retry attempts: Always force fresh IP resolution
+                if attempt == 1 && !baseUrl.isEmpty {
+                    print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Using provided baseUrl: \(baseUrl) for userId: \(userId)")
+                    await MainActor.run {
+                        user.baseUrl = URL(string: baseUrl)
+                    }
+                } else {
+                    // Retry or empty baseUrl: Force fresh IP resolution
+                    let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
+                    print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Re-resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl)")
+                    guard let providerIP = try await self.getProviderIP(userId) else {
+                        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
+                    }
+                    print("DEBUG: [updateUserFromServer] ✅ Setting baseUrl to provider IP: \(providerIP) for userId: \(userId) (was: \(oldBaseUrl))")
+                    await MainActor.run {
+                        user.baseUrl = URL(string: "http://\(providerIP)")!
+                    }
+                }
+                
+                // Perform the actual server communication
+                try await self.updateUserFromServerInternal(user)
+                return user
+                
+            } catch {
+                lastError = error
+                print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 failed for userId: \(userId): \(error)")
+                
+                if attempt < 3 {
+                    // Exponential backoff: 1s, 2s
+                    let delay = UInt64(attempt) * 1_000_000_000
+                    try await Task.sleep(nanoseconds: delay)
+                }
             }
-            print("DEBUG: [updateUserFromServer] ✅ Setting baseUrl to provider IP: \(providerIP) for userId: \(userId) (was: \(oldBaseUrl))")
-            await MainActor.run {
-                user.baseUrl = URL(string: "http://\(providerIP)")!
-            }
-            
-            // Perform the actual server communication
-            try await self.updateUserFromServerInternal(user)
-            return user
+        }
+        
+        // All retries failed
+        if let error = lastError {
+            throw error
+        } else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All retries failed"])
         }
     }
     
@@ -3766,8 +3809,9 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [HproseInstance] Refreshing user from provider IP: \(providerIp)")
             
             // Fetch updated user data from server
-            if let refreshedUser = try await fetchUser(appUser.mid, baseUrl: "http://\(providerIp)") {
-                // Update base URL if needed
+            // Use empty baseUrl to force re-resolution on retries
+            if let refreshedUser = try await fetchUser(appUser.mid, baseUrl: "") {
+                // Update base URL to the resolved provider IP
                 if HproseInstance.baseUrl.absoluteString != "http://\(providerIp)" {
                     HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString

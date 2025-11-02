@@ -696,6 +696,52 @@ showControls: true
 - Full player controls
 - Independent from grid/detail
 
+### Chat (Chat Message View)
+
+**Component:** `CachingVideoPlayer` in `ChatMessageView.swift`
+
+```swift
+autoPlay: controlled by user (play/pause button)
+muted: synced with global MuteState
+looping: true (auto-restart)
+showControls: false (custom overlay)
+```
+
+**Display Layout:**
+- Portrait videos (AR < 0.9): 0.9 aspect ratio grid (9:10)
+- Landscape videos: Actual aspect ratio
+- Max width: 70% of screen
+- Overflow clipped with rounded corners
+
+**Interaction Model:**
+1. **Play Button Tap (bottom-left):**
+   - Plays/pauses video inline
+   - Button icon toggles ▶️ ↔ ⏸️
+   - Video stays in chat view
+   
+2. **Video Area Tap:**
+   - Opens fullscreen `MediaBrowserView`
+   - Full native controls available
+   - Swipe down to dismiss
+
+**Caching:**
+- Uses `SharedAssetCache` (same as tweets)
+- Progressive download during playback
+- Disk persistence across app sessions
+- Shared cache with tweet videos
+
+**Background Recovery:**
+- Auto-saves playback position on background
+- Detects broken players on foreground
+- Recreates player if needed
+- Resumes playback if was playing before
+
+**Upload Progress:**
+- Upload dialog for attachments (no toast)
+- Stages: Preparing → Uploading → Sending
+- Auto-dismisses on completion
+- Shows errors with retry option
+
 ---
 
 ## Mute State Management
@@ -894,23 +940,32 @@ DEBUG: [PROGRESSIVE FETCH SUCCESS] - Network request completed
 - [ ] Grid video pauses when scrolled off-screen
 - [ ] Detail video auto-plays unmuted
 - [ ] Fullscreen video plays with controls
+- [ ] Chat video plays inline when play button tapped
+- [ ] Chat video pauses when pause button tapped
+- [ ] Chat video opens fullscreen when video area tapped
 
 **Navigation:**
 - [ ] Grid → Detail: Grid video stops, detail auto-plays
 - [ ] Detail → Grid: Detail stops, grid resumes
 - [ ] Detail → Fullscreen: Detail stops, fullscreen plays
+- [ ] Chat inline → Fullscreen: Inline pauses, fullscreen plays
+- [ ] Chat fullscreen → Inline: Fullscreen dismissed, inline state preserved
 
 **Caching:**
 - [ ] HLS video loads from cached playlist (< 0.1s)
 - [ ] Progressive video loads from cache (immediate)
 - [ ] Cache survives app restart
 - [ ] Cache cleared after 1 hour (configurable)
+- [ ] Chat videos share cache with tweet videos
+- [ ] Same video in tweet and chat uses one cache
 
 **Error Recovery:**
 - [ ] Auto-retry after network failure (3 attempts)
 - [ ] Recovery after background/foreground transition
 - [ ] Recovery after app init delay
 - [ ] Manual retry by scrolling away and back
+- [ ] Chat video recovers after screen lock
+- [ ] Chat video resumes position after background
 
 **Memory:**
 - [ ] Memory usage < 200MB under normal load
@@ -944,6 +999,13 @@ DEBUG: [PROGRESSIVE FETCH SUCCESS] - Network request completed
 - `Sources/Features/MediaViews/MediaGridView.swift` - Grid video container
 - `Sources/Tweet/TweetDetailView.swift` - Detail video container
 - `Sources/Features/MediaViews/MediaBrowserView.swift` - Fullscreen container
+- `Sources/Features/Chat/ChatMessageView.swift` - Chat video player (inline + fullscreen)
+
+**Chat Video Components:**
+- `Sources/Features/MediaViews/CachingVideoPlayer.swift` - Simple caching player for chat/browser
+- Background recovery with state preservation
+- Inline play/pause control
+- Fullscreen viewing via MediaBrowserView
 
 ---
 
