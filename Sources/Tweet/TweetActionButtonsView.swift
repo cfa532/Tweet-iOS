@@ -324,12 +324,12 @@ struct TweetActionButtonsView: View {
         return CustomShareItem(shareText: shareText, tweet: tweet)
     }
     
-    private func createCustomShareImage() -> UIImage {
+    private func createCustomShareImage() -> CustomShareImage {
         // Create a simple app icon image
         let size = CGSize(width: 120, height: 120) // Square app icon size
         let renderer = UIGraphicsImageRenderer(size: size)
         
-        return renderer.image { context in
+        let image = renderer.image { context in
             let rect = CGRect(origin: .zero, size: size)
             
             // Draw the actual app icon
@@ -359,6 +359,8 @@ struct TweetActionButtonsView: View {
                 iconString.draw(in: iconStringRect)
             }
         }
+        
+        return CustomShareImage(image: image)
     }
     
     private func tweetShareText(_ tweet: Tweet) -> String {
@@ -384,13 +386,18 @@ struct TweetActionButtonsView: View {
             shareText += attachmentTypes
         }
         
+        // Add two newlines after text if there is text
+        if !shareText.isEmpty {
+            shareText += "\n\n"
+        }
+        
         // Add URL
         var text = hproseInstance.domainToShare
         text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
         
         // Only add space if there's content before the URL
         if !shareText.isEmpty {
-            shareText += " \(text.trimmingCharacters(in: .whitespacesAndNewlines))"
+            shareText += text.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
             shareText += text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -458,5 +465,26 @@ class CustomShareItem: NSObject, UIActivityItemSource {
         } else {
             return "😊 Tweet"
         }
+    }
+}
+
+class CustomShareImage: NSObject, UIActivityItemSource {
+    let image: UIImage
+    
+    init(image: UIImage) {
+        self.image = image
+        super.init()
+    }
+    
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        return image
+    }
+    
+    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        // Exclude image from copy operations - only return image for other activities (e.g., share to social media)
+        if activityType == .copyToPasteboard {
+            return nil
+        }
+        return image
     }
 }
