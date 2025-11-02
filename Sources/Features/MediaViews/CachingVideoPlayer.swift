@@ -128,6 +128,15 @@ struct CachingVideoPlayer: View {
                 player?.pause()
             }
         }
+        .onChange(of: autoPlay) { _, shouldPlay in
+            if shouldPlay && isVisible {
+                player?.play()
+                print("DEBUG: [CachingVideoPlayer] Started playing \(mid)")
+            } else {
+                player?.pause()
+                print("DEBUG: [CachingVideoPlayer] Paused \(mid)")
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             handleWillResignActive()
         }

@@ -447,6 +447,7 @@ struct ChatVideoPlayer: View {
     let senderUser: User?
     
     @State private var showFullScreen = false
+    @State private var isPlaying = false
     
     private var baseUrl: URL {
         if isFromCurrentUser {
@@ -471,59 +472,16 @@ struct ChatVideoPlayer: View {
                 let maxWidth = UIScreen.main.bounds.width * 0.7
                 let gridHeight = maxWidth / CGFloat(gridAspectRatio)
                 
-                ZStack {
-                    CachingVideoPlayer(
-                        url: url,
-                        mid: attachment.mid,
-                        isVisible: !showFullScreen, // Hide when full-screen is open
-                        mediaType: attachment.type,
-                        autoPlay: false, // Don't autoplay in chat
-                        videoAspectRatio: CGFloat(videoAR),
-                        showNativeControls: false,
-                        isMuted: MuteState.shared.isMuted,
-                        onVideoTap: {
-                            // This is handled by the overlay below
-                        }
-                    )
-                    .aspectRatio(CGFloat(videoAR), contentMode: .fill) // Use fill like MediaCell
-                    .frame(width: maxWidth, height: gridHeight) // Fixed grid size
-                    .clipped() // Clip overflow
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .contentShape(Rectangle())
-                    
-                    // Clear overlay to capture taps for full-screen (like MediaCell)
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            showFullScreen = true
-                        }
-                    
-                    // Bottom overlay with play and mute buttons
-                    VStack {
-                        Spacer()
-                        HStack {
-                            // Play button (bottom left, smaller)
-                            Image(systemName: "play.circle.fill")
-                                .font(.system(size: 32))
-                                .foregroundColor(.white)
-                                .background(
-                                    Circle()
-                                        .fill(Color.black.opacity(0.3))
-                                        .frame(width: 40, height: 40)
-                                )
-                                .allowsHitTesting(false) // Allow taps to pass through
-                                .padding(.leading, 8)
-                                .padding(.bottom, 8)
-                            
-                            Spacer()
-                            
-                            // Mute button (bottom right)
-                            MuteButton()
-                                .padding(.trailing, 8)
-                                .padding(.bottom, 8)
-                        }
-                    }
-                }
+                ChatVideoPlayerContent(
+                    url: url,
+                    attachment: attachment,
+                    videoAR: CGFloat(videoAR),
+                    gridAspectRatio: CGFloat(gridAspectRatio),
+                    maxWidth: maxWidth,
+                    gridHeight: gridHeight,
+                    showFullScreen: $showFullScreen,
+                    isPlaying: $isPlaying
+                )
                 .frame(width: maxWidth, height: gridHeight) // Constrain ZStack to grid size
                 .fullScreenCover(isPresented: $showFullScreen) {
                     // Create a temporary tweet-like structure for the video
@@ -548,6 +506,80 @@ struct ChatVideoPlayer: View {
                         Image(systemName: "video")
                             .foregroundColor(.gray)
                     )
+            }
+        }
+    }
+}
+
+// MARK: - Chat Video Player Content
+
+private struct ChatVideoPlayerContent: View {
+    let url: URL
+    let attachment: MimeiFileType
+    let videoAR: CGFloat
+    let gridAspectRatio: CGFloat
+    let maxWidth: CGFloat
+    let gridHeight: CGFloat
+    @Binding var showFullScreen: Bool
+    @Binding var isPlaying: Bool
+    
+    var body: some View {
+        ZStack {
+            CachingVideoPlayer(
+                url: url,
+                mid: attachment.mid,
+                isVisible: !showFullScreen, // Hide when full-screen is open
+                mediaType: attachment.type,
+                autoPlay: isPlaying, // Control playback based on state
+                videoAspectRatio: CGFloat(videoAR),
+                showNativeControls: false,
+                isMuted: MuteState.shared.isMuted,
+                onVideoTap: {
+                    // This is handled by the overlay below
+                }
+            )
+            .aspectRatio(CGFloat(videoAR), contentMode: .fill) // Use fill like MediaCell
+            .frame(width: maxWidth, height: gridHeight) // Fixed grid size
+            .clipped() // Clip overflow
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+            
+            // Clear overlay to capture taps for full-screen
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // Only open fullscreen if not tapping on play/mute buttons
+                    showFullScreen = true
+                }
+            
+            // Bottom overlay with play and mute buttons
+            VStack {
+                Spacer()
+                HStack {
+                    // Play/Pause button (bottom left, smaller, interactive)
+                    Button {
+                        isPlaying.toggle()
+                    } label: {
+                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.white)
+                            .background(
+                                Circle()
+                                    .fill(Color.black.opacity(0.3))
+                                    .frame(width: 40, height: 40)
+                            )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.leading, 8)
+                    .padding(.bottom, 8)
+                    
+                    Spacer()
+                    
+                    // Mute button (bottom right)
+                    MuteButton()
+                        .padding(.trailing, 8)
+                        .padding(.bottom, 8)
+                }
             }
         }
     }
