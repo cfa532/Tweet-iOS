@@ -1706,10 +1706,17 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
             
-            print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId), refreshing appUser from server...")
+            print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId)")
+            
+            // Immediately update appUser tweet count (like favorites/bookmarks)
+            await MainActor.run {
+                let currentCount = self.appUser.tweetCount ?? 0
+                self.appUser.tweetCount = max(0, currentCount - 1)
+                print("DEBUG: [deleteTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+            }
+            
             // Refresh appUser from server to get updated tweetCount and other properties
             try? await self.refreshAppUserFromServer()
-            print("DEBUG: [deleteTweet] Finished refreshing appUser, new tweetCount: \(appUser.tweetCount ?? 0)")
             
             return deletedTweetId
         } else {
@@ -3906,6 +3913,13 @@ final class HproseInstance: ObservableObject {
                 let uploadedTweet = tweet
                 uploadedTweet.mid = newTweetId
                 uploadedTweet.author = try? await self.fetchUser(tweet.authorId)
+                
+                // Immediately update appUser tweet count (like favorites/bookmarks)
+                await MainActor.run {
+                    let currentCount = self.appUser.tweetCount ?? 0
+                    self.appUser.tweetCount = currentCount + 1
+                    print("DEBUG: [uploadTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+                }
                 
                 // Refresh appUser from server to get updated tweetCount and other properties
                 try? await self.refreshAppUserFromServer()

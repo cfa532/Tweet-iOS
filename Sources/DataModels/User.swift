@@ -23,6 +23,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     @Published var tweetCount: Int? {
         didSet {
+            // Ensure count never goes below zero
+            if let count = tweetCount, count < 0 {
+                tweetCount = 0
+                return
+            }
+            
             let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when tweetCount changes
@@ -41,6 +47,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var followingCount: Int? {
         didSet {
+            // Ensure count never goes below zero
+            if let count = followingCount, count < 0 {
+                followingCount = 0
+                return
+            }
+            
             let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when followingCount changes
@@ -59,6 +71,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var followersCount: Int? {
         didSet {
+            // Ensure count never goes below zero
+            if let count = followersCount, count < 0 {
+                followersCount = 0
+                return
+            }
+            
             let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when followersCount changes
@@ -77,6 +95,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var bookmarksCount: Int? {
         didSet {
+            // Ensure count never goes below zero
+            if let count = bookmarksCount, count < 0 {
+                bookmarksCount = 0
+                return
+            }
+            
             let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when bookmarksCount changes
@@ -95,6 +119,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var favoritesCount: Int? {
         didSet {
+            // Ensure count never goes below zero
+            if let count = favoritesCount, count < 0 {
+                favoritesCount = 0
+                return
+            }
+            
             let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when favoritesCount changes
@@ -111,7 +141,15 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             }
         }
     }
-    @Published var commentsCount: Int?
+    @Published var commentsCount: Int? {
+        didSet {
+            // Ensure count never goes below zero
+            if let count = commentsCount, count < 0 {
+                commentsCount = 0
+                return
+            }
+        }
+    }
     
     @Published var hostIds: [MimeiId]? // List of MimeiId
     @Published var hasAcceptedTerms: Bool = false // Terms of Service acceptance
