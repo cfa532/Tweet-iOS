@@ -447,7 +447,6 @@ struct ChatVideoPlayer: View {
     let senderUser: User?
     
     @State private var showFullScreen = false
-    @State private var showPlayButton = true
     
     private var baseUrl: URL {
         if isFromCurrentUser {
@@ -492,21 +491,6 @@ struct ChatVideoPlayer: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
                     
-                    // Play button overlay
-                    if showPlayButton {
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 50))
-                            .foregroundColor(.white)
-                            .background(
-                                Circle()
-                                    .fill(Color.black.opacity(0.3))
-                                    .frame(width: 60, height: 60)
-                            )
-                            .transition(.opacity)
-                            .animation(.easeInOut(duration: 0.2), value: showPlayButton)
-                            .allowsHitTesting(false) // Allow taps to pass through to the overlay
-                    }
-                    
                     // Clear overlay to capture taps for full-screen (like MediaCell)
                     Color.clear
                         .contentShape(Rectangle())
@@ -514,11 +498,26 @@ struct ChatVideoPlayer: View {
                             showFullScreen = true
                         }
                     
-                    // Mute button overlay (bottom right corner)
+                    // Bottom overlay with play and mute buttons
                     VStack {
                         Spacer()
                         HStack {
+                            // Play button (bottom left, smaller)
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 32))
+                                .foregroundColor(.white)
+                                .background(
+                                    Circle()
+                                        .fill(Color.black.opacity(0.3))
+                                        .frame(width: 40, height: 40)
+                                )
+                                .allowsHitTesting(false) // Allow taps to pass through
+                                .padding(.leading, 8)
+                                .padding(.bottom, 8)
+                            
                             Spacer()
+                            
+                            // Mute button (bottom right)
                             MuteButton()
                                 .padding(.trailing, 8)
                                 .padding(.bottom, 8)
@@ -526,24 +525,7 @@ struct ChatVideoPlayer: View {
                     }
                 }
                 .frame(width: maxWidth, height: gridHeight) // Constrain ZStack to grid size
-                .onAppear {
-                    // Auto-hide play button after 2 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showPlayButton = false
-                        }
-                    }
-                }
-                .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
-                    // Reset play button visibility when returning from full-screen
-                    showPlayButton = true
-                    // Auto-hide it again after 2 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showPlayButton = false
-                        }
-                    }
-                }) {
+                .fullScreenCover(isPresented: $showFullScreen) {
                     // Create a temporary tweet-like structure for the video
                     let tempTweet = Tweet(
                         mid: "chat_video_\(attachment.mid)",
