@@ -483,7 +483,10 @@ struct ChatVideoPlayer: View {
                     isPlaying: $isPlaying
                 )
                 .frame(width: maxWidth, height: gridHeight) // Constrain ZStack to grid size
-                .fullScreenCover(isPresented: $showFullScreen) {
+                .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
+                    // Reset play state when returning from fullscreen
+                    isPlaying = false
+                }) {
                     // Create a temporary tweet-like structure for the video
                     let tempTweet = Tweet(
                         mid: "chat_video_\(attachment.mid)",
@@ -531,11 +534,16 @@ private struct ChatVideoPlayerContent: View {
                 isVisible: !showFullScreen, // Hide when full-screen is open
                 mediaType: attachment.type,
                 autoPlay: isPlaying, // Control playback based on state
+                loopOnCompletion: false, // Don't auto-replay when video finishes
                 videoAspectRatio: CGFloat(videoAR),
                 showNativeControls: false,
                 isMuted: MuteState.shared.isMuted,
                 onVideoTap: {
                     // This is handled by the overlay below
+                },
+                onVideoFinished: {
+                    // Reset play button to triangle when video finishes
+                    isPlaying = false
                 }
             )
             .aspectRatio(CGFloat(videoAR), contentMode: .fill) // Use fill like MediaCell
@@ -552,35 +560,35 @@ private struct ChatVideoPlayerContent: View {
                     showFullScreen = true
                 }
             
-            // Bottom overlay with play and mute buttons
-            VStack {
-                Spacer()
-                HStack {
-                    // Play/Pause button (bottom left, smaller, interactive)
-                    Button {
-                        isPlaying.toggle()
-                    } label: {
-                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(.white)
-                            .background(
-                                Circle()
-                                    .fill(Color.black.opacity(0.3))
-                                    .frame(width: 40, height: 40)
-                            )
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .padding(.leading, 8)
-                    .padding(.bottom, 8)
-                    
-                    Spacer()
-                    
-                    // Mute button (bottom right)
-                    MuteButton()
-                        .padding(.trailing, 8)
-                        .padding(.bottom, 8)
-                }
-            }
+             // Bottom overlay with play and mute buttons
+             VStack {
+                 Spacer()
+                 HStack {
+                     // Play/Pause button (bottom left, small and compact)
+                     Button {
+                         isPlaying.toggle()
+                     } label: {
+                         Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                             .font(.system(size: 24))
+                             .foregroundColor(.white)
+                             .background(
+                                 Circle()
+                                     .fill(Color.black.opacity(0.3))
+                                     .frame(width: 32, height: 32)
+                             )
+                     }
+                     .buttonStyle(PlainButtonStyle())
+                     .padding(.leading, 8)
+                     .padding(.bottom, 8)
+                     
+                     Spacer()
+                     
+                     // Mute button (bottom right)
+                     MuteButton()
+                         .padding(.trailing, 8)
+                         .padding(.bottom, 8)
+                 }
+             }
         }
     }
 }

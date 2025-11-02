@@ -15,10 +15,12 @@ struct CachingVideoPlayer: View {
     let isVisible: Bool
     let mediaType: MediaType
     let autoPlay: Bool
+    let loopOnCompletion: Bool
     let videoAspectRatio: CGFloat
     let showNativeControls: Bool
     let isMuted: Bool
     let onVideoTap: (() -> Void)?
+    let onVideoFinished: (() -> Void)?
     
     @State private var player: AVPlayer?
     @State private var cachingPlayerItem: CachingPlayerItem?
@@ -36,20 +38,24 @@ struct CachingVideoPlayer: View {
         isVisible: Bool,
         mediaType: MediaType,
         autoPlay: Bool = true,
+        loopOnCompletion: Bool = true,
         videoAspectRatio: CGFloat = 16.0/9.0,
         showNativeControls: Bool = true,
         isMuted: Bool = false,
         onVideoTap: (() -> Void)? = nil,
+        onVideoFinished: (() -> Void)? = nil
     ) {
         self.url = url
         self.mid = mid
         self.isVisible = isVisible
         self.mediaType = mediaType
         self.autoPlay = autoPlay
+        self.loopOnCompletion = loopOnCompletion
         self.videoAspectRatio = videoAspectRatio
         self.showNativeControls = showNativeControls
         self.isMuted = isMuted
         self.onVideoTap = onVideoTap
+        self.onVideoFinished = onVideoFinished
     }
     
     var body: some View {
@@ -328,10 +334,13 @@ struct CachingVideoPlayer: View {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem,
             queue: .main
-        ) { notification in
+        ) { [onVideoFinished, loopOnCompletion] notification in
             print("DEBUG: [CachingVideoPlayer] Video completion notification received for \(mid)")
             print("DEBUG: [CachingVideoPlayer] Notification object: \(notification.object ?? "nil")")
             print("DEBUG: [CachingVideoPlayer] Player current item: \(player.currentItem?.description ?? "nil")")
+            
+            // Notify that video finished
+            onVideoFinished?()
             
             // Reset video to beginning
             player.seek(to: .zero) { finished in
@@ -342,12 +351,12 @@ struct CachingVideoPlayer: View {
                 
                 print("DEBUG: [CachingVideoPlayer] Successfully seeked to zero for \(mid)")
                 
-                // Auto-restart if in fullscreen (autoPlay is true)
-                if autoPlay {
-                    print("DEBUG: [CachingVideoPlayer] Auto-restarting video for \(mid)")
+                // Auto-restart only if looping is enabled
+                if loopOnCompletion {
+                    print("DEBUG: [CachingVideoPlayer] Auto-restarting video (loop enabled) for \(mid)")
                     player.play()
                 } else {
-                    print("DEBUG: [CachingVideoPlayer] Video ready to replay for \(mid)")
+                    print("DEBUG: [CachingVideoPlayer] Video finished, not looping for \(mid)")
                 }
             }
         }
