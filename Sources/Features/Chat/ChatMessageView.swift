@@ -463,6 +463,15 @@ struct ChatVideoPlayer: View {
         Group {
             // Compact layout to minimize spacing
             if let url = attachment.getUrl(baseUrl) {
+                // Calculate grid aspect ratio same as MediaGridViewModel
+                let videoAR = attachment.aspectRatio ?? 1.0
+                let isPortrait = videoAR < 0.9
+                let gridAspectRatio = isPortrait ? 0.9 : videoAR
+                
+                // Calculate grid dimensions (max width 70% of screen like images)
+                let maxWidth = UIScreen.main.bounds.width * 0.7
+                let gridHeight = maxWidth / CGFloat(gridAspectRatio)
+                
                 ZStack {
                     CachingVideoPlayer(
                         url: url,
@@ -470,14 +479,16 @@ struct ChatVideoPlayer: View {
                         isVisible: !showFullScreen, // Hide when full-screen is open
                         mediaType: attachment.type,
                         autoPlay: false, // Don't autoplay in chat
-                        videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
+                        videoAspectRatio: CGFloat(videoAR),
                         showNativeControls: false,
                         isMuted: MuteState.shared.isMuted,
                         onVideoTap: {
                             // This is handled by the overlay below
                         }
                     )
-                    .aspectRatio(max(CGFloat(attachment.aspectRatio ?? 16.0/9.0), 0.9), contentMode: .fit)
+                    .aspectRatio(CGFloat(videoAR), contentMode: .fill) // Use fill like MediaCell
+                    .frame(width: maxWidth, height: gridHeight) // Fixed grid size
+                    .clipped() // Clip overflow
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
                     
@@ -514,6 +525,7 @@ struct ChatVideoPlayer: View {
                         }
                     }
                 }
+                .frame(width: maxWidth, height: gridHeight) // Constrain ZStack to grid size
                 .onAppear {
                     // Auto-hide play button after 2 seconds
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
