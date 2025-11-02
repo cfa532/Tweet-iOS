@@ -536,10 +536,6 @@ private struct ChatVideoPlayerContent: View {
                 isMuted: MuteState.shared.isMuted,
                 onVideoTap: {
                     // This is handled by the overlay below
-                },
-                onVideoFinished: {
-                    // Reset play button to triangle when video finishes
-                    isPlaying = false
                 }
             )
             .aspectRatio(CGFloat(videoAR), contentMode: .fill) // Use fill like MediaCell
