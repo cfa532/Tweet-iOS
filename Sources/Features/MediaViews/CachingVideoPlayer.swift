@@ -19,6 +19,7 @@ struct CachingVideoPlayer: View {
     let showNativeControls: Bool
     let isMuted: Bool
     let onVideoTap: (() -> Void)?
+    let onVideoFinished: (() -> Void)?
     
     @State private var player: AVPlayer?
     @State private var cachingPlayerItem: CachingPlayerItem?
@@ -40,6 +41,7 @@ struct CachingVideoPlayer: View {
         showNativeControls: Bool = true,
         isMuted: Bool = false,
         onVideoTap: (() -> Void)? = nil,
+        onVideoFinished: (() -> Void)? = nil
     ) {
         self.url = url
         self.mid = mid
@@ -50,6 +52,7 @@ struct CachingVideoPlayer: View {
         self.showNativeControls = showNativeControls
         self.isMuted = isMuted
         self.onVideoTap = onVideoTap
+        self.onVideoFinished = onVideoFinished
     }
     
     var body: some View {
@@ -328,10 +331,13 @@ struct CachingVideoPlayer: View {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem,
             queue: .main
-        ) { notification in
+        ) { [onVideoFinished] notification in
             print("DEBUG: [CachingVideoPlayer] Video completion notification received for \(mid)")
             print("DEBUG: [CachingVideoPlayer] Notification object: \(notification.object ?? "nil")")
             print("DEBUG: [CachingVideoPlayer] Player current item: \(player.currentItem?.description ?? "nil")")
+            
+            // Notify that video finished
+            onVideoFinished?()
             
             // Reset video to beginning
             player.seek(to: .zero) { finished in
