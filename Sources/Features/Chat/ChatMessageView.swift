@@ -467,7 +467,7 @@ struct ChatVideoPlayer: View {
                     CachingVideoPlayer(
                         url: url,
                         mid: attachment.mid,
-                        isVisible: true,
+                        isVisible: !showFullScreen, // Hide when full-screen is open
                         mediaType: attachment.type,
                         autoPlay: false, // Don't autoplay in chat
                         videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
@@ -522,7 +522,16 @@ struct ChatVideoPlayer: View {
                         }
                     }
                 }
-                .fullScreenCover(isPresented: $showFullScreen) {
+                .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
+                    // Reset play button visibility when returning from full-screen
+                    showPlayButton = true
+                    // Auto-hide it again after 2 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showPlayButton = false
+                        }
+                    }
+                }) {
                     // Create a temporary tweet-like structure for the video
                     let tempTweet = Tweet(
                         mid: "chat_video_\(attachment.mid)",
