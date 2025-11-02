@@ -385,17 +385,41 @@ struct ChatScreen: View {
         attachmentData = nil
         selectedPhotos = []
         
-        // Show toast message for background upload
-        showToastMessage(NSLocalizedString("Uploading attachment...", comment: "Chat status"), type: .info)
+        // Show upload dialog instead of toast
+        Task { @MainActor in
+            UploadProgressManager.shared.startUpload(type: "chat")
+        }
         
         // Process attachment upload in background, then send message directly
         Task.detached(priority: .background) {
             do {
+                // Update progress: preparing
+                await MainActor.run {
+                    UploadProgressManager.shared.updateProgress(
+                        stage: .preparing,
+                        message: NSLocalizedString("Preparing attachment...", comment: "Chat upload"),
+                        progress: 0.1
+                    )
+                }
+                
                 // Use the same tweet upload routine for attachments
                 var uploadedAttachments: [MimeiFileType]? = nil
                 
                 if let attachment = currentAttachment, let photoData = currentAttachmentData {
                     print("[ChatScreen] Uploading attachment using tweet upload routine...")
+                    
+                    // Update progress: uploading
+                    await MainActor.run {
+                        let typeName = attachment.type == .image ? 
+                            NSLocalizedString("image", comment: "Media type") : 
+                            NSLocalizedString("video", comment: "Media type")
+                        UploadProgressManager.shared.updateProgress(
+                            stage: .uploadingAttachments,
+                            message: NSLocalizedString("Uploading attachment...", comment: "Chat upload"),
+                            progress: 0.5,
+                            detail: NSLocalizedString("Uploading", comment: "Upload detail") + " \(typeName)"
+                        )
+                    }
                     
                     // Upload attachment directly using the same method as tweet uploads
                     let (uploadedAttachment, _) = try await HproseInstance.shared.uploadToIPFS(
@@ -418,6 +442,15 @@ struct ChatScreen: View {
                     attachments: uploadedAttachments
                 )
                 
+                // Update progress: sending message
+                await MainActor.run {
+                    UploadProgressManager.shared.updateProgress(
+                        stage: .submittingTweet,
+                        message: NSLocalizedString("Sending message...", comment: "Chat upload"),
+                        progress: 0.9
+                    )
+                }
+                
                 // Send message directly (not in background)
                 print("[ChatScreen] Sending message directly...")
                 let resultMessage = try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: finalMessage)
@@ -436,8 +469,14 @@ struct ChatScreen: View {
                     
                     if resultMessage.success == true {
                         print("[ChatScreen] Message sent successfully")
+                        // Complete upload dialog
+                        UploadProgressManager.shared.completeUpload()
                     } else {
                         print("[ChatScreen] Message failed to send: \(resultMessage.errorMsg ?? "Unknown error")")
+                        // Show failure in dialog
+                        UploadProgressManager.shared.failUpload(
+                            message: resultMessage.errorMsg ?? NSLocalizedString("Failed to send message", comment: "Chat error")
+                        )
                     }
                 }
                 
@@ -446,6 +485,11 @@ struct ChatScreen: View {
                 
                 // Handle network exceptions
                 await MainActor.run {
+                    // Show failure in upload dialog
+                    UploadProgressManager.shared.failUpload(
+                        message: ErrorMessageHelper.userFriendlyMessage(from: error)
+                    )
+                    
                     // Create a failed message with error details
                     let failedMessage = ChatMessage(
                         authorId: HproseInstance.shared.appUser.mid,
