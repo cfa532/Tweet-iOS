@@ -1149,9 +1149,11 @@ extension TweetUploadManager {
             if let jobId = item.videoJobId {
                 // This is a video - use the completed CID from server
                 if let completedCID = completedCIDs[jobId] {
+                    // Use the mediaType from itemData if available, otherwise default to hls_video
+                    let mediaType = item.mediaType != nil ? MediaType.fromString(item.mediaType!) : .hls_video
                     let attachment = MimeiFileType(
                         mid: completedCID,
-                        mediaType: .hls_video,
+                        mediaType: mediaType,
                         size: item.fileSize ?? Int64(item.data.count),
                         fileName: item.fileName,
                         timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
@@ -1159,7 +1161,7 @@ extension TweetUploadManager {
                         url: nil
                     )
                     finalAttachments.append(attachment)
-                    print("✅ [Chat Submit] Added video attachment \(index + 1): CID: \(completedCID), size: \(item.fileSize ?? 0), aspectRatio: \(item.aspectRatio ?? 0)")
+                    print("✅ [Chat Submit] Added video attachment \(index + 1): CID: \(completedCID), mediaType: \(mediaType.rawValue), size: \(item.fileSize ?? 0), aspectRatio: \(item.aspectRatio ?? 0)")
                 } else {
                     print("❌ [Chat Submit] WARNING: Missing completed CID for job: \(jobId)")
                 }
@@ -1176,7 +1178,7 @@ extension TweetUploadManager {
                     url: nil
                 )
                 finalAttachments.append(attachment)
-                print("✅ [Chat Submit] Added image attachment \(index + 1): CID: \(storedCID)")
+                print("✅ [Chat Submit] Added image attachment \(index + 1): CID: \(storedCID), mediaType: \(mediaType.rawValue)")
             } else {
                 print("❌ [Chat Submit] ERROR: Missing CID for attachment \(index + 1) - This should never happen!")
             }
@@ -1188,6 +1190,18 @@ extension TweetUploadManager {
         finalMessage.attachments = finalAttachments
         
         print("📤 [Chat Submit] About to send message: content='\(finalMessage.content ?? "nil")', attachments=\(finalMessage.attachments?.count ?? 0), receiptId=\(finalMessage.receiptId)")
+        if let attachments = finalMessage.attachments {
+            for (idx, att) in attachments.enumerated() {
+                print("📤 [Chat Submit] Final attachment \(idx + 1):")
+                print("  mid: \(att.mid)")
+                print("  type: \(att.type.rawValue)")
+                print("  size: \(att.size ?? -1)")
+                print("  fileName: \(att.fileName ?? "nil")")
+                print("  aspectRatio: \(att.aspectRatio ?? -1)")
+                print("  timestamp: \(att.timestamp.timeIntervalSince1970 * 1000)")
+            }
+        }
+        print("📤 [Chat Submit] Full message JSON: \(finalMessage.toJSONString())")
         
         // Send the message
         do {
@@ -1277,6 +1291,8 @@ extension TweetUploadManager {
                     if index < uploadedAttachments.count {
                         let attachment = uploadedAttachments[index]
                         let jobId = jobIdMap[item.identifier]
+                        
+                        print("📋 [Chat Upload] Storing metadata for item \(index + 1): mediaType=\(attachment.type.rawValue), jobId=\(jobId ?? "nil"), cid=\(attachment.mid)")
                         
                         updatedItemData[index] = PendingTweetUpload.ItemData(
                             identifier: item.identifier,
