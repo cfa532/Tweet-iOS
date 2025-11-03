@@ -10,7 +10,7 @@ struct ChatScreen: View {
     @State private var user: User?
     @State private var selectedAttachment: MimeiFileType?
     @State private var selectedPhotos: [PhotosPickerItem] = []
-    @State private var attachmentData: Data?
+    @State private var attachmentItemData: HproseInstance.PendingTweetUpload.ItemData?
     @State private var keyboardHeight: CGFloat = 0
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
@@ -132,7 +132,7 @@ struct ChatScreen: View {
                         
                         Button(action: {
                             selectedAttachment = nil
-                            attachmentData = nil
+                            attachmentItemData = nil
                             selectedPhotos = []
                         }) {
                             Image(systemName: "xmark.circle.fill")
@@ -377,12 +377,12 @@ struct ChatScreen: View {
         // Store current values for background processing
         let currentMessageText = messageText
         let currentAttachment = selectedAttachment
-        let currentAttachmentData = attachmentData
+        let currentAttachmentItemData = attachmentItemData
         
         // Clear input immediately
         messageText = ""
         selectedAttachment = nil
-        attachmentData = nil
+        attachmentItemData = nil
         selectedPhotos = []
         
         // Show upload dialog instead of toast
@@ -405,7 +405,7 @@ struct ChatScreen: View {
                 // Use the same tweet upload routine for attachments
                 var uploadedAttachments: [MimeiFileType]? = nil
                 
-                if let attachment = currentAttachment, let photoData = currentAttachmentData {
+                if let attachment = currentAttachment, let itemData = currentAttachmentItemData {
                     print("[ChatScreen] Uploading attachment using tweet upload routine...")
                     
                     // Update progress: uploading
@@ -423,9 +423,9 @@ struct ChatScreen: View {
                     
                     // Upload attachment directly using the same method as tweet uploads
                     let (uploadedAttachment, _) = try await HproseInstance.shared.uploadToIPFS(
-                        data: photoData,
-                        typeIdentifier: attachment.type == .image ? "public.image" : "public.movie",
-                        fileName: attachment.fileName ?? "attachment"
+                        data: itemData.data,
+                        typeIdentifier: itemData.typeIdentifier,
+                        fileName: itemData.fileName
                     )
                     if let uploadedAttachment = uploadedAttachment {
                         uploadedAttachments = [uploadedAttachment]
@@ -632,31 +632,6 @@ struct ChatScreen: View {
         }
     }
     
-    private func getFileTypeDescription(from typeIdentifier: String) -> String {
-        if typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
-            typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
-            typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
-            typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
-            typeIdentifier.contains("webm") {
-            return "Video"
-        } else if typeIdentifier.contains("image") || typeIdentifier.contains("jpeg") || 
-                    typeIdentifier.contains("png") || typeIdentifier.contains("gif") || 
-                    typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
-            return "Image"
-        } else if typeIdentifier.contains("audio") || typeIdentifier.contains("mp3") || 
-                    typeIdentifier.contains("wav") || typeIdentifier.contains("m4a") {
-            return "Audio"
-        } else if typeIdentifier.contains("pdf") {
-            return "PDF"
-        } else if typeIdentifier.contains("zip") {
-            return "ZIP"
-        } else if typeIdentifier.contains("doc") || typeIdentifier.contains("word") {
-            return "Document"
-        } else {
-            return "File"
-        }
-    }
-    
     // MARK: - Periodic Message Refresh
     
     private func startPeriodicMessageRefresh() {
@@ -685,92 +660,57 @@ struct ChatScreen: View {
         guard let item = items.first else { return }
         
         do {
-            if let data = try await item.loadTransferable(type: Data.self) {
-                // Get the type identifier from the PhotosPickerItem
-                let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                print("[ChatScreen] Type identifier: \(typeIdentifier)")
-                
-                // Detect media type and set appropriate file extension
-                let mediaType: MediaType
-                let fileExtension: String
-                
-                // Determine media type and extension from type identifier
-                let isVideo = typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
-                typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
-                typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
-                typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
-                typeIdentifier.contains("webm")
-                
-                if isVideo {
-                    mediaType = .video
-                    if typeIdentifier.contains("mp4") || typeIdentifier.contains("mpeg-4") {
-                        fileExtension = "mp4"
-                    } else if typeIdentifier.contains("mov") || typeIdentifier.contains("quicktime") {
-                        fileExtension = "mov"
-                    } else if typeIdentifier.contains("avi") {
-                        fileExtension = "avi"
-                    } else if typeIdentifier.contains("wmv") {
-                        fileExtension = "wmv"
-                    } else if typeIdentifier.contains("flv") {
-                        fileExtension = "flv"
-                    } else if typeIdentifier.contains("webm") {
-                        fileExtension = "webm"
-                    } else {
-                        fileExtension = "mp4" // Default for videos
-                    }
-                    print("[ChatScreen] Detected video with extension: \(fileExtension)")
-                } else {
-                    mediaType = .image
-                    if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
-                        fileExtension = "jpg"
-                    } else if typeIdentifier.contains("png") {
-                        fileExtension = "png"
-                    } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
-                        fileExtension = "heic"
-                    } else if typeIdentifier.contains("gif") {
-                        fileExtension = "gif"
-                    } else if typeIdentifier.contains("webp") {
-                        fileExtension = "webp"
-                    } else {
-                        fileExtension = "jpg" // Default for images
-                    }
-                    print("[ChatScreen] Detected image with extension: \(fileExtension)")
-                }
-                
-                // Use item identifier for uniqueness, fallback to timestamp
-                let uniqueId = item.itemIdentifier ?? String(Int(Date().timeIntervalSince1970))
-                // Sanitize the uniqueId to make it safe for filenames
-                let sanitizedId = uniqueId.replacingOccurrences(of: "/", with: "_")
-                    .replacingOccurrences(of: ":", with: "_")
-                    .replacingOccurrences(of: "\\", with: "_")
-                    .replacingOccurrences(of: "*", with: "_")
-                    .replacingOccurrences(of: "?", with: "_")
-                    .replacingOccurrences(of: "\"", with: "_")
-                    .replacingOccurrences(of: "<", with: "_")
-                    .replacingOccurrences(of: ">", with: "_")
-                    .replacingOccurrences(of: "|", with: "_")
-                
-                let fileName = "\(mediaType == .image ? "photo" : "video")_\(sanitizedId).\(fileExtension)"
-                print("[ChatScreen] Generated filename: \(fileName)")
-                
-                // Create a temporary MimeiFileType for the selected media
-                let tempAttachment = MimeiFileType(
-                    mid: UUID().uuidString,
-                    mediaType: mediaType,
-                    size: Int64(data.count),
-                    fileName: fileName,
-                    url: nil
-                )
-                
-                await MainActor.run {
-                    // Replace current attachment with new one
-                    selectedAttachment = tempAttachment
-                    attachmentData = data // Store the actual file data
-                    selectedPhotos = [] // Clear selection
-                }
+            // Use MediaUploadHelper to properly prepare the item data (same as tweet attachments)
+            let itemDataArray = try await MediaUploadHelper.prepareItemData(
+                selectedItems: [item],
+                selectedImages: [],
+                selectedVideos: []
+            )
+            
+            guard let itemData = itemDataArray.first else {
+                print("[ChatScreen] Failed to prepare item data")
+                return
+            }
+            
+            // Get the type identifier to determine media type
+            let typeIdentifier = itemData.typeIdentifier
+            print("[ChatScreen] Type identifier: \(typeIdentifier)")
+            
+            // Determine media type from type identifier
+            let typeIdLower = typeIdentifier.lowercased()
+            let isVideo = typeIdLower.contains("video") || 
+                          typeIdLower.contains("movie") || 
+                          typeIdLower.contains("mpeg") ||
+                          typeIdLower.contains("mp4") ||
+                          typeIdLower.contains("m4v") ||
+                          typeIdLower.contains("quicktime") ||
+                          typeIdLower.contains("avi") ||
+                          typeIdLower.contains("mov")
+            
+            let mediaType: MediaType = isVideo ? .video : .image
+            
+            print("[ChatScreen] Detected \(isVideo ? "video" : "image") with filename: \(itemData.fileName)")
+            
+            // Create a temporary MimeiFileType for the selected media
+            let tempAttachment = MimeiFileType(
+                mid: UUID().uuidString,
+                mediaType: mediaType,
+                size: Int64(itemData.data.count),
+                fileName: itemData.fileName,
+                url: nil
+            )
+            
+            await MainActor.run {
+                // Replace current attachment with new one
+                selectedAttachment = tempAttachment
+                attachmentItemData = itemData // Store the prepared item data
+                selectedPhotos = [] // Clear selection
             }
         } catch {
             print("[ChatScreen] Error loading media: \(error)")
+            await MainActor.run {
+                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
+            }
         }
     }
     

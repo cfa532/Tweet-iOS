@@ -1,0 +1,31 @@
+2025-11-03 17:42:31.843 xcodebuild[2772:23440]  DVTFilePathFSEvents: Failed to start fs event stream.
+2025-11-03 17:42:31.950 xcodebuild[2772:23391] [MT] DVTDeveloperPaths: Failed to get length of DARWIN_USER_CACHE_DIR from confstr(3), error = Error Domain=NSPOSIXErrorDomain Code=5 "Input/output error". Using NSCachesDirectory instead.
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -workspace Tweet.xcworkspace -scheme Tweet -sdk iphoneos -configuration Debug -destination generic/platform=iOS clean build
+
+Build settings from command line:
+    SDKROOT = iphoneos26.0
+
+2025-11-03 17:42:32.271 xcodebuild[2772:23439] CoreSimulatorService connection became invalid.  Simulator services will no longer be available.
+2025-11-03 17:42:32.272 xcodebuild[2772:23593] Logging connecton invalid: <OS_xpc_error: <dictionary: 0x2080f6be0> { count = 1, transaction: 0, voucher = 0x0, contents =
+	"XPCErrorDescription" => <string: 0x2080f6d28> { length = 18, contents = "Connection invalid" }
+}>
+2025-11-03 17:42:32.314 xcodebuild[2772:23593] Error opening log file (/Users/cfa532/Library/Logs/CoreSimulator/CoreSimulator.com.apple.dt.xcodebuild.log): Operation not permitted
+[-[SimServiceContext sendRequest:]:1743] ERROR : Unable to deliver request ({
+    "developer_dir" = "/Applications/Xcode.app/Contents/Developer";
+    request = "set_developer_dir";
+}) because we are not connected to CoreSimulatorService.
+2025-11-03 17:42:32.315 xcodebuild[2772:23391] [MT] DVTAssertions: Warning in DVTFrameworks/DVTFoundation/FileTypes/DVTFileDataTypeDetection.m:79
+Details:  detectedTypeIdentifier (com.apple.binary-property-list) does not conform to matchedTypeIdentifier in MagicFileDataTypeDetector extenson com.apple.property-list. When both are specified, this conformance is required unless overridden by setting allowNonInheritance. extension.identifier:Xcode.MagicFileDataTypeDetector.BinaryPlist
+Object:   <DVTFileDataTypeDetectionMagicCache: 0x1155fc0c0>
+Method:   -initWithExtension:
+Thread:   <_NSMainThread: 0x154f0ff80>{number = 1, name = main}
+Please file a bug at https://feedbackassistant.apple.com with this warning message and any useful information you can provide.
+2025-11-03 17:42:32.316 xcodebuild[2772:23391] [MT] DVTAssertions: Warning in DVTFrameworks/DVTFoundation/FileTypes/DVTFileDataTypeDetection.m:79
+Details:  detectedTypeIdentifier (com.apple.xml-property-list) does not conform to matchedTypeIdentifier in MagicFileDataTypeDetector extenson com.apple.property-list. When both are specified, this conformance is required unless overridden by setting allowNonInheritance. extension.identifier:Xcode.MagicFileDataTypeDetector.XMLPlist
+Object:   <DVTFileDataTypeDetectionMagicCache: 0x1155fec60>
+Method:   -initWithExtension:
+Thread:   <_NSMainThread: 0x154f0ff80>{number = 1, name = main}
+Please file a bug at https://feedbackassistant.apple.com with this warning message and any useful information you can provide.
+2025-11-03 17:42:32.318 xcodebuild[2772:23391] Writing error result bundle to /var/folders/tw/vp07hjf94w51v8mfvs95gf_00000gn/T/ResultBundle_2025-03-11_17-42-0032.xcresult
+xcodebuild: error: 'Tweet.xcworkspace' is not a workspace file.
