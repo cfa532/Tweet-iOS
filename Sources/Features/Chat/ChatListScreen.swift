@@ -204,7 +204,7 @@ struct ChatSessionRow: View {
                     
                     // Message preview
                     Text(getMessagePreview())
-                        .font(.system(size: 15, weight: .regular))
+                        .font(.system(size: 16, weight: .regular))
                         .foregroundColor(.primary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)

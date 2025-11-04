@@ -30,6 +30,7 @@
 "Checking video status..." = "動画ステータスを確認中...";
 "Processing on server..." = "サーバーで処理中...";
 "Your tweet will be posted when ready" = "準備が整い次第ツイートが投稿されます";
+"Your message will be sent when ready" = "準備が整い次第メッセージが送信されます";
 "Uploading %@ %d/%d..." = "%@ %d/%d をアップロード中...";
 "Processing video %d/%d" = "動画を処理中 %d/%d";
 "Uploading image %d/%d" = "画像をアップロード中 %d/%d";

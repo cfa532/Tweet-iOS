@@ -30,6 +30,7 @@
 "Checking video status..." = "Checking video status...";
 "Processing on server..." = "Processing on server...";
 "Your tweet will be posted when ready" = "Your tweet will be posted when ready";
+"Your message will be sent when ready" = "Your message will be sent when ready";
 "Uploading %@ %d/%d..." = "Uploading %@ %d/%d...";
 "Processing video %d/%d" = "Processing video %d/%d";
 "Uploading image %d/%d" = "Uploading image %d/%d";

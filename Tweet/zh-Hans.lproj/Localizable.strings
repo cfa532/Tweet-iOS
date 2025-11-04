@@ -30,6 +30,7 @@
 "Checking video status..." = "正在检查视频状态...";
 "Processing on server..." = "服务器处理中...";
 "Your tweet will be posted when ready" = "准备就绪后将发布您的推文";
+"Your message will be sent when ready" = "准备就绪后将发送您的消息";
 "Uploading %@ %d/%d..." = "正在上传%@ %d/%d...";
 "Processing video %d/%d" = "正在处理视频 %d/%d";
 "Uploading image %d/%d" = "正在上传图片 %d/%d";

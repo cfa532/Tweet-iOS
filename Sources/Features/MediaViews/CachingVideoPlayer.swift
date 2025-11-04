@@ -31,6 +31,7 @@ struct CachingVideoPlayer: View {
     @State private var videoCompletionObserver: NSObjectProtocol?
     @State private var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
     @State private var hasRecoveredThisCycle = false
+    @State private var playerRefreshID = UUID()
     
     init(
         url: URL,
@@ -66,6 +67,7 @@ struct CachingVideoPlayer: View {
                         VideoPlayer(player: player)
                             .aspectRatio(videoAspectRatio, contentMode: .fit)
                             .clipped()
+                            .id(playerRefreshID) // Force view refresh when player is recreated
                             .onTapGesture {
                                 onVideoTap?()
                             }
@@ -73,6 +75,7 @@ struct CachingVideoPlayer: View {
                         VideoPlayer(player: player)
                             .aspectRatio(videoAspectRatio, contentMode: .fit)
                             .clipped()
+                            .id(playerRefreshID) // Force view refresh when player is recreated
                             .onTapGesture {
                                 onVideoTap?()
                             }
@@ -448,6 +451,9 @@ struct CachingVideoPlayer: View {
             self.player = nil
             isLoading = true
             loadFailed = false
+            
+            // Force view refresh when recreating player
+            playerRefreshID = UUID()
             
             // Recreate player
             setupPlayer()
