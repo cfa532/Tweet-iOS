@@ -4,46 +4,67 @@ struct ChatListScreen: View {
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messageCheckTimer: Timer?
-    @State private var showStartChat = false
     @State private var sessionToDelete: ChatSession?
     @State private var showDeleteConfirmation = false
+    @State private var followingUsers: [User] = []
+    @State private var isLoadingFollowings = false
+    @EnvironmentObject private var hproseInstance: HproseInstance
     
     var body: some View {
         VStack {
                 let currentUserSessions = chatSessionManager.chatSessions.filter { $0.userId == HproseInstance.shared.appUser.mid }
                 if currentUserSessions.isEmpty {
-                    VStack(spacing: 20) {
-                        Image(systemName: "message")
-                            .font(.system(size: 48))
-                            .foregroundColor(.gray)
-                        Text(LocalizedStringKey("No chats yet"))
-                            .font(.headline)
-                            .foregroundColor(.gray)
-                        Text(LocalizedStringKey("Start a conversation to see your chats here"))
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                        
-                        Button(action: {
-                            showStartChat = true
-                        }) {
-                            HStack {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 16, weight: .medium))
-                                Text(LocalizedStringKey("Start Chat"))
-                                    .font(.system(size: 16, weight: .medium))
+                    // Show followings list when no chats exist
+                    VStack {
+                        if isLoadingFollowings {
+                            ProgressView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if followingUsers.isEmpty {
+                            VStack(spacing: 20) {
+                                Image(systemName: "person.2")
+                                    .font(.system(size: 48))
+                                    .foregroundColor(.gray)
+                                Text(LocalizedStringKey("No followings found"))
+                                    .font(.headline)
+                                    .foregroundColor(.gray)
+                                Text(LocalizedStringKey("Follow some users to start chatting"))
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal)
                             }
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.blue)
-                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            List(followingUsers) { user in
+                                NavigationLink(value: user.mid) {
+                                    HStack {
+                                        Avatar(user: user, size: 40)
+                                        
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack {
+                                                Text("\(user.name ?? "")@\(user.username ?? "")")
+                                                    .font(.headline)
+                                                    .foregroundColor(.primary)
+                                                Spacer()
+                                            }
+                                            
+                                            if let profile = user.profile, !profile.isEmpty {
+                                                Text(profile)
+                                                    .font(.body)
+                                                    .foregroundColor(.secondary)
+                                                    .lineLimit(2)
+                                            }
+                                        }
+                                        
+                                        Image(systemName: "message")
+                                            .foregroundColor(.blue)
+                                            .font(.system(size: 16, weight: .medium))
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                            }
                         }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
                         ForEach(chatSessionManager.chatSessions
@@ -64,6 +85,8 @@ struct ChatListScreen: View {
                 // Only load chat sessions if they're empty
                 if chatSessionManager.chatSessions.isEmpty {
                     await loadChatSessions()
+                    // Also load followings when no chats exist
+                    await loadFollowings()
                 }
             }
             .onAppear {
@@ -87,9 +110,6 @@ struct ChatListScreen: View {
             .onDisappear {
                 // Stop periodic checking when view disappears
                 stopPeriodicMessageCheck()
-            }
-            .sheet(isPresented: $showStartChat) {
-                StartChatView()
             }
             .alert(NSLocalizedString("Delete Chat", comment: "Delete chat alert title"), isPresented: $showDeleteConfirmation) {
                 Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) {
@@ -148,6 +168,37 @@ struct ChatListScreen: View {
         
         sessionToDelete = nil
         showDeleteConfirmation = false
+    }
+    
+    // MARK: - Followings Loading
+    
+    private func loadFollowings() async {
+        isLoadingFollowings = true
+        do {
+            // Get current user's followings
+            let followingIds = try await hproseInstance.getListByType(
+                user: hproseInstance.appUser,
+                entry: .FOLLOWING
+            )
+            
+            // Fetch user objects for each following ID
+            var fetchedUsers: [User] = []
+            for userId in followingIds {
+                if let user = try await hproseInstance.fetchUser(userId) {
+                    fetchedUsers.append(user)
+                }
+            }
+            
+            await MainActor.run {
+                followingUsers = fetchedUsers
+                isLoadingFollowings = false
+            }
+        } catch {
+            await MainActor.run {
+                print("[ChatListScreen] Error loading followings: \(error)")
+                isLoadingFollowings = false
+            }
+        }
     }
 }
 
