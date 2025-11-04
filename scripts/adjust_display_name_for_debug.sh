@@ -14,10 +14,19 @@ if [ "${CONFIGURATION}" == "Debug" ]; then
     if [ -d "${RESOURCE_PATH}" ]; then
         # Find all InfoPlist.strings files in the bundle (including .lproj subdirectories)
         find "${RESOURCE_PATH}" -name "InfoPlist.strings" -type f | while read file; do
-            echo "Modifying: $file"
-            # Remove CFBundleDisplayName lines (including lines with just whitespace before)
-            sed -i '' '/^[[:space:]]*CFBundleDisplayName[[:space:]]*=/d' "$file" 2>/dev/null || \
-            sed -i '/^[[:space:]]*CFBundleDisplayName[[:space:]]*=/d' "$file"
+            echo "Processing: $file"
+            
+            # Convert binary plist to XML, remove CFBundleDisplayName, convert back to binary
+            if plutil -convert xml1 "$file" -o "${file}.xml" 2>/dev/null; then
+                # Remove the CFBundleDisplayName key and its value from XML
+                sed -i '' '/<key>CFBundleDisplayName<\/key>/,/<\/string>/d' "${file}.xml"
+                # Convert back to binary plist
+                plutil -convert binary1 "${file}.xml" -o "$file"
+                rm "${file}.xml"
+                echo "  ✓ Removed CFBundleDisplayName from: $file"
+            else
+                echo "  ✗ Failed to process: $file"
+            fi
         done
     fi
 else
