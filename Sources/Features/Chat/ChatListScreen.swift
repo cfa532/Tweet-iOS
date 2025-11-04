@@ -8,6 +8,7 @@ struct ChatListScreen: View {
     @State private var showDeleteConfirmation = false
     @State private var followingUsers: [User] = []
     @State private var isLoadingFollowings = false
+    @State private var showStartNewChat = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     var body: some View {
@@ -15,56 +16,7 @@ struct ChatListScreen: View {
                 let currentUserSessions = chatSessionManager.chatSessions.filter { $0.userId == HproseInstance.shared.appUser.mid }
                 if currentUserSessions.isEmpty {
                     // Show followings list when no chats exist
-                    VStack {
-                        if isLoadingFollowings {
-                            ProgressView()
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if followingUsers.isEmpty {
-                            VStack(spacing: 20) {
-                                Image(systemName: "person.2")
-                                    .font(.system(size: 48))
-                                    .foregroundColor(.gray)
-                                Text(LocalizedStringKey("No followings found"))
-                                    .font(.headline)
-                                    .foregroundColor(.gray)
-                                Text(LocalizedStringKey("Follow some users to start chatting"))
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
-                                    .multilineTextAlignment(.center)
-                                    .padding(.horizontal)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            List(followingUsers) { user in
-                                NavigationLink(value: user.mid) {
-                                    HStack {
-                                        Avatar(user: user, size: 40)
-                                        
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            HStack {
-                                                Text("\(user.name ?? "")@\(user.username ?? "")")
-                                                    .font(.headline)
-                                                    .foregroundColor(.primary)
-                                                Spacer()
-                                            }
-                                            
-                                            if let profile = user.profile, !profile.isEmpty {
-                                                Text(profile)
-                                                    .font(.body)
-                                                    .foregroundColor(.secondary)
-                                                    .lineLimit(2)
-                                            }
-                                        }
-                                        
-                                        Image(systemName: "message")
-                                            .foregroundColor(.blue)
-                                            .font(.system(size: 16, weight: .medium))
-                                    }
-                                    .padding(.vertical, 4)
-                                }
-                            }
-                        }
-                    }
+                    FollowingsListForChat(followingUsers: followingUsers, isLoadingFollowings: isLoadingFollowings)
                 } else {
                     List {
                         ForEach(chatSessionManager.chatSessions
@@ -78,8 +30,40 @@ struct ChatListScreen: View {
             }
             .navigationTitle(LocalizedStringKey("Chats"))
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        showStartNewChat = true
+                    }) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .medium))
+                    }
+                }
+            }
             .navigationDestination(for: String.self) { receiptId in
                 ChatScreen(receiptId: receiptId)
+            }
+            .sheet(isPresented: $showStartNewChat) {
+                NavigationStack {
+                    FollowingsListForChat(followingUsers: followingUsers, isLoadingFollowings: isLoadingFollowings)
+                        .navigationTitle(LocalizedStringKey("Start Chat"))
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button(LocalizedStringKey("Done")) {
+                                    showStartNewChat = false
+                                }
+                            }
+                        }
+                }
+                .onAppear {
+                    // Refresh followings when opening the sheet
+                    if followingUsers.isEmpty {
+                        Task {
+                            await loadFollowings()
+                        }
+                    }
+                }
             }
             .task {
                 // Only load chat sessions if they're empty
@@ -198,6 +182,74 @@ struct ChatListScreen: View {
                 print("[ChatListScreen] Error loading followings: \(error)")
                 isLoadingFollowings = false
             }
+        }
+    }
+}
+
+// MARK: - Followings List for Chat
+
+struct FollowingsListForChat: View {
+    let followingUsers: [User]
+    let isLoadingFollowings: Bool
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack {
+            if isLoadingFollowings {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if followingUsers.isEmpty {
+                VStack(spacing: 20) {
+                    Image(systemName: "person.2")
+                        .font(.system(size: 48))
+                        .foregroundColor(.gray)
+                    Text(LocalizedStringKey("No followings found"))
+                        .font(.headline)
+                        .foregroundColor(.gray)
+                    Text(LocalizedStringKey("Follow some users to start chatting"))
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(followingUsers) { user in
+                    NavigationLink(value: user.mid) {
+                        HStack {
+                            Avatar(user: user, size: 40)
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("\(user.name ?? "")@\(user.username ?? "")")
+                                        .font(.headline)
+                                        .foregroundColor(.primary)
+                                    Spacer()
+                                }
+                                
+                                if let profile = user.profile, !profile.isEmpty {
+                                    Text(profile)
+                                        .font(.body)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                            
+                            Image(systemName: "message")
+                                .foregroundColor(.blue)
+                                .font(.system(size: 16, weight: .medium))
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .navigationDestination(for: String.self) { receiptId in
+            ChatScreen(receiptId: receiptId)
+                .onAppear {
+                    // Dismiss the sheet when navigating to chat
+                    dismiss()
+                }
         }
     }
 }
