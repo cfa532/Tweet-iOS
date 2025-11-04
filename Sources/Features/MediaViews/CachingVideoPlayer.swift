@@ -131,8 +131,14 @@ struct CachingVideoPlayer: View {
             cleanupPlayer()
         }
         .onChange(of: isVisible) { _, visible in
-            if visible && autoPlay {
-                player?.play()
+            if visible {
+                // When view becomes visible, check if player needs recovery
+                if let player = player, isPlayerBroken() {
+                    print("DEBUG: [CachingVideoPlayer] Player is broken when becoming visible for \(mid), recovering...")
+                    recoverFromBackground()
+                } else if visible && autoPlay {
+                    player?.play()
+                }
             } else {
                 player?.pause()
             }
@@ -429,53 +435,48 @@ struct CachingVideoPlayer: View {
     }
     
     private func recoverFromBackground() {
-        guard let player = player else {
-            print("DEBUG: [CachingVideoPlayer] No player to recover for \(mid)")
+        // Always check if player is broken, even if we don't have one yet
+        if let player = player, !isPlayerBroken() {
+            // Player is healthy, restore state
+            if let state = savedPlaybackState {
+                print("DEBUG: [CachingVideoPlayer] Restoring playback state for \(mid) - wasPlaying: \(state.wasPlaying)")
+                
+                // Seek to saved position
+                player.seek(to: state.time) { finished in
+                    if finished && state.wasPlaying && self.isVisible {
+                        player.play()
+                        print("DEBUG: [CachingVideoPlayer] Resumed playback for \(self.mid)")
+                    }
+                }
+                
+                savedPlaybackState = nil
+            }
             hasRecoveredThisCycle = true
             return
         }
         
+        // Player is broken or doesn't exist - recreate it
+        print("DEBUG: [CachingVideoPlayer] Player is broken or missing for \(mid), recreating...")
+        
+        // Clear broken player
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
+        }
+        
+        player?.pause()
+        self.player = nil
+        isLoading = true
+        loadFailed = false
+        
+        // Force view refresh when recreating player
+        playerRefreshID = UUID()
+        
+        // Recreate player
+        setupPlayer()
+        
+        savedPlaybackState = nil
         hasRecoveredThisCycle = true
-        
-        // Check if player is broken
-        if isPlayerBroken() {
-            print("DEBUG: [CachingVideoPlayer] Player is broken for \(mid), recreating...")
-            
-            // Clear broken player
-            if let observer = videoCompletionObserver {
-                NotificationCenter.default.removeObserver(observer)
-                videoCompletionObserver = nil
-            }
-            
-            player.pause()
-            self.player = nil
-            isLoading = true
-            loadFailed = false
-            
-            // Force view refresh when recreating player
-            playerRefreshID = UUID()
-            
-            // Recreate player
-            setupPlayer()
-            
-            savedPlaybackState = nil
-            return
-        }
-        
-        // Player is healthy, restore state
-        if let state = savedPlaybackState {
-            print("DEBUG: [CachingVideoPlayer] Restoring playback state for \(mid) - wasPlaying: \(state.wasPlaying)")
-            
-            // Seek to saved position
-            player.seek(to: state.time) { finished in
-                if finished && state.wasPlaying && self.isVisible {
-                    player.play()
-                    print("DEBUG: [CachingVideoPlayer] Resumed playback for \(self.mid)")
-                }
-            }
-            
-            savedPlaybackState = nil
-        }
     }
     
     private func isPlayerBroken() -> Bool {
@@ -488,10 +489,22 @@ struct CachingVideoPlayer: View {
             return true
         }
         
+        // Check if player item is in unknown state (common after backgrounding)
+        if playerItem.status == .unknown {
+            print("DEBUG: [CachingVideoPlayer] Player item status is unknown for \(mid) - likely broken after backgrounding")
+            return true
+        }
+        
         // Check if player has invalid time
         let currentTime = player.currentTime()
         if !currentTime.isValid || currentTime.isIndefinite {
             print("DEBUG: [CachingVideoPlayer] Player has invalid time for \(mid)")
+            return true
+        }
+        
+        // Check if player item error exists
+        if let error = playerItem.error {
+            print("DEBUG: [CachingVideoPlayer] Player item has error for \(mid): \(error.localizedDescription)")
             return true
         }
         

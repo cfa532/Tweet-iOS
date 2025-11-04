@@ -2,7 +2,7 @@ from PIL import Image
 import os
 
 # Source image
-source_image = "Icon-iOS-Marketing.png"
+source_image = "2birds1024.png"
 
 # Icon sizes
 sizes = [
