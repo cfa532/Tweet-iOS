@@ -2317,10 +2317,11 @@ struct AVPlayerLayerView: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         guard let playerView = uiView as? PlayerView else { return }
         
-        // Update player if changed
-        if playerView.playerLayer.player !== player {
-            playerView.playerLayer.player = player
-        }
+        // CRITICAL: Detach player first, then re-attach
+        // This ensures the player's layer is not attached to any other view
+        // Without this, cached/reused players can show black screen in MediaCell
+        playerView.playerLayer.player = nil
+        playerView.playerLayer.player = player
     }
     
     class PlayerView: UIView {
