@@ -11,8 +11,8 @@
 	</dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>com.tweet.upload</string>
-		<string>com.example.Tweet.messageCheck</string>
+		<string>com.zz.upload</string>
+		<string>com.example.ZZ.messageCheck</string>
 	</array>
 	<key>CFBundleLocalizations</key>
 	<array>

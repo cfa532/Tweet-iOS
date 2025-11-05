@@ -20,13 +20,13 @@ class ImageCacheManager: @unchecked Sendable {
     
     // Request deduplication: Track ongoing requests to prevent duplicate downloads
     private var ongoingRequests: [String: Task<UIImage?, Never>] = [:]
-    private let requestsQueue = DispatchQueue(label: "com.tweet.imagecache.requests", attributes: .concurrent)
+    private let requestsQueue = DispatchQueue(label: "com.zz.imagecache.requests", attributes: .concurrent)
     
     // Avatar loading throttling
     private let maxConcurrentAvatarLoads = 4 // Balanced for stable network performance
     private var activeAvatarLoads: [String: Task<UIImage?, Never>] = [:]
     private var pendingAvatarRequests: [(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL, continuation: CheckedContinuation<UIImage?, Never>)] = []
-    private let avatarQueue = DispatchQueue(label: "com.tweet.imagecache.avatars", attributes: .concurrent)
+    private let avatarQueue = DispatchQueue(label: "com.zz.imagecache.avatars", attributes: .concurrent)
     
     private init() {
         // Get the cache directory

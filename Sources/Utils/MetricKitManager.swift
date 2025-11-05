@@ -5,7 +5,7 @@ import OSLog
 @available(iOS 13.0, *)
 class MetricKitManager: NSObject, MXMetricManagerSubscriber {
     static let shared = MetricKitManager()
-    private let logger = Logger(subsystem: "com.tweet", category: "MetricKit")
+    private let logger = Logger(subsystem: "com.zz", category: "MetricKit")
     
     private override init() {
         super.init()

@@ -1,11 +1,11 @@
 /* 
   InfoPlist.strings (Japanese)
-  Tweet
+  ZZ
   
   Created for permission localization.
 */
 CFBundleDisplayName = "众众";
-NSCameraUsageDescription = "众众はツイートや返信用の写真や動画を撮影するためにカメラへのアクセスが必要です。フォロワーと共有するリッチメディアコンテンツを作成できます。";
-NSMicrophoneUsageDescription = "众众は動画ツイートや返信を作成する際に音声を録音するためにマイクへのアクセスが必要です。これにより動画コンテンツに音声ナレーションを追加できます。";
-NSPhotoLibraryUsageDescription = "众众は撮影した写真や動画を保存し、ツイートや返信用に既存のメディアを選択するためにフォトライブラリへのアクセスが必要です。";
+NSCameraUsageDescription = "众众は投稿や返信用の写真や動画を撮影するためにカメラへのアクセスが必要です。フォロワーと共有するリッチメディアコンテンツを作成できます。";
+NSMicrophoneUsageDescription = "众众は動画投稿や返信を作成する際に音声を録音するためにマイクへのアクセスが必要です。これにより動画コンテンツに音声ナレーションを追加できます。";
+NSPhotoLibraryUsageDescription = "众众は撮影した写真や動画を保存し、投稿や返信用に既存のメディアを選択するためにフォトライブラリへのアクセスが必要です。";
 NSUserNotificationUsageDescription = "众众は新しいチャットメッセージ、メンション、ネットワークからの重要な更新について最新情報を提供するために通知を使用します。";

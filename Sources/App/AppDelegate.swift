@@ -64,7 +64,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     private func registerBackgroundTasks() {
         // Register background task for checking new messages every 15 minutes
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.example.Tweet.messageCheck", using: nil) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.example.ZZ.messageCheck", using: nil) { task in
             self.handleMessageCheckBackgroundTask(task: task as! BGAppRefreshTask)
         }
         
@@ -92,7 +92,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     private func scheduleNextMessageCheck() {
-        let request = BGAppRefreshTaskRequest(identifier: "com.example.Tweet.messageCheck")
+        let request = BGAppRefreshTaskRequest(identifier: "com.example.ZZ.messageCheck")
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60) // 15 minutes from now
         
         do {
