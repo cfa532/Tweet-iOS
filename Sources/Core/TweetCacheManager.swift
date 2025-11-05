@@ -397,6 +397,33 @@ extension TweetCacheManager {
             }
         }
     }
+    
+    /// Delete all tweets from a specific user from a specific cache (e.g., when unfollowing)
+    func deleteTweetsFromUser(userId: String, cacheKey: String) {
+        context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            // Match tweets where uid (cache key) matches AND tweet's authorId matches userId
+            request.predicate = NSPredicate(format: "uid == %@", cacheKey)
+            
+            if let cdTweets = try? context.fetch(request) {
+                var deletedCount = 0
+                for cdTweet in cdTweets {
+                    // Decode tweet to check authorId
+                    if let tweet = try? Tweet.from(cdTweet: cdTweet), tweet.authorId == userId {
+                        // Remove from access times
+                        tweetAccessTimes.removeValue(forKey: tweet.mid)
+                        context.delete(cdTweet)
+                        deletedCount += 1
+                    }
+                }
+                if deletedCount > 0 {
+                    try? context.save()
+                    saveAccessTimes()
+                    print("DEBUG: [TweetCacheManager] Deleted \(deletedCount) tweets from user \(userId) in cache: \(cacheKey)")
+                }
+            }
+        }
+    }
 
     func clearAllCache() {
         context.performAndWait {

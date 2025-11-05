@@ -620,12 +620,20 @@ struct ProfileView: View {
                     // Increment the followed user's followers count
                     user.followersCount = (user.followersCount ?? 0) + 1
                     print("DEBUG: [ProfileView] Incremented followers count for user \(user.mid): \(oldFollowersCount ?? 0) -> \(user.followersCount ?? 0)")
+                    
+                    // Fetch and add recent tweets from newly followed user to main feed
+                    Task {
+                        await FollowingsTweetViewModel.shared.addTweetsFromNewlyFollowedUser(user)
+                    }
                 } else {
                     // User is no longer following - remove app user from followed user's fansList
                     user.fansList?.removeAll { $0 == hproseInstance.appUser.mid }
                     // Decrement the followed user's followers count
                     user.followersCount = max(0, (user.followersCount ?? 0) - 1)
                     print("DEBUG: [ProfileView] Decremented followers count for user \(user.mid): \(oldFollowersCount ?? 0) -> \(user.followersCount ?? 0)")
+                    
+                    // Remove unfollowed user's tweets from main feed
+                    FollowingsTweetViewModel.shared.removeTweetsFromUser(user.mid)
                 }
                 
                 // Update app user's following count

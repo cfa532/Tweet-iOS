@@ -133,7 +133,7 @@ struct CachingVideoPlayer: View {
         .onChange(of: isVisible) { _, visible in
             if visible {
                 // When view becomes visible, check if player needs recovery
-                if let player = player, isPlayerBroken() {
+                if player != nil && isPlayerBroken() {
                     print("DEBUG: [CachingVideoPlayer] Player is broken when becoming visible for \(mid), recovering...")
                     recoverFromBackground()
                 } else if visible && autoPlay {

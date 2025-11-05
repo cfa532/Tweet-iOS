@@ -728,7 +728,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // CRITICAL: For very large progressive videos (>200MB total), redirect to direct playback
         // LocalHTTPServer caching doesn't work well for extremely large files - AVPlayer gets confused with partial ranges
         let maxCacheableSize: Int64 = 200 * 1024 * 1024  // 200MB (cache limit is 2GB, so this is safe)
-        if let end = rangeEnd, let start = rangeStart {
+        if let end = rangeEnd, let _ = rangeStart {
             let totalSize = end + 1  // Total file size indicated by the request
             if totalSize > maxCacheableSize {
                 NSLog("⚠️ [PROGRESSIVE TOO LARGE] File size \(totalSize/1024/1024)MB exceeds cacheable limit (\(maxCacheableSize/1024/1024)MB) - redirecting to direct playback")

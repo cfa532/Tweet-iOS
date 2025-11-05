@@ -122,6 +122,53 @@ class FollowingsTweetViewModel: ObservableObject {
         // Note: deleteTweet removes by tweet ID, so it will remove from all caches
     }
     
+    // Remove all tweets from a specific user (e.g., when unfollowing)
+    func removeTweetsFromUser(_ userId: MimeiId) {
+        let removedCount = tweets.filter { $0.authorId == userId }.count
+        print("[FollowingsTweetViewModel] Removing \(removedCount) tweets from user \(userId)")
+        
+        // Remove from displayed tweets array
+        tweets.removeAll { $0.authorId == userId }
+        
+        // Remove from local cache
+        TweetCacheManager.shared.deleteTweetsFromUser(userId: userId, cacheKey: "main_feed")
+    }
+    
+    // Fetch and add recent tweets from a newly followed user
+    func addTweetsFromNewlyFollowedUser(_ user: User) async {
+        do {
+            print("[FollowingsTweetViewModel] Fetching recent tweets from newly followed user: \(user.mid)")
+            
+            // Fetch first page of user's tweets (10 tweets should be enough for initial display)
+            let userTweets = try await hproseInstance.fetchUserTweets(
+                user: user,
+                pageNumber: 0,
+                pageSize: 10
+            )
+            
+            // Filter out nils and private tweets
+            let validTweets = userTweets.compactMap { $0 }.filter { !($0.isPrivate ?? false) }
+            
+            print("[FollowingsTweetViewModel] Got \(validTweets.count) valid tweets from newly followed user \(user.mid)")
+            
+            if !validTweets.isEmpty {
+                await MainActor.run {
+                    // Add tweets to the feed (mergeTweets will sort them by timestamp)
+                    tweets.mergeTweets(validTweets)
+                }
+                
+                // Cache the tweets to main feed
+                for tweet in validTweets {
+                    TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
+                }
+                
+                print("[FollowingsTweetViewModel] Added and cached \(validTweets.count) tweets from newly followed user")
+            }
+        } catch {
+            print("[FollowingsTweetViewModel] Error fetching tweets from newly followed user \(user.mid): \(error)")
+        }
+    }
+    
     func showTweetDetail(_ tweet: Tweet) {
         selectedTweet = tweet
         showTweetDetail = true

@@ -447,7 +447,7 @@ struct ChatVideoPlayer: View {
     let senderUser: User?
     
     @State private var showFullScreen = false
-    @State private var isPlaying = false
+    @State private var isPlaying = true  // Start with autoplay enabled
     
     private var baseUrl: URL {
         if isFromCurrentUser {
@@ -484,8 +484,8 @@ struct ChatVideoPlayer: View {
                 )
                 .frame(width: maxWidth, height: gridHeight) // Constrain ZStack to grid size
                 .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
-                    // Reset play state when returning from fullscreen
-                    isPlaying = false
+                    // Resume playing when returning from fullscreen
+                    isPlaying = true
                 }) {
                     // Create a temporary tweet-like structure for the video
                     let tempTweet = Tweet(
