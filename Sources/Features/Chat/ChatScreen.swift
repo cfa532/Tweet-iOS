@@ -6,6 +6,7 @@ struct ChatScreen: View {
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messages: [ChatMessage] = []
+    @State private var allCachedMessages: [ChatMessage] = [] // All messages from cache for pagination
     @State private var messageText = ""
     @State private var user: User?
     @State private var selectedAttachment: MimeiFileType?
@@ -15,6 +16,12 @@ struct ChatScreen: View {
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var messageRefreshTimer: Timer?
+    
+    // Pagination states
+    @State private var currentOffset = 0
+    @State private var hasMoreMessages = true
+    @State private var isLoadingMore = false
+    @State private var shouldScrollToBottom = false
     
     // Toast message states
     @State private var showToast = false
@@ -48,6 +55,24 @@ struct ChatScreen: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 8) {
+                        // Load more indicator at top
+                        if hasMoreMessages && !messages.isEmpty {
+                            if isLoadingMore {
+                                HStack {
+                                    Spacer()
+                                    ProgressView()
+                                        .padding()
+                                    Spacer()
+                                }
+                            } else {
+                                Color.clear
+                                    .frame(height: 1)
+                                    .onAppear {
+                                        loadMoreMessages()
+                                    }
+                            }
+                        }
+                        
                         ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                             // Add time divider if there's a 5+ minute gap
                             if index > 0 {
@@ -69,19 +94,17 @@ struct ChatScreen: View {
                     }
                     .padding()
                 }
-                .onChange(of: messages.count) { _, _ in
-                    if let lastMessage = messages.last {
+                .onChange(of: shouldScrollToBottom) { _, newValue in
+                    if newValue, let lastMessage = messages.last {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
+                        shouldScrollToBottom = false
                     }
                 }
                 .onChange(of: keyboardHeight) { _, newHeight in
                     // Scroll to bottom when keyboard appears/disappears
-                    print("[ChatScreen] Keyboard height changed to: \(newHeight)")
                     if let lastMessage = messages.last {
-                        print("[ChatScreen] Scrolling to message: \(lastMessage.id)")
-                        // Animate synchronously with keyboard using easeOut curve to match iOS keyboard animation
                         withAnimation(.easeOut(duration: 0.25)) {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
@@ -89,9 +112,9 @@ struct ChatScreen: View {
                 }
                 .navigationBarHidden(true)
                 .onAppear {
-                    // Scroll to bottom when view appears
-                    if let lastMessage = messages.last {
-                        withAnimation(.easeInOut(duration: 0.3)) {
+                    // Scroll to bottom when messages are loaded
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        if let lastMessage = messages.last {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
                     }
@@ -238,10 +261,14 @@ struct ChatScreen: View {
             // Handle successfully sent message
             if let sentMessage = notification.userInfo?["message"] as? ChatMessage {
                 print("[ChatScreen] Received notification for sent message: \(sentMessage.id)")
-                // Add message to UI if not already there
+                // Add message to UI and cache if not already there
                 if !messages.contains(where: { $0.id == sentMessage.id }) {
                     messages.append(sentMessage)
+                    allCachedMessages.append(sentMessage)
                     chatRepository.addMessagesToCoreData([sentMessage])
+                    
+                    // Scroll to bottom for sent message
+                    shouldScrollToBottom = true
                     
                     // Update chat session
                     Task {
@@ -323,8 +350,12 @@ struct ChatScreen: View {
         // Clear input immediately
         messageText = ""
         
-        // Add message to UI immediately
+        // Add message to UI and cache immediately
         messages.append(message)
+        allCachedMessages.append(message)
+        
+        // Scroll to bottom for sent message
+        shouldScrollToBottom = true
         
         // Send message directly (synchronously)
         Task {
@@ -436,48 +467,79 @@ struct ChatScreen: View {
     }
     
     private func loadMessages() async {
-        // First, load the last 50 messages from local storage
-        let localMessages = chatRepository.getLastMessages(for: receiptId, limit: 50)
-        let validLocalMessages = localMessages.filter { isValidChatMessage($0) }
-        await MainActor.run {
-            messages = validLocalMessages
-        }
-        
-        print("[ChatScreen] Loaded \(validLocalMessages.count) valid messages from local storage (filtered from \(localMessages.count) total)")
-        
-        // Then, fetch new messages from backend
+        // First, fetch new messages from backend
         do {
             let backendMessages = try await HproseInstance.shared.fetchMessages(senderId: receiptId)
             let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
             
-            // Merge new messages with existing ones, avoiding duplicates
-            var allMessages = Set(messages)
-            for message in validBackendMessages {
-                allMessages.insert(message)
-            }
-            
-            // Convert back to array and sort by timestamp
-            let sortedMessages = Array(allMessages).sorted { $0.timestamp < $1.timestamp }
-            
-            await MainActor.run {
-                messages = sortedMessages
-            }
-            
             // Save new messages to Core Data
-            chatRepository.addMessagesToCoreData(backendMessages)
+            chatRepository.addMessagesToCoreData(validBackendMessages)
             
-            // Update session timestamp if there are new messages
-            if let latestMessage = sortedMessages.last, latestMessage.timestamp > messages.first?.timestamp ?? 0 {
-                await chatSessionManager.updateOrCreateChatSession(
-                    senderId: receiptId,
-                    message: latestMessage,
-                    hasNews: false
-                )
-            }
-            
-            print("[ChatScreen] Fetched \(backendMessages.count) messages from backend, total: \(sortedMessages.count)")
+            print("[ChatScreen] Fetched \(validBackendMessages.count) messages from backend")
         } catch {
             print("[ChatScreen] Error fetching messages from backend: \(error)")
+        }
+        
+        // Load all messages from local storage for pagination
+        let localMessages = chatRepository.getMessages(for: receiptId)
+        let validLocalMessages = localMessages.filter { isValidChatMessage($0) }
+        let sortedMessages = validLocalMessages.sorted { $0.timestamp < $1.timestamp }
+        
+        await MainActor.run {
+            allCachedMessages = sortedMessages
+            
+            // Load only the most recent 20 messages initially
+            currentOffset = max(0, sortedMessages.count - 20)
+            let initialMessages = Array(sortedMessages.suffix(20))
+            messages = initialMessages
+            hasMoreMessages = currentOffset > 0
+            
+            print("[ChatScreen] Loaded \(initialMessages.count) initial messages (total cached: \(sortedMessages.count), hasMore: \(hasMoreMessages))")
+            
+            // Scroll to bottom after messages are set
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                shouldScrollToBottom = true
+            }
+        }
+        
+        // Update session timestamp if there are messages
+        if let latestMessage = await messages.last {
+            await chatSessionManager.updateOrCreateChatSession(
+                senderId: receiptId,
+                message: latestMessage,
+                hasNews: false
+            )
+        }
+    }
+    
+    private func loadMoreMessages() {
+        guard hasMoreMessages && !isLoadingMore else { return }
+        
+        isLoadingMore = true
+        
+        Task {
+            await MainActor.run {
+                // Calculate how many more messages to load
+                let messagesToLoad = min(20, currentOffset)
+                guard messagesToLoad > 0 else {
+                    hasMoreMessages = false
+                    isLoadingMore = false
+                    return
+                }
+                
+                // Get the next 20 older messages
+                let newOffset = currentOffset - messagesToLoad
+                let olderMessages = Array(allCachedMessages[newOffset..<currentOffset])
+                
+                // Prepend older messages to the current list
+                messages = olderMessages + messages
+                currentOffset = newOffset
+                hasMoreMessages = currentOffset > 0
+                
+                print("[ChatScreen] Loaded \(messagesToLoad) more messages (offset: \(currentOffset), total: \(messages.count), hasMore: \(hasMoreMessages))")
+                
+                isLoadingMore = false
+            }
         }
     }
     
@@ -573,14 +635,14 @@ struct ChatScreen: View {
         // Stop any existing timer first
         stopPeriodicMessageRefresh()
         
-        // Start timer to refresh messages every 10 seconds
-        messageRefreshTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { _ in
+        // Start timer to refresh messages every 15 seconds
+        messageRefreshTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { _ in
             Task {
                 await refreshMessagesFromBackend()
             }
         }
         
-        print("[ChatScreen] Started periodic message refresh timer (10 seconds)")
+        print("[ChatScreen] Started periodic message refresh timer (15 seconds)")
     }
     
     private func stopPeriodicMessageRefresh() {
@@ -657,37 +719,42 @@ struct ChatScreen: View {
             let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
             
             // Check if we have new messages
-            let currentMessageIds = Set(messages.map { $0.id })
-            let newMessages = validBackendMessages.filter { !currentMessageIds.contains($0.id) }
+            let currentCachedIds = Set(allCachedMessages.map { $0.id })
+            let newMessages = validBackendMessages.filter { !currentCachedIds.contains($0.id) }
             
             if !newMessages.isEmpty {
                 print("[ChatScreen] Found \(newMessages.count) new messages from backend")
                 
-                // Merge new messages with existing ones
-                var allMessages = Set(messages)
-                for message in validBackendMessages {
-                    allMessages.insert(message)
-                }
-                
-                // Convert back to array and sort by timestamp
-                let sortedMessages = Array(allMessages).sorted { $0.timestamp < $1.timestamp }
-                
-                await MainActor.run {
-                    messages = sortedMessages
-                }
-                
                 // Save new messages to Core Data
                 chatRepository.addMessagesToCoreData(newMessages)
                 
+                await MainActor.run {
+                    // Add new messages to allCachedMessages
+                    var updatedCache = allCachedMessages + newMessages
+                    updatedCache.sort { $0.timestamp < $1.timestamp }
+                    allCachedMessages = updatedCache
+                    
+                    // Append new messages to displayed messages
+                    messages.append(contentsOf: newMessages)
+                    messages.sort { $0.timestamp < $1.timestamp }
+                    
+                    // Update offset to account for new messages
+                    currentOffset = max(0, allCachedMessages.count - messages.count)
+                    hasMoreMessages = currentOffset > 0
+                    
+                    // Scroll to bottom for new messages
+                    shouldScrollToBottom = true
+                }
+                
                 // Update session timestamp if there are new messages
-                if let latestMessage = sortedMessages.last {
+                if let latestMessage = await messages.last {
                     await chatSessionManager.updateOrCreateChatSession(
                         senderId: receiptId,
                         message: latestMessage,
                         hasNews: false
                     )
                 }
-                print("[ChatScreen] Updated message list with \(newMessages.count) new messages, total: \(sortedMessages.count)")
+                print("[ChatScreen] Updated message list with \(newMessages.count) new messages, total displayed: \(messages.count), total cached: \(allCachedMessages.count)")
             } else {
                 print("[ChatScreen] No new messages found in periodic refresh")
             }
