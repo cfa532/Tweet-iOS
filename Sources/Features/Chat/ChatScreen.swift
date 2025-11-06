@@ -503,7 +503,7 @@ struct ChatScreen: View {
         }
         
         // Update session timestamp if there are messages
-        if let latestMessage = await messages.last {
+        if let latestMessage = messages.last {
             await chatSessionManager.updateOrCreateChatSession(
                 senderId: receiptId,
                 message: latestMessage,
@@ -747,7 +747,7 @@ struct ChatScreen: View {
                 }
                 
                 // Update session timestamp if there are new messages
-                if let latestMessage = await messages.last {
+                if let latestMessage = messages.last {
                     await chatSessionManager.updateOrCreateChatSession(
                         senderId: receiptId,
                         message: latestMessage,
