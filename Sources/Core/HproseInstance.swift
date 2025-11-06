@@ -208,7 +208,7 @@ final class HproseInstance: ObservableObject {
         // This ensures safe operation even after cache is completely cleared
         let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
         
-        NSLog("🔍 [initializeAppUser] Loaded cached user: \(userId), avatar: \(cachedUser.avatar ?? "nil")")
+        NSLog("🔍 [initializeAppUser] Loaded cached appUser: \(userId), avatar: \(cachedUser.avatar ?? "nil")")
         
         await MainActor.run {
             // CRITICAL: Update the singleton instance instead of replacing _appUser
@@ -305,16 +305,14 @@ final class HproseInstance: ObservableObject {
                     HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     
-                    if !appUser.isGuest, let providerIp = try await getProviderIP(appUser.mid) {
-                        print("provider ip:  \(providerIp)")
-                        print("🔄 [INIT] Fetching user data for appUser...")
-                        // Try to fetch user with empty baseUrl to force IP resolution on retries
+                    if !appUser.isGuest {
+                        // Try to fetch user with empty baseUrl to force IP resolution
                         let user = try await fetchUser(appUser.mid, baseUrl: "")
-                        print("✅ [INIT] User data fetched, got user: \(user != nil)")
+                        print("✅ [INIT] appUser data fetched: \(String(describing: user))")
                         
                         if let user = user {
                             // Valid login user is found, use its provider IP as base.
-                            HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
+                            HproseInstance.baseUrl = URL(string: user.baseUrl?.absoluteString ?? "")!
                             client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                             
                             // CRITICAL: Set user.baseUrl on MainActor to avoid publishing warnings
@@ -329,7 +327,7 @@ final class HproseInstance: ObservableObject {
                                 User.updateUserInstance(with: user)
                                 _appUser = User.getInstance(mid: user.mid)
                             }
-                            print("✅ [INIT] App initialized with real IP: \(providerIp)")
+                            print("✅ [INIT] App initialized with real IP: \(user.baseUrl!)")
                             
                             // Notify UI that app is ready (tweets can now render with real IP)
                             await MainActor.run {
@@ -349,7 +347,6 @@ final class HproseInstance: ObservableObject {
                                     self.printAppUserContent("After background data loaded")
                                 }
                             }
-                            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(providerIp)")
                         } else {
                             print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
                             let user = User.getInstance(mid: Constants.GUEST_ID)
