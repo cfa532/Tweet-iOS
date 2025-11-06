@@ -97,7 +97,10 @@ struct StartChatView: View {
             var fetchedUsers: [User] = []
             for userId in followingIds {
                 if let user = try await hproseInstance.fetchUser(userId) {
-                    fetchedUsers.append(user)
+                    // Ignore invalid users without username
+                    if user.username != nil {
+                        fetchedUsers.append(user)
+                    }
                 }
             }
             
