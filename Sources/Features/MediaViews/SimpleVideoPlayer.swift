@@ -152,6 +152,7 @@ struct SimpleVideoPlayer: View {
     @State private var player: AVPlayer?
     @State private var loadingState: LoadingState = .idle
     @State private var playbackState: PlaybackState = .notStarted
+    @State private var retryAttempts: Int = 0 // Track retry attempts separately
     @State private var isLongPressing = false
     @State private var isPlayerDetached = false  // Track background state
     @State private var hasRecoveredThisCycle = false  // Prevent double recovery (background + screen lock)
@@ -583,6 +584,7 @@ struct SimpleVideoPlayer: View {
                     // Update loading state to show video is ready
                     if loadingState.isLoading {
                         loadingState = .loaded
+                        retryAttempts = 0  // Reset retry counter on successful load
                     }
                     
                     // Check if should auto-play
@@ -1119,6 +1121,7 @@ struct SimpleVideoPlayer: View {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                             .scaleEffect(1.5)
+                            .opacity(0.5)
                     }
                     .cornerRadius(8)
                 }
@@ -1128,23 +1131,11 @@ struct SimpleVideoPlayer: View {
             ZStack {
                 Color.black.opacity(0.9)
                 
-                // Show spinner when loading, or error icon when failed
-                if loadingState.hasFailed {
-                    // Just show error icon, no retry button
-                    VStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.title)
-                            .foregroundColor(.white.opacity(0.7))
-                        Text("Failed to load")
-                            .foregroundColor(.white.opacity(0.7))
-                            .font(.caption)
-                    }
-                } else {
-                    // Show spinner when loading
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.2)
-                }
+                // Always show spinner when no player (loading or retrying)
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.2)
+                    .opacity(0.5)
                 
                 // Long press indicator with reload icon
                 if isLongPressing {
@@ -1692,6 +1683,7 @@ struct SimpleVideoPlayer: View {
                     if hasBufferedData && loadingState.isLoading {
                         NSLog("📦 [STATUS READY] Data already buffered, hiding spinner for \(mid)")
                         loadingState = .loaded
+                        retryAttempts = 0  // Reset retry counter on successful load
                     }
                     
                     if shouldAutoPlay {
@@ -1722,6 +1714,7 @@ struct SimpleVideoPlayer: View {
                     if hasBufferedData && loadingState.isLoading && item.status == .readyToPlay {
                         NSLog("📦 [BUFFER READY] Data buffered and player ready for \(mid), hiding spinner")
                         loadingState = .loaded
+                        retryAttempts = 0  // Reset retry counter on successful load
                         // Keep observer active to detect stalls - it will be cleaned up when view disappears
                     }
                 }
@@ -1736,6 +1729,7 @@ struct SimpleVideoPlayer: View {
                 // Hide spinner if we have buffered data
                 if hasBufferedData {
                     loadingState = .loaded
+                    retryAttempts = 0  // Reset retry counter on successful load
                     NSLog("🎬 [INITIAL CHECK] Hiding spinner immediately for \(mid)")
                 } else {
                     NSLog("⏳ [INITIAL CHECK] Ready but waiting for buffer data for \(mid)")
@@ -1800,8 +1794,7 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleError(strategy: RecoveryStrategy = .loadFailure) {
-        let currentRetryCount = loadingState.retryCount
-        print("DEBUG: [VIDEO ERROR] Handling error with strategy: \(strategy) for \(mid), retryCount: \(currentRetryCount)")
+        print("DEBUG: [VIDEO ERROR] Handling error with strategy: \(strategy) for \(mid), retryCount: \(retryAttempts)")
         
         // Clear caches using uniquePlayerURL to match caching key
         VideoStateCache.shared.clearCache(for: mid)
@@ -1822,12 +1815,14 @@ struct SimpleVideoPlayer: View {
             cleanupFailedPlayer()
             
             // Automatic retry up to 3 times
-            if currentRetryCount < 3 {
-                let retryDelay = Double(currentRetryCount + 1) * 1.0 // 1s, 2s, 3s delays
-                print("DEBUG: [VIDEO ERROR] Auto-retry #\(currentRetryCount + 1) in \(retryDelay)s for \(mid)")
+            if retryAttempts < 3 {
+                let retryDelay = Double(retryAttempts + 1) * 1.0 // 1s, 2s, 3s delays
+                print("DEBUG: [VIDEO ERROR] Auto-retry #\(retryAttempts + 1) in \(retryDelay)s for \(mid)")
                 
-                loadingState = .failed(retryCount: currentRetryCount + 1)
+                // Keep showing spinner during retry by staying in loading state
+                loadingState = .loading
                 player = nil
+                retryAttempts += 1
                 
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
@@ -1844,20 +1839,21 @@ struct SimpleVideoPlayer: View {
                     self.setupPlayer()
                 }
             } else {
-                // After 3 retries, give up
-                loadingState = .failed(retryCount: currentRetryCount + 1)
+                // After 3 retries, still keep showing spinner (never show error)
+                loadingState = .loading
                 player = nil
-                print("DEBUG: [VIDEO ERROR] Video permanently failed after 3 retries for \(mid)")
+                print("DEBUG: [VIDEO ERROR] Video failed after 3 retries for \(mid), keeping spinner visible")
             }
             
             // For fullscreen, try to restore from cache as last resort
-            if mode == .mediaBrowser && currentRetryCount >= 3 {
+            if mode == .mediaBrowser && retryAttempts >= 3 {
                 restoreCachedVideoState()
             }
             
         case .manualReset, .networkRecovery:
             playbackState = .notStarted
             loadingState = .idle  // Reset to idle - setupPlayer() will set to .loading
+            retryAttempts = 0  // Reset retry counter on manual/network recovery
             
             if shouldLoadVideo {
                 setupPlayer()
@@ -1867,6 +1863,7 @@ struct SimpleVideoPlayer: View {
             player = nil
             playbackState = .notStarted
             loadingState = .idle  // Reset to idle - setupPlayer() will set to .loading
+            retryAttempts = 0  // Reset retry counter on background recovery
             
             if shouldLoadVideo {
                 setupPlayer()
