@@ -742,8 +742,8 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
-        // CRITICAL: Cap range size to prevent memory outages (max 50MB per request)
-        let maxRangeSize: Int64 = 50 * 1024 * 1024  // 50MB
+        // CRITICAL: Cap range size to prevent memory outages (max 8MB per request)
+        let maxRangeSize: Int64 = 8 * 1024 * 1024  // 8MB
         var cappedRangeEnd = rangeEnd
         if let start = rangeStart, let end = rangeEnd {
             let requestedSize = end - start + 1
@@ -1303,29 +1303,59 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?) {
         var response = "HTTP/1.1 \(statusCode) \(getStatusText(statusCode))\r\n"
-        
+
         // Add default headers first
         response += "Connection: keep-alive\r\n"  // CRITICAL for HTTP keep-alive!
-        
+
         // Add custom headers
         for (key, value) in headers {
             response += "\(key): \(value)\r\n"
         }
-        
+
         response += "\r\n"
-        
-        let responseData = response.data(using: .utf8) ?? Data()
-        var allData = responseData
-        
-        if let body = body {
-            allData.append(body)
-        }
-        
-        connection.send(content: allData, completion: .contentProcessed { error in
+
+        let headerData = response.data(using: .utf8) ?? Data()
+
+        connection.send(content: headerData, completion: .contentProcessed { [weak self] error in
             if let error = error {
                 NSLog("DEBUG: [LocalHTTPServer] Send error: \(error)")
+                return
             }
+
+            guard let body = body, !body.isEmpty else {
+                return
+            }
+
+            self?.sendBodyChunks(connection: connection, body: body)
         })
+    }
+
+    private func sendBodyChunks(connection: NWConnection, body: Data, chunkSize: Int = 8 * 1024 * 1024) {
+        if body.isEmpty {
+            return
+        }
+
+        var offset = 0
+        let total = body.count
+
+        func sendNext() {
+            guard offset < total else { return }
+
+            let end = min(offset + chunkSize, total)
+            let chunk = body.subdata(in: offset..<end)
+            offset = end
+
+            connection.send(content: chunk, completion: .contentProcessed { error in
+                if let error = error {
+                    NSLog("DEBUG: [LocalHTTPServer] Send error: \(error)")
+                    return
+                }
+
+                sendNext()
+            })
+        }
+
+        sendNext()
     }
     
     private func getStatusText(_ statusCode: Int) -> String {
