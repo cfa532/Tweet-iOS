@@ -32,8 +32,6 @@ struct CachingVideoPlayer: View {
     @State private var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
     @State private var hasRecoveredThisCycle = false
     @State private var playerRefreshID = UUID()
-    @State private var bufferingRecoveryTask: Task<Void, Never>?
-    @State private var timeControlObserver: NSKeyValueObservation?
     
     init(
         url: URL,
@@ -85,12 +83,19 @@ struct CachingVideoPlayer: View {
                     
                     // Show subtle loading indicator while buffering
                     if isLoading {
-                        Color.black.opacity(0.2)
-                            .allowsHitTesting(false)
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.1)
-                            .allowsHitTesting(false)
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Spacer()
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                                    .padding(8)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                                    .padding(8)
+                            }
+                        }
                     }
                 }
             } else if isLoading {
@@ -173,7 +178,6 @@ struct CachingVideoPlayer: View {
                 await MainActor.run {
                     // Store references
                     self.player = newPlayer
-                    self.attachObservers(to: newPlayer)
                     
                     // Configure player
                     newPlayer.isMuted = isMuted
@@ -186,7 +190,6 @@ struct CachingVideoPlayer: View {
                             onReadyToPlay: { [weak newPlayer] in
                                 DispatchQueue.main.async {
                                     self.isLoading = false
-                                    self.cancelBufferingRecovery()
                                     if self.autoPlay && self.isVisible {
                                         newPlayer?.play()
                                     }
@@ -194,10 +197,6 @@ struct CachingVideoPlayer: View {
                             },
                             onPlaybackStalled: {
                                 print("DEBUG: [CachingVideoPlayer] Playback stalled for \(self.mid)")
-                                DispatchQueue.main.async {
-                                    self.isLoading = true
-                                    self.startBufferingRecovery(with: newPlayer)
-                                }
                             },
                             onDidFailToPlay: { error in
                                 DispatchQueue.main.async {
@@ -241,7 +240,6 @@ struct CachingVideoPlayer: View {
                                     if cachingPlayerItem.status == .readyToPlay {
                                         print("DEBUG: [CachingVideoPlayer] Player item became ready for \(self.mid)")
                                         self.isLoading = false
-                                        self.cancelBufferingRecovery()
                                         if self.autoPlay && self.isVisible {
                                             newPlayer.play()
                                         }
@@ -257,13 +255,9 @@ struct CachingVideoPlayer: View {
                         if let playerItem = newPlayer.currentItem {
                             if playerItem.status == .readyToPlay {
                                 self.isLoading = false
-                                self.cancelBufferingRecovery()
                                 if self.autoPlay && self.isVisible {
                                     newPlayer.play()
                                 }
-                            } else if playerItem.status == .unknown {
-                                // Wait until ready
-                                self.isLoading = true
                             } else {
                                 // Poll status for non-caching player items
                                 Task {
@@ -274,7 +268,6 @@ struct CachingVideoPlayer: View {
                                     await MainActor.run {
                                         if playerItem.status == .readyToPlay {
                                             self.isLoading = false
-                                            self.cancelBufferingRecovery()
                                             if self.autoPlay && self.isVisible {
                                                 newPlayer.play()
                                             }
@@ -320,58 +313,8 @@ struct CachingVideoPlayer: View {
     private func handleLoadFailure() {
         isLoading = false
         loadFailed = true
-        cancelBufferingRecovery()
     }
     
-    private func attachObservers(to player: AVPlayer) {
-        timeControlObserver?.invalidate()
-        timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { observedPlayer, _ in
-            DispatchQueue.main.async {
-                switch observedPlayer.timeControlStatus {
-                case .waitingToPlayAtSpecifiedRate:
-                    self.isLoading = true
-                    self.startBufferingRecovery(with: observedPlayer)
-                case .playing:
-                    self.isLoading = false
-                    self.cancelBufferingRecovery()
-                default:
-                    break
-                }
-            }
-        }
-    }
-
-    private func startBufferingRecovery(with player: AVPlayer?) {
-        bufferingRecoveryTask?.cancel()
-        guard let player = player else { return }
-        bufferingRecoveryTask = Task {
-            let pollInterval: UInt64 = 300_000_000 // 0.3s
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: pollInterval)
-                if Task.isCancelled { break }
-                guard let item = player.currentItem else { continue }
-                if item.isPlaybackLikelyToKeepUp || item.isPlaybackBufferFull {
-                    await MainActor.run {
-                        self.isLoading = false
-                        if self.autoPlay && self.isVisible {
-                            player.play()
-                        }
-                        self.cancelBufferingRecovery()
-                    }
-                    break
-                }
-                if item.status == .failed {
-                    break
-                }
-            }
-        }
-    }
-
-    private func cancelBufferingRecovery() {
-        bufferingRecoveryTask?.cancel()
-        bufferingRecoveryTask = nil
-    }
-
     private func isVideoAtEnd(_ player: AVPlayer) -> Bool {
         guard let playerItem = player.currentItem else { return false }
         let currentTime = player.currentTime()
@@ -431,9 +374,6 @@ struct CachingVideoPlayer: View {
     }
     
     private func cleanupPlayer() {
-        cancelBufferingRecovery()
-        timeControlObserver?.invalidate()
-        timeControlObserver = nil
         // Remove video completion observer
         if let observer = videoCompletionObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -495,7 +435,6 @@ struct CachingVideoPlayer: View {
     }
     
     private func recoverFromBackground() {
-        cancelBufferingRecovery()
         // Always check if player is broken, even if we don't have one yet
         if let player = player, !isPlayerBroken() {
             // Player is healthy, restore state
@@ -526,8 +465,6 @@ struct CachingVideoPlayer: View {
         }
         
         player?.pause()
-        timeControlObserver?.invalidate()
-        timeControlObserver = nil
         self.player = nil
         isLoading = true
         loadFailed = false
