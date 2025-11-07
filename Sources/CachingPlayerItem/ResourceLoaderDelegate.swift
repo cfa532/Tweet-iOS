@@ -464,29 +464,31 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     
     private func getCachePath(for url: URL) -> String {
         let fileName = url.lastPathComponent
-        
-        // Include mediaID in the cache path to prevent conflicts between different videos
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         
-        if let mediaID = mediaID {
-            // Create a subdirectory for each media ID
-            let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-            
-            // For playlist files, use the original filename to preserve different playlists
-            if fileName.hasSuffix(".m3u8") {
-                // Use the full path structure to preserve different playlists (master.m3u8, 720p/playlist.m3u8, etc.)
-                let urlPath = url.path
-                let relativePath = urlPath.replacingOccurrences(of: "/ipfs/\(mediaID)", with: "")
-                let cacheFileName = relativePath.isEmpty ? fileName : relativePath.replacingOccurrences(of: "/", with: "_")
-                return mediaCacheDir.appendingPathComponent(cacheFileName).path
-            } else {
-                // For segments and other files, use the original filename
-                return mediaCacheDir.appendingPathComponent(fileName).path
-            }
-        } else {
+        guard let mediaID = mediaID else {
             // Fallback to original behavior if no mediaID
             return cacheDir.appendingPathComponent(fileName).path
         }
+        
+        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+        let urlPath = url.path
+        let trimmedQueryPath = urlPath.components(separatedBy: "?").first ?? urlPath
+        let relativePath: String
+        if let range = trimmedQueryPath.range(of: "/ipfs/\(mediaID)/") {
+            let suffix = trimmedQueryPath[range.upperBound...]
+            relativePath = suffix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        } else if let range = trimmedQueryPath.range(of: "/ipfs/\(mediaID)") {
+            let suffix = trimmedQueryPath[range.upperBound...]
+            relativePath = suffix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        } else {
+            relativePath = ""
+        }
+        let finalComponent = relativePath.isEmpty ? fileName : relativePath
+        let cacheURL = mediaCacheDir.appendingPathComponent(finalComponent)
+        let directoryURL = cacheURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        return cacheURL.path
     }
     
     private func startHLSPlaylistDownload(_ loadingRequest: AVAssetResourceLoadingRequest, playlistURL: URL, cachePath: String) {
