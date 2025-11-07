@@ -22,6 +22,8 @@ struct ChatScreen: View {
     @State private var hasMoreMessages = true
     @State private var isLoadingMore = false
     @State private var shouldScrollToBottom = false
+    @State private var isLoadMoreEnabled = false
+    @State private var shouldAnimateScroll = true
     
     // Toast message states
     @State private var showToast = false
@@ -56,7 +58,7 @@ struct ChatScreen: View {
                 ScrollView {
                     LazyVStack(spacing: 8) {
                         // Load more indicator at top
-                        if hasMoreMessages && !messages.isEmpty {
+                        if hasMoreMessages && !messages.isEmpty && isLoadMoreEnabled {
                             if isLoadingMore {
                                 HStack {
                                     Spacer()
@@ -95,12 +97,18 @@ struct ChatScreen: View {
                     .padding()
                 }
                 .onChange(of: shouldScrollToBottom) { _, newValue in
-                    if newValue, let lastMessage = messages.last {
+                    guard newValue, let lastMessage = messages.last else { return }
+                    
+                    if shouldAnimateScroll {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
-                        shouldScrollToBottom = false
+                    } else {
+                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
                     }
+                    
+                    shouldScrollToBottom = false
+                    shouldAnimateScroll = true
                 }
                 .onChange(of: keyboardHeight) { _, newHeight in
                     // Scroll to bottom when keyboard appears/disappears
@@ -143,6 +151,8 @@ struct ChatScreen: View {
                                 Text(attachment.fileName ?? "Attachment")
                                     .font(.caption)
                                     .foregroundColor(.primary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
                                 Spacer()
                             }
                             
@@ -268,6 +278,7 @@ struct ChatScreen: View {
                     chatRepository.addMessagesToCoreData([sentMessage])
                     
                     // Scroll to bottom for sent message
+                    shouldAnimateScroll = true
                     shouldScrollToBottom = true
                     
                     // Update chat session
@@ -355,6 +366,7 @@ struct ChatScreen: View {
         allCachedMessages.append(message)
         
         // Scroll to bottom for sent message
+        shouldAnimateScroll = true
         shouldScrollToBottom = true
         
         // Send message directly (synchronously)
@@ -493,13 +505,20 @@ struct ChatScreen: View {
             let initialMessages = Array(sortedMessages.suffix(20))
             messages = initialMessages
             hasMoreMessages = currentOffset > 0
+            isLoadMoreEnabled = false
             
             print("[ChatScreen] Loaded \(initialMessages.count) initial messages (total cached: \(sortedMessages.count), hasMore: \(hasMoreMessages))")
             
             // Scroll to bottom after messages are set
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                shouldScrollToBottom = true
-            }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    shouldAnimateScroll = false
+                    shouldScrollToBottom = true
+                    
+                    // Allow loading older messages only after initial scroll completes
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        isLoadMoreEnabled = true
+                    }
+                }
         }
         
         // Update session timestamp if there are messages
@@ -743,6 +762,7 @@ struct ChatScreen: View {
                     hasMoreMessages = currentOffset > 0
                     
                     // Scroll to bottom for new messages
+                    shouldAnimateScroll = true
                     shouldScrollToBottom = true
                 }
                 
