@@ -55,6 +55,28 @@ xcodebuild -workspace Tweet.xcworkspace \
 xcrun simctl install SIMULATOR_UDID ./DerivedData/Build/Products/Debug-iphonesimulator/Tweet.app
 ```
 
+### For Real iOS Device (Debug Mode)
+
+```bash
+cd /Users/cfa532/Documents/GitHub/Tweet-iOS
+
+# Discover plugged-in devices and grab the UDID
+xcrun devicectl list devices
+
+# Build Debug version and install to the device directly (workspace pulls in Pods)
+xcodebuild -workspace Tweet.xcworkspace \
+  -scheme Tweet \
+  -configuration Debug \
+  -destination "id=DEVICE_UDID" \
+  -allowProvisioningUpdates \
+  build install
+```
+
+**Notes**
+- Replace `DEVICE_UDID` with the identifier from `xcrun devicectl list devices` (e.g. `00008110-001230222230401E`).
+- `-allowProvisioningUpdates` lets Xcode refresh signing assets automatically. Drop it if signing is already set up locally.
+- The command uses `Tweet.xcworkspace` so CocoaPods frameworks (e.g. ffmpegkit) resolve correctly.
+
 ### For Real iOS Device (Release Mode)
 
 ```bash
