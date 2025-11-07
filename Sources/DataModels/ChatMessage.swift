@@ -92,6 +92,129 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     }
 }
 
+// MARK: - Display Helpers
+extension ChatMessage {
+    func previewText(for currentUserId: MimeiId) -> String? {
+        let trimmedContent = content?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedContent.isEmpty && !isAttachmentPlaceholder(trimmedContent) {
+            return trimmedContent
+        }
+        guard let attachments = attachments, !attachments.isEmpty else {
+            return trimmedContent.isEmpty ? nil : trimmedContent
+        }
+        let description = Self.attachmentDescription(for: attachments)
+        let directionText = authorId == currentUserId ? NSLocalizedString("sent", comment: "Attachment sent label") : NSLocalizedString("received", comment: "Attachment received label")
+        return "\(description) \(directionText)"
+    }
+    
+    private func isAttachmentPlaceholder(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower == "attachment" || lower.contains("attachment sent") || lower.contains("attachment received")
+    }
+    
+    private static func attachmentDescription(for attachments: [MimeiFileType]) -> String {
+        guard !attachments.isEmpty else {
+            return NSLocalizedString("Attachment", comment: "Generic attachment label")
+        }
+        let groups = Dictionary(grouping: attachments) { normalizedType(effectiveType(for: $0)) }
+        if groups.count == 1, let (type, items) = groups.first {
+            return mediaTypeDisplayName(for: type, count: items.count)
+        }
+        if attachments.count == 1, let first = attachments.first {
+            return mediaTypeDisplayName(for: normalizedType(effectiveType(for: first)), count: 1)
+        }
+        if groups.count == 2 {
+            let parts = groups.keys.map { mediaTypeDisplayName(for: $0, count: groups[$0]?.count ?? 1) }
+            return parts.sorted().joined(separator: " & ")
+        }
+        let total = attachments.count
+        return String(format: NSLocalizedString("%d attachments", comment: "Multiple attachment label"), total)
+    }
+    
+    private static func effectiveType(for attachment: MimeiFileType) -> MediaType {
+        if attachment.type != .unknown {
+            return attachment.type
+        }
+        if let inferred = inferType(from: attachment.fileName) {
+            return inferred
+        }
+        if let urlString = attachment.url, let inferred = inferType(from: URL(string: urlString)?.lastPathComponent) {
+            return inferred
+        }
+        return .unknown
+    }
+    
+    private static func inferType(from fileName: String?) -> MediaType? {
+        guard let name = fileName?.lowercased() else { return nil }
+        if name.hasSuffix(".png") || name.hasSuffix(".jpg") || name.hasSuffix(".jpeg") || name.hasSuffix(".gif") || name.hasSuffix(".webp") || name.hasSuffix(".heic") || name.hasSuffix(".heif") {
+            return .image
+        }
+        if name.hasSuffix(".mp4") || name.hasSuffix(".mov") || name.hasSuffix(".m4v") || name.hasSuffix(".avi") || name.hasSuffix(".wmv") || name.hasSuffix(".flv") || name.hasSuffix(".webm") {
+            return .video
+        }
+        if name.hasSuffix(".mp3") || name.hasSuffix(".wav") || name.hasSuffix(".m4a") || name.hasSuffix(".aac") || name.hasSuffix(".ogg") {
+            return .audio
+        }
+        if name.hasSuffix(".pdf") {
+            return .pdf
+        }
+        if name.hasSuffix(".doc") || name.hasSuffix(".docx") {
+            return .word
+        }
+        if name.hasSuffix(".xls") || name.hasSuffix(".xlsx") {
+            return .excel
+        }
+        if name.hasSuffix(".ppt") || name.hasSuffix(".pptx") {
+            return .ppt
+        }
+        if name.hasSuffix(".zip") || name.hasSuffix(".rar") || name.hasSuffix(".7z") || name.hasSuffix(".tar") || name.hasSuffix(".gz") {
+            return .zip
+        }
+        if name.hasSuffix(".txt") || name.hasSuffix(".md") {
+            return .txt
+        }
+        if name.hasSuffix(".html") || name.hasSuffix(".htm") {
+            return .html
+        }
+        return nil
+    }
+    
+    private static func normalizedType(_ type: MediaType) -> MediaType {
+        switch type {
+        case .hls_video:
+            return .video
+        default:
+            return type
+        }
+    }
+    
+    private static func mediaTypeDisplayName(for type: MediaType, count: Int) -> String {
+        let isPlural = count > 1
+        switch type {
+        case .image:
+            return isPlural ? NSLocalizedString("Images", comment: "Images plural") : NSLocalizedString("Image", comment: "Image singular")
+        case .video, .hls_video:
+            return isPlural ? NSLocalizedString("Videos", comment: "Videos plural") : NSLocalizedString("Video", comment: "Video singular")
+        case .audio:
+            return isPlural ? NSLocalizedString("Audio clips", comment: "Audio plural") : NSLocalizedString("Audio clip", comment: "Audio singular")
+        case .pdf:
+            return isPlural ? NSLocalizedString("PDFs", comment: "PDF plural") : NSLocalizedString("PDF", comment: "PDF singular")
+        case .word:
+            return isPlural ? NSLocalizedString("Word documents", comment: "Word plural") : NSLocalizedString("Word document", comment: "Word singular")
+        case .excel:
+            return isPlural ? NSLocalizedString("Excel sheets", comment: "Excel plural") : NSLocalizedString("Excel sheet", comment: "Excel singular")
+        case .ppt:
+            return isPlural ? NSLocalizedString("Presentations", comment: "Presentation plural") : NSLocalizedString("Presentation", comment: "Presentation singular")
+        case .zip:
+            return isPlural ? NSLocalizedString("Archives", comment: "Archive plural") : NSLocalizedString("Archive", comment: "Archive singular")
+        case .txt, .html:
+            return isPlural ? NSLocalizedString("Documents", comment: "Documents plural") : NSLocalizedString("Document", comment: "Document singular")
+        case .unknown:
+            return isPlural ? NSLocalizedString("Attachments", comment: "Attachments plural") : NSLocalizedString("Attachment", comment: "Attachment singular")
+        }
+    }
+}
+
 struct ChatSession: Identifiable, Codable {
     let id: String
     let userId: MimeiId

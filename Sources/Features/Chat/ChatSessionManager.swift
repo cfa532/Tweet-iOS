@@ -162,6 +162,7 @@ class ChatSessionManager: ObservableObject {
             print("[ChatSessionManager] Skipping session update for invalid message: \(message.id)")
             return
         }
+        let displayMessage = summarizedMessage(for: message)
         await MainActor.run {
             // Determine the other party's ID (the person we're chatting with)
             let otherPartyId: MimeiId
@@ -191,8 +192,8 @@ class ChatSessionManager: ObservableObject {
                     id: existingSession.id,
                     userId: hproseInstance.appUser.mid,
                     receiptId: otherPartyId,
-                    lastMessage: message,
-                    timestamp: message.timestamp,
+                    lastMessage: displayMessage,
+                    timestamp: displayMessage.timestamp,
                     hasNews: hasNews || existingSession.hasNews
                 )
                 chatSessions[existingIndex] = updatedSession
@@ -202,7 +203,7 @@ class ChatSessionManager: ObservableObject {
                 let newSession = ChatSession.createSession(
                     userId: hproseInstance.appUser.mid,
                     receiptId: otherPartyId,
-                    lastMessage: message,
+                    lastMessage: displayMessage,
                     hasNews: hasNews
                 )
                 chatSessions.append(newSession)
@@ -385,5 +386,27 @@ class ChatSessionManager: ObservableObject {
         }
         
         print("[ChatSessionManager] Triggered notification for message from \(senderName)")
+    }
+
+    // MARK: - Session Display Helpers
+    private func summarizedMessage(for message: ChatMessage) -> ChatMessage {
+        guard let summary = message.previewText(for: hproseInstance.appUser.mid) else {
+            return message
+        }
+        let trimmedContent = message.content?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if summary == trimmedContent {
+            return message
+        }
+        return ChatMessage(
+            id: message.id,
+            authorId: message.authorId,
+            receiptId: message.receiptId,
+            chatSessionId: message.chatSessionId,
+            content: summary,
+            timestamp: message.timestamp,
+            attachments: message.attachments,
+            success: message.success,
+            errorMsg: message.errorMsg
+        )
     }
 }

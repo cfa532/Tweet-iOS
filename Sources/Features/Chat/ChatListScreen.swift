@@ -331,20 +331,11 @@ struct ChatSessionRow: View {
     
     private func getMessagePreview() -> String {
         let message = session.lastMessage
+        if let preview = message.previewText(for: hproseInstance.appUser.mid) {
+            return preview
+        }
         let isFromCurrentUser = message.authorId == hproseInstance.appUser.mid
-        
-        // If there's text content, show it
-        if let content = message.content, !content.isEmpty {
-            return content
-        }
-        
-        // If there are attachments, show appropriate message based on direction
-        if let attachments = message.attachments, !attachments.isEmpty {
-            return isFromCurrentUser ? "📎 Attachment sent" : "📎 Attachment received"
-        }
-        
-        // Fallback
-        return isFromCurrentUser ? "Message sent" : "Message received"
+        return isFromCurrentUser ? NSLocalizedString("Message sent", comment: "Sent fallback") : NSLocalizedString("Message received", comment: "Received fallback")
     }
     
     private func formatDate(_ timestamp: TimeInterval) -> String {
