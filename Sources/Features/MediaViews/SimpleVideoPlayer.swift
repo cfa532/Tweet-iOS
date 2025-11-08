@@ -161,6 +161,7 @@ struct SimpleVideoPlayer: View {
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var videoCompletionObserver: NSObjectProtocol?
     @State private var videoErrorObserver: NSObjectProtocol?
+    @State private var videoStallObserver: NSObjectProtocol?
     @State private var playerItemStatusObserver: NSKeyValueObservation?
     @State private var playerItemBufferObserver: NSKeyValueObservation?
     @State private var timeObserver: Any?
@@ -1649,6 +1650,63 @@ struct SimpleVideoPlayer: View {
             self.handleError(strategy: .loadFailure)
         }
         
+        // CRITICAL FIX: Playback stall observer - detects when video stalls waiting for data
+        // This is essential for HLS videos where data arrives asynchronously
+        videoStallObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled,
+            object: playerItem,
+            queue: .main
+        ) { [weak playerItem, weak player] notification in
+            NSLog("⚠️ [PLAYBACK STALL] Video stalled for \(mid), waiting for data...")
+            
+            // UX: Show spinner when stalled
+            DispatchQueue.main.async {
+                self.loadingState = .loading
+                NSLog("🔄 [PLAYBACK STALL] Showing spinner")
+            }
+            
+            // Monitor when data becomes available again using KVO on loadedTimeRanges
+            guard let item = playerItem, let player = player else { return }
+            
+            // Set up a temporary observer to detect when new data arrives
+            var resumeObserver: NSKeyValueObservation?
+            resumeObserver = item.observe(\.loadedTimeRanges, options: [.new]) { observedItem, _ in
+                let hasData = !observedItem.loadedTimeRanges.isEmpty
+                let isReadyToPlay = observedItem.status == .readyToPlay
+                
+                if hasData && isReadyToPlay {
+                    NSLog("✅ [PLAYBACK RESUME] Data available, resuming playback for \(mid)")
+                    NSLog("🔍 [PLAYBACK RESUME] Player state - rate: \(player.rate), timeControlStatus: \(player.timeControlStatus.rawValue)")
+                    
+                    // CRITICAL FIX: Always call play() when data arrives after stall
+                    // Don't check player state - if we stalled, we need to resume
+                    // The rate might be 0 but timeControlStatus might not be .waitingToPlayAtSpecifiedRate
+                    if player.rate == 0 {
+                        player.play()
+                        NSLog("🔄 [PLAYBACK RESUME] Manually triggered play() for \(mid)")
+                        
+                        // UX: Hide spinner when resumed
+                        DispatchQueue.main.async {
+                            self.loadingState = .loaded
+                            NSLog("✅ [PLAYBACK RESUME] Hiding spinner")
+                        }
+                    } else {
+                        NSLog("▶️ [PLAYBACK RESUME] Player already playing at rate \(player.rate)")
+                        
+                        // UX: Hide spinner even if already playing
+                        DispatchQueue.main.async {
+                            self.loadingState = .loaded
+                            NSLog("✅ [PLAYBACK RESUME] Hiding spinner")
+                        }
+                    }
+                    
+                    // Clean up the temporary observer
+                    resumeObserver?.invalidate()
+                    resumeObserver = nil
+                }
+            }
+        }
+        
         // Simple approach: Tell AVPlayer what to do and let IT handle the rest
         // For MediaCell mode, observe when player is ready and react accordingly
         if mode == .mediaCell {
@@ -1707,15 +1765,45 @@ struct SimpleVideoPlayer: View {
             playerItemBufferObserver = playerItem.observe(\.loadedTimeRanges, options: [.new]) { item, change in
                 
                 let hasBufferedData = !item.loadedTimeRanges.isEmpty
-                NSLog("🔍 [KVO BUFFER] Fired for \(mid) - hasData: \(hasBufferedData), loadingState: \(loadingState)")
+                
+                // Calculate buffered duration to ensure we have ENOUGH data
+                var bufferedDuration: Double = 0
+                if !item.loadedTimeRanges.isEmpty {
+                    let timeRange = item.loadedTimeRanges[0].timeRangeValue
+                    bufferedDuration = CMTimeGetSeconds(timeRange.duration)
+                }
+                
+                NSLog("🔍 [KVO BUFFER] Fired for \(mid) - hasData: \(hasBufferedData), buffered: \(String(format: "%.1f", bufferedDuration))s, loadingState: \(loadingState)")
                 
                 DispatchQueue.main.async {
-                    // Hide spinner once we have buffered data AND player is ready
-                    if hasBufferedData && loadingState.isLoading && item.status == .readyToPlay {
-                        NSLog("📦 [BUFFER READY] Data buffered and player ready for \(mid), hiding spinner")
+                    // UX FIX: Only hide spinner when we have ENOUGH data to continue playback
+                    // Need at least 1 second of buffered data, not just any data
+                    let hasEnoughData = hasBufferedData && bufferedDuration >= 1.0
+                    
+                    if hasEnoughData && loadingState.isLoading {
+                        NSLog("📦 [BUFFER DATA] Sufficient data arrived for \(mid) (\(String(format: "%.1f", bufferedDuration))s buffered), showing first frame")
+                        
+                        // Force player to render first frame by calling play() then checking if we should pause
+                        if player.rate == 0 {
+                            player.play()
+                            NSLog("▶️ [FIRST FRAME] Triggered play() to render first frame for \(mid)")
+                            
+                            // If not in autoplay mode, pause after first frame renders
+                            if !shouldAutoPlay {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    if player.rate > 0 {
+                                        player.pause()
+                                        NSLog("⏸️ [FIRST FRAME] Paused after rendering first frame for \(mid)")
+                                    }
+                                }
+                            }
+                        }
+                        
                         loadingState = .loaded
                         retryAttempts = 0  // Reset retry counter on successful load
                         // Keep observer active to detect stalls - it will be cleaned up when view disappears
+                    } else if hasBufferedData && bufferedDuration < 1.0 && loadingState.isLoading {
+                        NSLog("⏳ [BUFFER DATA] Insufficient data for \(mid) (\(String(format: "%.1f", bufferedDuration))s buffered), waiting for more...")
                     }
                 }
             }
@@ -1773,6 +1861,11 @@ struct SimpleVideoPlayer: View {
         if let observer = videoErrorObserver {
             NotificationCenter.default.removeObserver(observer)
             videoErrorObserver = nil
+        }
+        
+        if let observer = videoStallObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoStallObserver = nil
         }
         
         // Cancel KVO observers

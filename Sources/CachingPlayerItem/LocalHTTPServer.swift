@@ -15,6 +15,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     public private(set) var isRunning = false   // Track if server is running (public read)
     private var isStopping = false  // Track if server is currently stopping
     
+    // DEDUPLICATION: Track active downloads to prevent duplicates
+    private var activeDownloads: [String: DispatchSemaphore] = [:]
+    private let activeDownloadsLock = NSLock()
+    
     // Connection pool for efficient HTTP requests
     private var _connectionPool: URLSession?
     private let connectionPoolLock = NSLock()
@@ -28,9 +32,9 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         let config = URLSessionConfiguration.default
         
-        // Connection pool settings for better performance
+        // Connection pool settings for slow networks
         config.httpMaximumConnectionsPerHost = 12  // Increased from 6 for better network utilization
-        config.timeoutIntervalForRequest = 30     // 30 seconds per request
+        config.timeoutIntervalForRequest = 90     // 90 seconds per request (slow network!)
         config.timeoutIntervalForResource = 300   // 5 minutes total
         
         // Enable HTTP pipelining for better throughput
@@ -677,9 +681,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
         
-        // Not cached - fetch from real server
+        // Not cached - fetch from real server (no deduplication for non-.ts files)
         // Removed repetitive fetch log
-        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method)
+        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
     }
     
     private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
@@ -687,14 +691,85 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // Check cache first
         if FileManager.default.fileExists(atPath: cachePath) {
-            // Removed repetitive cache hit log
-            serveFile(path: cachePath, connection: connection, method: method)
+            // Serve cached segment - this reads from disk, no memory bloat
+            autoreleasepool {
+                serveFile(path: cachePath, connection: connection, method: method)
+            }
             return
         }
         
-        // Not cached - fetch from real server
-        // Removed repetitive fetch log
-        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method)
+        // DEDUPLICATION FIX: Check if this segment is already being downloaded
+        let downloadKey = cachePath
+        var shouldWait = false
+        var semaphore: DispatchSemaphore?
+        
+        // Extract quality level for logging (dynamic - no hardcoding!)
+        let pathComponents = cachePath.components(separatedBy: "/")
+        // Look for any component that ends with 'p' (e.g., "480p", "720p", "1080p", "4k", etc.)
+        let quality = pathComponents.first(where: { component in
+            // Matches patterns like "480p", "720p", "1080p", etc.
+            component.hasSuffix("p") && component.dropLast().allSatisfy({ $0.isNumber })
+        }) ?? "unknown"
+        
+        activeDownloadsLock.lock()
+        if let existingSemaphore = activeDownloads[downloadKey] {
+            // Another request is already downloading this segment
+            semaphore = existingSemaphore
+            shouldWait = true
+            activeDownloadsLock.unlock()
+            NSLog("🔄 [DEDUP] Segment already downloading (\(quality)), waiting: \(fullRealURL.lastPathComponent)")
+        } else {
+            // This is the first request for this segment - create semaphore
+            let newSemaphore = DispatchSemaphore(value: 0)
+            activeDownloads[downloadKey] = newSemaphore
+            activeDownloadsLock.unlock()
+            NSLog("📥 [DEDUP] Starting download (\(quality)): \(fullRealURL.lastPathComponent)")
+        }
+        
+        if shouldWait {
+            // CRITICAL: For very slow networks, don't wait at all - AVPlayer connections timeout
+            // Instead, immediately check if file exists and serve, or start independent download
+            NSLog("🔄 [DEDUP] Segment already downloading (\(quality)), checking cache: \(fullRealURL.lastPathComponent)")
+            
+            // Check if file already exists in cache (from previous play or completed download)
+            if FileManager.default.fileExists(atPath: cachePath) {
+                NSLog("✅ [DEDUP] File already cached, serving immediately: \(fullRealURL.lastPathComponent)")
+                autoreleasepool {
+                    serveFile(path: cachePath, connection: connection, method: method)
+                }
+            } else {
+                // File not ready yet - on slow networks (20+ second downloads), waiting would timeout the connection
+                // Better to start an independent download for this connection
+                NSLog("⚠️ [DEDUP] File not cached yet, starting independent download for this connection: \(fullRealURL.lastPathComponent)")
+                fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
+            }
+            return
+        }
+        
+        // This request is the downloader - fetch from server and wait for cache write
+        // Use a completion handler that signals the semaphore AFTER download completes
+        let downloadStartTime = Date()
+        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
+            // This completion is called AFTER the file is written and served
+            let downloadTime = Date().timeIntervalSince(downloadStartTime)
+            
+            if FileManager.default.fileExists(atPath: cachePath) {
+                let fileSize = (try? FileManager.default.attributesOfItem(atPath: cachePath)[.size] as? Int) ?? 0
+                NSLog("✅ [DEDUP] File cached successfully after \(String(format: "%.2f", downloadTime))s, size: \(fileSize) bytes: \(fullRealURL.lastPathComponent)")
+            } else {
+                NSLog("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
+            }
+            
+            // Signal all waiting requests that download is complete AND cached
+            self.activeDownloadsLock.lock()
+            if let semaphore = self.activeDownloads.removeValue(forKey: downloadKey) {
+                self.activeDownloadsLock.unlock()
+                semaphore.signal()  // Wake up all waiting requests
+                NSLog("🔔 [DEDUP] Signaled waiting requests for: \(fullRealURL.lastPathComponent)")
+            } else {
+                self.activeDownloadsLock.unlock()
+            }
+        }
     }
     
     private func handleProgressiveVideoRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String, requestHeaders: [String]) {
@@ -1059,140 +1134,178 @@ public class LocalHTTPServer: @unchecked Sendable {
         return mediaDir.appendingPathComponent(filename).path
     }
     
-    private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String) {
+    private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, completion: (() -> Void)? = nil) {
         // CRITICAL: Block NEW network requests until app initialized
         guard HproseInstance.shared.isAppInitialized else {
             NSLog("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
+            completion?()
             return
         }
         
+        let startTime = Date()
+        NSLog("⏱️ [DOWNLOAD START] Fetching: \(url.lastPathComponent)")
+        
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
+            let downloadTime = Date().timeIntervalSince(startTime)
+            NSLog("⏱️ [DOWNLOAD COMPLETE] \(url.lastPathComponent) took \(String(format: "%.2f", downloadTime))s")
             guard let self = self else { return }
             
-            // Extract mediaID from cachePath for BlackList tracking
-            let pathComponents = cachePath.components(separatedBy: "/")
-            let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
-            
-            if let error = error {
-                NSLog("DEBUG: [LocalHTTPServer] Fetch error: \(error.localizedDescription)")
+            // MEMORY FIX: Use autoreleasepool for large segment downloads (4-5MB each)
+            autoreleasepool {
+                // Extract mediaID from cachePath for BlackList tracking
+                let pathComponents = cachePath.components(separatedBy: "/")
+                let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
                 
-                // Record failure for this mediaID (attachment mid)
+                if let error = error {
+                    NSLog("DEBUG: [LocalHTTPServer] Fetch error: \(error.localizedDescription)")
+                    
+                    // Record failure for this mediaID (attachment mid)
+                    if !mediaID.isEmpty {
+                        BlackList.shared.recordFailure(mediaID)
+                        NSLog("DEBUG: [LocalHTTPServer] Recorded fetch failure for mediaID: \(mediaID)")
+                    }
+                    
+                    self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                    completion?()
+                    return
+                }
+                
+                // CRITICAL: Validate HTTP response status
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    NSLog("DEBUG: [LocalHTTPServer] Invalid HTTP response")
+                    
+                    // Record failure for invalid response
+                    if !mediaID.isEmpty {
+                        BlackList.shared.recordFailure(mediaID)
+                    }
+                    
+                    self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                    completion?()
+                    return
+                }
+                
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    NSLog("DEBUG: [LocalHTTPServer] Server returned error status: \(httpResponse.statusCode)")
+                    
+                    // Record failure for error status
+                    if !mediaID.isEmpty {
+                        BlackList.shared.recordFailure(mediaID)
+                    }
+                    
+                    self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: [:], body: nil)
+                    completion?()
+                    return
+                }
+                
+                guard let data = data, !data.isEmpty else {
+                    NSLog("DEBUG: [LocalHTTPServer] Empty data received")
+                    
+                    // Record failure for empty data
+                    if !mediaID.isEmpty {
+                        BlackList.shared.recordFailure(mediaID)
+                    }
+                    
+                    self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+                    completion?()
+                    return
+                }
+                
+                // For playlists, strip to relative paths for caching (port-independent!)
+                var dataToCache = data
+                var finalData = data
+                if cachePath.hasSuffix(".m3u8"), let playlistString = String(data: data, encoding: .utf8) {
+                    // Strip URLs to relative paths for caching (remove scheme/host/port)
+                    let relativePlaylist = self.stripPlaylistToRelativePaths(playlistString, baseURL: url)
+                    if let relativeData = relativePlaylist.data(using: .utf8) {
+                        dataToCache = relativeData
+                        NSLog("DEBUG: [LocalHTTPServer] Stripped playlist to relative paths for caching")
+                    }
+                    
+                    // Rewrite with current port for serving
+                    let modifiedPlaylist = self.rewritePlaylistURLs(relativePlaylist, mediaID: mediaID, baseURL: url)
+                    if let modifiedData = modifiedPlaylist.data(using: .utf8) {
+                        finalData = modifiedData
+                        NSLog("DEBUG: [LocalHTTPServer] Rewrote playlist URLs for localhost")
+                    }
+                }
+                
+                // CRITICAL FIX: Write synchronously so file exists when fetchAndServe returns
+                // This ensures deduplication polling finds the file immediately
+                // autoreleasepool still protects memory during write
+                let cacheURL = URL(fileURLWithPath: cachePath)
+                do {
+                    try dataToCache.write(to: cacheURL)
+                    NSLog("DEBUG: [LocalHTTPServer] Cached to: \(cachePath) (size: \(dataToCache.count) bytes)")
+                } catch {
+                    NSLog("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
+                }
+                
+                // Record successful fetch for this mediaID
                 if !mediaID.isEmpty {
-                    BlackList.shared.recordFailure(mediaID)
-                    NSLog("DEBUG: [LocalHTTPServer] Recorded fetch failure for mediaID: \(mediaID)")
+                    BlackList.shared.recordSuccess(mediaID)
                 }
                 
-                self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
-                return
-            }
-            
-            // CRITICAL: Validate HTTP response status
-            guard let httpResponse = response as? HTTPURLResponse else {
-                NSLog("DEBUG: [LocalHTTPServer] Invalid HTTP response")
+                // Serve it
+                let mimeType = self.getMimeType(for: cachePath)
+                let headers: [String: String] = [
+                    "Content-Type": mimeType,
+                    "Content-Length": "\(finalData.count)",
+                    "Accept-Ranges": "bytes"
+                ]
                 
-                // Record failure for invalid response
-                if !mediaID.isEmpty {
-                    BlackList.shared.recordFailure(mediaID)
+                if method == "HEAD" {
+                    self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: nil)
+                } else {
+                    self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: finalData)
                 }
+                // MEMORY FIX: All Data objects released when autoreleasepool exits
                 
-                self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
-                return
+                // CRITICAL: Call completion AFTER file is written and served
+                completion?()
             }
-            
-            guard (200...299).contains(httpResponse.statusCode) else {
-                NSLog("DEBUG: [LocalHTTPServer] Server returned error status: \(httpResponse.statusCode)")
-                
-                // Record failure for error status
-                if !mediaID.isEmpty {
-                    BlackList.shared.recordFailure(mediaID)
-                }
-                
-                self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: [:], body: nil)
-                return
-            }
-            
-            guard let data = data, !data.isEmpty else {
-                NSLog("DEBUG: [LocalHTTPServer] Empty data received")
-                
-                // Record failure for empty data
-                if !mediaID.isEmpty {
-                    BlackList.shared.recordFailure(mediaID)
-                }
-                
-                self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
-                return
-            }
-            
-            // For playlists, strip to relative paths for caching (port-independent!)
-            var dataToCache = data
-            var finalData = data
-            if cachePath.hasSuffix(".m3u8"), let playlistString = String(data: data, encoding: .utf8) {
-                // Strip URLs to relative paths for caching (remove scheme/host/port)
-                let relativePlaylist = self.stripPlaylistToRelativePaths(playlistString, baseURL: url)
-                if let relativeData = relativePlaylist.data(using: .utf8) {
-                    dataToCache = relativeData
-                    NSLog("DEBUG: [LocalHTTPServer] Stripped playlist to relative paths for caching")
-                }
-                
-                // Rewrite with current port for serving
-                let modifiedPlaylist = self.rewritePlaylistURLs(relativePlaylist, mediaID: mediaID, baseURL: url)
-                if let modifiedData = modifiedPlaylist.data(using: .utf8) {
-                    finalData = modifiedData
-                    NSLog("DEBUG: [LocalHTTPServer] Rewrote playlist URLs for localhost")
-                }
-            }
-            
-            // Cache the relative-path version (port-independent!)
-            try? dataToCache.write(to: URL(fileURLWithPath: cachePath))
-            NSLog("DEBUG: [LocalHTTPServer] Cached to: \(cachePath) (size: \(dataToCache.count) bytes)")
-            
-            // Record successful fetch for this mediaID
-            if !mediaID.isEmpty {
-                BlackList.shared.recordSuccess(mediaID)
-            }
-            
-            // Serve it
-            let mimeType = self.getMimeType(for: cachePath)
-            let headers: [String: String] = [
-                "Content-Type": mimeType,
-                "Content-Length": "\(finalData.count)",
-                "Accept-Ranges": "bytes"
-            ]
-            
-            if method == "HEAD" {
-                self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: nil)
-            } else {
-                self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: finalData)
-            }
-            // Removed: Served fresh data log (too frequent)
         }
         task.resume()
     }
     
     private func serveFile(path: String, connection: NWConnection, method: String) {
+        // CRITICAL: Check if connection is still alive before trying to serve
+        // After long waits (22+ seconds), AVPlayer may have closed the connection
+        let connectionState = connection.state
+        switch connectionState {
+        case .cancelled, .failed:
+            NSLog("⚠️ [LocalHTTPServer] Connection closed while waiting, cannot serve: \(path.components(separatedBy: "/").last ?? path)")
+            return
+        default:
+            break
+        }
+
+        
         guard FileManager.default.fileExists(atPath: path) else {
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             return
         }
         
         do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: path))
-            let mimeType = getMimeType(for: path)
-            
-            let headers: [String: String] = [
-                "Content-Type": mimeType,
-                "Content-Length": "\(data.count)",
-                "Accept-Ranges": "bytes",
-                "Cache-Control": "public, max-age=3600"
-            ]
-            
-            if method == "HEAD" {
-                sendResponse(connection: connection, statusCode: 200, headers: headers, body: nil)
-            } else {
-                sendResponse(connection: connection, statusCode: 200, headers: headers, body: data)
+            // MEMORY FIX: Use autoreleasepool for large files to release memory immediately
+            try autoreleasepool {
+                let data = try Data(contentsOf: URL(fileURLWithPath: path))
+                let mimeType = getMimeType(for: path)
+                
+                let headers: [String: String] = [
+                    "Content-Type": mimeType,
+                    "Content-Length": "\(data.count)",
+                    "Accept-Ranges": "bytes",
+                    "Cache-Control": "public, max-age=3600"
+                ]
+                
+                if method == "HEAD" {
+                    sendResponse(connection: connection, statusCode: 200, headers: headers, body: nil)
+                } else {
+                    sendResponse(connection: connection, statusCode: 200, headers: headers, body: data)
+                }
+                // data released here when autoreleasepool exits
             }
-            // Removed: Served file log (too frequent)
         } catch {
             NSLog("ERROR: [LocalHTTPServer] Failed to read file: \(error)")
             sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
@@ -1301,7 +1414,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
     
-    private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?) {
+    private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?, completion: (() -> Void)? = nil) {
         var response = "HTTP/1.1 \(statusCode) \(getStatusText(statusCode))\r\n"
         
         // Add default headers first
@@ -1321,11 +1434,11 @@ public class LocalHTTPServer: @unchecked Sendable {
             allData.append(body)
         }
         
-        connection.send(content: allData, completion: .contentProcessed { error in
-            if let error = error {
-                NSLog("DEBUG: [LocalHTTPServer] Send error: \(error)")
-            }
-        })
+        // CRITICAL FIX: Send everything at once and wait for complete transmission
+        connection.send(content: allData, completion: .idempotent)
+        
+        // Call completion to allow next request ONLY after data is fully sent
+        completion?()
     }
     
     private func getStatusText(_ statusCode: Int) -> String {
