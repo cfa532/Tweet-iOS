@@ -757,12 +757,14 @@ final class HproseInstance: ObservableObject {
         // If we have a valid cached user that hasn't expired, return it
         // BUT: If baseUrl is nil (old cache data or new user), we need to resolve IP
         // ALSO: If baseUrl is empty string, force refresh to re-resolve provider IP
-        if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil && !baseUrl.isEmpty {
+        var effectiveBaseUrl = baseUrl
+        
+        if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil && !effectiveBaseUrl.isEmpty {
             return cachedUser
         }
         
         // If baseUrl is empty, force update from server to re-resolve provider IP
-        if baseUrl.isEmpty && cachedUser.username != nil {
+        if effectiveBaseUrl.isEmpty && cachedUser.username != nil {
             print("DEBUG: [fetchUser] 🔄 baseUrl is empty, forcing IP re-evaluation for userId: \(userId), current baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
         }
         
@@ -770,6 +772,28 @@ final class HproseInstance: ObservableObject {
         if cachedUser.username != nil && cachedUser.baseUrl == nil {
             print("DEBUG: [fetchUser] Cached user has nil baseUrl (old data or new user), resolving IP for userId: \(userId)")
             // Fall through to updateUserFromServer to resolve IP
+        }
+        
+        if hasExpired {
+            print("DEBUG: [fetchUser] Cache expired for userId: \(userId), refreshing provider IP")
+            do {
+                if let providerIP = try await self.getProviderIP(userId) {
+                    let resolvedUrlString = providerIP.hasPrefix("http") ? providerIP : "http://\(providerIP)"
+                    if let resolvedUrl = URL(string: resolvedUrlString) {
+                        await MainActor.run {
+                            cachedUser.baseUrl = resolvedUrl
+                        }
+                        effectiveBaseUrl = resolvedUrlString
+                        print("DEBUG: [fetchUser] ✅ Updated baseUrl after cache expiry to \(resolvedUrlString) for userId: \(userId)")
+                    } else {
+                        print("DEBUG: [fetchUser] Unable to construct URL from provider IP \(providerIP) for userId: \(userId)")
+                    }
+                } else {
+                    print("DEBUG: [fetchUser] Provider IP lookup returned nil after cache expiry for userId: \(userId)")
+                }
+            } catch {
+                print("DEBUG: [fetchUser] Error refreshing provider IP after cache expiry for userId: \(userId): \(error)")
+            }
         }
         
         print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
@@ -780,7 +804,7 @@ final class HproseInstance: ObservableObject {
             Task {
                 do {
                     // Background update: use cached baseUrl first, retries will force IP re-resolution
-                    if (try await self.updateUserFromServer(userId, baseUrl: baseUrl)) != nil {
+                    if (try await self.updateUserFromServer(userId, baseUrl: effectiveBaseUrl)) != nil {
                         print("DEBUG: [fetchUser] Background update completed for userId: \(userId)")
                     }
                 } catch {
@@ -857,7 +881,7 @@ final class HproseInstance: ObservableObject {
         do {
             // First attempt: use provided baseUrl (might be cached/valid)
             // Retries: force fresh IP resolution (handled in updateUserFromServer)
-            let user = try await updateUserFromServer(userId, baseUrl: baseUrl)
+            let user = try await updateUserFromServer(userId, baseUrl: effectiveBaseUrl)
             // Successfully fetched user - remove from blacklist candidates if it was there
             if user != nil {
                 blackList.recordSuccess(userId)
@@ -1052,6 +1076,25 @@ final class HproseInstance: ObservableObject {
             }
         } else {
             print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: response)), value: \(response)")
+            
+            do {
+                if let providerIP = try await self.getProviderIP(user.mid) {
+                    let resolvedUrlString = providerIP.hasPrefix("http") ? providerIP : "http://\(providerIP)"
+                    if let resolvedUrl = URL(string: resolvedUrlString) {
+                        await MainActor.run {
+                            user.baseUrl = resolvedUrl
+                        }
+                        print("DEBUG: [updateUserFromServer] ✅ Refreshed baseUrl after unexpected response to \(resolvedUrlString) for userId: \(user.mid)")
+                    } else {
+                        print("DEBUG: [updateUserFromServer] Unable to construct URL from provider IP \(providerIP) after unexpected response for userId: \(user.mid)")
+                    }
+                } else {
+                    print("DEBUG: [updateUserFromServer] Provider IP lookup returned nil after unexpected response for userId: \(user.mid)")
+                }
+            } catch {
+                print("DEBUG: [updateUserFromServer] Error refreshing provider IP after unexpected response for userId: \(user.mid): \(error)")
+            }
+            
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected response from server: \(response))"])
         }
     }
