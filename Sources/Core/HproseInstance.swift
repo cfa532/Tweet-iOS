@@ -750,9 +750,32 @@ final class HproseInstance: ObservableObject {
         
         // Step 1: Check user cache in Core Data first (async, non-blocking)
         let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+        var effectiveBaseUrl = baseUrl
         
         // Check if cached user has expired (async, non-blocking)
         let hasExpired = await cachedUser.hasExpired()
+
+        if hasExpired {
+            print("DEBUG: [fetchUser] Cache expired for userId: \(userId), refreshing provider IP")
+            do {
+                if let providerIP = try await self.getProviderIP(userId) {
+                    let resolvedUrlString = providerIP.hasPrefix("http") ? providerIP : "http://\(providerIP)"
+                    if let resolvedUrl = URL(string: resolvedUrlString) {
+                        await MainActor.run {
+                            cachedUser.baseUrl = resolvedUrl
+                        }
+                        effectiveBaseUrl = resolvedUrlString
+                        print("DEBUG: [fetchUser] ✅ Refreshed baseUrl after cache expiry to \(resolvedUrlString) for userId: \(userId)")
+                    } else {
+                        print("DEBUG: [fetchUser] Unable to construct URL from provider IP \(providerIP) for userId: \(userId)")
+                    }
+                } else {
+                    print("DEBUG: [fetchUser] Provider IP lookup returned nil after cache expiry for userId: \(userId)")
+                }
+            } catch {
+                print("DEBUG: [fetchUser] Error refreshing provider IP after cache expiry for userId: \(userId): \(error)")
+            }
+        }
         
         // If we have a valid cached user that hasn't expired, return it
         // BUT: If baseUrl is nil (old cache data or new user), we need to resolve IP
@@ -780,7 +803,7 @@ final class HproseInstance: ObservableObject {
             Task {
                 do {
                     // Background update: use cached baseUrl first, retries will force IP re-resolution
-                    if (try await self.updateUserFromServer(userId, baseUrl: baseUrl)) != nil {
+                    if (try await self.updateUserFromServer(userId, baseUrl: effectiveBaseUrl)) != nil {
                         print("DEBUG: [fetchUser] Background update completed for userId: \(userId)")
                     }
                 } catch {
@@ -857,7 +880,8 @@ final class HproseInstance: ObservableObject {
         do {
             // First attempt: use provided baseUrl (might be cached/valid)
             // Retries: force fresh IP resolution (handled in updateUserFromServer)
-            let user = try await updateUserFromServer(userId, baseUrl: baseUrl)
+            let targetBaseUrl = cachedUser.baseUrl?.absoluteString ?? effectiveBaseUrl
+            let user = try await updateUserFromServer(userId, baseUrl: targetBaseUrl)
             // Successfully fetched user - remove from blacklist candidates if it was there
             if user != nil {
                 blackList.recordSuccess(userId)
@@ -967,7 +991,7 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Internal method that performs the actual server communication
-    private func updateUserFromServerInternal(_ user: User) async throws {
+    private func updateUserFromServerInternal(_ user: User, allowUnexpectedResponseRetry: Bool = true) async throws {
         let entry = "get_user"
         let params = [
             "aid": appId,
@@ -1052,6 +1076,29 @@ final class HproseInstance: ObservableObject {
             }
         } else {
             print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: response)), value: \(response)")
+
+            if allowUnexpectedResponseRetry {
+                do {
+                    if let providerIP = try await self.getProviderIP(user.mid) {
+                        let resolvedUrlString = providerIP.hasPrefix("http") ? providerIP : "http://\(providerIP)"
+                        if let resolvedUrl = URL(string: resolvedUrlString) {
+                            await MainActor.run {
+                                user.baseUrl = resolvedUrl
+                            }
+                            print("DEBUG: [updateUserFromServer] Retrying after unexpected response with provider IP: \(resolvedUrlString)")
+                            try await self.updateUserFromServerInternal(user, allowUnexpectedResponseRetry: false)
+                            return
+                        } else {
+                            print("DEBUG: [updateUserFromServer] Failed to construct URL from provider IP: \(resolvedUrlString)")
+                        }
+                    } else {
+                        print("DEBUG: [updateUserFromServer] Provider IP lookup returned nil after unexpected response")
+                    }
+                } catch {
+                    print("DEBUG: [updateUserFromServer] Error retrieving provider IP after unexpected response: \(error)")
+                }
+            }
+
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected response from server: \(response))"])
         }
     }
@@ -1475,32 +1522,40 @@ final class HproseInstance: ObservableObject {
         userId: MimeiId? = nil
     )  async throws -> Bool? {
         let effectiveUserId = userId ?? appUser.mid
-        
-        // Check if app user is blacklisted by the target user
-        guard let targetUser = try await fetchUser(followingId) else {
+        print("DEBUG: [toggleFollowing] Initiating follow toggle", "appUser:\(appUser.mid)", "effectiveUser:\(effectiveUserId)", "target:\(followingId)")
+ 
+         // Check if app user is blacklisted by the target user
+         guard let targetUser = try await fetchUser(followingId) else {
+            print("ERROR: [toggleFollowing] Target user not found", "target:\(followingId)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Target user not found", comment: "User lookup error")])
-        }
-        if targetUser.isUserBlacklisted(effectiveUserId) {
+         }
+        print("DEBUG: [toggleFollowing] Retrieved target user", "username:\(targetUser.username ?? "nil")", "isBlacklisted:\(targetUser.isUserBlacklisted(effectiveUserId))")
+         if targetUser.isUserBlacklisted(effectiveUserId) {
+            print("WARN: [toggleFollowing] Blocked by target user", "effectiveUser:\(effectiveUserId)", "target:\(followingId)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot follow this user because you are blocked", comment: "Follow blocked error")])
-        }
-        
-        return try await withRetry {
-            let entry = "toggle_following"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "followingid": followingId,
-                "userid": effectiveUserId,
-            ]
-            guard let client = appUser.hproseClient else {
+         }
+ 
+         return try await withRetry {
+             let entry = "toggle_following"
+             let params = [
+                 "aid": appId,
+                 "ver": "last",
+                 "followingid": followingId,
+                 "userid": effectiveUserId,
+             ]
+            print("DEBUG: [toggleFollowing] Invoking runMApp", "entry:\(entry)", "params:\(params)")
+             guard let client = appUser.hproseClient else {
+                print("ERROR: [toggleFollowing] Client not initialized for appUser", "appUser:\(appUser.mid)")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-            }
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
+             }
+             guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
+                print("ERROR: [toggleFollowing] Nil or unexpected response", "entry:\(entry)")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
-            }
-            return response
-        }
-    }
+             }
+            print("DEBUG: [toggleFollowing] Server response", "success:\(response)")
+             return response
+         }
+     }
     
     /*
      Return an updated tweet object after toggling favorite status of the tweet by appUser.
