@@ -450,7 +450,7 @@ class SharedAssetCache: ObservableObject {
             // If no buffered data, force preroll to reload from disk cache
             if !hasBufferedData && playerItem.status == .readyToPlay {
                 print("DEBUG: [SHARED ASSET CACHE] Cached player has no buffered data - forcing preroll to reload from cache")
-                playerItem.preferredForwardBufferDuration = 5.0
+                playerItem.preferredForwardBufferDuration = 15.0  // Balanced prefetch
                 player.preroll(atRate: 1.0) { success in
                     print("DEBUG: [SHARED ASSET CACHE] Preroll completed for cached player: \(success)")
                 }
@@ -666,7 +666,7 @@ class SharedAssetCache: ObservableObject {
         
         // Optimize buffering for HLS playback
         player.automaticallyWaitsToMinimizeStalling = false
-        cachingPlayerItem.preferredForwardBufferDuration = 10.0  // Buffer 10 seconds ahead to prevent stalls
+        cachingPlayerItem.preferredForwardBufferDuration = 15.0  // Buffer 15 seconds ahead (balanced prefetch)
         cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Don't buffer when paused to avoid connection overload
         
         // Cache the player using cacheKey

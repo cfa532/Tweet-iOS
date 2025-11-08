@@ -2355,7 +2355,7 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                         } else {
                             // No buffered data - need to load
                             context.coordinator.isBuffering = true
-                            playerItem.preferredForwardBufferDuration = 2.0
+                            playerItem.preferredForwardBufferDuration = 15.0  // Balanced prefetch
                             player.preroll(atRate: 1.0) { success in
                                 DispatchQueue.main.async {
                                     player.play()
