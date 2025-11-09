@@ -2234,6 +2234,7 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                 var statusObserver: NSKeyValueObservation?
                 var timeControlObserver: NSKeyValueObservation?
                 @Binding var isBuffering: Bool
+                var bufferingDebounceTask: DispatchWorkItem?
                 
                 init(isBuffering: Binding<Bool>) {
                     self._isBuffering = isBuffering
@@ -2243,6 +2244,7 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                 deinit {
                     statusObserver?.invalidate()
                     timeControlObserver?.invalidate()
+                    bufferingDebounceTask?.cancel()
                 }
             }
             
@@ -2265,12 +2267,24 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                             let isWaitingToPlay = observedPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
                             
                             if isWaitingToPlay {
-                                context.coordinator.isBuffering = true
+                                // Cancel any pending hide task
+                                context.coordinator.bufferingDebounceTask?.cancel()
+                                
+                                // Debounce: Only show spinner if buffering lasts > 0.5 seconds
+                                // This prevents flashing spinner during brief buffering pauses
+                                let task = DispatchWorkItem {
+                                    context.coordinator.isBuffering = true
+                                }
+                                context.coordinator.bufferingDebounceTask = task
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
                             } else if observedPlayer.timeControlStatus == .playing {
+                                // Cancel pending show task and hide spinner immediately
+                                context.coordinator.bufferingDebounceTask?.cancel()
                                 context.coordinator.isBuffering = false
                                 NSLog("✅ [AVPlayerViewController] Video started playing")
                             } else {
-                                // Paused
+                                // Paused - cancel pending show task and hide spinner
+                                context.coordinator.bufferingDebounceTask?.cancel()
                                 context.coordinator.isBuffering = false
                             }
                         }

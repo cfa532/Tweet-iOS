@@ -1285,7 +1285,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                     continue
                 }
                 
-                let requestedLength = end != nil ? Int(min(Int64(availableLength), requestEnd - start + 1)) : availableLength
+                // Cap response size to prevent connection timeouts (same as new cache system)
+                let maxChunkSize = 2 * 1024 * 1024 // 2MB max per response
+                let cappedLength = min(availableLength, maxChunkSize)
+                
+                let requestedLength = end != nil ? Int(min(Int64(cappedLength), requestEnd - start + 1)) : cappedLength
                 guard requestedLength > 0 else {
                     continue
                 }

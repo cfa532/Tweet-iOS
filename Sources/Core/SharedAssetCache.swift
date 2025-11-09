@@ -580,8 +580,9 @@ class SharedAssetCache: ObservableObject {
             // CRITICAL: Mute player at creation - will be unmuted by mode if needed
             player.isMuted = true
             
-            // Disable automatic waiting
+            // Optimize buffering for progressive video playback
             player.automaticallyWaitsToMinimizeStalling = false
+            playerItem.preferredForwardBufferDuration = 30.0  // Buffer 30 seconds ahead to reduce spinner frequency
             
             // Cache the player
             let cacheKey = tweetId ?? mediaID
