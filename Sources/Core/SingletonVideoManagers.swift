@@ -36,6 +36,10 @@ class FullScreenVideoManager: ObservableObject {
     // Video completion observer
     private var videoCompletionObserver: NSObjectProtocol?
     
+    // Retry mechanism for seeking
+    private var retryWorkItem: DispatchWorkItem?
+    private var bufferObserver: NSKeyValueObservation?
+    
     /// Initialize singleton player early (called during app startup)
     func initializePlayerEarly() {
         guard singletonPlayer == nil else {
@@ -68,6 +72,14 @@ class FullScreenVideoManager: ObservableObject {
             videoCompletionObserver = nil
         }
         
+        // Cancel any retry work
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        
+        // Clean up buffer observer
+        bufferObserver?.invalidate()
+        bufferObserver = nil
+        
         // Store current video info
         self.currentVideoMid = mid
         self.currentTweetId = tweetId
@@ -97,6 +109,9 @@ class FullScreenVideoManager: ObservableObject {
                     // Setup video completion observer
                     self.setupVideoCompletionObserver(playerItem)
                     
+                    // Start monitoring for stalls during seeking
+                    self.startRetryMonitoring()
+                    
                     // Check if player item is ready
                     if playerItem.status == .readyToPlay {
                         print("DEBUG: [FullScreenVideoManager] Player item ready immediately, playing now")
@@ -107,7 +122,7 @@ class FullScreenVideoManager: ObservableObject {
                         self.isPlaying = true // Mark as "should be playing"
                     }
                     
-                    print("DEBUG: [FullScreenVideoManager] ✅ Singleton player loaded - mid: \(mid), tweetId: \(tweetId), videoIndex: \(videoIndex)")
+                                print("DEBUG: [FullScreenVideoManager] ✅ Singleton player loaded - mid: \(mid), tweetId: \(tweetId), videoIndex: \(videoIndex)")
                 }
             } catch {
                 await MainActor.run {
@@ -139,6 +154,97 @@ class FullScreenVideoManager: ObservableObject {
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
                 self.handleVideoFinished()
             }
+        }
+    }
+    
+    /// Start monitoring for playback stalls and auto-retry
+    private func startRetryMonitoring() {
+        // Cancel existing monitoring
+        retryWorkItem?.cancel()
+        
+        // Create new retry work item
+        let workItem = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.checkAndRetryIfStalled()
+            }
+        }
+        
+        retryWorkItem = workItem
+        
+        // Schedule first check after 3 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
+    }
+    
+    /// Check if player is stalled and retry
+    private func checkAndRetryIfStalled() {
+        guard let player = singletonPlayer, let playerItem = player.currentItem else { return }
+        
+        // If player is stuck (not playing and rate is 0), force a seek to trigger reload
+        if player.rate == 0 && player.timeControlStatus != .playing {
+            let currentTime = player.currentTime()
+            NSLog("🔄 [FULLSCREEN RETRY] Player stuck at \(String(format: "%.1f", currentTime.seconds))s, seeking to trigger segment load")
+            
+            // Clean up old observer
+            bufferObserver?.invalidate()
+            bufferObserver = nil
+            
+            // Force seek to current position to trigger segment download
+            player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player, weak playerItem] finished in
+                guard finished, let self = self, let player = player, let item = playerItem else { return }
+                
+                Task { @MainActor in
+                    NSLog("🔍 [FULLSCREEN RETRY] Seek completed, waiting for buffered data before resuming")
+                    
+                    // Wait for buffered data before calling play()
+                    self.bufferObserver = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self, weak player] observedItem, _ in
+                        let hasData = !observedItem.loadedTimeRanges.isEmpty
+                        var bufferedDuration: Double = 0
+                        if !observedItem.loadedTimeRanges.isEmpty {
+                            let timeRange = observedItem.loadedTimeRanges[0].timeRangeValue
+                            bufferedDuration = CMTimeGetSeconds(timeRange.duration)
+                        }
+                        
+                        // Only resume when we have at least 1 second of buffer
+                        if hasData && bufferedDuration >= 1.0 {
+                            Task { @MainActor in
+                                guard let self = self, let player = player else { return }
+                                NSLog("✅ [FULLSCREEN RETRY] Data loaded (\(String(format: "%.1f", bufferedDuration))s buffered), resuming playback")
+                                
+                                // Clean up observer
+                                self.bufferObserver?.invalidate()
+                                self.bufferObserver = nil
+                                
+                                // Resume playback
+                                if player.rate == 0 {
+                                    player.play()
+                                    NSLog("▶️ [FULLSCREEN RETRY] Called play() after data ready")
+                                }
+                                
+                                // Continue monitoring for future stalls
+                                self.startRetryMonitoring()
+                            }
+                        } else if hasData {
+                            NSLog("⏳ [FULLSCREEN RETRY] Partial data (\(String(format: "%.1f", bufferedDuration))s), waiting for more...")
+                        }
+                    }
+                    
+                    // Safety timeout: if no data after 20 seconds, give up this retry and continue monitoring
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) { [weak self] in
+                        Task { @MainActor in
+                            guard let self = self else { return }
+                            if self.bufferObserver != nil {
+                                NSLog("⚠️ [FULLSCREEN RETRY] Timeout waiting for data, will retry on next cycle")
+                                self.bufferObserver?.invalidate()
+                                self.bufferObserver = nil
+                                self.startRetryMonitoring()
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Player is playing, continue monitoring
+            startRetryMonitoring()
         }
     }
     
@@ -210,6 +316,14 @@ class FullScreenVideoManager: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
             videoCompletionObserver = nil
         }
+        
+        // Cancel retry monitoring
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        
+        // Clean up buffer observer
+        bufferObserver?.invalidate()
+        bufferObserver = nil
         
         print("DEBUG: [FullScreenVideoManager] Cleared video content (player instance retained)")
     }
