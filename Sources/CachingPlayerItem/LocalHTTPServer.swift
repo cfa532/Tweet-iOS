@@ -1116,20 +1116,58 @@ public class LocalHTTPServer: @unchecked Sendable {
     ) -> Bool {
         let cacheFileURL = progressiveCacheFileURL(for: mediaID)
         if FileManager.default.fileExists(atPath: cacheFileURL.path) {
-            // Verify the cached file is valid MP4 with moov atom at the beginning
-            if !isValidProgressiveCache(fileURL: cacheFileURL) {
-                NSLog("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted cache for \(mediaID), deleting entire cache directory")
-                // Delete the entire cache directory (including legacy per-range files)
-                let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-                try? FileManager.default.removeItem(at: mediaCacheDir)
-                // Fall through to network fetch
+            let totalSize = loadProgressiveTotalSize(mediaID: mediaID)
+            let cachedSize: Int64
+            do {
+                let attributes = try FileManager.default.attributesOfItem(atPath: cacheFileURL.path)
+                cachedSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            } catch {
+                NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cached file attributes for \(mediaID): \(error.localizedDescription)")
                 return false
             }
             
+            let shouldValidate: Bool = {
+                guard let totalSize = totalSize else { return false }
+                let tolerance: Int64 = 512 * 1024 // 512KB tolerance
+                return cachedSize + tolerance >= totalSize
+            }()
+            
+            if shouldValidate {
+                let hasRealDataAtStart: Bool = {
+                    do {
+                        let fileHandle = try FileHandle(forReadingFrom: cacheFileURL)
+                        defer { try? fileHandle.close() }
+                        let prefix = try fileHandle.read(upToCount: 8192) ?? Data()
+                        return prefix.contains { $0 != 0 }
+                    } catch {
+                        NSLog("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache prefix for \(mediaID): \(error.localizedDescription)")
+                        return false
+                    }
+                }()
+                
+                if !hasRealDataAtStart {
+                    NSLog("DEBUG: [PROGRESSIVE CACHE] Skipping validation for sparse cache (missing leading bytes) of \(mediaID)")
+                } else if !isValidProgressiveCache(fileURL: cacheFileURL) {
+                    NSLog("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted COMPLETE cache for \(mediaID), deleting entire cache directory")
+                    // Delete the entire cache directory (including legacy per-range files)
+                    let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                    let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+                    try? FileManager.default.removeItem(at: mediaCacheDir)
+                    // Fall through to network fetch
+                    return false
+                }
+            } else if totalSize != nil {
+                NSLog("DEBUG: [PROGRESSIVE CACHE] Skipping validation for partial cache (\(cachedSize) bytes) of \(mediaID)")
+            }
+            
             do {
-                let attributes = try FileManager.default.attributesOfItem(atPath: cacheFileURL.path)
-                let cachedSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                if let end = end, end >= cachedSize {
+                    return false
+                }
+                
+                if end == nil, let totalSize = totalSize, cachedSize + 512 * 1024 < totalSize {
+                    return false
+                }
                 
                 guard start < cachedSize else {
                     return false
@@ -1157,7 +1195,24 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
                 
                 let actualEnd = start + requestedLength - 1
-                let totalSize = loadProgressiveTotalSize(mediaID: mediaID)
+                let totalSize = totalSize
+                
+                // Ensure the requested range actually has non-zero data (avoid sparse holes)
+                do {
+                    let probeHandle = try FileHandle(forReadingFrom: cacheFileURL)
+                    defer { try? probeHandle.close() }
+                    try probeHandle.seek(toOffset: UInt64(start))
+                    let probeCount = min(Int(requestedLength), 4096)
+                    let probeData = try probeHandle.read(upToCount: probeCount) ?? Data()
+                    let hasRealData = probeData.contains { $0 != 0 }
+                    if !hasRealData {
+                        NSLog("DEBUG: [PROGRESSIVE CACHE] Sparse data detected for \(mediaID) at range \(start)-\(actualEnd), falling back to network")
+                        return false
+                    }
+                } catch {
+                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache data for \(mediaID): \(error.localizedDescription)")
+                    return false
+                }
                 
                 // Check if we're capping the response (requested more than we're sending)
                 let requestedEnd = end ?? (totalSize.map { $0 - 1 } ?? Int64.max)
@@ -1212,25 +1267,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
-        // Legacy fallback: check old range-based cache
-        // But first, validate if any legacy cache files exist and delete them if corrupted
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-        let rangesDir = mediaCacheDir.appendingPathComponent("ranges")
-        
-        if FileManager.default.fileExists(atPath: rangesDir.path) {
-            // Legacy cache exists - validate the first range file
-            if let files = try? FileManager.default.contentsOfDirectory(atPath: rangesDir.path),
-               let firstFile = files.first(where: { $0.hasPrefix("r_") }) {
-                let firstFileURL = rangesDir.appendingPathComponent(firstFile)
-                if !isValidProgressiveCache(fileURL: firstFileURL) {
-                    NSLog("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted LEGACY cache for \(mediaID), deleting entire cache directory")
-                    try? FileManager.default.removeItem(at: mediaCacheDir)
-                    return false
-                }
-            }
-        }
-        
+        // Legacy fallback: check old range-based cache (no validation - legacy files may be partial)
         return serveLegacyProgressiveCacheIfAvailable(
             mediaID: mediaID,
             start: start,
@@ -1705,15 +1742,16 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
     
-    /// Validates that a cached progressive video file is playable by checking for moov atom near the beginning
+    /// Validates that a cached progressive video file is playable by checking for moov atom near the beginning.
+    /// Some progressive MP4s place the moov atom slightly deeper than the first 8KB, so we scan up to 512KB.
     private func isValidProgressiveCache(fileURL: URL) -> Bool {
         do {
             let fileHandle = try FileHandle(forReadingFrom: fileURL)
             defer { try? fileHandle.close() }
             
-            // Read first 8KB to check for moov atom
+            // Read the first 512KB (or available data) to check for moov atom
             // MP4 files need the moov atom (metadata) to be accessible early for streaming
-            guard let headerData = try fileHandle.read(upToCount: 8192) else {
+            guard let headerData = try fileHandle.read(upToCount: 512 * 1024) else {
                 return false
             }
             
@@ -1727,7 +1765,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 return true
             }
             
-            NSLog("⚠️ [PROGRESSIVE CACHE] No moov atom found in first 8KB - file may not be streamable")
+            NSLog("⚠️ [PROGRESSIVE CACHE] No moov atom found in first \(headerData.count) bytes - file may not be streamable")
             return false
             
         } catch {
