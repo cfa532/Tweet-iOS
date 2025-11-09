@@ -140,6 +140,31 @@ public class LocalHTTPServer: @unchecked Sendable {
         return pool
     }
     
+    private func canBypassInitialization(for mediaID: String? = nil, url: URL? = nil) -> Bool {
+        if HproseInstance.shared.isAppInitialized {
+            return true
+        }
+        
+        if let url = url, let host = url.host, !host.isEmpty, host != "127.0.0.1" {
+            return true
+        }
+        
+        if let mediaID = mediaID,
+           let registeredURL = mediaRealURLs[mediaID],
+           let host = registeredURL.host,
+           !host.isEmpty,
+           host != "127.0.0.1" {
+            return true
+        }
+        
+        if let baseHost = HproseInstance.shared.appUser.baseUrl?.host,
+           !baseHost.isEmpty {
+            return true
+        }
+        
+        return false
+    }
+    
     // Screen lock resilience
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var didEnterBackground = false
@@ -910,7 +935,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // CACHE MISS - fetch from real server
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
-        guard HproseInstance.shared.isAppInitialized else {
+        guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
             NSLog("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
             return
@@ -1160,111 +1185,105 @@ public class LocalHTTPServer: @unchecked Sendable {
                 NSLog("DEBUG: [PROGRESSIVE CACHE] Skipping validation for partial cache (\(cachedSize) bytes) of \(mediaID)")
             }
             
-            do {
-                if let end = end, end >= cachedSize {
-                    return false
-                }
-                
-                if end == nil, let totalSize = totalSize, cachedSize + 512 * 1024 < totalSize {
-                    return false
-                }
-                
-                guard start < cachedSize else {
-                    return false
-                }
-                
-                let availableLength = cachedSize - start
-                
-                // Cap response size to prevent connection timeouts on large files
-                // AVPlayer will request more data in subsequent range requests
-                // 2MB is small enough to read+send quickly, avoiding AVPlayer timeouts
-                let maxChunkSize: Int64 = 2 * 1024 * 1024 // 2MB max per response
-                
-                let requestedLength: Int64
-                if let end = end {
-                    // Explicit range request - honor it but cap to maxChunkSize
-                    let rangeLength = end - start + 1
-                    requestedLength = min(min(availableLength, rangeLength), maxChunkSize)
-                } else {
-                    // Open-ended request - cap to maxChunkSize
-                    requestedLength = min(availableLength, maxChunkSize)
-                }
-                
-                guard requestedLength > 0 else {
-                    return false
-                }
-                
-                let actualEnd = start + requestedLength - 1
-                let totalSize = totalSize
-                
-                // Ensure the requested range actually has non-zero data (avoid sparse holes)
-                do {
-                    let probeHandle = try FileHandle(forReadingFrom: cacheFileURL)
-                    defer { try? probeHandle.close() }
-                    try probeHandle.seek(toOffset: UInt64(start))
-                    let probeCount = min(Int(requestedLength), 4096)
-                    let probeData = try probeHandle.read(upToCount: probeCount) ?? Data()
-                    let hasRealData = probeData.contains { $0 != 0 }
-                    if !hasRealData {
-                        NSLog("DEBUG: [PROGRESSIVE CACHE] Sparse data detected for \(mediaID) at range \(start)-\(actualEnd), falling back to network")
-                        return false
-                    }
-                } catch {
-                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache data for \(mediaID): \(error.localizedDescription)")
-                    return false
-                }
-                
-                // Check if we're capping the response (requested more than we're sending)
-                let requestedEnd = end ?? (totalSize.map { $0 - 1 } ?? Int64.max)
-                let isCapped = actualEnd < requestedEnd
-                
-                var headers: [String: String] = [
-                    "Content-Type": "video/mp4",
-                    "Content-Length": "\(requestedLength)",
-                    "Accept-Ranges": "bytes"
-                ]
-                
-                var statusCode = 200
-                
-                if rangeHeader != nil && !isCapped {
-                    // Only send 206 Partial Content if we're honoring the full requested range
-                    if let total = totalSize {
-                        headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(total)"
-                    } else {
-                        headers["Content-Range"] = "bytes \(start)-\(actualEnd)/*"
-                    }
-                    statusCode = 206
-                } else if isCapped {
-                    // We're capping the response - send 206 but with correct range
-                    if let total = totalSize {
-                        headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(total)"
-                    } else {
-                        headers["Content-Range"] = "bytes \(start)-\(actualEnd)/*"
-                    }
-                    statusCode = 206
-                    NSLog("⚠️ [PROGRESSIVE CACHE] Capping response: requested \(start)-\(requestedEnd), sending \(start)-\(actualEnd), total: \(totalSize ?? -1)")
-                }
-                let rangeDescription = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
-                NSLog("🎯 [PROGRESSIVE CACHE HIT] mediaID: \(mediaID), range: \(rangeDescription), size: \(requestedLength) bytes, total: \(totalSize ?? -1)")
-                
-                if method == "HEAD" {
-                    sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
-                    return true
-                }
-                
-                sendHeadersAndStreamRange(
-                    connection: connection,
-                    statusCode: statusCode,
-                    headers: headers,
-                    fileURL: cacheFileURL,
-                    offset: start,
-                    length: requestedLength
-                )
-                return true
-            } catch {
-                NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cached file for \(mediaID): \(error.localizedDescription)")
+            if let end = end, end >= cachedSize {
                 return false
             }
+            
+            if end == nil, let totalSize = totalSize, cachedSize + 512 * 1024 < totalSize {
+                return false
+            }
+            
+            guard start < cachedSize else {
+                return false
+            }
+            
+            let availableLength = cachedSize - start
+            
+            // Cap response size to prevent connection timeouts on large files
+            // AVPlayer will request more data in subsequent range requests
+            // 2MB is small enough to read+send quickly, avoiding AVPlayer timeouts
+            let maxChunkSize: Int64 = 2 * 1024 * 1024 // 2MB max per response
+            
+            let requestedLength: Int64
+            if let end = end {
+                // Explicit range request - honor it but cap to maxChunkSize
+                let rangeLength = end - start + 1
+                requestedLength = min(min(availableLength, rangeLength), maxChunkSize)
+            } else {
+                // Open-ended request - cap to maxChunkSize
+                requestedLength = min(availableLength, maxChunkSize)
+            }
+            
+            guard requestedLength > 0 else {
+                return false
+            }
+            
+            let actualEnd = start + requestedLength - 1
+            
+            // Ensure the requested range actually has non-zero data (avoid sparse holes)
+            do {
+                let probeHandle = try FileHandle(forReadingFrom: cacheFileURL)
+                defer { try? probeHandle.close() }
+                try probeHandle.seek(toOffset: UInt64(start))
+                let probeCount = min(Int(requestedLength), 4096)
+                let probeData = try probeHandle.read(upToCount: probeCount) ?? Data()
+                let hasRealData = probeData.contains { $0 != 0 }
+                if !hasRealData {
+                    NSLog("DEBUG: [PROGRESSIVE CACHE] Sparse data detected for \(mediaID) at range \(start)-\(actualEnd), falling back to network")
+                    return false
+                }
+            } catch {
+                NSLog("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache data for \(mediaID): \(error.localizedDescription)")
+                return false
+            }
+            
+            // Check if we're capping the response (requested more than we're sending)
+            let requestedEnd = end ?? (totalSize.map { $0 - 1 } ?? Int64.max)
+            let isCapped = actualEnd < requestedEnd
+            
+            var headers: [String: String] = [
+                "Content-Type": "video/mp4",
+                "Content-Length": "\(requestedLength)",
+                "Accept-Ranges": "bytes"
+            ]
+            
+            var statusCode = 200
+            
+            if rangeHeader != nil && !isCapped {
+                // Only send 206 Partial Content if we're honoring the full requested range
+                if let total = totalSize {
+                    headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(total)"
+                } else {
+                    headers["Content-Range"] = "bytes \(start)-\(actualEnd)/*"
+                }
+                statusCode = 206
+            } else if isCapped {
+                // We're capping the response - send 206 but with correct range
+                if let total = totalSize {
+                    headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(total)"
+                } else {
+                    headers["Content-Range"] = "bytes \(start)-\(actualEnd)/*"
+                }
+                statusCode = 206
+                NSLog("⚠️ [PROGRESSIVE CACHE] Capping response: requested \(start)-\(requestedEnd), sending \(start)-\(actualEnd), total: \(totalSize ?? -1)")
+            }
+            let rangeDescription = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
+            NSLog("🎯 [PROGRESSIVE CACHE HIT] mediaID: \(mediaID), range: \(rangeDescription), size: \(requestedLength) bytes, total: \(totalSize ?? -1)")
+            
+            if method == "HEAD" {
+                sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
+                return true
+            }
+            
+            sendHeadersAndStreamRange(
+                connection: connection,
+                statusCode: statusCode,
+                headers: headers,
+                fileURL: cacheFileURL,
+                offset: start,
+                length: requestedLength
+            )
+            return true
         }
         
         // Legacy fallback: check old range-based cache (no validation - legacy files may be partial)
@@ -1426,7 +1445,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, completion: (() -> Void)? = nil) {
         // CRITICAL: Block NEW network requests until app initialized
-        guard HproseInstance.shared.isAppInitialized else {
+        guard canBypassInitialization(url: url) else {
             NSLog("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
             completion?()
