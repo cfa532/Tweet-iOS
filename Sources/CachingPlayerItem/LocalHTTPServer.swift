@@ -11,11 +11,22 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     let isProbeRequest: Bool
     let cacheFileHandle: FileHandle?
     let cacheFilePath: String?
+    let initialCachedSize: Int64
     
-    private var receivedData = Data()
     private var sentBytesCount: Int64 = 0
+    private var cachedBytesCount: Int64
+    private let maxCacheSize: Int64 = 50 * 1024 * 1024  // 50MB safety cap
     
-    init(connection: NWConnection, mediaID: String, cacheStart: Int64, totalExpectedSize: Int64?, isProbeRequest: Bool, cacheFileHandle: FileHandle?, cacheFilePath: String?) {
+    init(
+        connection: NWConnection,
+        mediaID: String,
+        cacheStart: Int64,
+        totalExpectedSize: Int64?,
+        isProbeRequest: Bool,
+        cacheFileHandle: FileHandle?,
+        cacheFilePath: String?,
+        initialCachedSize: Int64
+    ) {
         self.connection = connection
         self.mediaID = mediaID
         self.cacheStart = cacheStart
@@ -23,6 +34,8 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         self.isProbeRequest = isProbeRequest
         self.cacheFileHandle = cacheFileHandle
         self.cacheFilePath = cacheFilePath
+        self.initialCachedSize = initialCachedSize
+        self.cachedBytesCount = initialCachedSize
     }
     
     // Receive data in chunks
@@ -33,8 +46,25 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
             sentBytesCount += Int64(data.count)
             
             // Write chunk to disk cache (if not probe request)
-            if !isProbeRequest, let fileHandle = cacheFileHandle, data.count >= 1024 {
-                try? fileHandle.write(contentsOf: data)
+            if !isProbeRequest,
+               let fileHandle = cacheFileHandle,
+               data.count >= 1024,
+               cachedBytesCount < maxCacheSize {
+                let remainingAllowance = maxCacheSize - cachedBytesCount
+                if remainingAllowance > 0 {
+                    let bytesToWrite = min(Int64(data.count), remainingAllowance)
+                    let chunkToWrite = data.prefix(Int(bytesToWrite))
+                    do {
+                        try fileHandle.write(contentsOf: chunkToWrite)
+                        cachedBytesCount += bytesToWrite
+                    } catch {
+                        NSLog("❌ [PROGRESSIVE CACHE WRITE] Failed to write chunk for \(mediaID): \(error.localizedDescription)")
+                    }
+                    
+                    if cachedBytesCount >= maxCacheSize {
+                        NSLog("⚠️ [PROGRESSIVE CACHE LIMIT] Reached 50MB cache limit for \(mediaID) - further data won't be cached")
+                    }
+                }
             }
         }
     }
@@ -75,6 +105,9 @@ public class LocalHTTPServer: @unchecked Sendable {
     // Streaming download sessions
     private var streamingSessions: [String: URLSession] = [:]
     private let streamingSessionsLock = NSLock()
+    
+    private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
+    private let progressiveDiskCacheLimit: Int64 = 50 * 1024 * 1024
     
     // Connection pool for efficient HTTP requests
     private var _connectionPool: URLSession?
@@ -758,7 +791,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         // DEDUPLICATION FIX: Check if this segment is already being downloaded
         let downloadKey = cachePath
         var shouldWait = false
-        var semaphore: DispatchSemaphore?
         
         // Extract quality level for logging (dynamic - no hardcoding!)
         let pathComponents = cachePath.components(separatedBy: "/")
@@ -769,9 +801,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         }) ?? "unknown"
         
         activeDownloadsLock.lock()
-        if let existingSemaphore = activeDownloads[downloadKey] {
+        if activeDownloads[downloadKey] != nil {
             // Another request is already downloading this segment
-            semaphore = existingSemaphore
             shouldWait = true
             activeDownloadsLock.unlock()
             NSLog("🔄 [DEDUP] Segment already downloading (\(quality)), waiting: \(fullRealURL.lastPathComponent)")
@@ -857,62 +888,25 @@ public class LocalHTTPServer: @unchecked Sendable {
         let requestSize = rangeEnd != nil ? (rangeEnd! - (rangeStart ?? 0) + 1) : Int64.max
         let isProbeRequest = requestSize < 1024  // Requests < 1KB are just probes
         
-        // For videos > 200MB, redirect to direct playback (no caching)
-        // AVPlayer handles large files natively better than our caching proxy
-        let maxCacheableSize: Int64 = 200 * 1024 * 1024  // 200MB
-        if let end = rangeEnd, let _ = rangeStart {
-            let totalSize = end + 1  // Total file size indicated by the request
-            if totalSize > maxCacheableSize {
-                NSLog("📍 [PROGRESSIVE REDIRECT] File >200MB, redirecting to direct playback: \(mediaID) (\(totalSize/1024/1024)MB)")
-                let redirectHeaders: [String: String] = [
-                    "Location": fullRealURL.absoluteString,
-                    "Content-Length": "0"
-                ]
-                sendResponse(connection: connection, statusCode: 307, headers: redirectHeaders, body: nil)
-                return
-            }
-        }
-        
         // Check cache for this specific range - ALWAYS check, even for probes
         // CRITICAL: If no range header, try to serve full file from cache (range 0-end)
         // For cache operations, use ORIGINAL rangeEnd (not capped) - we can serve from cache without memory issues
         let effectiveStart = rangeStart ?? 0
         let effectiveEnd = rangeEnd
         
-        // Try to get total cached file size for Content-Range header
-        let totalSize = getTotalCachedSize(mediaID: mediaID)
-        
-        if let cachedData = readCachedProgressiveRange(mediaID: mediaID, start: effectiveStart, end: effectiveEnd) {
-            // CACHE HIT - serve from cache instantly (any size is valid, including probe requests)
-            // Calculate the ACTUAL end byte we're serving (based on data size, not requested range)
-            let actualEndByte = effectiveStart + Int64(cachedData.count) - 1
-            
-            let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(actualEndByte)" : "full-file"
-            NSLog("🎯 [PROGRESSIVE CACHE HIT] mediaID: \(mediaID), range: \(rangeStr), size: \(cachedData.count) bytes, total: \(totalSize ?? -1)")
-            
-            var headers: [String: String] = [
-                "Content-Type": "video/mp4",
-                "Content-Length": "\(cachedData.count)",
-                "Accept-Ranges": "bytes"
-            ]
-            
-            if rangeHeader != nil {
-                // CRITICAL: Use actualEndByte (what we're ACTUALLY serving) not requested end
-                if let total = totalSize {
-                    headers["Content-Range"] = "bytes \(effectiveStart)-\(actualEndByte)/\(total)"
-                } else {
-                    headers["Content-Range"] = "bytes \(effectiveStart)-\(actualEndByte)/*"
-                }
-                NSLog("📦 [CACHE SERVE] Content-Range: bytes \(effectiveStart)-\(actualEndByte)/\(totalSize?.description ?? "*")")
-            }
-            
-            let statusCode = rangeHeader != nil ? 206 : 200
-            sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: cachedData)
+        if serveProgressiveCacheIfAvailable(
+            mediaID: mediaID,
+            start: effectiveStart,
+            end: effectiveEnd,
+            rangeHeader: rangeHeader,
+            method: method,
+            connection: connection
+        ) {
             return
-        } else {
-            let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(effectiveEnd?.description ?? "end")" : "full-file"
-            NSLog("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest) - will fetch from network")
         }
+        
+        let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(effectiveEnd?.description ?? "end")" : "full-file"
+        NSLog("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest) - will fetch from network")
         
         // CACHE MISS - fetch from real server
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
@@ -964,6 +958,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             if let contentLength = httpResponse.allHeaderFields["Content-Length"] as? String, let size = Int64(contentLength) {
                 totalFileSize = size
                 NSLog("📊 [PROGRESSIVE HEAD] \(mediaID): totalSize=\(size) bytes (\(size/1024/1024)MB)")
+                self.storeProgressiveTotalSize(mediaID: mediaID, totalSize: size)
             } else {
                 NSLog("⚠️ [PROGRESSIVE HEAD] \(mediaID): totalSize unknown")
             }
@@ -1006,22 +1001,32 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Prepare cache file handle for incremental writing
             var cacheFileHandle: FileHandle?
             var cacheFilePath: String?
+            var initialCachedSize: Int64 = 0
             if !isProbeRequest {
-                let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                let mediaDir = cacheDir.appendingPathComponent(mediaID)
-                try? FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
+                let cacheDir = progressiveCacheDirectory(for: mediaID)
+                try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
                 
-                cacheFilePath = mediaDir.appendingPathComponent("video.mp4").path
+                let cacheFileURL = progressiveCacheFileURL(for: mediaID)
+                cacheFilePath = cacheFileURL.path
                 
-                // Create or open file
-                if !FileManager.default.fileExists(atPath: cacheFilePath!) {
-                    FileManager.default.createFile(atPath: cacheFilePath!, contents: nil)
+                let fileManager = FileManager.default
+                if !fileManager.fileExists(atPath: cacheFilePath!) {
+                    fileManager.createFile(atPath: cacheFilePath!, contents: nil)
                 }
                 
-                cacheFileHandle = FileHandle(forWritingAtPath: cacheFilePath!)
-                try? cacheFileHandle?.seek(toOffset: UInt64(cacheStart))
+                if let attributes = try? fileManager.attributesOfItem(atPath: cacheFilePath!), let sizeNumber = attributes[.size] as? NSNumber {
+                    initialCachedSize = sizeNumber.int64Value
+                }
                 
-                NSLog("💾 [PROGRESSIVE CACHE] Prepared file handle at offset \(cacheStart)")
+                if initialCachedSize >= progressiveDiskCacheLimit {
+                    NSLog("⚠️ [PROGRESSIVE CACHE LIMIT] Disk cache already at 50MB for \(mediaID) - skipping additional caching")
+                    cacheFileHandle = nil
+                    cacheFilePath = nil
+                } else {
+                    cacheFileHandle = FileHandle(forWritingAtPath: cacheFilePath!)
+                    try? cacheFileHandle?.seek(toOffset: UInt64(cacheStart))
+                    NSLog("💾 [PROGRESSIVE CACHE] Prepared file handle at offset \(cacheStart) (current cache: \(initialCachedSize) bytes)")
+                }
             }
             
             // Create streaming session with delegate
@@ -1036,7 +1041,8 @@ public class LocalHTTPServer: @unchecked Sendable {
                 totalExpectedSize: totalFileSize,
                 isProbeRequest: isProbeRequest,
                 cacheFileHandle: cacheFileHandle,
-                cacheFilePath: cacheFilePath
+                cacheFilePath: cacheFilePath,
+                initialCachedSize: initialCachedSize
             )
             
             let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
@@ -1056,61 +1062,200 @@ public class LocalHTTPServer: @unchecked Sendable {
         headTask.resume()
     }
     
-    // MARK: - Progressive Video Byte-Range Cache Helpers
+    // MARK: - Progressive Video Cache Helpers
     
-    private func getTotalCachedSize(mediaID: String) -> Int64? {
+    private func progressiveCacheDirectory(for mediaID: String) -> URL {
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let mediaDir = cacheDir.appendingPathComponent(mediaID).appendingPathComponent("ranges")
+        return cacheDir.appendingPathComponent(mediaID)
+    }
+    
+    private func progressiveCacheFileURL(for mediaID: String) -> URL {
+        progressiveCacheDirectory(for: mediaID).appendingPathComponent("video.mp4")
+    }
+    
+    private func progressiveMetaFileURL(for mediaID: String) -> URL {
+        progressiveCacheDirectory(for: mediaID).appendingPathComponent("video.meta")
+    }
+    
+    private func storeProgressiveTotalSize(mediaID: String, totalSize: Int64) {
+        let metaURL = progressiveMetaFileURL(for: mediaID)
+        let directory = metaURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = "\(totalSize)".data(using: .utf8)
+        do {
+            try data?.write(to: metaURL, options: .atomic)
+        } catch {
+            NSLog("⚠️ [PROGRESSIVE META] Failed to store total size for \(mediaID): \(error.localizedDescription)")
+        }
+    }
+    
+    private func loadProgressiveTotalSize(mediaID: String) -> Int64? {
+        let metaURL = progressiveMetaFileURL(for: mediaID)
         
-        guard let files = try? FileManager.default.contentsOfDirectory(atPath: mediaDir.path) else {
-            return nil
+        // Only load from meta file - don't guess from video.mp4 size
+        // because partial downloads would give wrong total size
+        if FileManager.default.fileExists(atPath: metaURL.path),
+           let data = try? Data(contentsOf: metaURL),
+           let string = String(data: data, encoding: .utf8),
+           let value = Int64(string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return value
         }
         
-        // Find the largest end position from cached ranges
-        var maxEnd: Int64 = 0
-        for file in files where file.hasPrefix("r_") {
-            let components = file.replacingOccurrences(of: "r_", with: "").components(separatedBy: "_")
-            guard components.count == 2 else { continue }
+        // No meta file = we don't know the real total size
+        // Return nil so caller can handle appropriately (e.g., fetch from network)
+        return nil
+    }
+    
+    private func serveProgressiveCacheIfAvailable(
+        mediaID: String,
+        start: Int64,
+        end: Int64?,
+        rangeHeader: String?,
+        method: String,
+        connection: NWConnection
+    ) -> Bool {
+        let cacheFileURL = progressiveCacheFileURL(for: mediaID)
+        if FileManager.default.fileExists(atPath: cacheFileURL.path) {
+            // Verify the cached file is valid MP4 with moov atom at the beginning
+            if !isValidProgressiveCache(fileURL: cacheFileURL) {
+                NSLog("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted cache for \(mediaID), deleting entire cache directory")
+                // Delete the entire cache directory (including legacy per-range files)
+                let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+                try? FileManager.default.removeItem(at: mediaCacheDir)
+                // Fall through to network fetch
+                return false
+            }
             
-            if components[1] == "end" {
-                // Full file cached - get its size
-                let cachePath = mediaDir.appendingPathComponent(file)
-                if let data = try? Data(contentsOf: cachePath) {
-                    return Int64(data.count)
+            do {
+                let attributes = try FileManager.default.attributesOfItem(atPath: cacheFileURL.path)
+                let cachedSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                
+                guard start < cachedSize else {
+                    return false
                 }
-            } else if let end = Int64(components[1]) {
-                maxEnd = max(maxEnd, end)
+                
+                let availableLength = cachedSize - start
+                
+                // Cap response size to prevent connection timeouts on large files
+                // AVPlayer will request more data in subsequent range requests
+                // 2MB is small enough to read+send quickly, avoiding AVPlayer timeouts
+                let maxChunkSize: Int64 = 2 * 1024 * 1024 // 2MB max per response
+                
+                let requestedLength: Int64
+                if let end = end {
+                    // Explicit range request - honor it but cap to maxChunkSize
+                    let rangeLength = end - start + 1
+                    requestedLength = min(min(availableLength, rangeLength), maxChunkSize)
+                } else {
+                    // Open-ended request - cap to maxChunkSize
+                    requestedLength = min(availableLength, maxChunkSize)
+                }
+                
+                guard requestedLength > 0 else {
+                    return false
+                }
+                
+                let actualEnd = start + requestedLength - 1
+                let totalSize = loadProgressiveTotalSize(mediaID: mediaID)
+                
+                // Check if we're capping the response (requested more than we're sending)
+                let requestedEnd = end ?? (totalSize.map { $0 - 1 } ?? Int64.max)
+                let isCapped = actualEnd < requestedEnd
+                
+                var headers: [String: String] = [
+                    "Content-Type": "video/mp4",
+                    "Content-Length": "\(requestedLength)",
+                    "Accept-Ranges": "bytes"
+                ]
+                
+                var statusCode = 200
+                
+                if rangeHeader != nil && !isCapped {
+                    // Only send 206 Partial Content if we're honoring the full requested range
+                    if let total = totalSize {
+                        headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(total)"
+                    } else {
+                        headers["Content-Range"] = "bytes \(start)-\(actualEnd)/*"
+                    }
+                    statusCode = 206
+                } else if isCapped {
+                    // We're capping the response - send 206 but with correct range
+                    if let total = totalSize {
+                        headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(total)"
+                    } else {
+                        headers["Content-Range"] = "bytes \(start)-\(actualEnd)/*"
+                    }
+                    statusCode = 206
+                    NSLog("⚠️ [PROGRESSIVE CACHE] Capping response: requested \(start)-\(requestedEnd), sending \(start)-\(actualEnd), total: \(totalSize ?? -1)")
+                }
+                let rangeDescription = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
+                NSLog("🎯 [PROGRESSIVE CACHE HIT] mediaID: \(mediaID), range: \(rangeDescription), size: \(requestedLength) bytes, total: \(totalSize ?? -1)")
+                
+                if method == "HEAD" {
+                    sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
+                    return true
+                }
+                
+                sendHeadersAndStreamRange(
+                    connection: connection,
+                    statusCode: statusCode,
+                    headers: headers,
+                    fileURL: cacheFileURL,
+                    offset: start,
+                    length: requestedLength
+                )
+                return true
+            } catch {
+                NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cached file for \(mediaID): \(error.localizedDescription)")
+                return false
             }
         }
         
-        return maxEnd > 0 ? maxEnd + 1 : nil
-    }
-    
-    private func readCachedProgressiveRange(mediaID: String, start: Int64, end: Int64?) -> Data? {
+        // Legacy fallback: check old range-based cache
+        // But first, validate if any legacy cache files exist and delete them if corrupted
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let mediaDir = cacheDir.appendingPathComponent(mediaID).appendingPathComponent("ranges")
+        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
+        let rangesDir = mediaCacheDir.appendingPathComponent("ranges")
         
-        // Debug: Check if cache directory exists
-        let dirExists = FileManager.default.fileExists(atPath: mediaDir.path)
-        let fileCount = (try? FileManager.default.contentsOfDirectory(atPath: mediaDir.path))?.count ?? 0
-        NSLog("🔍 [CACHE CHECK] mediaID: \(mediaID), dir exists: \(dirExists), files: \(fileCount)")
-        
-        // First try exact match (fast path)
-        let rangeFileName = "r_\(start)_\(end?.description ?? "end")"
-        let exactCachePath = mediaDir.appendingPathComponent(rangeFileName)
-        
-        if FileManager.default.fileExists(atPath: exactCachePath.path) {
-            return try? Data(contentsOf: exactCachePath)
+        if FileManager.default.fileExists(atPath: rangesDir.path) {
+            // Legacy cache exists - validate the first range file
+            if let files = try? FileManager.default.contentsOfDirectory(atPath: rangesDir.path),
+               let firstFile = files.first(where: { $0.hasPrefix("r_") }) {
+                let firstFileURL = rangesDir.appendingPathComponent(firstFile)
+                if !isValidProgressiveCache(fileURL: firstFileURL) {
+                    NSLog("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted LEGACY cache for \(mediaID), deleting entire cache directory")
+                    try? FileManager.default.removeItem(at: mediaCacheDir)
+                    return false
+                }
+            }
         }
         
-        // No exact match - look for overlapping ranges that contain this request
-        guard let files = try? FileManager.default.contentsOfDirectory(atPath: mediaDir.path) else {
-            return nil
+        return serveLegacyProgressiveCacheIfAvailable(
+            mediaID: mediaID,
+            start: start,
+            end: end,
+            rangeHeader: rangeHeader,
+            method: method,
+            connection: connection
+        )
+    }
+    
+    private func serveLegacyProgressiveCacheIfAvailable(
+        mediaID: String,
+        start: Int64,
+        end: Int64?,
+        rangeHeader: String?,
+        method: String,
+        connection: NWConnection
+    ) -> Bool {
+        let cacheDir = progressiveCacheDirectory(for: mediaID).appendingPathComponent("ranges")
+        guard FileManager.default.fileExists(atPath: cacheDir.path),
+              let files = try? FileManager.default.contentsOfDirectory(atPath: cacheDir.path) else {
+            return false
         }
         
         let requestEnd = end ?? Int64.max
-        
-        // Parse cached range files and find one that fully contains the requested range
         for file in files where file.hasPrefix("r_") {
             let components = file.dropFirst(2).split(separator: "_")
             guard components.count == 2,
@@ -1127,69 +1272,90 @@ public class LocalHTTPServer: @unchecked Sendable {
                 continue
             }
             
-            // Check if cached range overlaps with requested range (even partially)
-            // For progressive video, serve what we have and let AVPlayer request the rest
-            let overlapsRequest = cachedStart <= start && cachedEnd >= start
-            
-            if overlapsRequest {
-                let cachePath = mediaDir.appendingPathComponent(file)
+            let overlaps = cachedStart <= start && cachedEnd >= start
+            if overlaps {
+                let cachePath = cacheDir.appendingPathComponent(file)
                 guard let fullData = try? Data(contentsOf: cachePath) else {
                     continue
                 }
                 
-                // Calculate offset into cached file
                 let offset = Int(start - cachedStart)
-                
-                // Calculate how much we can serve from this cached range
-                // If request asks for more than we have, serve only what we have
                 let availableLength = fullData.count - offset
-                let requestedLength = end != nil ? Int(requestEnd - start + 1) : availableLength
-                let actualLength = min(requestedLength, availableLength)
-                
-                // Validate bounds
-                guard offset >= 0, offset < fullData.count, actualLength > 0 else {
+                guard offset >= 0, availableLength > 0 else {
                     continue
                 }
                 
-                // Extract what we have cached
-                let endIndex = min(offset + actualLength, fullData.count)
+                let requestedLength = end != nil ? Int(min(Int64(availableLength), requestEnd - start + 1)) : availableLength
+                guard requestedLength > 0 else {
+                    continue
+                }
+                
+                let endIndex = min(offset + requestedLength, fullData.count)
                 let subrange = fullData.subdata(in: offset..<endIndex)
+                let actualEnd = start + Int64(subrange.count) - 1
+                let totalSize = Int64(fullData.count)
                 
-                let actualEndByte = start + Int64(subrange.count) - 1
-                NSLog("🎯 [PROGRESSIVE CACHE] Found overlapping range - cached: \(cachedStart)-\(cachedEnd == Int64.max ? "end" : String(cachedEnd)), requested: \(start)-\(end?.description ?? "end"), serving: \(start)-\(actualEndByte), size: \(subrange.count)")
+                var headers: [String: String] = [
+                    "Content-Type": "video/mp4",
+                    "Content-Length": "\(subrange.count)",
+                    "Accept-Ranges": "bytes"
+                ]
                 
-                return subrange
+                if rangeHeader != nil {
+                    headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(totalSize)"
+                }
+                
+                let statusCode = rangeHeader != nil ? 206 : 200
+                let rangeDescription = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
+                NSLog("🎯 [PROGRESSIVE CACHE HIT][legacy] mediaID: \(mediaID), range: \(rangeDescription), size: \(subrange.count) bytes")
+                
+                if method == "HEAD" {
+                    sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
+                } else {
+                    sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: subrange)
+                }
+                return true
             }
         }
         
-        return nil
+        return false
     }
     
-    private func cacheProgressiveRange(mediaID: String, start: Int64, end: Int64?, data: Data) {
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let mediaDir = cacheDir.appendingPathComponent(mediaID).appendingPathComponent("ranges")
-        
-        // Create ranges directory if needed
-        try? FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
-        
-        let rangeFileName = "r_\(start)_\(end?.description ?? "end")"
-        let cachePath = mediaDir.appendingPathComponent(rangeFileName)
-        
+    private func sendHeadersAndStreamRange(
+        connection: NWConnection,
+        statusCode: Int,
+        headers: [String: String],
+        fileURL: URL,
+        offset: Int64,
+        length: Int64
+    ) {
+        // Read the requested range from disk
         do {
-            try data.write(to: cachePath)
-            NSLog("✅ [PROGRESSIVE CACHE SAVED] mediaID: \(mediaID), file: \(rangeFileName), path: \(cachePath.path)")
+            let fileHandle = try FileHandle(forReadingFrom: fileURL)
+            defer { try? fileHandle.close() }
+            
+            try fileHandle.seek(toOffset: UInt64(offset))
+            guard let bodyData = try fileHandle.read(upToCount: Int(length)) else {
+                NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read \(length) bytes from cache")
+                return
+            }
+            
+            // Build complete response: headers + body in ONE atomic send
+            let headerData = buildHTTPHeaderData(statusCode: statusCode, headers: headers)
+            var completeResponse = Data(capacity: headerData.count + bodyData.count)
+            completeResponse.append(headerData)
+            completeResponse.append(bodyData)
+            
+            // Send everything at once - use contentProcessed to ensure data is fully transmitted
+            connection.send(content: completeResponse, completion: .contentProcessed { error in
+                if let error = error {
+                    NSLog("⚠️ [PROGRESSIVE CACHE] Send error: \(error.localizedDescription)")
+                }
+            })
+            
         } catch {
-            NSLog("❌ [PROGRESSIVE CACHE ERROR] Failed to save mediaID: \(mediaID), error: \(error)")
+            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache file: \(error.localizedDescription)")
         }
-    }
-    
-    private func deleteCachedProgressiveRange(mediaID: String, start: Int64, end: Int64?) {
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let mediaDir = cacheDir.appendingPathComponent(mediaID).appendingPathComponent("ranges")
-        let rangeFileName = "r_\(start)_\(end?.description ?? "end")"
-        let cachePath = mediaDir.appendingPathComponent(rangeFileName)
-        
-        try? FileManager.default.removeItem(at: cachePath)
     }
     
     private func getCachePath(for url: URL, mediaID: String) -> String {
@@ -1497,31 +1663,32 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
     
-    private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?, completion: (() -> Void)? = nil) {
+    private func buildHTTPHeaderData(statusCode: Int, headers: [String: String]) -> Data {
         var response = "HTTP/1.1 \(statusCode) \(getStatusText(statusCode))\r\n"
-        
-        // Add default headers first
-        response += "Connection: keep-alive\r\n"  // CRITICAL for HTTP keep-alive!
-        
-        // Add custom headers
+        response += "Connection: keep-alive\r\n"
         for (key, value) in headers {
             response += "\(key): \(value)\r\n"
         }
-        
         response += "\r\n"
+        return response.data(using: .utf8) ?? Data()
+    }
+    
+    private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?, completion: (() -> Void)? = nil) {
+        let headerData = buildHTTPHeaderData(statusCode: statusCode, headers: headers)
         
-        let responseData = response.data(using: .utf8) ?? Data()
-        var allData = responseData
-        
-        if let body = body {
-            allData.append(body)
+        guard let body = body, !body.isEmpty else {
+            connection.send(content: headerData, completion: .contentProcessed { _ in
+                completion?()
+            })
+            return
         }
         
-        // CRITICAL FIX: Send everything at once and wait for complete transmission
-        connection.send(content: allData, completion: .idempotent)
+        var allData = Data(headerData)
+        allData.append(body)
         
-        // Call completion to allow next request ONLY after data is fully sent
-        completion?()
+        connection.send(content: allData, completion: .contentProcessed { _ in
+            completion?()
+        })
     }
     
     private func getStatusText(_ statusCode: Int) -> String {
@@ -1531,6 +1698,37 @@ public class LocalHTTPServer: @unchecked Sendable {
         case 405: return "Method Not Allowed"
         case 500: return "Internal Server Error"
         default: return "Unknown"
+        }
+    }
+    
+    /// Validates that a cached progressive video file is playable by checking for moov atom near the beginning
+    private func isValidProgressiveCache(fileURL: URL) -> Bool {
+        do {
+            let fileHandle = try FileHandle(forReadingFrom: fileURL)
+            defer { try? fileHandle.close() }
+            
+            // Read first 8KB to check for moov atom
+            // MP4 files need the moov atom (metadata) to be accessible early for streaming
+            guard let headerData = try fileHandle.read(upToCount: 8192) else {
+                return false
+            }
+            
+            // Check for "moov" atom signature in the first 8KB
+            // MP4 atoms are: [4 bytes size][4 bytes type]
+            // We're looking for the "moov" type (0x6D6F6F76)
+            let moovSignature = Data([0x6D, 0x6F, 0x6F, 0x76]) // "moov" in ASCII
+            
+            // Search for moov atom in the header
+            if let _ = headerData.range(of: moovSignature) {
+                return true
+            }
+            
+            NSLog("⚠️ [PROGRESSIVE CACHE] No moov atom found in first 8KB - file may not be streamable")
+            return false
+            
+        } catch {
+            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to validate cache file: \(error.localizedDescription)")
+            return false
         }
     }
 }
