@@ -4,18 +4,22 @@ import UIKit
 
 // MARK: - Streaming Download Delegate
 private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
-    let connection: NWConnection
-    let mediaID: String
-    let cacheStart: Int64
-    let totalExpectedSize: Int64?
-    let isProbeRequest: Bool
-    let cacheFileHandle: FileHandle?
-    let cacheFilePath: String?
-    let initialCachedSize: Int64
+    private let connection: NWConnection
+    private let mediaID: String
+    private let cacheStart: Int64
+    private let totalExpectedSize: Int64?
+    private let isProbeRequest: Bool
+    private let cacheFileHandle: FileHandle?
+    private let cacheFilePath: String?
+    private let initialCachedSize: Int64
+    private let contiguousSizeUpdate: (Int64) -> Void
     
     private var sentBytesCount: Int64 = 0
     private var cachedBytesCount: Int64
     private let maxCacheSize: Int64 = 50 * 1024 * 1024  // 50MB safety cap
+    private let writeLock = NSLock()
+    private var lastPersistedContiguousSize: Int64
+    private let persistInterval: Int64 = 512 * 1024
     
     init(
         connection: NWConnection,
@@ -25,7 +29,8 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         isProbeRequest: Bool,
         cacheFileHandle: FileHandle?,
         cacheFilePath: String?,
-        initialCachedSize: Int64
+        initialCachedSize: Int64,
+        contiguousSizeUpdate: @escaping (Int64) -> Void
     ) {
         self.connection = connection
         self.mediaID = mediaID
@@ -36,6 +41,12 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         self.cacheFilePath = cacheFilePath
         self.initialCachedSize = initialCachedSize
         self.cachedBytesCount = initialCachedSize
+        self.contiguousSizeUpdate = contiguousSizeUpdate
+        self.lastPersistedContiguousSize = initialCachedSize
+        
+        if !isProbeRequest && cacheStart > initialCachedSize {
+            NSLog("DEBUG: [PROGRESSIVE CACHE] Non-contiguous request for \(mediaID) (start: \(cacheStart), contiguous: \(initialCachedSize)) - streaming only, no caching")
+        }
     }
     
     // Receive data in chunks
@@ -51,37 +62,98 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
             sentBytesCount += chunkLength
             
             // Write chunk to disk cache (if not probe request)
-            if !isProbeRequest,
-               let fileHandle = cacheFileHandle,
-               cachedBytesCount < maxCacheSize {
-                let remainingAllowance = maxCacheSize - cachedBytesCount
-                if remainingAllowance > 0 {
-                    let bytesToWrite = min(chunkLength, remainingAllowance)
-                    let chunkToWrite = data.prefix(Int(bytesToWrite))
-                    do {
-                        try fileHandle.seek(toOffset: UInt64(writeOffset))
-                        try fileHandle.write(contentsOf: chunkToWrite)
-                        let newEnd = writeOffset + bytesToWrite
-                        if newEnd > cachedBytesCount {
-                            cachedBytesCount = newEnd
-                        }
-                    } catch {
-                        NSLog("❌ [PROGRESSIVE CACHE WRITE] Failed to write chunk for \(mediaID): \(error.localizedDescription)")
-                    }
-                    
-                    if cachedBytesCount >= maxCacheSize {
-                        NSLog("⚠️ [PROGRESSIVE CACHE LIMIT] Reached 50MB cache limit for \(mediaID) - further data won't be cached")
-                    }
+            guard !isProbeRequest,
+                  let fileHandle = cacheFileHandle,
+                  cachedBytesCount < maxCacheSize else {
+                return
+            }
+            
+            // Only write sequential data to avoid sparse files
+            guard writeOffset <= cachedBytesCount else {
+                return
+            }
+            
+            var sizeToPersist: Int64?
+            
+            writeLock.lock()
+            defer {
+                writeLock.unlock()
+                if let size = sizeToPersist {
+                    contiguousSizeUpdate(size)
                 }
+            }
+            
+            let remainingAllowance = maxCacheSize - cachedBytesCount
+            guard remainingAllowance > 0 else { return }
+            
+            var bytesToWrite = min(chunkLength, remainingAllowance)
+            var chunkToWrite = data.prefix(Int(bytesToWrite))
+            var targetOffset = writeOffset
+            
+            if targetOffset < cachedBytesCount {
+                let alreadyCached = cachedBytesCount - targetOffset
+                if alreadyCached >= bytesToWrite {
+                    return
+                }
+                bytesToWrite -= alreadyCached
+                
+                let trimmedData = data.dropFirst(Int(alreadyCached))
+                chunkToWrite = trimmedData.prefix(Int(bytesToWrite))
+                targetOffset = cachedBytesCount
+            }
+            
+            do {
+                if #available(iOS 13.0, *) {
+                    try fileHandle.seek(toOffset: UInt64(targetOffset))
+                    try fileHandle.write(contentsOf: chunkToWrite)
+                } else {
+                    fileHandle.seek(toFileOffset: UInt64(targetOffset))
+                    fileHandle.write(chunkToWrite)
+                }
+                
+                let newEnd = targetOffset + bytesToWrite
+                if newEnd > cachedBytesCount {
+                    cachedBytesCount = newEnd
+                }
+                
+                let delta = cachedBytesCount - lastPersistedContiguousSize
+                if delta >= persistInterval || cachedBytesCount == maxCacheSize {
+                    lastPersistedContiguousSize = cachedBytesCount
+                    sizeToPersist = cachedBytesCount
+                }
+            } catch {
+                NSLog("❌ [PROGRESSIVE CACHE WRITE] Failed to write chunk for \(mediaID): \(error.localizedDescription)")
+            }
+            
+            if cachedBytesCount >= maxCacheSize {
+                NSLog("⚠️ [PROGRESSIVE CACHE LIMIT] Reached 50MB cache limit for \(mediaID) - further data won't be cached")
             }
         }
     }
     
     // Handle completion
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        var finalSizeToPersist: Int64?
+        
         defer {
             // Close file handle
+            writeLock.lock()
+            let finalSize = cachedBytesCount
+            if finalSize > lastPersistedContiguousSize {
+                lastPersistedContiguousSize = finalSize
+                finalSizeToPersist = finalSize
+            }
+            if #available(iOS 13.0, *) {
+                try? cacheFileHandle?.synchronize()
+            } else {
+                cacheFileHandle?.synchronizeFile()
+            }
             try? cacheFileHandle?.close()
+            writeLock.unlock()
+            
+            if let size = finalSizeToPersist {
+                contiguousSizeUpdate(size)
+            }
         }
         
         if let error = error {
@@ -242,7 +314,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         endBackgroundTask()
         
         // Check server health and restart if needed
-        queue.async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.verifyServerHealth()
         }
     }
@@ -256,47 +328,38 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func verifyServerHealth() {
-        guard isRunning else {
+        let serverState = queue.sync { () -> (Bool, NWListener.State?, UInt16) in
+            return (isRunning, listener?.state, port)
+        }
+        
+        let (running, listenerState, currentPort) = serverState
+        
+        guard running else {
             NSLog("[LocalHTTPServer] Server not running, no health check needed")
             return
         }
         
-        // Check if listener is still healthy
-        guard listener != nil else {
+        guard let state = listenerState else {
             NSLog("[LocalHTTPServer] ⚠️ Listener is nil but isRunning=true, restarting")
-            restart()
+            queue.async { [weak self] in self?.restart() }
             return
         }
         
-        // Quick health check - try to create a test connection
-        let testURL = URL(string: "http://127.0.0.1:\(port)/health")!
-        var request = URLRequest(url: testURL, timeoutInterval: 1.0)
-        request.httpMethod = "HEAD"
-        
-        let semaphore = DispatchSemaphore(value: 0)
-        var isHealthy = false
-        
-        let task = URLSession.shared.dataTask(with: request) { _, response, error in
-            if let httpResponse = response as? HTTPURLResponse {
-                // Server responded - it's alive
-                isHealthy = true
-                NSLog("[LocalHTTPServer] ✓ Health check passed (status: \(httpResponse.statusCode))")
-            } else if let error = error {
-                NSLog("[LocalHTTPServer] ✗ Health check failed: \(error.localizedDescription)")
-            }
-            semaphore.signal()
+        switch state {
+        case .ready:
+            NSLog("[LocalHTTPServer] ✓ Listener state is .ready – treating server as healthy (port \(currentPort))")
+            return
+        case .waiting(let error):
+            NSLog("[LocalHTTPServer] ⚠️ Listener waiting with error '\(error.localizedDescription)' – restarting")
+        case .failed(let error):
+            NSLog("[LocalHTTPServer] ⚠️ Listener failed with error '\(error.localizedDescription)' – restarting")
+        case .cancelled:
+            NSLog("[LocalHTTPServer] ⚠️ Listener was cancelled – restarting")
+        default:
+            NSLog("[LocalHTTPServer] ⚠️ Listener state \(state) – restarting for safety")
         }
-        task.resume()
         
-        // Wait up to 1 second for health check
-        let result = semaphore.wait(timeout: .now() + 1.0)
-        
-        if result == .timedOut || !isHealthy {
-            NSLog("[LocalHTTPServer] ⚠️ Server unhealthy after wake, restarting")
-            restart()
-        } else {
-            NSLog("[LocalHTTPServer] ✓ Server healthy and responsive")
-        }
+        queue.async { [weak self] in self?.restart() }
     }
     
     private func restart() {
@@ -664,6 +727,17 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func handleGetRequest(path: String, method: String, requestLines: [String], connection: NWConnection, completion: @escaping () -> Void) {
+        // Health check endpoint
+        if path == "/health" {
+            let headers = [
+                "Content-Length": "0",
+                "Content-Type": "text/plain"
+            ]
+            sendResponse(connection: connection, statusCode: 200, headers: headers, body: nil)
+            completion()
+            return
+        }
+        
         // NEW FORMAT: /mediaID/ipfs/hash/path (e.g., /QmAbc.../ipfs/QmAbc.../master.m3u8)
         // Extract mediaID (first component after /)
         let pathComponents = path.components(separatedBy: "/").filter { !$0.isEmpty }
@@ -1047,9 +1121,20 @@ public class LocalHTTPServer: @unchecked Sendable {
                     fileManager.createFile(atPath: cacheFilePath!, contents: nil)
                 }
                 
-                if let attributes = try? fileManager.attributesOfItem(atPath: cacheFilePath!), let sizeNumber = attributes[.size] as? NSNumber {
-                    initialCachedSize = sizeNumber.int64Value
+                if let storedContiguous = self.loadProgressiveContiguousSize(mediaID: mediaID) {
+                    initialCachedSize = storedContiguous
                 }
+                
+                if initialCachedSize == 0,
+                   let attributes = try? fileManager.attributesOfItem(atPath: cacheFilePath!),
+                   let sizeNumber = attributes[.size] as? NSNumber {
+                    initialCachedSize = sizeNumber.int64Value
+                    if initialCachedSize > 0 {
+                        self.storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: initialCachedSize)
+                    }
+                }
+                
+                initialCachedSize = min(initialCachedSize, progressiveDiskCacheLimit)
                 
                 if initialCachedSize >= progressiveDiskCacheLimit {
                     NSLog("⚠️ [PROGRESSIVE CACHE LIMIT] Disk cache already at 50MB for \(mediaID) - skipping additional caching")
@@ -1093,6 +1178,13 @@ public class LocalHTTPServer: @unchecked Sendable {
             config.timeoutIntervalForRequest = 90
             config.timeoutIntervalForResource = 300
             
+            let contiguousUpdate: (Int64) -> Void = { [weak self] newSize in
+                guard let self = self else { return }
+                self.queue.async {
+                    self.storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: newSize)
+                }
+            }
+            
             let delegate = StreamingDownloadDelegate(
                 connection: connection,
                 mediaID: mediaID,
@@ -1101,7 +1193,8 @@ public class LocalHTTPServer: @unchecked Sendable {
                 isProbeRequest: isProbeRequest,
                 cacheFileHandle: cacheFileHandle,
                 cacheFilePath: cacheFilePath,
-                initialCachedSize: initialCachedSize
+                initialCachedSize: initialCachedSize,
+                contiguousSizeUpdate: contiguousUpdate
             )
             
             let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
@@ -1134,6 +1227,40 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func progressiveMetaFileURL(for mediaID: String) -> URL {
         progressiveCacheDirectory(for: mediaID).appendingPathComponent("video.meta")
+    }
+    
+    private func progressiveContiguousFileURL(for mediaID: String) -> URL {
+        progressiveCacheDirectory(for: mediaID).appendingPathComponent("video.contiguous")
+    }
+    
+    private func storeProgressiveContiguousSize(mediaID: String, contiguousSize: Int64) {
+        let url = progressiveContiguousFileURL(for: mediaID)
+        let directory = url.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let data = "\(contiguousSize)".data(using: .utf8)
+            try data?.write(to: url, options: .atomic)
+        } catch {
+            NSLog("⚠️ [PROGRESSIVE META] Failed to store contiguous size for \(mediaID): \(error.localizedDescription)")
+        }
+    }
+    
+    private func loadProgressiveContiguousSize(mediaID: String) -> Int64? {
+        let url = progressiveContiguousFileURL(for: mediaID)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            guard let string = String(data: data, encoding: .utf8),
+                  let value = Int64(string.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                return nil
+            }
+            return value
+        } catch {
+            NSLog("⚠️ [PROGRESSIVE META] Failed to load contiguous size for \(mediaID): \(error.localizedDescription)")
+            return nil
+        }
     }
     
     private func storeProgressiveTotalSize(mediaID: String, totalSize: Int64) {
@@ -1176,10 +1303,17 @@ public class LocalHTTPServer: @unchecked Sendable {
         let cacheFileURL = progressiveCacheFileURL(for: mediaID)
         if FileManager.default.fileExists(atPath: cacheFileURL.path) {
             let totalSize = loadProgressiveTotalSize(mediaID: mediaID)
+            let contiguousSize = loadProgressiveContiguousSize(mediaID: mediaID)
             let cachedSize: Int64
             do {
                 let attributes = try FileManager.default.attributesOfItem(atPath: cacheFileURL.path)
-                cachedSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+                let cappedFileSize = min(fileSize, progressiveDiskCacheLimit)
+                if let contiguousSize = contiguousSize {
+                    cachedSize = min(contiguousSize, cappedFileSize)
+                } else {
+                    cachedSize = cappedFileSize
+                }
             } catch {
                 NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cached file attributes for \(mediaID): \(error.localizedDescription)")
                 return false
@@ -1217,14 +1351,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
             } else if totalSize != nil {
                 NSLog("DEBUG: [PROGRESSIVE CACHE] Skipping validation for partial cache (\(cachedSize) bytes) of \(mediaID)")
-            }
-            
-            if let end = end, end >= cachedSize {
-                return false
-            }
-            
-            if end == nil, let totalSize = totalSize, cachedSize + 512 * 1024 < totalSize {
-                return false
             }
             
             guard start < cachedSize else {
@@ -1275,6 +1401,19 @@ public class LocalHTTPServer: @unchecked Sendable {
             let requestedEnd = end ?? (totalSize.map { $0 - 1 } ?? Int64.max)
             let isCapped = actualEnd < requestedEnd
             
+            // If we can't satisfy the caller's explicit end byte, defer to network.
+            if let requestedEnd = end, actualEnd < requestedEnd {
+                NSLog("DEBUG: [PROGRESSIVE CACHE] Partial cache insufficient for requested range \(start)-\(requestedEnd) on \(mediaID) - deferring to network")
+                return false
+            }
+
+            // If the caller didn't provide a Range header (wants full file) but we only
+            // have a partial slice, let the network handle it to avoid truncation.
+            if isCapped, rangeHeader == nil {
+                NSLog("DEBUG: [PROGRESSIVE CACHE] Partial cache available for \(mediaID) but client requested full file - deferring to network")
+                return false
+            }
+
             var headers: [String: String] = [
                 "Content-Type": "video/mp4",
                 "Content-Length": "\(requestedLength)",

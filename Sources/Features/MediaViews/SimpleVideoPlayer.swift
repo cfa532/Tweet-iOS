@@ -170,7 +170,14 @@ struct SimpleVideoPlayer: View {
     @State private var viewConfigTimestamp: TimeInterval = 0 // Timestamp when view was last configured
     
     /// Minimum buffered seconds required before we consider the first frame renderable.
-    private let firstFrameMinimumBuffer: Double = 0.1
+    private var firstFrameMinimumBuffer: Double {
+        mediaType == .video ? 3.0 : 0.1
+    }
+    
+    /// Minimum buffered seconds required before we resume playback after a stall.
+    private var stallRecoveryMinimumBuffer: Double {
+        mediaType == .video ? 5.0 : 0.5
+    }
     
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
@@ -639,6 +646,14 @@ struct SimpleVideoPlayer: View {
                     wasPlaying: player.rate > 0,
                     originalMuteState: originalMuteState
                 )
+            }
+
+            if mode == .mediaCell {
+                if let player = player, player.rate != 0 {
+                    NSLog("DEBUG: [VIDEO VISIBILITY] MediaCell hidden - pausing playback for \(mid)")
+                    player.pause()
+                    playbackState = .paused
+                }
             }
         }
     }
@@ -1672,43 +1687,45 @@ struct SimpleVideoPlayer: View {
             
             // Monitor when data becomes available again using KVO on loadedTimeRanges
             guard let item = playerItem, let player = player else { return }
+            let resumePlayer = player
             
             // Set up a temporary observer to detect when new data arrives
             var resumeObserver: NSKeyValueObservation?
             resumeObserver = item.observe(\.loadedTimeRanges, options: [.new]) { observedItem, _ in
+                
                 let hasData = !observedItem.loadedTimeRanges.isEmpty
                 let isReadyToPlay = observedItem.status == .readyToPlay
+                guard hasData && isReadyToPlay else { return }
                 
-                if hasData && isReadyToPlay {
-                    NSLog("✅ [PLAYBACK RESUME] Data available, resuming playback for \(mid)")
-                    NSLog("🔍 [PLAYBACK RESUME] Player state - rate: \(player.rate), timeControlStatus: \(player.timeControlStatus.rawValue)")
-                    
-                    // CRITICAL FIX: Always call play() when data arrives after stall
-                    // Don't check player state - if we stalled, we need to resume
-                    // The rate might be 0 but timeControlStatus might not be .waitingToPlayAtSpecifiedRate
-                    if player.rate == 0 {
-                        player.play()
+                let bufferedAhead = self.bufferedTimeAhead(for: observedItem, player: resumePlayer)
+                let requiredBuffer = self.stallRecoveryMinimumBuffer
+                
+                if bufferedAhead < requiredBuffer {
+                    let aheadText = String(format: "%.2f", bufferedAhead)
+                    let requiredText = String(format: "%.2f", requiredBuffer)
+                    NSLog("⏳ [PLAYBACK RESUME] Waiting for buffer for \(mid) - ahead: \(aheadText)s, need: \(requiredText)s")
+                    return
+                }
+                
+                let bufferedText = String(format: "%.2f", bufferedAhead)
+                NSLog("✅ [PLAYBACK RESUME] Data available, resuming playback for \(mid) (buffered: \(bufferedText)s)")
+                DispatchQueue.main.async {
+                    if resumePlayer.rate == 0 {
+                        resumePlayer.play()
                         NSLog("🔄 [PLAYBACK RESUME] Manually triggered play() for \(mid)")
-                        
-                        // UX: Hide spinner when resumed
-                        DispatchQueue.main.async {
-                            self.loadingState = .loaded
-                            NSLog("✅ [PLAYBACK RESUME] Hiding spinner")
-                        }
                     } else {
-                        NSLog("▶️ [PLAYBACK RESUME] Player already playing at rate \(player.rate)")
-                        
-                        // UX: Hide spinner even if already playing
-                        DispatchQueue.main.async {
-                            self.loadingState = .loaded
-                            NSLog("✅ [PLAYBACK RESUME] Hiding spinner")
-                        }
+                        NSLog("▶️ [PLAYBACK RESUME] Player already playing at rate \(resumePlayer.rate)")
                     }
                     
-                    // Clean up the temporary observer
-                    resumeObserver?.invalidate()
-                    resumeObserver = nil
+                    if self.loadingState.isLoading {
+                        self.loadingState = .loaded
+                        NSLog("✅ [PLAYBACK RESUME] Hiding spinner")
+                    }
                 }
+                
+                // Clean up the temporary observer
+                resumeObserver?.invalidate()
+                resumeObserver = nil
             }
         }
         
@@ -1770,22 +1787,16 @@ struct SimpleVideoPlayer: View {
             playerItemBufferObserver = playerItem.observe(\.loadedTimeRanges, options: [.new]) { item, change in
                 
                 let hasBufferedData = !item.loadedTimeRanges.isEmpty
+                let bufferedDurationAhead = self.bufferedTimeAhead(for: item, player: player)
                 
-                // Calculate buffered duration to ensure we have ENOUGH data
-                var bufferedDuration: Double = 0
-                if !item.loadedTimeRanges.isEmpty {
-                    let timeRange = item.loadedTimeRanges[0].timeRangeValue
-                    bufferedDuration = CMTimeGetSeconds(timeRange.duration)
-                }
-                
-                NSLog("🔍 [KVO BUFFER] Fired for \(mid) - hasData: \(hasBufferedData), buffered: \(String(format: "%.1f", bufferedDuration))s, loadingState: \(loadingState)")
+                NSLog("🔍 [KVO BUFFER] Fired for \(mid) - hasData: \(hasBufferedData), buffered: \(String(format: "%.1f", bufferedDurationAhead))s, loadingState: \(loadingState)")
                 
                 DispatchQueue.main.async {
                     // UX FIX: Hide spinner as soon as we have enough buffered data to render the first frame
-                    let hasEnoughData = hasBufferedData && bufferedDuration >= firstFrameMinimumBuffer
+                    let hasEnoughData = hasBufferedData && bufferedDurationAhead >= firstFrameMinimumBuffer
                     
                     if hasEnoughData && loadingState.isLoading {
-                        NSLog("📦 [BUFFER DATA] Sufficient data arrived for \(mid) (\(String(format: "%.2f", bufferedDuration))s buffered), showing first frame")
+                        NSLog("📦 [BUFFER DATA] Sufficient data arrived for \(mid) (\(String(format: "%.2f", bufferedDurationAhead))s buffered), showing first frame")
                         
                         // Force player to render first frame by calling play() then checking if we should pause
                         if player.rate == 0 {
@@ -1806,8 +1817,8 @@ struct SimpleVideoPlayer: View {
                         loadingState = .loaded
                         retryAttempts = 0  // Reset retry counter on successful load
                         // Keep observer active to detect stalls - it will be cleaned up when view disappears
-                    } else if hasBufferedData && bufferedDuration < firstFrameMinimumBuffer && loadingState.isLoading {
-                        NSLog("⏳ [BUFFER DATA] Waiting for more data for \(mid) (\(String(format: "%.2f", bufferedDuration))s buffered)...")
+                    } else if hasBufferedData && bufferedDurationAhead < firstFrameMinimumBuffer && loadingState.isLoading {
+                        NSLog("⏳ [BUFFER DATA] Waiting for more data for \(mid) (\(String(format: "%.2f", bufferedDurationAhead))s buffered)...")
                     }
                 }
             }
@@ -2008,6 +2019,40 @@ struct SimpleVideoPlayer: View {
         }
         
         onVideoFinished?()
+    }
+    
+    private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+        bufferedTimeAhead(for: item, relativeTo: player.currentTime())
+    }
+    
+    private func bufferedTimeAhead(for item: AVPlayerItem, relativeTo currentTime: CMTime) -> Double {
+        let currentSeconds = seconds(from: currentTime)
+        guard currentSeconds.isFinite else { return 0 }
+        
+        var bestBufferAhead: Double = 0
+        
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let rangeStart = seconds(from: range.start)
+            let rangeDuration = seconds(from: range.duration)
+            let rangeEnd = rangeStart + rangeDuration
+            
+            if currentSeconds >= rangeStart && currentSeconds <= rangeEnd {
+                return max(0, rangeEnd - currentSeconds)
+            } else if rangeEnd > currentSeconds {
+                bestBufferAhead = max(bestBufferAhead, rangeEnd - currentSeconds)
+            }
+        }
+        
+        return max(0, bestBufferAhead)
+    }
+    
+    private func seconds(from time: CMTime) -> Double {
+        let seconds = CMTimeGetSeconds(time)
+        if seconds.isNaN || seconds.isInfinite {
+            return 0
+        }
+        return seconds
     }
     
     private func restoreCachedVideoState() {
