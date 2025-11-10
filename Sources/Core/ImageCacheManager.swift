@@ -5,8 +5,10 @@
 //  Created by 超方 on 2025/6/27.
 //
 import SwiftUI
+import UIKit
 import AVFoundation
 import CryptoKit
+import ImageIO
 
 // MARK: - Image Cache Manager
 class ImageCacheManager: @unchecked Sendable {
@@ -17,6 +19,7 @@ class ImageCacheManager: @unchecked Sendable {
     private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days in seconds
     private let maxDiskCacheSize: Int64 = 5000 * 1024 * 1024 // 500MB
     private let maxCompressedImageSize: Int = 300 * 1024 // 300KB for compressed images
+    private let maxDownsampleDimension: CGFloat = 1024
     
     // Request deduplication: Track ongoing requests to prevent duplicate downloads
     private var ongoingRequests: [String: Task<UIImage?, Never>] = [:]
@@ -38,12 +41,49 @@ class ImageCacheManager: @unchecked Sendable {
         
         // Set cache limits
         cache.countLimit = 100 // Maximum number of images in memory
-        cache.totalCostLimit = 50 * 1024 * 1024 // 50MB limit
+        cache.totalCostLimit = 35 * 1024 * 1024 // 35MB limit
         
     }
     
     deinit {
         NotificationCenter.default.removeObserver(self)
+    }
+    
+    private func downsampleImageData(_ data: Data, maxDimension: CGFloat) -> UIImage? {
+        let sourceOptions: [CFString: Any] = [
+            kCGImageSourceShouldCache: false
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions as CFDictionary) else {
+            return nil
+        }
+        
+        let scale: CGFloat = {
+            if Thread.isMainThread {
+                return UIScreen.main.scale
+            } else {
+                return DispatchQueue.main.sync { UIScreen.main.scale }
+            }
+        }()
+        let maxPixelSize = max(1, Int(maxDimension * scale))
+        let downsampleOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, downsampleOptions as CFDictionary) else {
+            return nil
+        }
+        
+        return UIImage(cgImage: cgImage, scale: scale, orientation: .up)
+    }
+    
+    private func cacheImageInMemory(_ image: UIImage, forKey key: String) {
+        let pixelWidth = Int(image.size.width * image.scale)
+        let pixelHeight = Int(image.size.height * image.scale)
+        let cost = max(1, pixelWidth * pixelHeight * 4)
+        cache.setObject(image, forKey: key as NSString, cost: cost)
     }
     
     func cleanupOldCache() {
@@ -223,8 +263,7 @@ class ImageCacheManager: @unchecked Sendable {
         let fileURL = getCompressedCacheFileURL(for: key)
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data) {
-            // Add to memory cache
-            cache.setObject(image, forKey: cacheKey as NSString)
+            cacheImageInMemory(image, forKey: cacheKey)
             return image
         }
         
@@ -246,25 +285,29 @@ class ImageCacheManager: @unchecked Sendable {
         let fileURL = getCompressedCacheFileURL(for: mid)
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data) {
-            // Add to memory cache
-            cache.setObject(image, forKey: cacheKey as NSString)
+            cacheImageInMemory(image, forKey: cacheKey)
             return image
         }
         
         return nil
     }
     
-    func cacheImageData(_ data: Data, for attachment: MimeiFileType, baseUrl: URL) {
+    @discardableResult
+    func cacheImageData(_ data: Data, for attachment: MimeiFileType, baseUrl: URL) -> UIImage? {
         let key = getCacheKey(for: attachment, baseUrl: baseUrl)
         
-        // Create UIImage from data
-        guard let image = UIImage(data: data) else { 
+        let targetImage: UIImage
+        if let downsampled = downsampleImageData(data, maxDimension: maxDownsampleDimension) {
+            targetImage = downsampled
+        } else if let fallback = UIImage(data: data) {
+            targetImage = fallback
+        } else {
             print("DEBUG: [ImageCacheManager] Failed to create UIImage from data for \(key)")
-            return 
+            return nil
         }
         
         // Create compressed version (under 300KB)
-        let compressedImage = compressImageToSize(image, maxSize: maxCompressedImageSize)
+        let compressedImage = compressImageToSize(targetImage, maxSize: maxCompressedImageSize)
         let compressedFileURL = getCompressedCacheFileURL(for: key)
         
         // Write compressed data to disk
@@ -274,13 +317,10 @@ class ImageCacheManager: @unchecked Sendable {
             print("DEBUG: [ImageCacheManager] Failed to write compressed image to disk for \(key): \(error)")
         }
         
-        // Add to memory cache if we can create UIImage from compressed data
-        if let compressedUIImage = UIImage(data: compressedImage) {
-            cache.setObject(compressedUIImage, forKey: "\(key)_compressed" as NSString)
-            print("DEBUG: [ImageCacheManager] Successfully cached compressed image for \(key)")
-        } else {
-            print("DEBUG: [ImageCacheManager] Failed to create UIImage from compressed data for \(key)")
-        }
+        // Add to memory cache
+        cacheImageInMemory(targetImage, forKey: "\(key)_compressed")
+        print("DEBUG: [ImageCacheManager] Successfully cached compressed image for \(key)")
+        return targetImage
     }
     
     private func compressImageToSize(_ image: UIImage, maxSize: Int) -> Data {

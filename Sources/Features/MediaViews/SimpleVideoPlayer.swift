@@ -168,7 +168,9 @@ struct SimpleVideoPlayer: View {
     @State private var timeObserverPlayer: AVPlayer?
     @State private var representableId: Int = 0 // Force VideoPlayerRepresentable recreation
     @State private var viewConfigTimestamp: TimeInterval = 0 // Timestamp when view was last configured
+    @State private var progressiveBufferTargetIndex: Int = 0
     
+    private let progressiveBufferTargets: [Double] = [8.0, 12.0, 18.0, 24.0, 30.0]
     /// Minimum buffered seconds required before we consider the first frame renderable.
     private var firstFrameMinimumBuffer: Double {
         mediaType == .video ? 3.0 : 0.1
@@ -181,7 +183,7 @@ struct SimpleVideoPlayer: View {
     
     /// Target forward buffer (in seconds) we want AVPlayer to maintain for progressive videos.
     private var progressiveForwardBufferDuration: Double {
-        30.0
+        progressiveBufferTargets[progressiveBufferTargetIndex]
     }
     
     // MARK: Computed Properties
@@ -651,6 +653,7 @@ struct SimpleVideoPlayer: View {
                     wasPlaying: player.rate > 0,
                     originalMuteState: originalMuteState
                 )
+                resetProgressiveBufferTarget(for: player.currentItem)
             }
 
             if mode == .mediaCell {
@@ -1552,14 +1555,40 @@ struct SimpleVideoPlayer: View {
         if mediaType == .video {
             player.automaticallyWaitsToMinimizeStalling = true
             if let item = player.currentItem {
-                item.preferredForwardBufferDuration = max(
-                    item.preferredForwardBufferDuration,
-                    progressiveForwardBufferDuration
-                )
+                applyProgressiveBufferTarget(to: item)
             }
         } else {
             player.automaticallyWaitsToMinimizeStalling = false
         }
+    }
+
+    private func applyProgressiveBufferTarget(to item: AVPlayerItem?) {
+        guard mediaType == .video, let item = item else { return }
+        let target = max(progressiveForwardBufferDuration, firstFrameMinimumBuffer)
+        if item.preferredForwardBufferDuration < target - 0.05 {
+            item.preferredForwardBufferDuration = target
+            let formatted = String(format: "%.1f", target)
+            NSLog("DEBUG: [BUFFER TARGET] Applied progressive buffer target \(formatted)s for \(mid)")
+        }
+    }
+
+    private func bumpProgressiveBufferTarget(for item: AVPlayerItem?) {
+        guard mediaType == .video else { return }
+        guard progressiveBufferTargetIndex + 1 < progressiveBufferTargets.count else { return }
+        progressiveBufferTargetIndex += 1
+        applyProgressiveBufferTarget(to: item)
+        let newTarget = progressiveForwardBufferDuration
+        let formatted = String(format: "%.1f", newTarget)
+        NSLog("⚙️ [BUFFER TARGET] Increased progressive buffer target to \(formatted)s for \(mid)")
+    }
+
+    private func resetProgressiveBufferTarget(for item: AVPlayerItem?) {
+        guard mediaType == .video else { return }
+        guard progressiveBufferTargetIndex != 0 else { return }
+        progressiveBufferTargetIndex = 0
+        applyProgressiveBufferTarget(to: item)
+        let formatted = String(format: "%.1f", progressiveForwardBufferDuration)
+        NSLog("⚙️ [BUFFER TARGET] Reset progressive buffer target to \(formatted)s for \(mid)")
     }
     
     private func configurePlayer(_ player: AVPlayer) {
@@ -1699,8 +1728,9 @@ struct SimpleVideoPlayer: View {
             forName: .AVPlayerItemPlaybackStalled,
             object: playerItem,
             queue: .main
-        ) { [weak playerItem, weak player] notification in
-            NSLog("⚠️ [PLAYBACK STALL] Video stalled for \(mid), waiting for data...")
+        ) { [weak playerItem, weak player] _ in
+            NSLog("⚠️ [PLAYBACK STALL] Video stalled for \(self.mid), waiting for data...")
+            self.bumpProgressiveBufferTarget(for: playerItem)
             
             // UX: Show spinner when stalled
             DispatchQueue.main.async {
@@ -1709,8 +1739,7 @@ struct SimpleVideoPlayer: View {
             }
             
             // Monitor when data becomes available again using KVO on loadedTimeRanges
-            guard let item = playerItem, let player = player else { return }
-            let resumePlayer = player
+            guard let item = playerItem, let resumePlayer = player else { return }
             
             // Set up a temporary observer to detect when new data arrives
             var resumeObserver: NSKeyValueObservation?
@@ -2004,6 +2033,7 @@ struct SimpleVideoPlayer: View {
     
     private func handleVideoFinished() {
         print("DEBUG: [SimpleVideoPlayer] Video finished playing for \(mid)")
+        resetProgressiveBufferTarget(for: player?.currentItem)
         
         // For MediaCell mode, pause immediately then rewind after delay (don't auto-restart)
         if mode == .mediaCell {

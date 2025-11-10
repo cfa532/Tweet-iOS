@@ -380,7 +380,7 @@ struct ProfileEditView: View {
                     
                     // Pre-cache the uploaded image locally so Avatar doesn't show spinner
                     let avatarAttachment = MimeiFileType(mid: confirmedAvatar, mediaType: .image)
-                    ImageCacheManager.shared.cacheImageData(data, for: avatarAttachment, baseUrl: hproseInstance.appUser.baseUrl ?? HproseInstance.baseUrl)
+                    _ = ImageCacheManager.shared.cacheImageData(data, for: avatarAttachment, baseUrl: hproseInstance.appUser.baseUrl ?? HproseInstance.baseUrl)
                     NSLog("✅ [Avatar Upload] Pre-cached new avatar image locally")
                     
                     // Update UI state
