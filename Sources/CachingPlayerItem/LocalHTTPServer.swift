@@ -41,22 +41,30 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     // Receive data in chunks
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         autoreleasepool {
+            let chunkLength = Int64(data.count)
+            guard chunkLength > 0 else { return }
+            
+            let writeOffset = cacheStart + sentBytesCount
+            
             // Stream chunk to AVPlayer immediately
             connection.send(content: data, completion: .contentProcessed { _ in })
-            sentBytesCount += Int64(data.count)
+            sentBytesCount += chunkLength
             
             // Write chunk to disk cache (if not probe request)
             if !isProbeRequest,
                let fileHandle = cacheFileHandle,
-               data.count >= 1024,
                cachedBytesCount < maxCacheSize {
                 let remainingAllowance = maxCacheSize - cachedBytesCount
                 if remainingAllowance > 0 {
-                    let bytesToWrite = min(Int64(data.count), remainingAllowance)
+                    let bytesToWrite = min(chunkLength, remainingAllowance)
                     let chunkToWrite = data.prefix(Int(bytesToWrite))
                     do {
+                        try fileHandle.seek(toOffset: UInt64(writeOffset))
                         try fileHandle.write(contentsOf: chunkToWrite)
-                        cachedBytesCount += bytesToWrite
+                        let newEnd = writeOffset + bytesToWrite
+                        if newEnd > cachedBytesCount {
+                            cachedBytesCount = newEnd
+                        }
                     } catch {
                         NSLog("❌ [PROGRESSIVE CACHE WRITE] Failed to write chunk for \(mediaID): \(error.localizedDescription)")
                     }
@@ -1199,19 +1207,14 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             let availableLength = cachedSize - start
             
-            // Cap response size to prevent connection timeouts on large files
-            // AVPlayer will request more data in subsequent range requests
-            // 2MB is small enough to read+send quickly, avoiding AVPlayer timeouts
-            let maxChunkSize: Int64 = 2 * 1024 * 1024 // 2MB max per response
-            
             let requestedLength: Int64
             if let end = end {
-                // Explicit range request - honor it but cap to maxChunkSize
+                // Explicit range request - honor it fully if available
                 let rangeLength = end - start + 1
-                requestedLength = min(min(availableLength, rangeLength), maxChunkSize)
+                requestedLength = min(availableLength, rangeLength)
             } else {
-                // Open-ended request - cap to maxChunkSize
-                requestedLength = min(availableLength, maxChunkSize)
+                // Open-ended request - return all available cached data
+                requestedLength = availableLength
             }
             
             guard requestedLength > 0 else {
@@ -1227,7 +1230,12 @@ public class LocalHTTPServer: @unchecked Sendable {
                 try probeHandle.seek(toOffset: UInt64(start))
                 let probeCount = min(Int(requestedLength), 4096)
                 let probeData = try probeHandle.read(upToCount: probeCount) ?? Data()
-                let hasRealData = probeData.contains { $0 != 0 }
+                let hasRealData: Bool
+                if requestedLength < 8 || probeData.count < 8 {
+                    hasRealData = true
+                } else {
+                    hasRealData = probeData.contains { $0 != 0 }
+                }
                 if !hasRealData {
                     NSLog("DEBUG: [PROGRESSIVE CACHE] Sparse data detected for \(mediaID) at range \(start)-\(actualEnd), falling back to network")
                     return false
@@ -1249,23 +1257,16 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             var statusCode = 200
             
-            if rangeHeader != nil && !isCapped {
-                // Only send 206 Partial Content if we're honoring the full requested range
+            if rangeHeader != nil || isCapped {
                 if let total = totalSize {
                     headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(total)"
                 } else {
                     headers["Content-Range"] = "bytes \(start)-\(actualEnd)/*"
                 }
                 statusCode = 206
-            } else if isCapped {
-                // We're capping the response - send 206 but with correct range
-                if let total = totalSize {
-                    headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(total)"
-                } else {
-                    headers["Content-Range"] = "bytes \(start)-\(actualEnd)/*"
+                if isCapped {
+                    NSLog("⚠️ [PROGRESSIVE CACHE] Capping response: requested \(start)-\(requestedEnd), sending \(start)-\(actualEnd), total: \(totalSize ?? -1)")
                 }
-                statusCode = 206
-                NSLog("⚠️ [PROGRESSIVE CACHE] Capping response: requested \(start)-\(requestedEnd), sending \(start)-\(actualEnd), total: \(totalSize ?? -1)")
             }
             let rangeDescription = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
             NSLog("🎯 [PROGRESSIVE CACHE HIT] mediaID: \(mediaID), range: \(rangeDescription), size: \(requestedLength) bytes, total: \(totalSize ?? -1)")
