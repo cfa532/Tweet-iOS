@@ -233,6 +233,7 @@
 "Failed to load comments." = "Failed to load comments.";
 "Failed to load more comments." = "Failed to load more comments.";
 "Avatar updated successfully!" = "Avatar updated successfully!";
+"Login failed. Please try again." = "Login failed. Please try again.";
 "No image to download" = "No image to download";
 "Photo library access denied" = "Photo library access denied";
 "Image saved to Photos" = "Image saved to Photos";

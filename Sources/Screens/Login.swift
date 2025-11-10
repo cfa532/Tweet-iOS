@@ -181,7 +181,7 @@ struct LoginView: View {
                 if let user = try await hproseInstance.updateUserFromServer(userId, baseUrl: "") {
                     if (user.username == nil) {
                         print("DEBUG: [Login] Cannot find user - username: \(username), userid: \(userId)")
-                        errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), username)
+                        errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
                     } else {
                         user.password = password
                         let result = try await hproseInstance.login(user)
@@ -196,15 +196,23 @@ struct LoginView: View {
                     }
                 } else {
                     print("DEBUG: [Login] Cannot find user - username: \(username), userid: \(userId)")
-                    errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), username)
+                    errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
                 }
             } else {
                 print("DEBUG: [Login] Cannot find userId - username: \(username)")
-                errorMessage = String(format: NSLocalizedString("Cannot find userId by %@", comment: "UserId not found error"), username)
+                errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
             }
         } catch {
             print("DEBUG: [Login] Login error - username: \(username), error: \(error.localizedDescription)")
-            errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+            let lowercasedDescription = error.localizedDescription.lowercased()
+            if lowercasedDescription.contains("base url") ||
+                lowercasedDescription.contains("provider ip") ||
+                lowercasedDescription.contains("userid not found") ||
+                lowercasedDescription.contains("login failed") {
+                errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
+            } else {
+                errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+            }
         }
         
         isLoading = false

@@ -225,6 +225,7 @@
 "Photo library access denied" = "相册访问被拒绝";
 "Image saved to Photos" = "图片已保存到相册";
 "Failed to save image" = "图片保存失败";
+"Login failed. Please try again." = "登录失败。请重试。";
 "Loading chat..." = "正在加载聊天...";
 "Receipt ID: %@" = "收件人ID: %@";
 "Loading..." = "加载中...";
