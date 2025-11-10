@@ -1056,9 +1056,35 @@ public class LocalHTTPServer: @unchecked Sendable {
                     cacheFileHandle = nil
                     cacheFilePath = nil
                 } else {
-                    cacheFileHandle = FileHandle(forWritingAtPath: cacheFilePath!)
-                    try? cacheFileHandle?.seek(toOffset: UInt64(cacheStart))
-                    NSLog("💾 [PROGRESSIVE CACHE] Prepared file handle at offset \(cacheStart) (current cache: \(initialCachedSize) bytes)")
+                    #if swift(>=5.3)
+                    if #available(iOS 13.0, macOS 10.15, *) {
+                        do {
+                            cacheFileHandle = try FileHandle(forUpdating: cacheFileURL)
+                        } catch {
+                            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to open cache file for updating (\(mediaID)): \(error.localizedDescription)")
+                            cacheFileHandle = try? FileHandle(forWritingTo: cacheFileURL)
+                        }
+                    } else {
+                        cacheFileHandle = FileHandle(forUpdatingAtPath: cacheFilePath!)
+                    }
+                    #else
+                    cacheFileHandle = FileHandle(forUpdatingAtPath: cacheFilePath!)
+                    #endif
+                    
+                    if cacheFileHandle == nil {
+                        cacheFileHandle = FileHandle(forWritingAtPath: cacheFilePath!)
+                    }
+                    
+                    if let fileHandle = cacheFileHandle {
+                        do {
+                            try fileHandle.seek(toOffset: UInt64(cacheStart))
+                        } catch {
+                            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to seek cache file for \(mediaID) to \(cacheStart): \(error.localizedDescription)")
+                        }
+                        NSLog("💾 [PROGRESSIVE CACHE] Prepared file handle at offset \(cacheStart) (current cache: \(initialCachedSize) bytes)")
+                    } else {
+                        NSLog("⚠️ [PROGRESSIVE CACHE] Could not obtain writable handle for \(mediaID) - caching disabled for this request")
+                    }
                 }
             }
             
@@ -1769,23 +1795,31 @@ public class LocalHTTPServer: @unchecked Sendable {
             let fileHandle = try FileHandle(forReadingFrom: fileURL)
             defer { try? fileHandle.close() }
             
-            // Read the first 512KB (or available data) to check for moov atom
-            // MP4 files need the moov atom (metadata) to be accessible early for streaming
-            guard let headerData = try fileHandle.read(upToCount: 512 * 1024) else {
-                return false
+            let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+            let fileSize = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+            let maxScanBytes = Int(min(max(fileSize, 0), 4 * 1024 * 1024)) // Scan up to 4MB
+            let chunkSize = 128 * 1024
+            var buffer = Data(capacity: maxScanBytes)
+            
+            while buffer.count < maxScanBytes {
+                let remaining = maxScanBytes - buffer.count
+                let toRead = min(chunkSize, remaining)
+                guard let chunk = try fileHandle.read(upToCount: toRead), !chunk.isEmpty else {
+                    break
+                }
+                buffer.append(chunk)
+                
+                if buffer.range(of: Data([0x6D, 0x6F, 0x6F, 0x76])) != nil { // "moov"
+                    return true
+                }
             }
             
-            // Check for "moov" atom signature in the first 8KB
-            // MP4 atoms are: [4 bytes size][4 bytes type]
-            // We're looking for the "moov" type (0x6D6F6F76)
-            let moovSignature = Data([0x6D, 0x6F, 0x6F, 0x76]) // "moov" in ASCII
-            
-            // Search for moov atom in the header
-            if let _ = headerData.range(of: moovSignature) {
+            if buffer.range(of: Data([0x66, 0x74, 0x79, 0x70])) != nil { // "ftyp"
+                NSLog("⚠️ [PROGRESSIVE CACHE] moov atom not found within first \(buffer.count) bytes, but ftyp is present – assuming valid progressive file")
                 return true
             }
             
-            NSLog("⚠️ [PROGRESSIVE CACHE] No moov atom found in first \(headerData.count) bytes - file may not be streamable")
+            NSLog("⚠️ [PROGRESSIVE CACHE] No moov atom found in first \(buffer.count) bytes - file may not be streamable")
             return false
             
         } catch {
