@@ -96,11 +96,18 @@ class FullScreenVideoManager: ObservableObject {
                     // Create or reuse singleton player
                     if self.singletonPlayer == nil {
                         self.singletonPlayer = AVPlayer(playerItem: playerItem)
-                        self.singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
                         print("DEBUG: [FullScreenVideoManager] Created new singleton player")
                     } else {
                         print("DEBUG: [FullScreenVideoManager] Reusing singleton player with new item")
                         self.singletonPlayer?.replaceCurrentItem(with: playerItem)
+                    }
+                    
+                    // Configure buffering behavior based on media type
+                    if mediaType == .video {
+                        self.singletonPlayer?.automaticallyWaitsToMinimizeStalling = true
+                        playerItem.preferredForwardBufferDuration = max(playerItem.preferredForwardBufferDuration, 30.0)
+                    } else {
+                        self.singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
                     }
                     
                     // Always unmuted in fullscreen

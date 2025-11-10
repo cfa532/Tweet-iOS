@@ -179,6 +179,11 @@ struct SimpleVideoPlayer: View {
         mediaType == .video ? 5.0 : 0.5
     }
     
+    /// Target forward buffer (in seconds) we want AVPlayer to maintain for progressive videos.
+    private var progressiveForwardBufferDuration: Double {
+        30.0
+    }
+    
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
         guard let ar = videoAspectRatio else { return false }
@@ -1080,7 +1085,12 @@ struct SimpleVideoPlayer: View {
                 if !isPlayerDetached {
                     if mode == .mediaBrowser || mode == .tweetDetail {
                         // Use AVPlayerViewController for fullscreen and detail modes to get native controls and reliable autoplay
-                        AVPlayerViewControllerRepresentable(player: player, isBuffering: $isBuffering)
+                        AVPlayerViewControllerRepresentable(
+                            player: player,
+                            isBuffering: $isBuffering,
+                            mediaType: mediaType,
+                            progressiveForwardBufferDuration: progressiveForwardBufferDuration
+                        )
                             .id("\(mid)_\(representableId)") // Force recreation with representableId changes
                             .onAppear {
                             }
@@ -1494,7 +1504,7 @@ struct SimpleVideoPlayer: View {
             // CRITICAL: Disable automatic waiting to minimize stalling for cached content
             // This prevents AVPlayer from unnecessarily evaluating buffering rate when data is local
             if hasBufferedData {
-                cachedState.player.automaticallyWaitsToMinimizeStalling = false
+                configureAutomaticWaiting(for: cachedState.player)
             }
             
             // If player is at end or has invalid position, reset to beginning
@@ -1536,12 +1546,23 @@ struct SimpleVideoPlayer: View {
         
     }
     
+    private func configureAutomaticWaiting(for player: AVPlayer) {
+        if mediaType == .video {
+            player.automaticallyWaitsToMinimizeStalling = true
+            if let item = player.currentItem {
+                item.preferredForwardBufferDuration = max(
+                    item.preferredForwardBufferDuration,
+                    progressiveForwardBufferDuration
+                )
+            }
+        } else {
+            player.automaticallyWaitsToMinimizeStalling = false
+        }
+    }
+    
     private func configurePlayer(_ player: AVPlayer) {
         
-        // CRITICAL: Always disable automatic waiting for HLS videos
-        // This prevents AVPlayer from evaluating buffering rate which adds 5-10 second delays
-        // Our videos are locally cached so we don't need network buffering evaluation
-        player.automaticallyWaitsToMinimizeStalling = false
+        configureAutomaticWaiting(for: player)
         
         // CRITICAL: For MediaCell, pause playing shared players FIRST to prevent audio bleed
         if mode == .mediaCell && player.rate > 0 {
@@ -2274,6 +2295,8 @@ struct VideoLayerRefreshView: UIViewRepresentable {
         struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             let player: AVPlayer?
             @Binding var isBuffering: Bool
+            let mediaType: MediaType
+            let progressiveForwardBufferDuration: Double
             
             func makeCoordinator() -> Coordinator {
                 Coordinator(isBuffering: $isBuffering)
@@ -2294,6 +2317,20 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                     statusObserver?.invalidate()
                     timeControlObserver?.invalidate()
                     bufferingDebounceTask?.cancel()
+                }
+            }
+            
+            private func applyAutomaticWaiting(for player: AVPlayer) {
+                if mediaType == .video {
+                    player.automaticallyWaitsToMinimizeStalling = true
+                    if let item = player.currentItem {
+                        item.preferredForwardBufferDuration = max(
+                            item.preferredForwardBufferDuration,
+                            progressiveForwardBufferDuration
+                        )
+                    }
+                } else {
+                    player.automaticallyWaitsToMinimizeStalling = false
                 }
             }
             
@@ -2346,9 +2383,13 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                         
                         if playerItem.status == .readyToPlay {
                             
-                            // CRITICAL: For cached content, disable automatic waiting
                             if hasBufferedData {
-                                player.automaticallyWaitsToMinimizeStalling = false
+                                applyAutomaticWaiting(for: player)
+                            } else if mediaType == .video {
+                                playerItem.preferredForwardBufferDuration = max(
+                                    playerItem.preferredForwardBufferDuration,
+                                    progressiveForwardBufferDuration
+                                )
                             }
                             
                             // Use DispatchQueue to ensure this happens after view is fully set up
@@ -2358,6 +2399,12 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                         } else if playerItem.status == .unknown {
                             // Set buffering state while waiting
                             context.coordinator.isBuffering = true
+                            if mediaType == .video {
+                                playerItem.preferredForwardBufferDuration = max(
+                                    playerItem.preferredForwardBufferDuration,
+                                    progressiveForwardBufferDuration
+                                )
+                            }
                         } else {
                             NSLog("DEBUG: [AVPlayerViewController] ❌ Player item in failed state during makeUIViewController")
                         }
@@ -2409,18 +2456,19 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                     
                     if playerItem.status == .readyToPlay {
                         
-                        // CRITICAL: For cached content, disable automatic waiting
                         if hasBufferedData {
-                            player.automaticallyWaitsToMinimizeStalling = false
+                            applyAutomaticWaiting(for: player)
                             
                             // Play immediately
                             player.play()
                         } else {
                             // No buffered data - need to load
                             context.coordinator.isBuffering = true
-                            playerItem.preferredForwardBufferDuration = 15.0  // Balanced prefetch
+                            let bufferTarget = mediaType == .video ? progressiveForwardBufferDuration : 15.0
+                            playerItem.preferredForwardBufferDuration = max(playerItem.preferredForwardBufferDuration, bufferTarget)
                             player.preroll(atRate: 1.0) { success in
                                 DispatchQueue.main.async {
+                                    applyAutomaticWaiting(for: player)
                                     player.play()
                                     // Buffering state will be updated by timeControlStatus observer
                                 }
@@ -2429,6 +2477,12 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                     } else if playerItem.status == .unknown {
                         // Show buffering while waiting
                         context.coordinator.isBuffering = true
+                        if mediaType == .video {
+                            playerItem.preferredForwardBufferDuration = max(
+                                playerItem.preferredForwardBufferDuration,
+                                progressiveForwardBufferDuration
+                            )
+                        }
                         
                         // Invalidate old observer if any
                         context.coordinator.statusObserver?.invalidate()
@@ -2438,6 +2492,7 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                             guard let player = player else { return }
                             DispatchQueue.main.async {
                                 if item.status == .readyToPlay {
+                                    applyAutomaticWaiting(for: player)
                                     player.play()
                                     context.coordinator.statusObserver?.invalidate()
                                     context.coordinator.statusObserver = nil
