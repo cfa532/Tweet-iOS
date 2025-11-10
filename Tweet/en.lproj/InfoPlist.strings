@@ -4,6 +4,7 @@
   
   Created for permission localization.
 */
+CFBundleDisplayName = "M2O";
 NSCameraUsageDescription = "We need camera access to let you capture photos and videos for your posts and replies. You can create rich media content to share with your followers.";
 NSMicrophoneUsageDescription = "We need microphone access to record audio when you create video posts and replies. This allows you to add voice narration to your video content.";
 NSPhotoLibraryUsageDescription = "We need photo library access to save your captured photos and videos, and to let you select existing media for your posts and replies.";
