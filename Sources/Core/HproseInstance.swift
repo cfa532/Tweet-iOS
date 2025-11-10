@@ -950,8 +950,9 @@ final class HproseInstance: ObservableObject {
                 // Retry attempts: Always force fresh IP resolution
                 if attempt == 1 && !baseUrl.isEmpty {
                     print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Using provided baseUrl: \(baseUrl) for userId: \(userId)")
+                    let normalizedBase = try normalizedBaseURL(from: baseUrl, context: "initial baseUrl for \(userId)")
                     await MainActor.run {
-                        user.baseUrl = URL(string: baseUrl)
+                        user.baseUrl = normalizedBase
                     }
                 } else {
                     // Retry or empty baseUrl: Force fresh IP resolution
@@ -961,8 +962,9 @@ final class HproseInstance: ObservableObject {
                         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
                     }
                     print("DEBUG: [updateUserFromServer] ✅ Setting baseUrl to provider IP: \(providerIP) for userId: \(userId) (was: \(oldBaseUrl))")
+                    let normalizedBase = try normalizedBaseURL(from: providerIP, context: "provider IP for \(userId)")
                     await MainActor.run {
-                        user.baseUrl = URL(string: "http://\(providerIP)")!
+                        user.baseUrl = normalizedBase
                     }
                 }
                 
@@ -973,6 +975,10 @@ final class HproseInstance: ObservableObject {
             } catch {
                 lastError = error
                 print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 failed for userId: \(userId): \(error)")
+                
+                if attempt < 3 {
+                    await handleRetryRecovery(for: user)
+                }
                 
                 if attempt < 3 {
                     // Exponential backoff: 1s, 2s
@@ -987,6 +993,125 @@ final class HproseInstance: ObservableObject {
             throw error
         } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All retries failed"])
+        }
+    }
+    
+    private func normalizedBaseURL(from value: String, context: String) throws -> URL {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: NSLocalizedString("Empty base URL returned while \(context)", comment: "Invalid base URL error")
+            ])
+        }
+        
+        if let url = URL(string: trimmed), let host = url.host, !host.isEmpty {
+            return url
+        }
+        
+        if let url = URL(string: "http://\(trimmed)"), let host = url.host, !host.isEmpty {
+            return url
+        }
+        
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [
+            NSLocalizedDescriptionKey: NSLocalizedString("Invalid base URL '\(trimmed)' returned while \(context)", comment: "Invalid base URL error")
+        ])
+    }
+    
+    private func handleRetryRecovery(for user: User) async {
+        do {
+            if var appBase = appUser.baseUrl {
+                var isHealthy = await isServerHealthy(appBase)
+                if !isHealthy {
+                    print("DEBUG: [updateUserFromServer] Retry recovery - app base \(appBase.absoluteString) unhealthy, reinitializing app")
+                    try await initAppEntry()
+                    if let refreshedBase = appUser.baseUrl {
+                        appBase = refreshedBase
+                        isHealthy = await isServerHealthy(appBase)
+                        print("DEBUG: [updateUserFromServer] Retry recovery - app base refreshed to \(appBase.absoluteString), healthy: \(isHealthy)")
+                    }
+                }
+                
+                // Ensure shared client targets the (possibly refreshed) app base
+                if HproseInstance.baseUrl != appBase {
+                    HproseInstance.baseUrl = appBase
+                    client.uri = appBase.appendingPathComponent("/webapi/").absoluteString
+                }
+                
+                if let providerIP = try await getProviderIP(user.mid) {
+                    let resolved = try normalizedBaseURL(from: providerIP, context: "retry provider IP for \(user.mid)")
+                    await MainActor.run {
+                        user.baseUrl = resolved
+                    }
+                    print("DEBUG: [updateUserFromServer] Retry recovery - refreshed user baseUrl to \(resolved.absoluteString)")
+                }
+            } else {
+                let baseToCheck = user.baseUrl
+                if let base = baseToCheck {
+                    let healthy = await isServerHealthy(base)
+                    if !healthy {
+                        print("DEBUG: [updateUserFromServer] Retry recovery - user base unhealthy, reinitializing app")
+                        try await initAppEntry()
+                        if let refreshedBase = appUser.baseUrl {
+                            await MainActor.run {
+                                user.baseUrl = refreshedBase
+                            }
+                            print("DEBUG: [updateUserFromServer] Retry recovery - updated user baseUrl after initApp to \(refreshedBase.absoluteString)")
+                        }
+                    }
+                }
+            }
+        } catch {
+            print("DEBUG: [updateUserFromServer] Retry recovery encountered error: \(error)")
+        }
+    }
+    
+    private func isServerHealthy(_ baseURL: URL) async -> Bool {
+        guard let host = baseURL.host else {
+            print("DEBUG: [updateUserFromServer] Server health check skipped - invalid host in \(baseURL)")
+            return false
+        }
+        
+        let entry = "health"
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "userid": appUser.mid
+        ]
+        
+        do {
+            let client: HproseClient
+            var disposableClient: HproseHttpClient?
+            
+            if let appBase = appUser.baseUrl,
+               appBase == baseURL,
+               let existingClient = appUser.hproseClient {
+                client = existingClient
+            } else {
+                let newClient = HproseHttpClient()
+                newClient.timeout = 300
+                newClient.uri = baseURL.appendingPathComponent("webapi/").absoluteString
+                disposableClient = newClient
+                client = newClient
+            }
+            
+            defer {
+                disposableClient?.close()
+            }
+            
+            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+                print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - invalid response")
+                return false
+            }
+            
+            if let status = (response["status"] as? String)?.lowercased(), status == "ok" {
+                return true
+            }
+            
+            print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - payload: \(response)")
+            return false
+        } catch {
+            print("DEBUG: [updateUserFromServer] Server health check for \(host) failed with error: \(error)")
+            return false
         }
     }
     
@@ -2590,23 +2715,20 @@ final class HproseInstance: ObservableObject {
         
         /// Check if cloud drive service is available at clouddriveport
         private func checkCloudDriveServiceAvailability(appUser: User) async -> Bool {
+            guard !appUser.isGuest else {
+                print("Cloud drive check skipped for guest user - using fallback")
+                return false
+            }
+            
             do {
                 let writableUrl = try await appUser.resolveWritableUrl()
-                guard let writableUrl = writableUrl else {
+                guard let writableUrl = writableUrl,
+                      let host = writableUrl.host,
+                      appUser.cloudDrivePort > 0,
+                      let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
                     return false
                 }
                 
-                guard let host = writableUrl.host else {
-                    return false
-                }
-                
-                guard appUser.cloudDrivePort > 0 else {
-                    return false
-                }
-                
-                guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
-                    return false
-                }
                 let healthCheckURL = cloudBaseURL.appendingPathComponent("health")
                 
                 var request = URLRequest(url: healthCheckURL)
@@ -2621,7 +2743,6 @@ final class HproseInstance: ObservableObject {
                     return false
                 }
                 
-                // Parse JSON response to verify service is actually running
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let status = json["status"] as? String,
                    status == "ok" {
@@ -4760,7 +4881,12 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format for get_provider_ip: \(mid)"])
             }
             
-            return ipAddress
+            let trimmed = ipAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Empty provider IP returned for user: \(mid)"])
+            }
+            
+            return trimmed
         }
     }
     
