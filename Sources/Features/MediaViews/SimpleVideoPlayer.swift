@@ -756,7 +756,9 @@ struct SimpleVideoPlayer: View {
         
         let isScreenLock = !didEnterBackground
         
-        if mode == .mediaCell && player != nil && shouldLoadVideo && isScreenLock && isVisible {
+        let isProgressive = (mediaType == .video)
+        
+        if mode == .mediaCell && isProgressive && player != nil && shouldLoadVideo && isScreenLock && isVisible {
             // SCREEN LOCK RECOVERY FOR VISIBLE VIDEOS: Force complete player recreation
             print("DEBUG: [VIDEO RECOVERY] Screen lock for VISIBLE video - forcing complete refresh")
             
@@ -866,7 +868,7 @@ struct SimpleVideoPlayer: View {
         // Player is valid - safe to reattach
         print("✅ [VIDEO RECOVERY] Player validated successfully, reattaching")
         
-        if mode == .mediaCell {
+        if mode == .mediaCell && mediaType == .video {
             player.isMuted = MuteState.shared.isMuted
         } else {
             player.isMuted = false

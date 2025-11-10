@@ -1101,7 +1101,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }()
             
             let cacheFileURL = self.progressiveCacheFileURL(for: mediaID)
-            let contiguousSize = self.loadProgressiveContiguousSize(mediaID: mediaID) ?? 0
+            let contiguousSize = self.cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
             let cachedOverlapStart = max(requestedStart, Int64(0))
             var cachedSegmentLength: Int64 = 0
             if FileManager.default.fileExists(atPath: cacheFileURL.path), contiguousSize > cachedOverlapStart {
@@ -1316,6 +1316,77 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
     
+    private func cachedContiguousSize(for mediaID: String, cacheFileURL: URL) -> Int64 {
+        if let stored = loadProgressiveContiguousSize(mediaID: mediaID), stored > 0 {
+            return min(stored, progressiveDiskCacheLimit)
+        }
+        
+        guard let inferred = inferContiguousSizeIfAvailable(mediaID: mediaID, cacheFileURL: cacheFileURL) else {
+            return 0
+        }
+        
+        if inferred > 0 {
+            storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: inferred)
+        }
+        return min(inferred, progressiveDiskCacheLimit)
+    }
+    
+    private func inferContiguousSizeIfAvailable(mediaID: String, cacheFileURL: URL) -> Int64? {
+        guard FileManager.default.fileExists(atPath: cacheFileURL.path) else {
+            return nil
+        }
+        
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: cacheFileURL.path)
+            let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            let cappedSize = min(fileSize, progressiveDiskCacheLimit)
+            guard cappedSize > 0 else { return nil }
+            
+            guard let handle = try? FileHandle(forReadingFrom: cacheFileURL) else {
+                return nil
+            }
+            defer { try? handle.close() }
+            
+            let chunkSize = 256 * 1024
+            var contiguous: Int64 = 0
+            while contiguous < cappedSize {
+                let remaining = cappedSize - contiguous
+                let readLength = Int(min(Int64(chunkSize), remaining))
+                if readLength <= 0 { break }
+                
+                let chunk: Data
+                do {
+                    chunk = try handle.read(upToCount: readLength) ?? Data()
+                } catch {
+                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache chunk for \(mediaID): \(error.localizedDescription)")
+                    break
+                }
+                
+                if chunk.isEmpty {
+                    break
+                }
+                
+                if chunk.allSatisfy({ $0 == 0 }) {
+                    break
+                }
+                
+                contiguous += Int64(chunk.count)
+                
+                if chunk.count < readLength {
+                    break
+                }
+            }
+            
+            if contiguous > 0 {
+                NSLog("DEBUG: [PROGRESSIVE CACHE] Inferred contiguous size \(contiguous) for \(mediaID) (fallback)")
+            }
+            return contiguous
+        } catch {
+            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to infer contiguous size for \(mediaID): \(error.localizedDescription)")
+            return nil
+        }
+    }
+    
     private func storeProgressiveTotalSize(mediaID: String, totalSize: Int64) {
         let metaURL = progressiveMetaFileURL(for: mediaID)
         let directory = metaURL.deletingLastPathComponent()
@@ -1356,17 +1427,13 @@ public class LocalHTTPServer: @unchecked Sendable {
         let cacheFileURL = progressiveCacheFileURL(for: mediaID)
         if FileManager.default.fileExists(atPath: cacheFileURL.path) {
             let totalSize = loadProgressiveTotalSize(mediaID: mediaID)
-            let contiguousSize = loadProgressiveContiguousSize(mediaID: mediaID)
+            let contiguousSize = cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
             let cachedSize: Int64
             do {
                 let attributes = try FileManager.default.attributesOfItem(atPath: cacheFileURL.path)
                 let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
                 let cappedFileSize = min(fileSize, progressiveDiskCacheLimit)
-                if let contiguousSize = contiguousSize {
-                    cachedSize = min(contiguousSize, cappedFileSize)
-                } else {
-                    cachedSize = cappedFileSize
-                }
+                cachedSize = contiguousSize > 0 ? min(contiguousSize, cappedFileSize) : cappedFileSize
             } catch {
                 NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cached file attributes for \(mediaID): \(error.localizedDescription)")
                 return false
