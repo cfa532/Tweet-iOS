@@ -169,6 +169,9 @@ struct SimpleVideoPlayer: View {
     @State private var representableId: Int = 0 // Force VideoPlayerRepresentable recreation
     @State private var viewConfigTimestamp: TimeInterval = 0 // Timestamp when view was last configured
     
+    /// Minimum buffered seconds required before we consider the first frame renderable.
+    private let firstFrameMinimumBuffer: Double = 0.1
+    
     // MARK: Computed Properties
     private var isVideoPortrait: Bool {
         guard let ar = videoAspectRatio else { return false }
@@ -1489,8 +1492,9 @@ struct SimpleVideoPlayer: View {
                 cachedState.player.seek(to: cachedState.time, toleranceBefore: .zero, toleranceAfter: .zero)
             }
             
-            // Update state immediately - no waiting for seek
-            self.loadingState = .loaded
+            // Spinner should remain visible until the player actually has data ready
+            let isReadyForDisplay = playerItem.status == .readyToPlay || hasBufferedData
+            self.loadingState = isReadyForDisplay ? .loaded : .loading
             self.playbackState = .notStarted
         } else {
             // For MediaCell, seek to cached position
@@ -1510,7 +1514,8 @@ struct SimpleVideoPlayer: View {
             }
             
             // Update state
-            self.loadingState = .loaded
+            let isReadyForDisplay = playerItem.status == .readyToPlay || hasBufferedData
+            self.loadingState = isReadyForDisplay ? .loaded : .loading
             self.playbackState = .notStarted
         }
         
@@ -1776,12 +1781,11 @@ struct SimpleVideoPlayer: View {
                 NSLog("🔍 [KVO BUFFER] Fired for \(mid) - hasData: \(hasBufferedData), buffered: \(String(format: "%.1f", bufferedDuration))s, loadingState: \(loadingState)")
                 
                 DispatchQueue.main.async {
-                    // UX FIX: Only hide spinner when we have ENOUGH data to continue playback
-                    // Need at least 1 second of buffered data, not just any data
-                    let hasEnoughData = hasBufferedData && bufferedDuration >= 1.0
+                    // UX FIX: Hide spinner as soon as we have enough buffered data to render the first frame
+                    let hasEnoughData = hasBufferedData && bufferedDuration >= firstFrameMinimumBuffer
                     
                     if hasEnoughData && loadingState.isLoading {
-                        NSLog("📦 [BUFFER DATA] Sufficient data arrived for \(mid) (\(String(format: "%.1f", bufferedDuration))s buffered), showing first frame")
+                        NSLog("📦 [BUFFER DATA] Sufficient data arrived for \(mid) (\(String(format: "%.2f", bufferedDuration))s buffered), showing first frame")
                         
                         // Force player to render first frame by calling play() then checking if we should pause
                         if player.rate == 0 {
@@ -1802,8 +1806,8 @@ struct SimpleVideoPlayer: View {
                         loadingState = .loaded
                         retryAttempts = 0  // Reset retry counter on successful load
                         // Keep observer active to detect stalls - it will be cleaned up when view disappears
-                    } else if hasBufferedData && bufferedDuration < 1.0 && loadingState.isLoading {
-                        NSLog("⏳ [BUFFER DATA] Insufficient data for \(mid) (\(String(format: "%.1f", bufferedDuration))s buffered), waiting for more...")
+                    } else if hasBufferedData && bufferedDuration < firstFrameMinimumBuffer && loadingState.isLoading {
+                        NSLog("⏳ [BUFFER DATA] Waiting for more data for \(mid) (\(String(format: "%.2f", bufferedDuration))s buffered)...")
                     }
                 }
             }
