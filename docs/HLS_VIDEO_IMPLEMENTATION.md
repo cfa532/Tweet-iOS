@@ -19,12 +19,12 @@ Complete HLS (HTTP Live Streaming) video playback system with local caching, aut
 Local caching proxy server that intercepts AVPlayer requests, caches video segments, and manages network downloads.
 
 **Key Features:**
-- Runs on localhost (default port: 8081)
+- Runs on localhost (default port: 8080, persisted via `PreferenceHelper`)
 - Caches HLS playlists and video segments to disk
-- Handles concurrent segment requests
-- Memory-optimized for large segments (2-5MB)
+- Handles concurrent segment requests with slow-network safeguards
+- Memory-optimized for large segments (2-5 MB)
 - Automatic connection pool management
-- Thread-safe operations with NSLock
+- Thread-safe operations with `NSLock`
 
 **Configuration:**
 ```swift
@@ -152,7 +152,7 @@ if let existingSemaphore = activeDownloads[downloadKey] {
     if FileManager.default.fileExists(atPath: cachePath) {
         serveFile(path: cachePath, connection: connection, method: method)
     } else {
-        // File not ready - start independent download (for slow networks)
+        // File not ready yet – launch an independent download to avoid AVPlayer's 30 s HTTP timeout on slow links
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method)
     }
 } else {
@@ -177,6 +177,12 @@ fetchAndServe(..., completion: {
     }
 })
 ```
+
+**Key Behaviour:**
+
+- Duplicate downloads are acceptable on congested links—keeping the pipeline moving is more important than saving one segment.
+- Once the first download finishes, the semaphore is signalled and subsequent requests become immediate cache hits.
+- Quality identifiers (`360p`, `480p`, `720p`, etc.) are extracted from the cache path for logging without hard-coding resolution lists.
 
 ---
 
