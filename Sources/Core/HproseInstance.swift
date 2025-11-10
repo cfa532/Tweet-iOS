@@ -1078,41 +1078,36 @@ final class HproseInstance: ObservableObject {
             "userid": appUser.mid
         ]
         
-        do {
-            let client: HproseClient
-            var disposableClient: HproseHttpClient?
-            
-            if let appBase = appUser.baseUrl,
-               appBase == baseURL,
-               let existingClient = appUser.hproseClient {
-                client = existingClient
-            } else {
-                let newClient = HproseHttpClient()
-                newClient.timeout = 300
-                newClient.uri = baseURL.appendingPathComponent("webapi/").absoluteString
-                disposableClient = newClient
-                client = newClient
-            }
-            
-            defer {
-                disposableClient?.close()
-            }
-            
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-                print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - invalid response")
-                return false
-            }
-            
-            if let status = (response["status"] as? String)?.lowercased(), status == "ok" {
-                return true
-            }
-            
-            print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - payload: \(response)")
-            return false
-        } catch {
-            print("DEBUG: [updateUserFromServer] Server health check for \(host) failed with error: \(error)")
+        let client: HproseClient
+        var disposableClient: HproseHttpClient?
+        
+        if let appBase = appUser.baseUrl,
+           appBase == baseURL,
+           let existingClient = appUser.hproseClient {
+            client = existingClient
+        } else {
+            let newClient = HproseHttpClient()
+            newClient.timeout = 300
+            newClient.uri = baseURL.appendingPathComponent("webapi/").absoluteString
+            disposableClient = newClient
+            client = newClient
+        }
+        
+        defer {
+            disposableClient?.close()
+        }
+        
+        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+            print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - invalid response")
             return false
         }
+        
+        if let status = (response["status"] as? String)?.lowercased(), status == "ok" {
+            return true
+        }
+        
+        print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - payload: \(response)")
+        return false
     }
     
     /// Internal method that performs the actual server communication
