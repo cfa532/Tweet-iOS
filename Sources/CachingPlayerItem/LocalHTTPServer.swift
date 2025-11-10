@@ -1416,32 +1416,63 @@ public class LocalHTTPServer: @unchecked Sendable {
         offset: Int64,
         length: Int64
     ) {
-        // Read the requested range from disk
         do {
             let fileHandle = try FileHandle(forReadingFrom: fileURL)
-            defer { try? fileHandle.close() }
-            
             try fileHandle.seek(toOffset: UInt64(offset))
-            guard let bodyData = try fileHandle.read(upToCount: Int(length)) else {
-                NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read \(length) bytes from cache")
+            
+            let headerData = buildHTTPHeaderData(statusCode: statusCode, headers: headers)
+            connection.send(content: headerData, completion: .contentProcessed { [weak self] error in
+                if let error = error {
+                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to send headers: \(error.localizedDescription)")
+                    try? fileHandle.close()
+                    return
+                }
+                
+                self?.streamFileChunks(
+                    connection: connection,
+                    fileHandle: fileHandle,
+                    remaining: length
+                )
+            })
+        } catch {
+            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache file: \(error.localizedDescription)")
+        }
+    }
+    
+    private func streamFileChunks(
+        connection: NWConnection,
+        fileHandle: FileHandle,
+        remaining: Int64
+    ) {
+        guard remaining > 0 else {
+            try? fileHandle.close()
+            return
+        }
+        
+        let chunkSize = Int(min(Int64(progressiveStreamChunkSize), remaining))
+        
+        do {
+            guard let chunk = try fileHandle.read(upToCount: chunkSize), !chunk.isEmpty else {
+                try? fileHandle.close()
                 return
             }
             
-            // Build complete response: headers + body in ONE atomic send
-            let headerData = buildHTTPHeaderData(statusCode: statusCode, headers: headers)
-            var completeResponse = Data(capacity: headerData.count + bodyData.count)
-            completeResponse.append(headerData)
-            completeResponse.append(bodyData)
-            
-            // Send everything at once - use contentProcessed to ensure data is fully transmitted
-            connection.send(content: completeResponse, completion: .contentProcessed { error in
+            connection.send(content: chunk, completion: .contentProcessed { [weak self] error in
                 if let error = error {
                     NSLog("⚠️ [PROGRESSIVE CACHE] Send error: \(error.localizedDescription)")
+                    try? fileHandle.close()
+                    return
                 }
+                
+                self?.streamFileChunks(
+                    connection: connection,
+                    fileHandle: fileHandle,
+                    remaining: remaining - Int64(chunk.count)
+                )
             })
-            
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache file: \(error.localizedDescription)")
+            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache chunk: \(error.localizedDescription)")
+            try? fileHandle.close()
         }
     }
     
