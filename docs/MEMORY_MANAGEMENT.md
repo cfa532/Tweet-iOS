@@ -896,6 +896,19 @@ print("DEBUG: [ImageCacheManager] ...")
 
 ---
 
+## Open Discoveries (November 2025)
+
+### 1. Progressive Video Spikes on Poor Networks (November 11, 2025)
+- **Observed Behaviour:** When several **progressive** clips load for the first time on a degraded connection (high latency / repeated stalls), the app requests full-range byte spans (0-N). LocalHTTPServer forwards those large ranges, and multiple concurrent `URLSessionDataTask`s retain in-flight buffers that can climb into the hundreds of MB before playback begins. Once the same clips are cached, memory usage returns to normal.
+- **Current Mitigation Status:** No code change yet. We plan to cap the first-serve window (e.g. stream only the first few MB), throttle concurrent progressive downloads, and tighten retry behaviour so overlapping ranges reuse existing work instead of spawning fresh network tasks.
+- **Next Steps:** Prototype smaller initial ranges inside `StreamingDownloadDelegate`, add a semaphore around progressive downloads, and adjust the progressive buffer ladder so `preferredForwardBufferDuration` stays minimal until stable playback.
+
+### 2. Suspected Spillover to HLS & Image Fetches
+- **Observation:** The same conditions (slow / flaky network + aggressive retries) may occur for **HLS playlists** and large **image** downloads. The proxies and loaders already deduplicate by filename, but we need to verify that retries do not issue overlapping requests that hold onto large buffers.
+- **Planned Actions:** Run throttled-network tests for HLS streams and image loads, capture Instruments allocation traces, and verify that each pipeline drops partial buffers promptly. Any issues will be documented here once confirmed.
+
+---
+
 ## Related Documentation
 
 - [VIDEO_SYSTEM.md](VIDEO_SYSTEM.md) - Video caching and playback
