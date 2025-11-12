@@ -489,53 +489,71 @@ class Tweet: Identifiable, Codable, ObservableObject {
 }
 // MARK: - Tweet Array Extension
 extension Array where Element == Tweet {
-    /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.
-    mutating func mergeTweets(_ newTweets: [Tweet]) {
-        // Create a dictionary to track unique tweets by their mid
-        var uniqueTweets: [String: Tweet] = [:]
-        
-        // Add existing tweets to dictionary
-        for tweet in self {
-            uniqueTweets[tweet.mid] = tweet
+    /// Determines whether `candidate` should appear before `other` in a descending timeline order.
+    private func shouldPlace(_ candidate: Tweet, before other: Tweet) -> Bool {
+        if candidate.timestamp == other.timestamp {
+            return candidate.mid > other.mid
         }
-        
-        // Add new tweets, overwriting existing ones if they have the same mid
-        for tweet in newTweets {
-            uniqueTweets[tweet.mid] = tweet
-        }
-        
-        // Convert back to array and sort by timestamp in descending order
-        self = Array(uniqueTweets.values).sorted { $0.timestamp > $1.timestamp }
+        return candidate.timestamp > other.timestamp
     }
     
-    /// Merge new tweets smoothly, preserving existing positions to prevent UI jumping
-    mutating func mergeTweetsSmoothly(_ newTweets: [Tweet]) {
-        // Create a set of existing tweet IDs for quick lookup
-        let existingIds = Set(self.map { $0.mid })
+    /// Finds the correct insertion index for `tweet` while keeping the array sorted by descending timestamp.
+    private func orderedInsertionIndex(for tweet: Tweet) -> Int {
+        var lowerBound = 0
+        var upperBound = count
         
-        // Filter out tweets that already exist to avoid unnecessary updates
-        let trulyNewTweets = newTweets.filter { !existingIds.contains($0.mid) }
-        
-        if trulyNewTweets.isEmpty {
-            return
-        }
-        
-        // Update existing tweets with new data (preserving positions)
-        for newTweet in newTweets {
-            if let existingIndex = self.firstIndex(where: { $0.mid == newTweet.mid }) {
-                // Update existing tweet in place to preserve position
-                self[existingIndex] = newTweet
+        while lowerBound < upperBound {
+            let midIndex = (lowerBound + upperBound) / 2
+            let comparisonTarget = self[midIndex]
+            
+            if shouldPlace(tweet, before: comparisonTarget) {
+                upperBound = midIndex
+            } else {
+                lowerBound = midIndex + 1
             }
         }
         
-        // Add truly new tweets at the end (they will be sorted by timestamp)
-        self.append(contentsOf: trulyNewTweets)
+        return lowerBound
+    }
+    
+    /// Core merge implementation shared by both merge variants.
+    private mutating func mergeTweetsInternal(_ newTweets: [Tweet]) {
+        guard !newTweets.isEmpty else { return }
         
-        // Sort only if we added new tweets to maintain chronological order
-        if !trulyNewTweets.isEmpty {
-            self.sort { $0.timestamp > $1.timestamp }
+        var processedIds = Set<String>()
+        
+        for newTweet in newTweets {
+            guard processedIds.insert(newTweet.mid).inserted else { continue }
+            
+            if let existingIndex = firstIndex(where: { $0.mid == newTweet.mid }) {
+                let previousNeighbor = existingIndex > 0 ? self[existingIndex - 1] : nil
+                let nextNeighbor = existingIndex + 1 < count ? self[existingIndex + 1] : nil
+                
+                let shouldMoveUp = previousNeighbor.map { shouldPlace(newTweet, before: $0) } ?? false
+                let shouldMoveDown = nextNeighbor.map { shouldPlace($0, before: newTweet) } ?? false
+                
+                if shouldMoveUp || shouldMoveDown {
+                    remove(at: existingIndex)
+                    let insertionIndex = orderedInsertionIndex(for: newTweet)
+                    insert(newTweet, at: insertionIndex)
+                } else {
+                    self[existingIndex] = newTweet
+                }
+            } else {
+                let insertionIndex = orderedInsertionIndex(for: newTweet)
+                insert(newTweet, at: insertionIndex)
+            }
         }
-        
+    }
+    
+    /// Merge new tweets into the array, overwriting existing ones with the same mid and inserting new ones at the correct position.
+    mutating func mergeTweets(_ newTweets: [Tweet]) {
+        mergeTweetsInternal(newTweets)
+    }
+    
+    /// Merge new tweets smoothly, preserving existing positions when ordering does not need to change.
+    mutating func mergeTweetsSmoothly(_ newTweets: [Tweet]) {
+        mergeTweetsInternal(newTweets)
     }
 }
 
