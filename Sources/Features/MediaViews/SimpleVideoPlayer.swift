@@ -176,9 +176,13 @@ struct SimpleVideoPlayer: View {
         mediaType == .video ? 3.0 : 0.1
     }
     
+    private var isProgressiveMedia: Bool {
+        mediaType == .video
+    }
+    
     /// Minimum buffered seconds required before we resume playback after a stall.
     private var stallRecoveryMinimumBuffer: Double {
-        mediaType == .video ? 5.0 : 0.5
+        isProgressiveMedia ? 5.0 : 0.5
     }
     
     /// Target forward buffer (in seconds) we want AVPlayer to maintain for progressive videos.
@@ -628,6 +632,7 @@ struct SimpleVideoPlayer: View {
                 // SANITY CHECK: Run when becoming visible to catch broken players
                 if isPlayerBroken() {
                     print("⚠️ [VIDEO VISIBILITY] Sanity check failed - player is broken, recreating for \(mid)")
+                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
                     player = nil
                     loadingState = .idle
                     playbackState = .notStarted
@@ -743,7 +748,34 @@ struct SimpleVideoPlayer: View {
             return true
         }
         
+        if shouldForceProgressiveReload(player: player, item: playerItem) {
+            NSLog("⚠️ [SANITY CHECK] Progressive player stalled, marking as broken for \(mid)")
+            return true
+        }
+        
         return false
+    }
+    
+    private func shouldForceProgressiveReload(player: AVPlayer, item: AVPlayerItem) -> Bool {
+        guard isProgressiveMedia else { return false }
+        guard loadingState.isLoaded else { return false }
+        guard item.status == .readyToPlay else { return false }
+        
+        // Ignore intentional pauses
+        if playbackState == .paused || player.timeControlStatus == .paused {
+            return false
+        }
+        
+        let waitingForData = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        let bufferEmpty = item.isPlaybackBufferEmpty
+        let notLikelyToKeepUp = !item.isPlaybackLikelyToKeepUp
+        if !(waitingForData || bufferEmpty || notLikelyToKeepUp) {
+            return false
+        }
+        
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        let minimumBufferThreshold = max(0.5, stallRecoveryMinimumBuffer * 0.25)
+        return bufferedAhead < minimumBufferThreshold
     }
     
     /// RECOVERY: Restore playback after background (with sanity check as safety net)

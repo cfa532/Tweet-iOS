@@ -10,6 +10,36 @@ import AVFoundation
 import CryptoKit
 import ImageIO
 
+private actor ImageDownloadGate {
+    private let limit: Int
+    private var current: Int = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    
+    init(limit: Int) {
+        self.limit = max(1, limit)
+    }
+    
+    func acquire() async {
+        if current < limit {
+            current += 1
+            return
+        }
+        
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+        current += 1
+    }
+    
+    func release() {
+        current = max(0, current - 1)
+        if let continuation = waiters.first {
+            waiters.removeFirst()
+            continuation.resume()
+        }
+    }
+}
+
 // MARK: - Image Cache Manager
 class ImageCacheManager: @unchecked Sendable {
     static let shared = ImageCacheManager()
@@ -33,7 +63,7 @@ class ImageCacheManager: @unchecked Sendable {
     
     // General image download throttling
     private let maxConcurrentImageDownloads = 3
-    private let imageDownloadSemaphore: DispatchSemaphore
+    private let imageDownloadGate: ImageDownloadGate
     
     private func memoryDuplicateBlockState() -> (blocked: Bool, percentage: Double, threshold: Double) {
         let manager = MemoryCapManager.shared
@@ -77,13 +107,13 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     private func withImageDownloadSlot<T>(_ work: () async throws -> T) async rethrows -> T {
-        imageDownloadSemaphore.wait()
-        defer { imageDownloadSemaphore.signal() }
+        await imageDownloadGate.acquire()
+        defer { Task { await imageDownloadGate.release() } }
         return try await work()
     }
     
     private init() {
-        imageDownloadSemaphore = DispatchSemaphore(value: maxConcurrentImageDownloads)
+        imageDownloadGate = ImageDownloadGate(limit: maxConcurrentImageDownloads)
         
         // Get the cache directory
         let cachesDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
