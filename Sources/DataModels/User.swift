@@ -210,6 +210,18 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
     }
     
+    @MainActor
+    func resetClients() {
+        if let httpClient = _hproseClient as? HproseHttpClient {
+            httpClient.close()
+        }
+        if let uploadClient = _uploadClient as? HproseHttpClient {
+            uploadClient.close()
+        }
+        _hproseClient = nil
+        _uploadClient = nil
+    }
+    
     @Published var fansList: [MimeiId]? // List of MimeiId
     @Published var followingList: [MimeiId]? // List of MimeiId
     @Published var bookmarkedTweets: [MimeiId]? {

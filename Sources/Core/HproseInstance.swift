@@ -96,6 +96,9 @@ final class HproseInstance: ObservableObject {
         return client
     }()
     
+    private var lastInitializationAddresses: String?
+    private var lastLoggedUpgradeDomain: String?
+    
     // MARK: - Helper Methods
     
     /// Generic retry helper with exponential backoff
@@ -120,6 +123,17 @@ final class HproseInstance: ObservableObject {
         }
         
         throw lastError ?? NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("All retry attempts failed", comment: "Network retry error")])
+    }
+    
+    private func applyBaseUrlIfNeeded(_ user: User, url: URL, reason: String) async {
+        await MainActor.run {
+            let current = user.baseUrl?.absoluteString
+            let newValue = url.absoluteString
+            guard current != newValue else { return }
+            user.baseUrl = url
+            user.resetClients()
+            print("DEBUG: [updateUserFromServer] Updated baseUrl (\(reason)) to \(newValue) for userId: \(user.mid)")
+        }
     }
     
     /// Print detailed app user content for debugging
@@ -256,6 +270,7 @@ final class HproseInstance: ObservableObject {
             
             // Check for domain updates
             await self.checkAndUpdateDomain()
+            self.blackList.processCandidates()
             
             // NOTE: Pending upload recovery is now handled by ContentView's dialog system
             // This gives users control over retry/discard instead of automatic retry
@@ -298,7 +313,10 @@ final class HproseInstance: ObservableObject {
                 let paramData = Gadget.shared.extractParamMap(from: html)
                 appId = paramData["mid"] as? String ?? ""
                 guard let addrs = paramData["addrs"] as? String else { continue }
-                print("Initializing with addresses: \(addrs)")
+                if lastInitializationAddresses != addrs {
+                    print("DEBUG: [HproseInstance] App addresses resolved: \(addrs)")
+                    lastInitializationAddresses = addrs
+                }
                 
                 if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
                     
@@ -951,9 +969,7 @@ final class HproseInstance: ObservableObject {
                 if attempt == 1 && !baseUrl.isEmpty {
                     print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Using provided baseUrl: \(baseUrl) for userId: \(userId)")
                     let normalizedBase = try normalizedBaseURL(from: baseUrl, context: "initial baseUrl for \(userId)")
-                    await MainActor.run {
-                        user.baseUrl = normalizedBase
-                    }
+                    await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "attempt \(attempt)")
                 } else {
                     // Retry or empty baseUrl: Force fresh IP resolution
                     let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
@@ -961,11 +977,8 @@ final class HproseInstance: ObservableObject {
                     guard let providerIP = try await self.getProviderIP(userId) else {
                         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
                     }
-                    print("DEBUG: [updateUserFromServer] ✅ Setting baseUrl to provider IP: \(providerIP) for userId: \(userId) (was: \(oldBaseUrl))")
                     let normalizedBase = try normalizedBaseURL(from: providerIP, context: "provider IP for \(userId)")
-                    await MainActor.run {
-                        user.baseUrl = normalizedBase
-                    }
+                    await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "provider IP attempt \(attempt)")
                 }
                 
                 // Perform the actual server communication
@@ -1022,16 +1035,20 @@ final class HproseInstance: ObservableObject {
             if var appBase = appUser.baseUrl {
                 var isHealthy = await isServerHealthy(appBase)
                 if !isHealthy {
-                    print("DEBUG: [updateUserFromServer] Retry recovery - app base \(appBase.absoluteString) unhealthy, reinitializing app")
+                    print("WARN: [updateUserFromServer] App base \(appBase.absoluteString) unhealthy, reinitializing")
                     try await initAppEntry()
                     if let refreshedBase = appUser.baseUrl {
+                        if refreshedBase != appBase {
+                            print("DEBUG: [updateUserFromServer] App base updated to \(refreshedBase.absoluteString) after reinit")
+                        }
                         appBase = refreshedBase
-                        isHealthy = await isServerHealthy(appBase)
-                        print("DEBUG: [updateUserFromServer] Retry recovery - app base refreshed to \(appBase.absoluteString), healthy: \(isHealthy)")
+                    }
+                    isHealthy = await isServerHealthy(appBase, logFailures: false)
+                    if !isHealthy {
+                        print("WARN: [updateUserFromServer] App base \(appBase.absoluteString) still unhealthy after reinit")
                     }
                 }
                 
-                // Ensure shared client targets the (possibly refreshed) app base
                 if HproseInstance.baseUrl != appBase {
                     HproseInstance.baseUrl = appBase
                     client.uri = appBase.appendingPathComponent("/webapi/").absoluteString
@@ -1039,24 +1056,15 @@ final class HproseInstance: ObservableObject {
                 
                 if let providerIP = try await getProviderIP(user.mid) {
                     let resolved = try normalizedBaseURL(from: providerIP, context: "retry provider IP for \(user.mid)")
-                    await MainActor.run {
-                        user.baseUrl = resolved
-                    }
-                    print("DEBUG: [updateUserFromServer] Retry recovery - refreshed user baseUrl to \(resolved.absoluteString)")
+                    await applyBaseUrlIfNeeded(user, url: resolved, reason: "retry provider IP")
                 }
-            } else {
-                let baseToCheck = user.baseUrl
-                if let base = baseToCheck {
-                    let healthy = await isServerHealthy(base)
-                    if !healthy {
-                        print("DEBUG: [updateUserFromServer] Retry recovery - user base unhealthy, reinitializing app")
-                        try await initAppEntry()
-                        if let refreshedBase = appUser.baseUrl {
-                            await MainActor.run {
-                                user.baseUrl = refreshedBase
-                            }
-                            print("DEBUG: [updateUserFromServer] Retry recovery - updated user baseUrl after initApp to \(refreshedBase.absoluteString)")
-                        }
+            } else if let base = user.baseUrl {
+                let healthy = await isServerHealthy(base)
+                if !healthy {
+                    print("WARN: [updateUserFromServer] User base \(base.absoluteString) unhealthy, reinitializing app")
+                    try await initAppEntry()
+                    if let refreshedBase = appUser.baseUrl {
+                        await applyBaseUrlIfNeeded(user, url: refreshedBase, reason: "initApp recovery")
                     }
                 }
             }
@@ -1065,9 +1073,11 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    private func isServerHealthy(_ baseURL: URL) async -> Bool {
+    private func isServerHealthy(_ baseURL: URL, logFailures: Bool = true) async -> Bool {
         guard let host = baseURL.host else {
-            print("DEBUG: [updateUserFromServer] Server health check skipped - invalid host in \(baseURL)")
+            if logFailures {
+                print("DEBUG: [updateUserFromServer] Server health check skipped - invalid host in \(baseURL)")
+            }
             return false
         }
         
@@ -1098,7 +1108,9 @@ final class HproseInstance: ObservableObject {
         }
         
         guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
-            print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - invalid response")
+            if logFailures {
+                print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - invalid response")
+            }
             return false
         }
         
@@ -1106,7 +1118,9 @@ final class HproseInstance: ObservableObject {
             return true
         }
         
-        print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - payload: \(response)")
+        if logFailures {
+            print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - payload: \(response)")
+        }
         return false
     }
     
@@ -1135,8 +1149,8 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [updateUserFromServer] \(user.mid) not found on current node, redirecting to IP: \(ipAddress)")
             // the user is not found on this node, a provider IP of the user is returned.
             // point server to this new IP.
-            await MainActor.run {
-                user.baseUrl = URL(string: "http://\(ipAddress)")!
+            if let redirectedURL = URL(string: "http://\(ipAddress)") {
+                await applyBaseUrlIfNeeded(user, url: redirectedURL, reason: "redirect")
             }
             
             // Use the user's computed hproseClient property which automatically creates client based on baseUrl
@@ -1201,10 +1215,7 @@ final class HproseInstance: ObservableObject {
                 if let providerIP = try await self.getProviderIP(user.mid) {
                     let resolvedUrlString = providerIP.hasPrefix("http") ? providerIP : "http://\(providerIP)"
                     if let resolvedUrl = URL(string: resolvedUrlString) {
-                        await MainActor.run {
-                            user.baseUrl = resolvedUrl
-                        }
-                        print("DEBUG: [updateUserFromServer] ✅ Refreshed baseUrl after unexpected response to \(resolvedUrlString) for userId: \(user.mid)")
+                        await applyBaseUrlIfNeeded(user, url: resolvedUrl, reason: "unexpected response recovery")
                     } else {
                         print("DEBUG: [updateUserFromServer] Unable to construct URL from provider IP \(providerIP) after unexpected response for userId: \(user.mid)")
                     }
@@ -5154,7 +5165,10 @@ final class HproseInstance: ObservableObject {
             return
         }
         
-        print("[checkAndUpdateDomain] Received domain: \(domain)")
+        if lastLoggedUpgradeDomain != domain {
+            print("[checkAndUpdateDomain] Received domain: \(domain)")
+            lastLoggedUpgradeDomain = domain
+        }
         
         // Update domain to share and save to preferences
         await MainActor.run {
