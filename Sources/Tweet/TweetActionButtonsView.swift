@@ -283,9 +283,16 @@ struct TweetActionButtonsView: View {
                 enableVibration: false
             ) {
                 Task {
+                    print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
                     let preview = await loadAttachmentPreviewImage()
                     await MainActor.run {
                         attachmentPreviewImage = preview
+                        print("DEBUG: [SHARE] Preview image loaded: \(preview != nil ? "YES" : "NO")")
+                    }
+                    // Small delay to ensure state is updated before showing sheet
+                    try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+                    await MainActor.run {
+                        print("DEBUG: [SHARE] About to show share sheet, preview: \(attachmentPreviewImage != nil ? "YES" : "NO")")
                         showShareSheet = true
                     }
                 }
@@ -334,49 +341,24 @@ struct TweetActionButtonsView: View {
     }
     
     private func shareActivityItems() -> [Any] {
-        let previewImage = attachmentPreviewImage ?? fallbackShareImage()
-        return [createCustomShareItem(), CustomShareImage(image: previewImage)]
-    }
-    
-    private func fallbackShareImage() -> UIImage {
-        let size = CGSize(width: 120, height: 120) // Square app icon size
-        let renderer = UIGraphicsImageRenderer(size: size)
-        
-        return renderer.image { context in
-            let rect = CGRect(origin: .zero, size: size)
-            
-            // Draw the actual app icon
-            if let appIcon = UIImage(named: "ic_splash") {
-                let iconSize = CGSize(width: 80, height: 80)
-                let iconRect = CGRect(
-                    x: rect.midX - iconSize.width / 2,
-                    y: rect.midY - iconSize.height / 2,
-                    width: iconSize.width,
-                    height: iconSize.height
-                )
-                appIcon.draw(in: iconRect)
-            } else {
-                // Fallback to bird emoji if app icon not found
-                let iconAttributes: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: 40),
-                    .foregroundColor: UIColor.black
-                ]
-                let iconString = NSAttributedString(string: "😊", attributes: iconAttributes)
-                let iconStringSize = iconString.size()
-                let iconStringRect = CGRect(
-                    x: rect.midX - iconStringSize.width / 2,
-                    y: rect.midY - iconStringSize.height / 2,
-                    width: iconStringSize.width,
-                    height: iconStringSize.height
-                )
-                iconString.draw(in: iconStringRect)
-            }
+        var items: [Any] = [createCustomShareItem()]
+        print("DEBUG: [SHARE] Creating share items, preview image: \(attachmentPreviewImage != nil ? "YES" : "NO")")
+        if let previewImage = attachmentPreviewImage {
+            items.append(CustomShareImage(image: previewImage))
+            print("DEBUG: [SHARE] Added CustomShareImage to share items")
+        } else {
+            print("DEBUG: [SHARE] No preview image to share")
         }
+        return items
     }
     
-    private func attachmentBaseURL() -> URL? {
-        if let authorBase = tweet.author?.baseUrl {
-            return authorBase
+    private func cachedAttachmentBaseURL(for sourceTweet: Tweet) -> URL? {
+        if let base = sourceTweet.author?.baseUrl {
+            return base
+        }
+        let author = User.getInstance(mid: sourceTweet.authorId)
+        if let base = author.baseUrl {
+            return base
         }
         if let appUserBase = hproseInstance.appUser.baseUrl {
             return appUserBase
@@ -385,29 +367,107 @@ struct TweetActionButtonsView: View {
     }
     
     private func loadAttachmentPreviewImage() async -> UIImage? {
-        guard let attachment = tweet.attachments?.first else {
+        print("DEBUG: [SHARE] loadAttachmentPreviewImage called for tweet: \(tweet.mid)")
+        print("DEBUG: [SHARE] Tweet has attachments: \(tweet.attachments?.count ?? 0)")
+        print("DEBUG: [SHARE] Tweet originalTweetId: \(tweet.originalTweetId ?? "nil")")
+        
+        guard let sourceTweet = await resolveSourceTweetWithAttachments() else {
+            print("DEBUG: [SHARE] No source tweet with attachments found")
             return nil
         }
-        guard let baseURL = attachmentBaseURL() else {
+        
+        print("DEBUG: [SHARE] Source tweet found: \(sourceTweet.mid), attachments: \(sourceTweet.attachments?.count ?? 0)")
+        
+        guard let attachment = sourceTweet.attachments?.first else {
+            print("DEBUG: [SHARE] No first attachment found")
             return nil
         }
+        
+        print("DEBUG: [SHARE] First attachment type: \(attachment.type), mid: \(attachment.mid)")
+        
+        let baseURL = await resolveAttachmentBaseURL(for: sourceTweet)
+        print("DEBUG: [SHARE] Resolved baseURL: \(baseURL?.absoluteString ?? "nil")")
         
         switch attachment.type {
         case .image:
+            print("DEBUG: [SHARE] Processing image attachment")
             if let cached = ImageCacheManager.shared.getCachedCompressedImage(forMid: attachment.mid) {
+                print("DEBUG: [SHARE] Found cached image")
                 return cached
             }
-            if let url = attachment.getUrl(baseURL) {
-                return await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: baseURL)
+            if let url = resolvedAttachmentURL(for: attachment, baseURL: baseURL) {
+                print("DEBUG: [SHARE] Loading image from URL: \(url.absoluteString)")
+                let cacheBase = baseURL ?? url.deletingLastPathComponent()
+                let image = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: cacheBase)
+                print("DEBUG: [SHARE] Image loaded: \(image != nil ? "YES" : "NO")")
+                return image
             }
         case .video, .hls_video:
-            if let url = attachment.getUrl(baseURL) {
-                return await generateVideoPreviewImage(for: url)
+            print("DEBUG: [SHARE] Processing video attachment")
+            if let url = resolvedAttachmentURL(for: attachment, baseURL: baseURL) {
+                print("DEBUG: [SHARE] Generating video preview from URL: \(url.absoluteString)")
+                let preview = await generateVideoPreviewImage(for: url)
+                print("DEBUG: [SHARE] Video preview generated: \(preview != nil ? "YES" : "NO")")
+                return preview
             }
         default:
+            print("DEBUG: [SHARE] Attachment type not supported: \(attachment.type)")
             break
         }
         
+        print("DEBUG: [SHARE] No preview image could be generated")
+        return nil
+    }
+    
+    private func resolveSourceTweetWithAttachments() async -> Tweet? {
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            return tweet
+        }
+        if let originalTweetId = tweet.originalTweetId,
+           let originalAuthorId = tweet.originalAuthorId {
+            if let original = Tweet.getInstance(for: originalTweetId),
+               let attachments = original.attachments,
+               !attachments.isEmpty {
+                return original
+            }
+            if let original = try? await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId
+            ),
+               let attachments = original.attachments,
+               !attachments.isEmpty {
+                return original
+            }
+        }
+        return nil
+    }
+    
+    private func resolveAttachmentBaseURL(for sourceTweet: Tweet) async -> URL? {
+        if let cached = cachedAttachmentBaseURL(for: sourceTweet) {
+            return cached
+        }
+        if let user = try? await hproseInstance.fetchUser(sourceTweet.authorId),
+           let base = user.baseUrl {
+            return base
+        }
+        return await MainActor.run {
+            hproseInstance.appUser.baseUrl
+        } ?? URL(string: AppConfig.baseUrl)
+    }
+    
+    private func resolvedAttachmentURL(for attachment: MimeiFileType, baseURL: URL?) -> URL? {
+        if let urlString = attachment.url,
+           let url = URL(string: urlString),
+           url.scheme != nil {
+            return url
+        }
+        if let urlString = attachment.url,
+           let base = baseURL {
+            return URL(string: urlString, relativeTo: base) ?? base.appendingPathComponent(urlString)
+        }
+        if let baseURL = baseURL {
+            return attachment.getUrl(baseURL)
+        }
         return nil
     }
     
