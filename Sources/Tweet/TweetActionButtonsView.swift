@@ -1,4 +1,6 @@
 import SwiftUI
+import UIKit
+import AVFoundation
 
 enum UserActions: Int {
     case FAVORITE = 0
@@ -17,6 +19,7 @@ struct TweetActionButtonsView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
+    @State private var attachmentPreviewImage: UIImage? = nil
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     private func handleGuestAction() {
@@ -279,7 +282,13 @@ struct TweetActionButtonsView: View {
                 enableAnimation: true,
                 enableVibration: false
             ) {
-                showShareSheet = true
+                Task {
+                    let preview = await loadAttachmentPreviewImage()
+                    await MainActor.run {
+                        attachmentPreviewImage = preview
+                        showShareSheet = true
+                    }
+                }
             } label: {
                 Image(systemName: "square.and.arrow.up")
                     .frame(width: 20)
@@ -300,7 +309,7 @@ struct TweetActionButtonsView: View {
             // Video management is now handled locally per grid
         }
         .sheet(isPresented: $showShareSheet) {
-            ShareSheet(activityItems: [createCustomShareItem(), createCustomShareImage()])
+            ShareSheet(activityItems: shareActivityItems())
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
@@ -324,12 +333,16 @@ struct TweetActionButtonsView: View {
         return CustomShareItem(shareText: shareText, tweet: tweet)
     }
     
-    private func createCustomShareImage() -> CustomShareImage {
-        // Create a simple app icon image
+    private func shareActivityItems() -> [Any] {
+        let previewImage = attachmentPreviewImage ?? fallbackShareImage()
+        return [createCustomShareItem(), CustomShareImage(image: previewImage)]
+    }
+    
+    private func fallbackShareImage() -> UIImage {
         let size = CGSize(width: 120, height: 120) // Square app icon size
         let renderer = UIGraphicsImageRenderer(size: size)
         
-        let image = renderer.image { context in
+        return renderer.image { context in
             let rect = CGRect(origin: .zero, size: size)
             
             // Draw the actual app icon
@@ -359,15 +372,95 @@ struct TweetActionButtonsView: View {
                 iconString.draw(in: iconStringRect)
             }
         }
+    }
+    
+    private func attachmentBaseURL() -> URL? {
+        if let authorBase = tweet.author?.baseUrl {
+            return authorBase
+        }
+        if let appUserBase = hproseInstance.appUser.baseUrl {
+            return appUserBase
+        }
+        return URL(string: AppConfig.baseUrl)
+    }
+    
+    private func loadAttachmentPreviewImage() async -> UIImage? {
+        guard let attachment = tweet.attachments?.first else {
+            return nil
+        }
+        guard let baseURL = attachmentBaseURL() else {
+            return nil
+        }
         
-        return CustomShareImage(image: image)
+        switch attachment.type {
+        case .image:
+            if let cached = ImageCacheManager.shared.getCachedCompressedImage(forMid: attachment.mid) {
+                return cached
+            }
+            if let url = attachment.getUrl(baseURL) {
+                return await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: baseURL)
+            }
+        case .video, .hls_video:
+            if let url = attachment.getUrl(baseURL) {
+                return await generateVideoPreviewImage(for: url)
+            }
+        default:
+            break
+        }
+        
+        return nil
+    }
+    
+    private func generateVideoPreviewImage(for url: URL) async -> UIImage? {
+        do {
+            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid)
+            _ = try? await asset.load(.tracks)
+            
+            let capturePoints: [Double] = [1.0, 0.5, 0.1]
+            for seconds in capturePoints {
+                if let image = try? await captureFrame(from: asset, at: seconds) {
+                    return image
+                }
+            }
+        } catch {
+            print("DEBUG: Failed to load asset for preview: \(error)")
+        }
+        return nil
+    }
+    
+    private func captureFrame(from asset: AVAsset, at seconds: Double) async throws -> UIImage {
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 640, height: 640)
+        
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        let cgImage = try await withCheckedThrowingContinuation { continuation in
+            generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, image, _, result, error in
+                switch result {
+                case .succeeded:
+                    if let image = image {
+                        continuation.resume(returning: image)
+                    } else {
+                        continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -2, userInfo: nil))
+                    }
+                case .failed:
+                    continuation.resume(throwing: error ?? NSError(domain: "AttachmentPreview", code: -3, userInfo: nil))
+                case .cancelled:
+                    continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -4, userInfo: nil))
+                @unknown default:
+                    continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -5, userInfo: nil))
+                }
+            }
+        }
+        
+        return UIImage(cgImage: cgImage)
     }
     
     private func tweetShareText(_ tweet: Tweet) -> String {
         // Create a share text that includes app branding
         var shareText = ""
         
-        // Priority: title > content > attachment types
+        // Priority: title > content
         if let title = tweet.title, !title.isEmpty {
             // Use title if available
             let maxLength = 40
@@ -380,10 +473,6 @@ struct TweetActionButtonsView: View {
             let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
             let truncatedContent = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
             shareText += truncatedContent
-        } else if let attachments = tweet.attachments, !attachments.isEmpty {
-            // Use attachment types if neither title nor content is available
-            let attachmentTypes = attachments.map { $0.type.rawValue }.joined(separator: ", ")
-            shareText += attachmentTypes
         }
         
         // Add two newlines after text if there is text
@@ -440,7 +529,7 @@ class CustomShareItem: NSObject, UIActivityItemSource {
         // Custom app name with bird icon using the same algorithm as share text
         var previewText = ""
         
-        // Priority: title > content > attachment types
+        // Priority: title > content
         if let title = tweet.title, !title.isEmpty {
             // Use title if available
             let maxLength = 40
@@ -453,10 +542,6 @@ class CustomShareItem: NSObject, UIActivityItemSource {
             let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
             let truncatedContent = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
             previewText = truncatedContent
-        } else if let attachments = tweet.attachments, !attachments.isEmpty {
-            // Use attachment types if neither title nor content is available
-            let attachmentTypes = attachments.map { $0.type.rawValue }.joined(separator: ", ")
-            previewText = attachmentTypes
         }
         
         // Add smiling face emoji prefix
@@ -481,10 +566,6 @@ class CustomShareImage: NSObject, UIActivityItemSource {
     }
     
     func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
-        // Exclude image from copy operations - only return image for other activities (e.g., share to social media)
-        if activityType == .copyToPasteboard {
-            return nil
-        }
         return image
     }
 }
