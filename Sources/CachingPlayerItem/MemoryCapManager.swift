@@ -17,6 +17,7 @@ class MemoryCapManager {
     private let criticalThreshold: Double = 0.85 // 85% of limit (aggressive cleanup)
     private let emergencyThreshold: Double = 0.95 // 95% of limit (emergency cleanup)
     private let monitoringInterval: TimeInterval = 3.0 // Check every 3 seconds (more frequent)
+    private let duplicateBlockThreshold: Double = 0.60 // 60% of limit - block duplicate fetches
     
     // MARK: - State
     private var monitoringTimer: Timer?
@@ -39,6 +40,16 @@ class MemoryCapManager {
     /// Check if memory usage is above warning threshold
     var isAboveWarningThreshold: Bool {
         return memoryUsagePercentage >= warningThreshold
+    }
+    
+    /// Check if memory usage is above duplicate-request block threshold
+    var isAboveDuplicateBlockThreshold: Bool {
+        return memoryUsagePercentage >= duplicateBlockThreshold
+    }
+    
+    /// Duplicate-request block threshold percentage (e.g., 0.60)
+    var duplicateBlockThresholdPercentage: Double {
+        return duplicateBlockThreshold
     }
     
     /// Check if memory usage is above critical threshold

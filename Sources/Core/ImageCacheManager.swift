@@ -31,7 +31,60 @@ class ImageCacheManager: @unchecked Sendable {
     private var pendingAvatarRequests: [(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL, continuation: CheckedContinuation<UIImage?, Never>)] = []
     private let avatarQueue = DispatchQueue(label: "com.zz.imagecache.avatars", attributes: .concurrent)
     
+    // General image download throttling
+    private let maxConcurrentImageDownloads = 3
+    private let imageDownloadSemaphore: DispatchSemaphore
+    
+    private func memoryDuplicateBlockState() -> (blocked: Bool, percentage: Double, threshold: Double) {
+        let manager = MemoryCapManager.shared
+        return (
+            blocked: manager.isAboveDuplicateBlockThreshold,
+            percentage: manager.memoryUsagePercentage,
+            threshold: manager.duplicateBlockThresholdPercentage
+        )
+    }
+    
+    private func waitForMemoryWindow(cacheKey: String, retryLabel: String) async -> Bool {
+        // Fast-path if we're comfortably below the threshold
+        if !memoryDuplicateBlockState().blocked {
+            return true
+        }
+        
+        let maxAttempts = 3
+        for attempt in 0..<maxAttempts {
+            let state = memoryDuplicateBlockState()
+            if !state.blocked {
+                if attempt > 0 {
+                    print("✅ [ImageCacheManager] Memory cooled down after \(attempt) backoff attempts for \(retryLabel) \(cacheKey)")
+                }
+                return true
+            }
+            
+            let delaySeconds = pow(2.0, Double(attempt)) * 0.4
+            print("⏳ [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - delaying new image download \(retryLabel) \(cacheKey) by \(String(format: "%.1f", delaySeconds))s")
+            try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+            
+            if Task.isCancelled { return false }
+        }
+        
+        let finalState = memoryDuplicateBlockState()
+        if finalState.blocked {
+            print("🚫 [ImageCacheManager] Aborting new image download \(retryLabel) \(cacheKey) - memory still high at \(String(format: "%.1f", finalState.percentage * 100))%")
+            return false
+        }
+        
+        return true
+    }
+    
+    private func withImageDownloadSlot<T>(_ work: () async throws -> T) async rethrows -> T {
+        imageDownloadSemaphore.wait()
+        defer { imageDownloadSemaphore.signal() }
+        return try await work()
+    }
+    
     private init() {
+        imageDownloadSemaphore = DispatchSemaphore(value: maxConcurrentImageDownloads)
+        
         // Get the cache directory
         let cachesDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
         cacheDirectory = cachesDirectory.appendingPathComponent("ImageCache")
@@ -376,6 +429,11 @@ class ImageCacheManager: @unchecked Sendable {
         }
         
         if let existingTask = existingTask {
+            let state = memoryDuplicateBlockState()
+            if state.blocked {
+                print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate image request for \(cacheKey)")
+                return nil
+            }
             print("DEBUG: [ImageCacheManager] Reusing existing request for \(cacheKey)")
             return await existingTask.value
         }
@@ -383,25 +441,30 @@ class ImageCacheManager: @unchecked Sendable {
         // Create new request task
         let task = Task<UIImage?, Never> {
             do {
-                // Create URLRequest with timeout
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 10.0 // 10 second timeout
-                request.cachePolicy = .returnCacheDataElseLoad
-                
-                let (data, response) = try await URLSession.shared.data(for: request)
-                
-                // Check if response is valid
-                guard let httpResponse = response as? HTTPURLResponse,
-                      (200...299).contains(httpResponse.statusCode) else {
-                    print("Error: Invalid response for image at \(url)")
+                guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[thumbnail]") else {
                     return nil
                 }
-                
-                // Cache the compressed version
-                cacheImageData(data, for: attachment, baseUrl: baseUrl)
-                
-                // Return the compressed image for thumbnail use
-                return getCompressedImage(for: attachment, baseUrl: baseUrl)
+                return try await self.withImageDownloadSlot {
+                    try Task.checkCancellation()
+                    
+                    var request = URLRequest(url: url)
+                    request.timeoutInterval = 10.0 // 10 second timeout
+                    request.cachePolicy = .returnCacheDataElseLoad
+                    
+                    let (tempURL, response) = try await URLSession.shared.download(for: request)
+                    
+                    guard let httpResponse = response as? HTTPURLResponse,
+                          (200...299).contains(httpResponse.statusCode) else {
+                        print("Error: Invalid response for image at \(url)")
+                        return nil
+                    }
+                    
+                    let data = try Data(contentsOf: tempURL, options: .mappedIfSafe)
+                    self.cacheImageData(data, for: attachment, baseUrl: baseUrl)
+                    try? FileManager.default.removeItem(at: tempURL)
+                    
+                    return self.getCompressedImage(for: attachment, baseUrl: baseUrl)
+                }
             } catch {
                 print("Error loading image from \(url): \(error.localizedDescription)")
                 return nil
@@ -433,6 +496,11 @@ class ImageCacheManager: @unchecked Sendable {
         }
         
         if let existingTask = existingTask {
+            let state = memoryDuplicateBlockState()
+            if state.blocked {
+                print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate original image request for \(cacheKey)")
+                return nil
+            }
             print("DEBUG: [ImageCacheManager] Reusing existing request for original image \(cacheKey)")
             return await existingTask.value
         }
@@ -440,21 +508,31 @@ class ImageCacheManager: @unchecked Sendable {
         // Create new request task
         let task = Task<UIImage?, Never> {
             do {
-                // Create URLRequest with timeout
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 15.0 // 15 second timeout for original images (larger files)
-                request.cachePolicy = .returnCacheDataElseLoad
-                
-                let (data, response) = try await URLSession.shared.data(for: request)
-                
-                // Check if response is valid
-                guard let httpResponse = response as? HTTPURLResponse,
-                      (200...299).contains(httpResponse.statusCode) else {
-                    print("Error: Invalid response for original image at \(url)")
+                guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[original]") else {
                     return nil
                 }
-                
-                return UIImage(data: data)
+                return try await self.withImageDownloadSlot {
+                    try Task.checkCancellation()
+                    
+                    var request = URLRequest(url: url)
+                    request.timeoutInterval = 15.0 // 15 second timeout for original images (larger files)
+                    request.cachePolicy = .returnCacheDataElseLoad
+                    
+                    let (tempURL, response) = try await URLSession.shared.download(for: request)
+                    
+                    guard let httpResponse = response as? HTTPURLResponse,
+                          (200...299).contains(httpResponse.statusCode) else {
+                        print("Error: Invalid response for original image at \(url)")
+                        return nil
+                    }
+                    
+                    let image = UIImage(contentsOfFile: tempURL.path)
+                    if image == nil {
+                        print("Error loading original image from disk (nil) at \(tempURL)")
+                    }
+                    try? FileManager.default.removeItem(at: tempURL)
+                    return image
+                }
             } catch {
                 print("Error loading original image from \(url): \(error.localizedDescription)")
                 return nil
@@ -494,6 +572,11 @@ class ImageCacheManager: @unchecked Sendable {
         }
         
         if let existingTask = existingTask {
+            let state = memoryDuplicateBlockState()
+            if state.blocked {
+                print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate avatar request for \(cacheKey)")
+                return nil
+            }
             print("DEBUG: [ImageCacheManager] Avatar already loading, waiting: \(cacheKey)")
             return await existingTask.value
         }
@@ -519,25 +602,30 @@ class ImageCacheManager: @unchecked Sendable {
     private func startAvatarLoad(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
         let task = Task<UIImage?, Never> {
             do {
-                // Create URLRequest with timeout
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 10.0
-                request.cachePolicy = .returnCacheDataElseLoad
-                
-                let (data, response) = try await URLSession.shared.data(for: request)
-                
-                // Check if response is valid
-                guard let httpResponse = response as? HTTPURLResponse,
-                      (200...299).contains(httpResponse.statusCode) else {
-                    print("DEBUG: [ImageCacheManager] Invalid response for avatar at \(url)")
+                guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[avatar]") else {
                     return nil
                 }
-                
-                // Cache the compressed version
-                cacheImageData(data, for: attachment, baseUrl: baseUrl)
-                
-                // Return the compressed image
-                return getCompressedImage(for: attachment, baseUrl: baseUrl)
+                return try await self.withImageDownloadSlot {
+                    try Task.checkCancellation()
+                    
+                    var request = URLRequest(url: url)
+                    request.timeoutInterval = 10.0
+                    request.cachePolicy = .returnCacheDataElseLoad
+                    
+                    let (tempURL, response) = try await URLSession.shared.download(for: request)
+                    
+                    guard let httpResponse = response as? HTTPURLResponse,
+                          (200...299).contains(httpResponse.statusCode) else {
+                        print("DEBUG: [ImageCacheManager] Invalid response for avatar at \(url)")
+                        return nil
+                    }
+                    
+                    let data = try Data(contentsOf: tempURL, options: .mappedIfSafe)
+                    self.cacheImageData(data, for: attachment, baseUrl: baseUrl)
+                    try? FileManager.default.removeItem(at: tempURL)
+                    
+                    return self.getCompressedImage(for: attachment, baseUrl: baseUrl)
+                }
             } catch {
                 print("DEBUG: [ImageCacheManager] Error loading avatar from \(url): \(error.localizedDescription)")
                 return nil

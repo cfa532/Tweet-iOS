@@ -933,10 +933,25 @@ public class LocalHTTPServer: @unchecked Sendable {
                     serveFile(path: cachePath, connection: connection, method: method)
                 }
             } else {
-                // File not ready yet - on slow networks (20+ second downloads), waiting would timeout the connection
-                // Better to start an independent download for this connection
-                NSLog("⚠️ [DEDUP] File not cached yet, starting independent download for this connection: \(fullRealURL.lastPathComponent)")
-                fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
+                let memoryManager = MemoryCapManager.shared
+                if memoryManager.isAboveDuplicateBlockThreshold {
+                    let percentage = memoryManager.memoryUsagePercentage * 100
+                    let threshold = memoryManager.duplicateBlockThresholdPercentage * 100
+                    NSLog("🚫 [DEDUP] Memory at \(String(format: "%.1f", percentage))%% (threshold \(String(format: "%.0f", threshold))%%) - rejecting duplicate segment download: \(fullRealURL.lastPathComponent)")
+                    
+                    let body = "Memory usage high. Retry segment later.".data(using: .utf8)
+                    self.sendResponse(
+                        connection: connection,
+                        statusCode: 503,
+                        headers: ["Retry-After": "1"],
+                        body: body
+                    )
+                } else {
+                    // File not ready yet - on slow networks (20+ second downloads), waiting would timeout the connection
+                    // Better to start an independent download for this connection
+                    NSLog("⚠️ [DEDUP] File not cached yet, starting independent download for this connection: \(fullRealURL.lastPathComponent)")
+                    fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
+                }
             }
             return
         }
