@@ -1122,6 +1122,7 @@ struct SimpleVideoPlayer: View {
                 if !isPlayerDetached {
                     if mode == .mediaBrowser || mode == .tweetDetail {
                         // Use AVPlayerViewController for fullscreen and detail modes to get native controls and reliable autoplay
+                        // Don't add tap gesture in these modes - it interferes with native controls (especially progress bar)
                         AVPlayerViewControllerRepresentable(
                             player: player,
                             isBuffering: $isBuffering,
@@ -1130,11 +1131,6 @@ struct SimpleVideoPlayer: View {
                         )
                             .id("\(mid)_\(representableId)") // Force recreation with representableId changes
                             .onAppear {
-                            }
-                            .onTapGesture {
-                                if let onVideoTap = onVideoTap {
-                                    onVideoTap()
-                                }
                             }
                     } else {
                         // MediaCell: Use custom AVPlayerLayer wrapper (no controls, respects mute state)
