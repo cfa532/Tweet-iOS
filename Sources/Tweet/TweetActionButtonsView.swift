@@ -568,10 +568,15 @@ struct TweetActionButtonsView: View {
                         print("DEBUG: [SHARE] Using cached HLS player, duration: \(durationSeconds)s")
                         
                         if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
-                            let captureTime = min(1.0, durationSeconds * 0.1)
-                            print("DEBUG: [SHARE] Seeking player to \(String(format: "%.2f", captureTime))s for capture")
+                            // Get current playback position
+                            let currentTime = CMTimeGetSeconds(playerItem.currentTime())
+                            print("DEBUG: [SHARE] Current playback position: \(String(format: "%.2f", currentTime))s")
                             
-                            // Seek to the capture time and grab the frame
+                            // Use current position, or fallback to 1s if at beginning
+                            let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                            print("DEBUG: [SHARE] Capturing frame at \(String(format: "%.2f", captureTime))s")
+                            
+                            // Capture the frame at current position
                             if let image = await captureFrameFromPlayer(cachedPlayer, at: captureTime) {
                                 let elapsed = Date().timeIntervalSince(startTime)
                                 print("DEBUG: [SHARE] HLS preview generated from player in \(String(format: "%.2f", elapsed))s")
@@ -585,7 +590,33 @@ struct TweetActionButtonsView: View {
             return nil
         }
         
-        // For regular videos, use normal asset loading
+        // For regular videos, try to use cached player first to get current position
+        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID),
+           let playerItem = cachedPlayer.currentItem {
+            print("DEBUG: [SHARE] Found cached player for regular video")
+            
+            let currentTime = CMTimeGetSeconds(playerItem.currentTime())
+            print("DEBUG: [SHARE] Current playback position: \(String(format: "%.2f", currentTime))s")
+            
+            let duration = try? await playerItem.asset.load(.duration)
+            if let duration = duration {
+                let durationSeconds = CMTimeGetSeconds(duration)
+                
+                if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                    // Use current position, or fallback to 1s if at beginning
+                    let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                    print("DEBUG: [SHARE] Capturing frame at \(String(format: "%.2f", captureTime))s")
+                    
+                    if let image = await captureFrameFromPlayer(cachedPlayer, at: captureTime) {
+                        let elapsed = Date().timeIntervalSince(startTime)
+                        print("DEBUG: [SHARE] Regular video preview generated from player in \(String(format: "%.2f", elapsed))s")
+                        return image
+                    }
+                }
+            }
+        }
+        
+        // Fallback: use asset loading if no cached player
         do {
             let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid)
             
@@ -610,9 +641,9 @@ struct TweetActionButtonsView: View {
                 return nil
             }
             
-            // Capture at 1 second, or at 10% of duration if video is shorter than 10 seconds
+            // Fallback: Capture at 1 second, or at 10% of duration if video is shorter than 10 seconds
             let captureTime = min(1.0, durationSeconds * 0.1)
-            print("DEBUG: [SHARE] Attempting capture at \(String(format: "%.2f", captureTime))s")
+            print("DEBUG: [SHARE] Attempting fallback capture at \(String(format: "%.2f", captureTime))s")
             
             if let image = try? await captureFrame(from: asset, at: captureTime) {
                 let elapsed = Date().timeIntervalSince(startTime)
