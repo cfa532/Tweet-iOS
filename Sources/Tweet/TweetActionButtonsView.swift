@@ -1,11 +1,18 @@
 import SwiftUI
 import UIKit
 import AVFoundation
+import LinkPresentation
 
 enum UserActions: Int {
     case FAVORITE = 0
     case BOOKMARK = 1
     case RETWEET = 2
+}
+
+// Wrapper to make share items identifiable for .sheet(item:)
+struct ShareSheetData: Identifiable {
+    let id = UUID()
+    let items: [Any]
 }
 
 @available(iOS 16.0, *)
@@ -14,12 +21,13 @@ struct TweetActionButtonsView: View {
     var commentsVM: CommentsViewModel? = nil
     var onCommentTap: (() -> Void)? = nil
     @State private var showCommentCompose = false
-    @State private var showShareSheet = false
     @State private var showLoginSheet = false
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
     @State private var attachmentPreviewImage: UIImage? = nil
+    @State private var isPreparingShare = false
+    @State private var shareSheetItems: ShareSheetData? = nil
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     private func handleGuestAction() {
@@ -282,18 +290,26 @@ struct TweetActionButtonsView: View {
                 enableAnimation: true,
                 enableVibration: false
             ) {
+                guard !isPreparingShare else { return }
                 Task {
+                    await MainActor.run {
+                        isPreparingShare = true
+                    }
+                    
                     print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
                     let preview = await loadAttachmentPreviewImage()
+                    
                     await MainActor.run {
                         attachmentPreviewImage = preview
                         print("DEBUG: [SHARE] Preview image loaded: \(preview != nil ? "YES" : "NO")")
-                    }
-                    // Small delay to ensure state is updated before showing sheet
-                    try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
-                    await MainActor.run {
-                        print("DEBUG: [SHARE] About to show share sheet, preview: \(attachmentPreviewImage != nil ? "YES" : "NO")")
-                        showShareSheet = true
+                        
+                        // Create the activity items with the current preview image
+                        let items = shareActivityItems()
+                        print("DEBUG: [SHARE] Created activity items, count: \(items.count)")
+                        
+                        // Set the sheet data which will trigger the sheet
+                        shareSheetItems = ShareSheetData(items: items)
+                        isPreparingShare = false
                     }
                 }
             } label: {
@@ -315,8 +331,13 @@ struct TweetActionButtonsView: View {
         .onChange(of: showCommentCompose) { _, isPresented in
             // Video management is now handled locally per grid
         }
-        .sheet(isPresented: $showShareSheet) {
-            ShareSheet(activityItems: shareActivityItems())
+        .sheet(item: $shareSheetItems, onDismiss: {
+            // Reset state when sheet is dismissed
+            attachmentPreviewImage = nil
+            print("DEBUG: [SHARE] Sheet dismissed, state cleared")
+        }) { sheetData in
+            let _ = print("DEBUG: [SHARE] Sheet presenting with \(sheetData.items.count) items")
+            return ShareSheet(activityItems: sheetData.items)
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
@@ -337,7 +358,7 @@ struct TweetActionButtonsView: View {
 
     private func createCustomShareItem() -> CustomShareItem {
         let shareText = tweetShareText(tweet)
-        return CustomShareItem(shareText: shareText, tweet: tweet)
+        return CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
     }
     
     private func shareActivityItems() -> [Any] {
@@ -570,10 +591,12 @@ struct ShareSheet: UIViewControllerRepresentable {
 class CustomShareItem: NSObject, UIActivityItemSource {
     let shareText: String
     let tweet: Tweet
+    let previewImage: UIImage?
     
-    init(shareText: String, tweet: Tweet) {
+    init(shareText: String, tweet: Tweet, previewImage: UIImage?) {
         self.shareText = shareText
         self.tweet = tweet
+        self.previewImage = previewImage
         super.init()
     }
     
@@ -610,6 +633,34 @@ class CustomShareItem: NSObject, UIActivityItemSource {
         } else {
             return "😊 Tweet"
         }
+    }
+    
+    @available(iOS 13.0, *)
+    func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
+        let metadata = LPLinkMetadata()
+        
+        // Set the title
+        if let title = tweet.title, !title.isEmpty {
+            metadata.title = title
+        } else if let content = tweet.content, !content.isEmpty {
+            let maxLength = 80
+            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
+            metadata.title = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
+        } else {
+            metadata.title = "Tweet"
+        }
+        
+        // Set the icon/thumbnail image
+        if let previewImage = previewImage {
+            metadata.iconProvider = NSItemProvider(object: previewImage)
+            metadata.imageProvider = NSItemProvider(object: previewImage)
+            print("DEBUG: [SHARE] Link metadata created with preview image")
+        } else if let appIcon = UIImage(named: "ic_splash") {
+            metadata.iconProvider = NSItemProvider(object: appIcon)
+            print("DEBUG: [SHARE] Link metadata created with app icon fallback")
+        }
+        
+        return metadata
     }
 }
 
