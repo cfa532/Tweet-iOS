@@ -902,7 +902,8 @@ class CustomShareItem: NSObject, UIActivityItemSource {
             let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
             metadata.title = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
         } else {
-            metadata.title = "Tweet"
+            // No title or content, compose from first 3 attachment types
+            metadata.title = composeAttachmentTypeText()
         }
         
         // Set the icon/thumbnail image
@@ -916,6 +917,63 @@ class CustomShareItem: NSObject, UIActivityItemSource {
         }
         
         return metadata
+    }
+    
+    private func composeAttachmentTypeText() -> String {
+        // Get attachments from the tweet or its original tweet
+        var attachments: [MimeiFileType]?
+        
+        if let tweetAttachments = tweet.attachments, !tweetAttachments.isEmpty {
+            attachments = tweetAttachments
+        } else if let originalTweetId = tweet.originalTweetId,
+                  let original = Tweet.getInstance(for: originalTweetId),
+                  let originalAttachments = original.attachments,
+                  !originalAttachments.isEmpty {
+            attachments = originalAttachments
+        }
+        
+        guard let attachments = attachments, !attachments.isEmpty else {
+            return "Tweet"
+        }
+        
+        // Get first 3 attachment types
+        let firstThree = Array(attachments.prefix(3))
+        var typeTexts: [String] = []
+        
+        for attachment in firstThree {
+            switch attachment.type {
+            case .image:
+                typeTexts.append("📷 Image")
+            case .video, .hls_video:
+                typeTexts.append("🎬 Video")
+            case .audio:
+                typeTexts.append("🎵 Audio")
+            case .pdf:
+                typeTexts.append("📄 PDF")
+            case .word:
+                typeTexts.append("📝 Word")
+            case .excel:
+                typeTexts.append("📊 Excel")
+            case .ppt:
+                typeTexts.append("📊 PPT")
+            case .zip:
+                typeTexts.append("🗜️ Zip")
+            case .txt:
+                typeTexts.append("📄 Text")
+            case .html:
+                typeTexts.append("🌐 HTML")
+            case .unknown:
+                typeTexts.append("📎 File")
+            }
+        }
+        
+        // Add count if there are more attachments
+        if attachments.count > 3 {
+            let remaining = attachments.count - 3
+            return typeTexts.joined(separator: ", ") + " +\(remaining) more"
+        } else {
+            return typeTexts.joined(separator: ", ")
+        }
     }
 }
 
