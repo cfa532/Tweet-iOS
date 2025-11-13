@@ -93,6 +93,9 @@ class FullScreenVideoManager: ObservableObject {
                 let playerItem = await AVPlayerItem(asset: asset)
                 
                 await MainActor.run {
+                    // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
+                    AudioSessionManager.shared.activateForVideoPlayback()
+                    
                     // Create or reuse singleton player
                     if self.singletonPlayer == nil {
                         self.singletonPlayer = AVPlayer(playerItem: playerItem)
@@ -333,6 +336,9 @@ class FullScreenVideoManager: ObservableObject {
         bufferObserver = nil
         
         print("DEBUG: [FullScreenVideoManager] Cleared video content (player instance retained)")
+        
+        // Restore ambient audio session when leaving fullscreen playback
+        AudioSessionManager.shared.deactivateForVideoPlayback()
     }
     
     /// Pause current playback

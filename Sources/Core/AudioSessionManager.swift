@@ -13,6 +13,8 @@ import AVFoundation
 class AudioSessionManager {
     static let shared = AudioSessionManager()
     
+    private var isUsingPlaybackCategory = false
+    
     private init() {
         setupAudioSession()
     }
@@ -27,6 +29,7 @@ class AudioSessionManager {
             // It allows mixing with other audio sources and doesn't block communication apps
             try audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
             try audioSession.setActive(true)
+            isUsingPlaybackCategory = false
             
             print("DEBUG: [AudioSessionManager] Audio session configured for call-friendly playback")
         } catch {
@@ -39,14 +42,16 @@ class AudioSessionManager {
         do {
             let audioSession = AVAudioSession.sharedInstance()
             
-            // Ensure audio session is active with ambient category
-            if audioSession.category != .ambient {
-                try audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+            // Force playback category so audio ignores the mute switch in fullscreen/detail modes
+            let desiredOptions: AVAudioSession.CategoryOptions = [.mixWithOthers]
+            if audioSession.category != .playback ||
+                audioSession.mode != .moviePlayback ||
+                audioSession.categoryOptions != desiredOptions {
+                try audioSession.setCategory(.playback, mode: .moviePlayback, options: desiredOptions)
             }
             
-            if !audioSession.isOtherAudioPlaying {
-                try audioSession.setActive(true)
-            }
+            try audioSession.setActive(true)
+            isUsingPlaybackCategory = true
         } catch {
             print("DEBUG: [AudioSessionManager] Failed to activate audio session: \(error)")
         }
@@ -57,11 +62,11 @@ class AudioSessionManager {
         do {
             let audioSession = AVAudioSession.sharedInstance()
             
-            // Only deactivate if no other audio is playing
-            if !audioSession.isOtherAudioPlaying {
-                try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
-                print("DEBUG: [AudioSessionManager] Audio session deactivated")
-            }
+            try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+            // Restore ambient category so other parts of the app continue respecting the mute switch
+            try audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+            isUsingPlaybackCategory = false
+            print("DEBUG: [AudioSessionManager] Audio session deactivated and restored to ambient")
         } catch {
             print("DEBUG: [AudioSessionManager] Failed to deactivate audio session: \(error)")
         }
