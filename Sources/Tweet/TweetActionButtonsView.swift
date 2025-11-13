@@ -308,34 +308,16 @@ struct TweetActionButtonsView: View {
                 Task {
                     print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
                     
-                    // If we don't have a preloaded preview, try to generate it quickly (max 0.5s wait)
+                    // If we don't have a preloaded preview, generate it now
                     if attachmentPreviewImage == nil {
-                        print("DEBUG: [SHARE] No preloaded preview, generating with 0.5s timeout...")
+                        print("DEBUG: [SHARE] No preloaded preview, generating now...")
                         
                         await MainActor.run {
                             isPreparingShare = true
                         }
                         
-                        // Race between preview generation and 0.5s timeout
-                        let preview = await withTaskGroup(of: UIImage?.self) { group in
-                            // Task 1: Generate preview
-                            group.addTask {
-                                await self.loadAttachmentPreviewImage()
-                            }
-                            
-                            // Task 2: 0.5s timeout
-                            group.addTask {
-                                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                                return nil
-                            }
-                            
-                            // Return first result (either preview or timeout)
-                            if let result = await group.next() {
-                                group.cancelAll()
-                                return result
-                            }
-                            return nil
-                        }
+                        // Generate preview (will return quickly if it fails or succeeds)
+                        let preview = await loadAttachmentPreviewImage()
                         
                         await MainActor.run {
                             attachmentPreviewImage = preview
@@ -571,7 +553,7 @@ struct TweetActionButtonsView: View {
         // For HLS videos, try to use cached player first
         if isHLS {
             print("DEBUG: [SHARE] HLS video detected, checking for cached player...")
-            if let cachedPlayer = await SharedAssetCache.shared.getCachedPlayer(for: mediaID),
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID),
                let playerItem = cachedPlayer.currentItem {
                 print("DEBUG: [SHARE] Found cached player for HLS video")
                 
