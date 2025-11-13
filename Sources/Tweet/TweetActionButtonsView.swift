@@ -682,7 +682,7 @@ struct TweetActionButtonsView: View {
             return nil
         }
         
-        // Convert pixel buffer to UIImage
+        // Convert pixel buffer to UIImage without alpha channel
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         let context = CIContext()
         
@@ -691,8 +691,21 @@ struct TweetActionButtonsView: View {
             return nil
         }
         
+        // Convert to UIImage and remove alpha channel to avoid iOS warning
+        let image = UIImage(cgImage: cgImage)
+        
+        // Re-render without alpha channel
+        UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
+        defer { UIGraphicsEndImageContext() }
+        
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+        guard let imageWithoutAlpha = UIGraphicsGetImageFromCurrentImageContext() else {
+            print("DEBUG: [SHARE] Failed to remove alpha channel, using original")
+            return image
+        }
+        
         print("DEBUG: [SHARE] Successfully captured frame from player")
-        return UIImage(cgImage: cgImage)
+        return imageWithoutAlpha
     }
     
     private func captureFrame(from asset: AVAsset, at seconds: Double) async throws -> UIImage {
@@ -734,7 +747,18 @@ struct TweetActionButtonsView: View {
         }
         
         print("DEBUG: [SHARE] Creating UIImage from CGImage")
-        return UIImage(cgImage: cgImage)
+        let image = UIImage(cgImage: cgImage)
+        
+        // Re-render without alpha channel to avoid iOS warning
+        UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
+        defer { UIGraphicsEndImageContext() }
+        
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+        guard let imageWithoutAlpha = UIGraphicsGetImageFromCurrentImageContext() else {
+            return image
+        }
+        
+        return imageWithoutAlpha
     }
     
     private func tweetShareText(_ tweet: Tweet) -> String {
