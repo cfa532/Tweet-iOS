@@ -519,17 +519,25 @@ struct TweetActionButtonsView: View {
         switch attachment.type {
         case .image:
             print("DEBUG: [SHARE] Processing image attachment")
+            var fullImage: UIImage?
+            
             if let cached = ImageCacheManager.shared.getCachedCompressedImage(forMid: attachment.mid) {
                 print("DEBUG: [SHARE] Found cached image")
-                return cached
-            }
-            if let url = resolvedAttachmentURL(for: attachment, baseURL: baseURL) {
+                fullImage = cached
+            } else if let url = resolvedAttachmentURL(for: attachment, baseURL: baseURL) {
                 print("DEBUG: [SHARE] Loading image from URL: \(url.absoluteString)")
                 let cacheBase = baseURL ?? url.deletingLastPathComponent()
-                let image = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: cacheBase)
-                print("DEBUG: [SHARE] Image loaded: \(image != nil ? "YES" : "NO")")
-                return image
+                fullImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: cacheBase)
+                print("DEBUG: [SHARE] Image loaded: \(fullImage != nil ? "YES" : "NO")")
             }
+            
+            // Crop to center square for preview
+            if let image = fullImage {
+                let croppedImage = cropToCenter(image: image)
+                print("DEBUG: [SHARE] Image cropped to center")
+                return croppedImage
+            }
+            return nil
         case .video, .hls_video:
             print("DEBUG: [SHARE] Processing video attachment, type: \(attachment.type)")
             if let url = resolvedAttachmentURL(for: attachment, baseURL: baseURL) {
@@ -785,22 +793,26 @@ struct TweetActionButtonsView: View {
         
         // Re-render without alpha channel
         UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
-        defer { UIGraphicsEndImageContext() }
-        
         image.draw(in: CGRect(origin: .zero, size: image.size))
-        guard let imageWithoutAlpha = UIGraphicsGetImageFromCurrentImageContext() else {
+        let imageWithoutAlpha = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        guard let cleanImage = imageWithoutAlpha else {
             print("DEBUG: [SHARE] Failed to remove alpha channel, using original")
-            return image
+            return cropToCenter(image: image, targetSize: 270)
         }
         
-        print("DEBUG: [SHARE] Successfully captured frame from player")
-        return imageWithoutAlpha
+        // Crop to center and resize to 270x270
+        let croppedImage = cropToCenter(image: cleanImage, targetSize: 270)
+        
+        print("DEBUG: [SHARE] Successfully captured and cropped frame from player to 270x270")
+        return croppedImage
     }
     
     private func captureFrame(from asset: AVAsset, at seconds: Double) async throws -> UIImage {
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 640, height: 640)
+        generator.maximumSize = CGSize(width: 480, height: 480)
         generator.requestedTimeToleranceBefore = .zero
         generator.requestedTimeToleranceAfter = .zero
         
@@ -838,16 +850,64 @@ struct TweetActionButtonsView: View {
         print("DEBUG: [SHARE] Creating UIImage from CGImage")
         let image = UIImage(cgImage: cgImage)
         
-        // Re-render without alpha channel to avoid iOS warning
+        // Re-render without alpha channel to avoid iOS warning, then crop
         UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
-        defer { UIGraphicsEndImageContext() }
-        
         image.draw(in: CGRect(origin: .zero, size: image.size))
-        guard let imageWithoutAlpha = UIGraphicsGetImageFromCurrentImageContext() else {
+        let imageWithoutAlpha = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        guard let cleanImage = imageWithoutAlpha else {
+            print("DEBUG: [SHARE] Failed to remove alpha, using original")
+            return cropToCenter(image: image, targetSize: 270)
+        }
+        
+        // Crop to center and resize to 270x270
+        let croppedImage = cropToCenter(image: cleanImage, targetSize: 270)
+        
+        print("DEBUG: [SHARE] Video frame cropped and resized to 270x270")
+        return croppedImage
+    }
+    
+    private func cropToCenter(image: UIImage, targetSize: CGFloat = 270) -> UIImage {
+        let size = image.size
+        let scale = image.scale
+        
+        // Determine the crop size (square based on the shorter dimension)
+        let cropSize = min(size.width, size.height)
+        
+        // Calculate the crop rect (centered)
+        let cropRect = CGRect(
+            x: (size.width - cropSize) / 2,
+            y: (size.height - cropSize) / 2,
+            width: cropSize,
+            height: cropSize
+        )
+        
+        // Create a scaled crop rect for the CGImage
+        let scaledCropRect = CGRect(
+            x: cropRect.origin.x * scale,
+            y: cropRect.origin.y * scale,
+            width: cropRect.size.width * scale,
+            height: cropRect.size.height * scale
+        )
+        
+        guard let cgImage = image.cgImage?.cropping(to: scaledCropRect) else {
             return image
         }
         
-        return imageWithoutAlpha
+        let croppedImage = UIImage(cgImage: cgImage, scale: scale, orientation: image.imageOrientation)
+        
+        // Resize to target size (270x270)
+        let targetRect = CGRect(x: 0, y: 0, width: targetSize, height: targetSize)
+        UIGraphicsBeginImageContextWithOptions(CGSize(width: targetSize, height: targetSize), true, 1.0)
+        defer { UIGraphicsEndImageContext() }
+        
+        croppedImage.draw(in: targetRect)
+        guard let resizedImage = UIGraphicsGetImageFromCurrentImageContext() else {
+            return croppedImage
+        }
+        
+        return resizedImage
     }
     
     private func composeAttachmentTypeText(for tweet: Tweet) -> String {
