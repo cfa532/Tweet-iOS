@@ -28,11 +28,26 @@ struct TweetActionButtonsView: View {
     @State private var attachmentPreviewImage: UIImage? = nil
     @State private var isPreparingShare = false
     @State private var shareSheetItems: ShareSheetData? = nil
+    @State private var hasPreloadedPreview = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     private func handleGuestAction() {
         if hproseInstance.appUser.isGuest {
             showLoginSheet = true
+        }
+    }
+    
+    private func preloadAttachmentPreview() {
+        guard !hasPreloadedPreview else { return }
+        hasPreloadedPreview = true
+        
+        Task {
+            print("DEBUG: [SHARE] Preloading attachment preview in background")
+            let preview = await loadAttachmentPreviewImage()
+            await MainActor.run {
+                attachmentPreviewImage = preview
+                print("DEBUG: [SHARE] Background preview preloaded: \(preview != nil ? "YES" : "NO")")
+            }
         }
     }
     
@@ -290,24 +305,50 @@ struct TweetActionButtonsView: View {
                 enableAnimation: true,
                 enableVibration: false
             ) {
-                guard !isPreparingShare else { return }
                 Task {
-                    await MainActor.run {
-                        isPreparingShare = true
+                    print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
+                    
+                    // If we don't have a preloaded preview, try to generate it quickly (max 0.5s wait)
+                    if attachmentPreviewImage == nil {
+                        print("DEBUG: [SHARE] No preloaded preview, generating with 0.5s timeout...")
+                        
+                        await MainActor.run {
+                            isPreparingShare = true
+                        }
+                        
+                        // Race between preview generation and 0.5s timeout
+                        let preview = await withTaskGroup(of: UIImage?.self) { group in
+                            // Task 1: Generate preview
+                            group.addTask {
+                                await self.loadAttachmentPreviewImage()
+                            }
+                            
+                            // Task 2: 0.5s timeout
+                            group.addTask {
+                                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                                return nil
+                            }
+                            
+                            // Return first result (either preview or timeout)
+                            if let result = await group.next() {
+                                group.cancelAll()
+                                return result
+                            }
+                            return nil
+                        }
+                        
+                        await MainActor.run {
+                            attachmentPreviewImage = preview
+                            print("DEBUG: [SHARE] Preview image generated: \(preview != nil ? "YES" : "NO")")
+                        }
+                    } else {
+                        print("DEBUG: [SHARE] Using preloaded preview")
                     }
                     
-                    print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
-                    let preview = await loadAttachmentPreviewImage()
-                    
+                    // Open sheet with preview (if available)
                     await MainActor.run {
-                        attachmentPreviewImage = preview
-                        print("DEBUG: [SHARE] Preview image loaded: \(preview != nil ? "YES" : "NO")")
-                        
-                        // Create the activity items with the current preview image
                         let items = shareActivityItems()
-                        print("DEBUG: [SHARE] Created activity items, count: \(items.count)")
-                        
-                        // Set the sheet data which will trigger the sheet
+                        print("DEBUG: [SHARE] Opening sheet with items, count: \(items.count)")
                         shareSheetItems = ShareSheetData(items: items)
                         isPreparingShare = false
                     }
@@ -334,10 +375,32 @@ struct TweetActionButtonsView: View {
         .sheet(item: $shareSheetItems, onDismiss: {
             // Reset state when sheet is dismissed
             attachmentPreviewImage = nil
+            isPreparingShare = false
             print("DEBUG: [SHARE] Sheet dismissed, state cleared")
         }) { sheetData in
             let _ = print("DEBUG: [SHARE] Sheet presenting with \(sheetData.items.count) items")
-            return ShareSheet(activityItems: sheetData.items)
+            return ZStack {
+                ShareSheet(activityItems: sheetData.items)
+                
+                // Show loading overlay if still generating preview
+                if isPreparingShare {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                    
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        
+                        Text("Generating preview...")
+                            .foregroundColor(.white)
+                            .font(.headline)
+                    }
+                    .padding(32)
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(16)
+                }
+            }
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
@@ -354,6 +417,10 @@ struct TweetActionButtonsView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
         )
+        .onAppear {
+            // Preload attachment preview in background when view appears
+            preloadAttachmentPreview()
+        }
     }
 
     private func createCustomShareItem() -> CustomShareItem {
@@ -424,10 +491,11 @@ struct TweetActionButtonsView: View {
                 return image
             }
         case .video, .hls_video:
-            print("DEBUG: [SHARE] Processing video attachment")
+            print("DEBUG: [SHARE] Processing video attachment, type: \(attachment.type)")
             if let url = resolvedAttachmentURL(for: attachment, baseURL: baseURL) {
                 print("DEBUG: [SHARE] Generating video preview from URL: \(url.absoluteString)")
-                let preview = await generateVideoPreviewImage(for: url)
+                let isHLS = attachment.type == .hls_video
+                let preview = await generateVideoPreviewImage(for: url, isHLS: isHLS)
                 print("DEBUG: [SHARE] Video preview generated: \(preview != nil ? "YES" : "NO")")
                 return preview
             }
@@ -492,48 +560,198 @@ struct TweetActionButtonsView: View {
         return nil
     }
     
-    private func generateVideoPreviewImage(for url: URL) async -> UIImage? {
-        do {
-            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid)
-            _ = try? await asset.load(.tracks)
-            
-            let capturePoints: [Double] = [1.0, 0.5, 0.1]
-            for seconds in capturePoints {
-                if let image = try? await captureFrame(from: asset, at: seconds) {
-                    return image
+    private func generateVideoPreviewImage(for url: URL, isHLS: Bool = false) async -> UIImage? {
+        print("DEBUG: [SHARE] Starting video preview generation for: \(url.absoluteString), isHLS: \(isHLS)")
+        let startTime = Date()
+        
+        // Extract mediaID from URL
+        let mediaID = extractMediaID(from: url)
+        print("DEBUG: [SHARE] Extracted mediaID: \(mediaID)")
+        
+        // For HLS videos, try to use cached player first
+        if isHLS {
+            print("DEBUG: [SHARE] HLS video detected, checking for cached player...")
+            if let cachedPlayer = await SharedAssetCache.shared.getCachedPlayer(for: mediaID),
+               let playerItem = cachedPlayer.currentItem {
+                print("DEBUG: [SHARE] Found cached player for HLS video")
+                
+                // Check if player has buffered data
+                let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
+                print("DEBUG: [SHARE] Cached player has buffered data: \(hasBufferedData)")
+                
+                if hasBufferedData && playerItem.status == .readyToPlay {
+                    let duration = try? await playerItem.asset.load(.duration)
+                    if let duration = duration {
+                        let durationSeconds = CMTimeGetSeconds(duration)
+                        print("DEBUG: [SHARE] Using cached HLS player, duration: \(durationSeconds)s")
+                        
+                        if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                            let captureTime = min(1.0, durationSeconds * 0.1)
+                            print("DEBUG: [SHARE] Seeking player to \(String(format: "%.2f", captureTime))s for capture")
+                            
+                            // Seek to the capture time and grab the frame
+                            if let image = await captureFrameFromPlayer(cachedPlayer, at: captureTime) {
+                                let elapsed = Date().timeIntervalSince(startTime)
+                                print("DEBUG: [SHARE] HLS preview generated from player in \(String(format: "%.2f", elapsed))s")
+                                return image
+                            }
+                        }
+                    }
                 }
             }
+            print("DEBUG: [SHARE] No usable cached player for HLS video, skipping preview")
+            return nil
+        }
+        
+        // For regular videos, use normal asset loading
+        do {
+            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid)
+            
+            // Load duration and tracks to ensure video is ready
+            async let durationLoad = asset.load(.duration)
+            async let tracksLoad = asset.load(.tracks)
+            
+            let (duration, tracks) = try await (durationLoad, tracksLoad)
+            let durationSeconds = CMTimeGetSeconds(duration)
+            
+            print("DEBUG: [SHARE] Video duration: \(durationSeconds)s, tracks: \(tracks.count)")
+            
+            // Check if video has valid duration
+            guard durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite else {
+                print("DEBUG: [SHARE] Invalid video duration: \(durationSeconds)")
+                return nil
+            }
+            
+            // Check if video has tracks
+            guard !tracks.isEmpty else {
+                print("DEBUG: [SHARE] Video has no tracks, cannot generate preview")
+                return nil
+            }
+            
+            // Capture at 1 second, or at 10% of duration if video is shorter than 10 seconds
+            let captureTime = min(1.0, durationSeconds * 0.1)
+            print("DEBUG: [SHARE] Attempting capture at \(String(format: "%.2f", captureTime))s")
+            
+            if let image = try? await captureFrame(from: asset, at: captureTime) {
+                let elapsed = Date().timeIntervalSince(startTime)
+                print("DEBUG: [SHARE] Video preview generated successfully at \(String(format: "%.2f", captureTime))s in \(String(format: "%.2f", elapsed))s")
+                return image
+            }
+            
+            print("DEBUG: [SHARE] Failed to capture frame at \(String(format: "%.2f", captureTime))s")
         } catch {
-            print("DEBUG: Failed to load asset for preview: \(error)")
+            let elapsed = Date().timeIntervalSince(startTime)
+            print("DEBUG: [SHARE] Failed to load asset for preview after \(String(format: "%.2f", elapsed))s: \(error.localizedDescription)")
         }
         return nil
+    }
+    
+    private func extractMediaID(from url: URL) -> String {
+        // Extract mediaID from URL path
+        // Format: http://baseurl/ipfs/MEDIAID or http://baseurl/ipfs/MEDIAID/master.m3u8
+        let pathComponents = url.pathComponents
+        if let ipfsIndex = pathComponents.firstIndex(of: "ipfs"),
+           ipfsIndex + 1 < pathComponents.count {
+            return pathComponents[ipfsIndex + 1]
+        }
+        // Fallback: use last path component
+        return url.lastPathComponent
+    }
+    
+    private func captureFrameFromPlayer(_ player: AVPlayer, at seconds: Double) async -> UIImage? {
+        print("DEBUG: [SHARE] Attempting to capture frame from player at \(seconds)s")
+        
+        guard let playerItem = player.currentItem else {
+            print("DEBUG: [SHARE] Player has no current item")
+            return nil
+        }
+        
+        // Create video output to extract frames
+        let videoOutput = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ])
+        
+        // Add output to player item
+        playerItem.add(videoOutput)
+        defer {
+            playerItem.remove(videoOutput)
+        }
+        
+        // Seek to the desired time
+        let targetTime = CMTime(seconds: seconds, preferredTimescale: 600)
+        await player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        
+        // Wait a bit for the seek to complete and frame to be ready
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        
+        // Get the current time after seek
+        let currentTime = playerItem.currentTime()
+        print("DEBUG: [SHARE] Player seeked to: \(CMTimeGetSeconds(currentTime))s")
+        
+        // Check if we have a pixel buffer at this time
+        guard videoOutput.hasNewPixelBuffer(forItemTime: currentTime) else {
+            print("DEBUG: [SHARE] No pixel buffer available at current time")
+            return nil
+        }
+        
+        // Copy the pixel buffer
+        guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else {
+            print("DEBUG: [SHARE] Failed to copy pixel buffer")
+            return nil
+        }
+        
+        // Convert pixel buffer to UIImage
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let context = CIContext()
+        
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            print("DEBUG: [SHARE] Failed to create CGImage from pixel buffer")
+            return nil
+        }
+        
+        print("DEBUG: [SHARE] Successfully captured frame from player")
+        return UIImage(cgImage: cgImage)
     }
     
     private func captureFrame(from asset: AVAsset, at seconds: Double) async throws -> UIImage {
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 640, height: 640)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
         
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        
+        print("DEBUG: [SHARE] Generating CGImage at time: \(seconds)s")
+        
         let cgImage = try await withCheckedThrowingContinuation { continuation in
-            generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, image, _, result, error in
+            generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { requestedTime, image, actualTime, result, error in
+                print("DEBUG: [SHARE] Frame generation result: \(result.rawValue), requested: \(CMTimeGetSeconds(requestedTime)), actual: \(CMTimeGetSeconds(actualTime))")
+                
                 switch result {
                 case .succeeded:
                     if let image = image {
+                        print("DEBUG: [SHARE] CGImage generated successfully")
                         continuation.resume(returning: image)
                     } else {
-                        continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -2, userInfo: nil))
+                        print("DEBUG: [SHARE] CGImage generation succeeded but image is nil")
+                        continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -2, userInfo: [NSLocalizedDescriptionKey: "Image is nil"]))
                     }
                 case .failed:
-                    continuation.resume(throwing: error ?? NSError(domain: "AttachmentPreview", code: -3, userInfo: nil))
+                    let errorDesc = error?.localizedDescription ?? "Unknown error"
+                    print("DEBUG: [SHARE] CGImage generation failed: \(errorDesc)")
+                    continuation.resume(throwing: error ?? NSError(domain: "AttachmentPreview", code: -3, userInfo: [NSLocalizedDescriptionKey: "Generation failed"]))
                 case .cancelled:
-                    continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -4, userInfo: nil))
+                    print("DEBUG: [SHARE] CGImage generation cancelled")
+                    continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -4, userInfo: [NSLocalizedDescriptionKey: "Cancelled"]))
                 @unknown default:
-                    continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -5, userInfo: nil))
+                    print("DEBUG: [SHARE] CGImage generation unknown result")
+                    continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -5, userInfo: [NSLocalizedDescriptionKey: "Unknown result"]))
                 }
             }
         }
         
+        print("DEBUG: [SHARE] Creating UIImage from CGImage")
         return UIImage(cgImage: cgImage)
     }
     
