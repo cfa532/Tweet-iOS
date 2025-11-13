@@ -15,6 +15,64 @@ struct ShareSheetData: Identifiable {
     let items: [Any]
 }
 
+// Global function to compose attachment type text
+func composeAttachmentTypeText(for tweet: Tweet) -> String {
+    // Get attachments from the tweet or its original tweet
+    var attachments: [MimeiFileType]?
+    
+    if let tweetAttachments = tweet.attachments, !tweetAttachments.isEmpty {
+        attachments = tweetAttachments
+    } else if let originalTweetId = tweet.originalTweetId,
+              let original = Tweet.getInstance(for: originalTweetId),
+              let originalAttachments = original.attachments,
+              !originalAttachments.isEmpty {
+        attachments = originalAttachments
+    }
+    
+    guard let attachments = attachments, !attachments.isEmpty else {
+        return ""
+    }
+    
+    // Get first 3 attachment types
+    let firstThree = Array(attachments.prefix(3))
+    var typeTexts: [String] = []
+    
+    for attachment in firstThree {
+        switch attachment.type {
+        case .image:
+            typeTexts.append("📷 Image")
+        case .video, .hls_video:
+            typeTexts.append("🎬 Video")
+        case .audio:
+            typeTexts.append("🎵 Audio")
+        case .pdf:
+            typeTexts.append("📄 PDF")
+        case .word:
+            typeTexts.append("📝 Word")
+        case .excel:
+            typeTexts.append("📊 Excel")
+        case .ppt:
+            typeTexts.append("📊 PPT")
+        case .zip:
+            typeTexts.append("🗜️ Zip")
+        case .txt:
+            typeTexts.append("📄 Text")
+        case .html:
+            typeTexts.append("🌐 HTML")
+        case .unknown:
+            typeTexts.append("📎 File")
+        }
+    }
+    
+    // Add count if there are more attachments
+    if attachments.count > 3 {
+        let remaining = attachments.count - 3
+        return typeTexts.joined(separator: ", ") + " +\(remaining) more"
+    } else {
+        return typeTexts.joined(separator: ", ")
+    }
+}
+
 @available(iOS 16.0, *)
 struct TweetActionButtonsView: View {
     @ObservedObject var tweet: Tweet
@@ -792,23 +850,83 @@ struct TweetActionButtonsView: View {
         return imageWithoutAlpha
     }
     
+    private func composeAttachmentTypeText(for tweet: Tweet) -> String {
+        // Get attachments from the tweet or its original tweet
+        var attachments: [MimeiFileType]?
+        
+        if let tweetAttachments = tweet.attachments, !tweetAttachments.isEmpty {
+            attachments = tweetAttachments
+        } else if let originalTweetId = tweet.originalTweetId,
+                  let original = Tweet.getInstance(for: originalTweetId),
+                  let originalAttachments = original.attachments,
+                  !originalAttachments.isEmpty {
+            attachments = originalAttachments
+        }
+        
+        guard let attachments = attachments, !attachments.isEmpty else {
+            return ""
+        }
+        
+        // Get first 3 attachment types
+        let firstThree = Array(attachments.prefix(3))
+        var typeTexts: [String] = []
+        
+        for attachment in firstThree {
+            switch attachment.type {
+            case .image:
+                typeTexts.append("📷 Image")
+            case .video, .hls_video:
+                typeTexts.append("🎬 Video")
+            case .audio:
+                typeTexts.append("🎵 Audio")
+            case .pdf:
+                typeTexts.append("📄 PDF")
+            case .word:
+                typeTexts.append("📝 Word")
+            case .excel:
+                typeTexts.append("📊 Excel")
+            case .ppt:
+                typeTexts.append("📊 PPT")
+            case .zip:
+                typeTexts.append("🗜️ Zip")
+            case .txt:
+                typeTexts.append("📄 Text")
+            case .html:
+                typeTexts.append("🌐 HTML")
+            case .unknown:
+                typeTexts.append("📎 File")
+            }
+        }
+        
+        // Add count if there are more attachments
+        if attachments.count > 3 {
+            let remaining = attachments.count - 3
+            return typeTexts.joined(separator: ", ") + " +\(remaining) more"
+        } else {
+            return typeTexts.joined(separator: ", ")
+        }
+    }
+    
     private func tweetShareText(_ tweet: Tweet) -> String {
         // Create a share text that includes app branding
         var shareText = ""
         
-        // Priority: title > content
-        if let title = tweet.title, !title.isEmpty {
+        // Priority: title > content > attachment types
+        if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use title if available
             let maxLength = 40
             let truncatedTitle = title.count > maxLength ? String(title.prefix(maxLength)) + "..." : title
             shareText += truncatedTitle
-        } else if let content = tweet.content, !content.isEmpty {
+        } else if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use content if title is not available
             let maxLength = 40
             // Replace newlines with spaces in the content
-            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
+            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
             let truncatedContent = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
             shareText += truncatedContent
+        } else {
+            // No title or content, use attachment types
+            shareText += composeAttachmentTypeText(for: tweet)
         }
         
         // Add two newlines after text if there is text
@@ -867,25 +985,34 @@ class CustomShareItem: NSObject, UIActivityItemSource {
         // Custom app name with bird icon using the same algorithm as share text
         var previewText = ""
         
-        // Priority: title > content
-        if let title = tweet.title, !title.isEmpty {
+        // Priority: title > content > attachment types
+        if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use title if available
             let maxLength = 40
             let truncatedTitle = title.count > maxLength ? String(title.prefix(maxLength)) + "..." : title
             previewText = truncatedTitle
-        } else if let content = tweet.content, !content.isEmpty {
+            print("DEBUG: [SHARE] Subject from title: \(truncatedTitle)")
+        } else if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use content if title is not available
             let maxLength = 40
             // Replace newlines with spaces in the content
-            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
+            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
             let truncatedContent = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
             previewText = truncatedContent
+            print("DEBUG: [SHARE] Subject from content: \(truncatedContent)")
+        } else {
+            // No title or content, use attachment types
+            previewText = composeAttachmentTypeText(for: tweet)
+            print("DEBUG: [SHARE] Subject from attachments: '\(previewText)'")
         }
         
         // Add smiling face emoji prefix
         if !previewText.isEmpty {
-            return "😊 Tweet: \(previewText)"
+            let result = "😊 Tweet: \(previewText)"
+            print("DEBUG: [SHARE] Final subject: \(result)")
+            return result
         } else {
+            print("DEBUG: [SHARE] Final subject: 😊 Tweet (fallback)")
             return "😊 Tweet"
         }
     }
@@ -894,16 +1021,27 @@ class CustomShareItem: NSObject, UIActivityItemSource {
     func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
         let metadata = LPLinkMetadata()
         
+        print("DEBUG: [SHARE] Creating link metadata for tweet: \(tweet.mid)")
+        print("DEBUG: [SHARE] Tweet title: '\(tweet.title ?? "nil")'")
+        print("DEBUG: [SHARE] Tweet content: '\(tweet.content ?? "nil")'")
+        print("DEBUG: [SHARE] Tweet attachments count: \(tweet.attachments?.count ?? 0)")
+        
         // Set the title
-        if let title = tweet.title, !title.isEmpty {
+        if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             metadata.title = title
-        } else if let content = tweet.content, !content.isEmpty {
+            print("DEBUG: [SHARE] Link metadata title from tweet title: \(title)")
+        } else if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let maxLength = 80
-            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
-            metadata.title = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
+            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            let truncated = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
+            metadata.title = truncated
+            print("DEBUG: [SHARE] Link metadata title from tweet content: \(truncated)")
         } else {
             // No title or content, compose from first 3 attachment types
-            metadata.title = composeAttachmentTypeText()
+            let attachmentText = composeAttachmentTypeText(for: tweet)
+            metadata.title = attachmentText.isEmpty ? nil : attachmentText
+            print("DEBUG: [SHARE] Link metadata title from attachments: '\(attachmentText)'")
+            print("DEBUG: [SHARE] Final metadata.title value: '\(metadata.title ?? "nil")'")
         }
         
         // Set the icon/thumbnail image
@@ -917,63 +1055,6 @@ class CustomShareItem: NSObject, UIActivityItemSource {
         }
         
         return metadata
-    }
-    
-    private func composeAttachmentTypeText() -> String {
-        // Get attachments from the tweet or its original tweet
-        var attachments: [MimeiFileType]?
-        
-        if let tweetAttachments = tweet.attachments, !tweetAttachments.isEmpty {
-            attachments = tweetAttachments
-        } else if let originalTweetId = tweet.originalTweetId,
-                  let original = Tweet.getInstance(for: originalTweetId),
-                  let originalAttachments = original.attachments,
-                  !originalAttachments.isEmpty {
-            attachments = originalAttachments
-        }
-        
-        guard let attachments = attachments, !attachments.isEmpty else {
-            return "Tweet"
-        }
-        
-        // Get first 3 attachment types
-        let firstThree = Array(attachments.prefix(3))
-        var typeTexts: [String] = []
-        
-        for attachment in firstThree {
-            switch attachment.type {
-            case .image:
-                typeTexts.append("📷 Image")
-            case .video, .hls_video:
-                typeTexts.append("🎬 Video")
-            case .audio:
-                typeTexts.append("🎵 Audio")
-            case .pdf:
-                typeTexts.append("📄 PDF")
-            case .word:
-                typeTexts.append("📝 Word")
-            case .excel:
-                typeTexts.append("📊 Excel")
-            case .ppt:
-                typeTexts.append("📊 PPT")
-            case .zip:
-                typeTexts.append("🗜️ Zip")
-            case .txt:
-                typeTexts.append("📄 Text")
-            case .html:
-                typeTexts.append("🌐 HTML")
-            case .unknown:
-                typeTexts.append("📎 File")
-            }
-        }
-        
-        // Add count if there are more attachments
-        if attachments.count > 3 {
-            let remaining = attachments.count - 3
-            return typeTexts.joined(separator: ", ") + " +\(remaining) more"
-        } else {
-            return typeTexts.joined(separator: ", ")
-        }
     }
 }
 
