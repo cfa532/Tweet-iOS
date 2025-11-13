@@ -513,8 +513,10 @@ struct VideoThumbnailView: View {
                 let imageGenerator = AVAssetImageGenerator(asset: asset)
                 imageGenerator.appliesPreferredTrackTransform = true
                 imageGenerator.maximumSize = CGSize(width: 120, height: 120)
-                imageGenerator.requestedTimeToleranceBefore = .zero
-                imageGenerator.requestedTimeToleranceAfter = .zero
+                // Allow some tolerance to find nearby keyframes instead of requiring exact time
+                // This prevents falling back to 1.0s when earlier positions don't have exact frames
+                imageGenerator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
+                imageGenerator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
                 
                 print("DEBUG: [VideoThumbnailView] Attempting to generate thumbnail at CMTime.zero")
                 
