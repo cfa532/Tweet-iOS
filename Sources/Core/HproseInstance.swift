@@ -2488,6 +2488,24 @@ final class HproseInstance: ObservableObject {
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
             
+            // Check file size - if less than 50MB, upload as regular video without conversion
+            let fileSizeMB = Double(data.count) / (1024 * 1024)
+            let sizeThresholdMB = 50.0
+            
+            if fileSizeMB < sizeThresholdMB {
+                print("Video upload: Regular IPFS upload (file size \(String(format: "%.1f", fileSizeMB))MB < \(Int(sizeThresholdMB))MB)")
+                let result = try await uploadRegularFile(
+                    data: data,
+                    typeIdentifier: typeIdentifier,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    mediaType: .video,
+                    appUser: appUser,
+                    appId: appId
+                )
+                return (result, nil)
+            }
+            
             let cloudPort = appUser.cloudDrivePort
             if cloudPort <= 0 {
                 print("Video upload: MP4 fallback (no cloud drive configured)")
