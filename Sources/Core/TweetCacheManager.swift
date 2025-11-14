@@ -699,55 +699,60 @@ extension TweetCacheManager {
         
         // Step 2: Search cached users in Core Data
         if scoredResults.count < limit {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let coreDataUsers = await withCheckedContinuation { (continuation: CheckedContinuation<[User], Never>) in
                 context.perform {
                     let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
                     request.fetchLimit = 100 // Get more candidates for better results
                     
+                    var users: [User] = []
                     if let cdUsers = try? self.context.fetch(request) {
                         for cdUser in cdUsers {
-                            if scoredResults.count >= limit { break }
                             let user = User.from(cdUser: cdUser)
-                            consider(user)
+                            users.append(user)
                         }
                     }
-                    continuation.resume()
+                    continuation.resume(returning: users)
                 }
+            }
+            
+            // Consider users outside the closure to avoid Sendable warnings
+            for user in coreDataUsers {
+                if scoredResults.count >= limit { break }
+                consider(user)
             }
         }
         
         // Step 3: Search users from cached tweets (tweet authors)
         if scoredResults.count < limit {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let candidateUserIds = await withCheckedContinuation { (continuation: CheckedContinuation<Set<String>, Never>) in
                 context.perform {
                     let tweetRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                     tweetRequest.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
                     tweetRequest.fetchLimit = 200 // Check recent tweets for author candidates
                     
+                    var userIds = Set<String>()
                     if let cdTweets = try? self.context.fetch(tweetRequest) {
-                        var candidateUserIds = Set<String>()
-                        
                         // Collect unique author IDs from recent tweets by decoding tweet data
                         for cdTweet in cdTweets {
                             if let tweetData = cdTweet.tweetData,
                                let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
-                                candidateUserIds.insert(tweet.authorId)
+                                userIds.insert(tweet.authorId)
                             }
-                            if candidateUserIds.count >= 50 { break }
-                        }
-                        
-                        // Fetch and consider these users
-                        for userId in candidateUserIds {
-                            if scoredResults.count >= limit { break }
-                            if scoredResults[userId] != nil { continue } // Already have this user
-                            
-                            let user = User.getInstance(mid: userId)
-                            if user.username != nil {
-                                consider(user)
-                            }
+                            if userIds.count >= 50 { break }
                         }
                     }
-                    continuation.resume()
+                    continuation.resume(returning: userIds)
+                }
+            }
+            
+            // Fetch and consider these users outside the closure
+            for userId in candidateUserIds {
+                if scoredResults.count >= limit { break }
+                if scoredResults[userId] != nil { continue } // Already have this user
+                
+                let user = User.getInstance(mid: userId)
+                if user.username != nil {
+                    consider(user)
                 }
             }
         }
@@ -849,20 +854,26 @@ extension TweetCacheManager {
         
         // Step 2: Search cached users in Core Data - update UI
         if scoredResults.count < limit {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let coreDataUsers = await withCheckedContinuation { (continuation: CheckedContinuation<[User], Never>) in
                 context.perform {
                     let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
                     request.fetchLimit = 100
                     
+                    var users: [User] = []
                     if let cdUsers = try? self.context.fetch(request) {
                         for cdUser in cdUsers {
-                            if scoredResults.count >= limit { break }
                             let user = User.from(cdUser: cdUser)
-                            consider(user)
+                            users.append(user)
                         }
                     }
-                    continuation.resume()
+                    continuation.resume(returning: users)
                 }
+            }
+            
+            // Consider users outside the closure to avoid Sendable warnings
+            for user in coreDataUsers {
+                if scoredResults.count >= limit { break }
+                consider(user)
             }
             
             // Show updated results
@@ -871,35 +882,35 @@ extension TweetCacheManager {
         
         // Step 3: Search users from cached tweets (tweet authors) - final update
         if scoredResults.count < limit {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let candidateUserIds = await withCheckedContinuation { (continuation: CheckedContinuation<Set<String>, Never>) in
                 context.perform {
                     let tweetRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                     tweetRequest.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
                     tweetRequest.fetchLimit = 200
                     
+                    var userIds = Set<String>()
                     if let cdTweets = try? self.context.fetch(tweetRequest) {
-                        var candidateUserIds = Set<String>()
-                        
                         // Collect unique author IDs from recent tweets by decoding tweet data
                         for cdTweet in cdTweets {
                             if let tweetData = cdTweet.tweetData,
                                let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
-                                candidateUserIds.insert(tweet.authorId)
+                                userIds.insert(tweet.authorId)
                             }
-                            if candidateUserIds.count >= 50 { break }
-                        }
-                        
-                        for userId in candidateUserIds {
-                            if scoredResults.count >= limit { break }
-                            if scoredResults[userId] != nil { continue }
-                            
-                            let user = User.getInstance(mid: userId)
-                            if user.username != nil {
-                                consider(user)
-                            }
+                            if userIds.count >= 50 { break }
                         }
                     }
-                    continuation.resume()
+                    continuation.resume(returning: userIds)
+                }
+            }
+            
+            // Fetch and consider these users outside the closure
+            for userId in candidateUserIds {
+                if scoredResults.count >= limit { break }
+                if scoredResults[userId] != nil { continue }
+                
+                let user = User.getInstance(mid: userId)
+                if user.username != nil {
+                    consider(user)
                 }
             }
             
@@ -908,3 +919,5 @@ extension TweetCacheManager {
         }
     }
 } 
+
+
