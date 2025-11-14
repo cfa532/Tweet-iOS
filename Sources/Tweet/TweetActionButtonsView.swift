@@ -1006,15 +1006,24 @@ struct TweetActionButtonsView: View {
             shareText += "\n\n"
         }
         
-        // Add URL
-        var text = hproseInstance.domainToShare
-        text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
+        // Add URL - use different format based on context
+        let urlText: String
+        if isInDetailView {
+            // In detail view: use author's baseUrl with entry format
+            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
+            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"
+        } else {
+            // In feed/grid: use traditional format
+            var text = hproseInstance.domainToShare
+            text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
+            urlText = text
+        }
         
         // Only add space if there's content before the URL
         if !shareText.isEmpty {
-            shareText += text.trimmingCharacters(in: .whitespacesAndNewlines)
+            shareText += urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
-            shareText += text.trimmingCharacters(in: .whitespacesAndNewlines)
+            shareText += urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         
         return shareText
