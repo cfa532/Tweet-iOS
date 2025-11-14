@@ -5,7 +5,7 @@ import hprose
 class User: ObservableObject, Codable, Identifiable, Hashable {
     // MARK: - Singleton Dictionary
     private static var userInstances: [MimeiId: User] = [:]
-    private static let userInstancesQueue = DispatchQueue(label: "user.instances.queue")
+    static let userInstancesQueue = DispatchQueue(label: "user.instances.queue")
     
     // MARK: - Properties
     @Published var mid: MimeiId
@@ -328,6 +328,13 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             let newUser = User(mid: mid)
             User.userInstances[mid] = newUser
             return newUser
+        }
+    }
+    
+    /// Get all user instances (for search functionality)
+    static func getAllInstances() -> [String: User] {
+        return userInstancesQueue.sync {
+            return userInstances
         }
     }
     

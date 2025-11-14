@@ -174,60 +174,38 @@ class SearchViewModel: ObservableObject {
         // Remove @ prefix if present for consistent searching
         let cleanQuery = query.hasPrefix("@") ? String(query.dropFirst()) : query
         
-        // Step 1: Search cached users for partial matches (fast, works offline)
-        let cachedResults = await cacheManager.searchUsers(query: cleanQuery)
+        // Search incrementally and show results as they come in
+        await cacheManager.searchUsersIncremental(query: cleanQuery, limit: 25) { [weak self] users in
+            // Update UI immediately with each batch of results
+            guard let self = self else { return }
+            await MainActor.run {
+                self.searchResults = users
+            }
+        }
         
-        // Step 2: Try exact username match from API (if no cached results or query looks like a username)
+        // Try exact username match from API (if query looks like a username)
         // Only do API call if query doesn't contain spaces (usernames can't have spaces)
-        var finalResults = cachedResults
         if !cleanQuery.contains(" ") {
             if let userId = try? await hproseInstance.getUserId(cleanQuery),
                let user = try? await hproseInstance.fetchUser(userId) {
                 // CRITICAL: Validate user has a username before adding to results
                 if let username = user.username, !username.isEmpty {
-                    // Add to results if not already there
-                    if !finalResults.contains(where: { $0.mid == user.mid }) {
-                        finalResults.insert(user, at: 0) // Put exact match first
-                    } else {
-                        // Move exact match to the front
-                        if let index = finalResults.firstIndex(where: { $0.mid == user.mid }) {
-                            let exactMatch = finalResults.remove(at: index)
-                            finalResults.insert(exactMatch, at: 0)
+                    await MainActor.run {
+                        var finalResults = self.searchResults
+                        // Add to results if not already there
+                        if !finalResults.contains(where: { $0.mid == user.mid }) {
+                            finalResults.insert(user, at: 0) // Put exact API match first
+                        } else {
+                            // Move exact match to the front if it exists
+                            if let index = finalResults.firstIndex(where: { $0.mid == user.mid }) {
+                                let exactMatch = finalResults.remove(at: index)
+                                finalResults.insert(exactMatch, at: 0)
+                            }
                         }
+                        self.searchResults = finalResults
                     }
                 }
             }
-        }
-        
-        // Step 3: Sort results: exact username matches first, then by name
-        let queryLower = cleanQuery.lowercased()
-        let sortedResults = finalResults.sorted { user1, user2 in
-            let username1 = user1.username?.lowercased() ?? ""
-            let username2 = user2.username?.lowercased() ?? ""
-            
-            // Exact username match comes first
-            if username1 == queryLower && username2 != queryLower {
-                return true
-            }
-            if username2 == queryLower && username1 != queryLower {
-                return false
-            }
-            
-            // Username starts with query comes next
-            if username1.hasPrefix(queryLower) && !username2.hasPrefix(queryLower) {
-                return true
-            }
-            if username2.hasPrefix(queryLower) && !username1.hasPrefix(queryLower) {
-                return false
-            }
-            
-            // Otherwise sort alphabetically by username
-            return username1 < username2
-        }
-        
-        // Step 4: Update results on MainActor
-        await MainActor.run {
-            searchResults = sortedResults
         }
         
         await MainActor.run {

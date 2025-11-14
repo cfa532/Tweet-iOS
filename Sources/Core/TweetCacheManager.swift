@@ -645,44 +645,266 @@ extension TweetCacheManager {
     
     /// Search for users by partial username or name match
     /// Only returns users with valid usernames (username is required, name is optional)
-    func searchUsers(query: String) async -> [User] {
-        return await withCheckedContinuation { continuation in
-            context.perform {
-                let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-                
-                // Create predicate to search in both username and name fields
-                // Use CONTAINS[cd] for case-insensitive and diacritic-insensitive matching
-                let usernamePredicate = NSPredicate(format: "userData CONTAINS[cd] %@", "\"username\":\"\(query)")
-                let namePredicate = NSPredicate(format: "userData CONTAINS[cd] %@", "\"name\":\"\(query)")
-                
-                // Combine predicates with OR
-                request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [usernamePredicate, namePredicate])
-                
-                // Limit results to 50 for performance
-                request.fetchLimit = 50
-                
-                var results: [User] = []
-                if let cdUsers = try? self.context.fetch(request) {
-                    for cdUser in cdUsers {
-                        let user = User.from(cdUser: cdUser)
-                        
-                        // CRITICAL: User must have a valid username (not nil and not empty)
-                        guard let username = user.username, !username.isEmpty else {
-                            continue // Skip users without valid username
-                        }
-                        
-                        // Additional filtering in memory for more precise matching
-                        let lowercaseQuery = query.lowercased()
-                        if username.lowercased().contains(lowercaseQuery) {
-                            results.append(user)
-                        } else if let name = user.name?.lowercased(), name.contains(lowercaseQuery) {
-                            results.append(user)
+    /// Uses multi-source search with relevance scoring (matches Android implementation)
+    func searchUsers(query: String, limit: Int = 25) async -> [User] {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        
+        let normalizedQuery = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        var scoredResults: [String: (score: Int, user: User)] = [:]
+        
+        // Helper function to calculate match score (lower is better)
+        func matchScore(for user: User, query: String) -> Int? {
+            guard let username = user.username, !username.isEmpty else {
+                return nil // Skip users without valid username
+            }
+            
+            let usernameLower = username.lowercased()
+            let nameLower = user.name?.lowercased() ?? ""
+            
+            // Prioritize matches: prefix > contains, username > name
+            if usernameLower.hasPrefix(query) {
+                return 0 // Best: username starts with query
+            } else if usernameLower.contains(query) {
+                return 1 // Good: username contains query
+            } else if nameLower.hasPrefix(query) {
+                return 2 // OK: name starts with query
+            } else if nameLower.contains(query) {
+                return 3 // Lower priority: name contains query
+            }
+            return nil
+        }
+        
+        // Helper to consider a user for results
+        func consider(_ user: User) {
+            guard let score = matchScore(for: user, query: normalizedQuery) else { return }
+            
+            // Keep the best score for each user
+            if let existing = scoredResults[user.mid] {
+                if score < existing.score {
+                    scoredResults[user.mid] = (score, user)
+                }
+            } else {
+                scoredResults[user.mid] = (score, user)
+            }
+        }
+        
+        // Step 1: Search in-memory User singletons (fast)
+        let memoryUsers = User.getAllInstances()
+        for (_, user) in memoryUsers {
+            consider(user)
+            if scoredResults.count >= limit { break }
+        }
+        
+        // Step 2: Search cached users in Core Data
+        if scoredResults.count < limit {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                context.perform {
+                    let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                    request.fetchLimit = 100 // Get more candidates for better results
+                    
+                    if let cdUsers = try? self.context.fetch(request) {
+                        for cdUser in cdUsers {
+                            if scoredResults.count >= limit { break }
+                            let user = User.from(cdUser: cdUser)
+                            consider(user)
                         }
                     }
+                    continuation.resume()
                 }
-                
-                continuation.resume(returning: results)
             }
+        }
+        
+        // Step 3: Search users from cached tweets (tweet authors)
+        if scoredResults.count < limit {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                context.perform {
+                    let tweetRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                    tweetRequest.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
+                    tweetRequest.fetchLimit = 200 // Check recent tweets for author candidates
+                    
+                    if let cdTweets = try? self.context.fetch(tweetRequest) {
+                        var candidateUserIds = Set<String>()
+                        
+                        // Collect unique author IDs from recent tweets by decoding tweet data
+                        for cdTweet in cdTweets {
+                            if let tweetData = cdTweet.tweetData,
+                               let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+                                candidateUserIds.insert(tweet.authorId)
+                            }
+                            if candidateUserIds.count >= 50 { break }
+                        }
+                        
+                        // Fetch and consider these users
+                        for userId in candidateUserIds {
+                            if scoredResults.count >= limit { break }
+                            if scoredResults[userId] != nil { continue } // Already have this user
+                            
+                            let user = User.getInstance(mid: userId)
+                            if user.username != nil {
+                                consider(user)
+                            }
+                        }
+                    }
+                    continuation.resume()
+                }
+            }
+        }
+        
+        // Sort by score (lower is better), then alphabetically by username
+        let sortedResults = scoredResults.values
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score {
+                    return lhs.score < rhs.score
+                }
+                let username1 = lhs.user.username?.lowercased() ?? ""
+                let username2 = rhs.user.username?.lowercased() ?? ""
+                return username1 < username2
+            }
+            .prefix(limit)
+            .map { $0.user }
+        
+        return Array(sortedResults)
+    }
+    
+    /// Search for users incrementally, calling the callback after each source completes
+    /// This provides a responsive UI by showing results as they're found
+    func searchUsersIncremental(
+        query: String,
+        limit: Int = 25,
+        onResults: @escaping ([User]) async -> Void
+    ) async {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            await onResults([])
+            return
+        }
+        
+        let normalizedQuery = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        var scoredResults: [String: (score: Int, user: User)] = [:]
+        
+        // Helper function to calculate match score (lower is better)
+        func matchScore(for user: User, query: String) -> Int? {
+            guard let username = user.username, !username.isEmpty else {
+                return nil // Skip users without valid username
+            }
+            
+            let usernameLower = username.lowercased()
+            let nameLower = user.name?.lowercased() ?? ""
+            
+            // Prioritize matches: prefix > contains, username > name
+            if usernameLower.hasPrefix(query) {
+                return 0 // Best: username starts with query
+            } else if usernameLower.contains(query) {
+                return 1 // Good: username contains query
+            } else if nameLower.hasPrefix(query) {
+                return 2 // OK: name starts with query
+            } else if nameLower.contains(query) {
+                return 3 // Lower priority: name contains query
+            }
+            return nil
+        }
+        
+        // Helper to consider a user for results
+        func consider(_ user: User) {
+            guard let score = matchScore(for: user, query: normalizedQuery) else { return }
+            
+            // Keep the best score for each user
+            if let existing = scoredResults[user.mid] {
+                if score < existing.score {
+                    scoredResults[user.mid] = (score, user)
+                }
+            } else {
+                scoredResults[user.mid] = (score, user)
+            }
+        }
+        
+        // Helper to sort and return current results
+        func getSortedResults() -> [User] {
+            let sorted = scoredResults.values
+                .sorted { lhs, rhs in
+                    if lhs.score != rhs.score {
+                        return lhs.score < rhs.score
+                    }
+                    let username1 = lhs.user.username?.lowercased() ?? ""
+                    let username2 = rhs.user.username?.lowercased() ?? ""
+                    return username1 < username2
+                }
+                .prefix(limit)
+                .map { $0.user }
+            return Array(sorted)
+        }
+        
+        // Step 1: Search in-memory User singletons (fast) - show immediately
+        let memoryUsers = User.getAllInstances()
+        for (_, user) in memoryUsers {
+            consider(user)
+            if scoredResults.count >= limit { break }
+        }
+        
+        // Show first results immediately
+        if !scoredResults.isEmpty {
+            await onResults(getSortedResults())
+        }
+        
+        // Step 2: Search cached users in Core Data - update UI
+        if scoredResults.count < limit {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                context.perform {
+                    let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                    request.fetchLimit = 100
+                    
+                    if let cdUsers = try? self.context.fetch(request) {
+                        for cdUser in cdUsers {
+                            if scoredResults.count >= limit { break }
+                            let user = User.from(cdUser: cdUser)
+                            consider(user)
+                        }
+                    }
+                    continuation.resume()
+                }
+            }
+            
+            // Show updated results
+            await onResults(getSortedResults())
+        }
+        
+        // Step 3: Search users from cached tweets (tweet authors) - final update
+        if scoredResults.count < limit {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                context.perform {
+                    let tweetRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                    tweetRequest.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
+                    tweetRequest.fetchLimit = 200
+                    
+                    if let cdTweets = try? self.context.fetch(tweetRequest) {
+                        var candidateUserIds = Set<String>()
+                        
+                        // Collect unique author IDs from recent tweets by decoding tweet data
+                        for cdTweet in cdTweets {
+                            if let tweetData = cdTweet.tweetData,
+                               let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+                                candidateUserIds.insert(tweet.authorId)
+                            }
+                            if candidateUserIds.count >= 50 { break }
+                        }
+                        
+                        for userId in candidateUserIds {
+                            if scoredResults.count >= limit { break }
+                            if scoredResults[userId] != nil { continue }
+                            
+                            let user = User.getInstance(mid: userId)
+                            if user.username != nil {
+                                consider(user)
+                            }
+                        }
+                    }
+                    continuation.resume()
+                }
+            }
+            
+            // Show final results
+            await onResults(getSortedResults())
         }
     }
 } 
