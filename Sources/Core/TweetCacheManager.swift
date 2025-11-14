@@ -644,6 +644,7 @@ extension TweetCacheManager {
     }
     
     /// Search for users by partial username or name match
+    /// Only returns users with valid usernames (username is required, name is optional)
     func searchUsers(query: String) async -> [User] {
         return await withCheckedContinuation { continuation in
             context.perform {
@@ -664,9 +665,15 @@ extension TweetCacheManager {
                 if let cdUsers = try? self.context.fetch(request) {
                     for cdUser in cdUsers {
                         let user = User.from(cdUser: cdUser)
+                        
+                        // CRITICAL: User must have a valid username (not nil and not empty)
+                        guard let username = user.username, !username.isEmpty else {
+                            continue // Skip users without valid username
+                        }
+                        
                         // Additional filtering in memory for more precise matching
                         let lowercaseQuery = query.lowercased()
-                        if let username = user.username?.lowercased(), username.contains(lowercaseQuery) {
+                        if username.lowercased().contains(lowercaseQuery) {
                             results.append(user)
                         } else if let name = user.name?.lowercased(), name.contains(lowercaseQuery) {
                             results.append(user)
