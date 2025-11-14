@@ -371,8 +371,11 @@
 "Start a conversation to see your chats here" = "开始对话以在此处查看您的聊天";
 "No results found" = "未找到结果";
 "Try searching for a different username" = "尝试搜索其他用户名";
+"Try a different search term" = "尝试不同的搜索词";
 "Search for users" = "搜索用户";
 "Enter @username to find users" = "输入 @用户名 以查找用户";
+"Search by username or name..." = "按用户名或名称搜索...";
+"Search by username or display name" = "按用户名或显示名称搜索";
 "Start Chat" = "开始聊天";
 "%d attachments" = "%d 个附件";
 "+%d" = "+%d";

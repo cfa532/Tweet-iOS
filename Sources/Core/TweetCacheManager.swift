@@ -642,4 +642,40 @@ extension TweetCacheManager {
             }
         }
     }
+    
+    /// Search for users by partial username or name match
+    func searchUsers(query: String) async -> [User] {
+        return await withCheckedContinuation { continuation in
+            context.perform {
+                let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                
+                // Create predicate to search in both username and name fields
+                // Use CONTAINS[cd] for case-insensitive and diacritic-insensitive matching
+                let usernamePredicate = NSPredicate(format: "userData CONTAINS[cd] %@", "\"username\":\"\(query)")
+                let namePredicate = NSPredicate(format: "userData CONTAINS[cd] %@", "\"name\":\"\(query)")
+                
+                // Combine predicates with OR
+                request.predicate = NSCompoundPredicate(orPredicateWithSubpredicates: [usernamePredicate, namePredicate])
+                
+                // Limit results to 50 for performance
+                request.fetchLimit = 50
+                
+                var results: [User] = []
+                if let cdUsers = try? self.context.fetch(request) {
+                    for cdUser in cdUsers {
+                        let user = User.from(cdUser: cdUser)
+                        // Additional filtering in memory for more precise matching
+                        let lowercaseQuery = query.lowercased()
+                        if let username = user.username?.lowercased(), username.contains(lowercaseQuery) {
+                            results.append(user)
+                        } else if let name = user.name?.lowercased(), name.contains(lowercaseQuery) {
+                            results.append(user)
+                        }
+                    }
+                }
+                
+                continuation.resume(returning: results)
+            }
+        }
+    }
 } 

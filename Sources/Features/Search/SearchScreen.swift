@@ -15,7 +15,7 @@ struct SearchScreen: View {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(.gray)
                         
-                        TextField(LocalizedStringKey("Search users..."), text: $searchText)
+                        TextField(LocalizedStringKey("Search by username or name..."), text: $searchText)
                             .textFieldStyle(PlainTextFieldStyle())
                             .onSubmit {
                                 Task {
@@ -72,7 +72,7 @@ struct SearchScreen: View {
                         Text(LocalizedStringKey("No results found"))
                             .font(.headline)
                             .foregroundColor(.gray)
-                        Text(LocalizedStringKey("Try searching for a different username"))
+                        Text(LocalizedStringKey("Try a different search term"))
                             .font(.caption)
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
@@ -87,7 +87,7 @@ struct SearchScreen: View {
                         Text(LocalizedStringKey("Search for users"))
                             .font(.headline)
                             .foregroundColor(.gray)
-                        Text(LocalizedStringKey("Enter @username to find users"))
+                        Text(LocalizedStringKey("Search by username or display name"))
                             .font(.caption)
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
@@ -120,9 +120,24 @@ struct UserSearchResultRow: View {
                 Avatar(user: user, size: 40)
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(user.name ?? "")@\(user.username ?? "")")
-                        .font(.headline)
-                        .foregroundColor(.primary)
+                    // Display name and username, handling nil values gracefully
+                    HStack(spacing: 4) {
+                        if let name = user.name, !name.isEmpty {
+                            Text(name)
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                        }
+                        if let username = user.username, !username.isEmpty {
+                            Text("@\(username)")
+                                .font(.headline)
+                                .foregroundColor(.secondary)
+                        } else if user.name == nil || user.name?.isEmpty == true {
+                            // Show placeholder if both name and username are empty
+                            Text("Unknown User")
+                                .font(.headline)
+                                .foregroundColor(.secondary)
+                        }
+                    }
                     
                     if let profile = user.profile, !profile.isEmpty {
                         Text(profile)
@@ -144,6 +159,7 @@ class SearchViewModel: ObservableObject {
     @Published var isLoading = false
     
     private let hproseInstance = HproseInstance.shared
+    private let cacheManager = TweetCacheManager.shared
     
     func search(query: String) async {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -155,32 +171,64 @@ class SearchViewModel: ObservableObject {
             isLoading = true
         }
         
+        // Remove @ prefix if present for consistent searching
+        let cleanQuery = query.hasPrefix("@") ? String(query.dropFirst()) : query
+        
         do {
-            // If query starts with @, search for a user by username
-            if query.hasPrefix("@") {
-                let username = String(query.dropFirst())
-                if let userId = try await hproseInstance.getUserId(username),
-                   let user = try await hproseInstance.fetchUser(userId) {
-                    await MainActor.run {
-                        searchResults = [user]
-                    }
-                } else {
-                    await MainActor.run {
-                        searchResults = []
+            // Step 1: Search cached users for partial matches (fast, works offline)
+            let cachedResults = await cacheManager.searchUsers(query: cleanQuery)
+            
+            // Step 2: Try exact username match from API (if no cached results or query looks like a username)
+            // Only do API call if query doesn't contain spaces (usernames can't have spaces)
+            var finalResults = cachedResults
+            if !cleanQuery.contains(" ") {
+                if let userId = try? await hproseInstance.getUserId(cleanQuery),
+                   let user = try? await hproseInstance.fetchUser(userId) {
+                    // Add to results if not already there
+                    if !finalResults.contains(where: { $0.mid == user.mid }) {
+                        finalResults.insert(user, at: 0) // Put exact match first
+                    } else {
+                        // Move exact match to the front
+                        if let index = finalResults.firstIndex(where: { $0.mid == user.mid }) {
+                            let exactMatch = finalResults.remove(at: index)
+                            finalResults.insert(exactMatch, at: 0)
+                        }
                     }
                 }
-            } else {
-                // TODO: Implement tweet content search
-                // For now, clear results for non-@ searches
-                await MainActor.run {
-                    searchResults = []
+            }
+            
+            // Step 3: Sort results: exact username matches first, then by name
+            let queryLower = cleanQuery.lowercased()
+            let sortedResults = finalResults.sorted { user1, user2 in
+                let username1 = user1.username?.lowercased() ?? ""
+                let username2 = user2.username?.lowercased() ?? ""
+                
+                // Exact username match comes first
+                if username1 == queryLower && username2 != queryLower {
+                    return true
                 }
+                if username2 == queryLower && username1 != queryLower {
+                    return false
+                }
+                
+                // Username starts with query comes next
+                if username1.hasPrefix(queryLower) && !username2.hasPrefix(queryLower) {
+                    return true
+                }
+                if username2.hasPrefix(queryLower) && !username1.hasPrefix(queryLower) {
+                    return false
+                }
+                
+                // Otherwise sort alphabetically by username
+                return username1 < username2
+            }
+            
+            // Step 4: Update results on MainActor
+            await MainActor.run {
+                searchResults = sortedResults
             }
         } catch {
             print("Search error: \(error)")
-            await MainActor.run {
-                searchResults = []
-            }
         }
         
         await MainActor.run {

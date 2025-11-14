@@ -378,9 +378,12 @@
 "Start a conversation to see your chats here" = "Start a conversation to see your chats here";
 "No results found" = "No results found";
 "Try searching for a different username" = "Try searching for a different username";
+"Try a different search term" = "Try a different search term";
 "Search for users" = "Search for users";
 "Enter a username to find users" = "Enter a username to find users";
 "Enter @username to find users" = "Enter @username to find users";
+"Search by username or name..." = "Search by username or name...";
+"Search by username or display name" = "Search by username or display name";
 "Start Chat" = "Start Chat";
 "%d attachments" = "%d attachments";
 "+%d" = "+%d";

@@ -366,8 +366,11 @@
 "Start a conversation to see your chats here" = "会話を始めて、ここにチャットを表示";
 "No results found" = "結果が見つかりません";
 "Try searching for a different username" = "別のユーザー名で検索してみてください";
+"Try a different search term" = "別の検索語で試してみてください";
 "Search for users" = "ユーザーを検索";
 "Enter @username to find users" = "@ユーザー名を入力してユーザーを見つける";
+"Search by username or name..." = "ユーザー名または名前で検索...";
+"Search by username or display name" = "ユーザー名または表示名で検索";
 "Start Chat" = "チャットを開始";
 "%d attachments" = "%d個の添付ファイル";
 "+%d" = "+%d";
