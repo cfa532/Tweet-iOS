@@ -614,7 +614,8 @@ struct TweetDetailView: View {
             tweet: displayTweet,
             onCommentTap: {
                 shouldShowExpandedReply = true
-            }
+            },
+            isInDetailView: true  // Tell TweetActionButtonsView we're in detail view context
         )
         .padding(.leading, 16)
         .padding(.top, 8)

@@ -181,7 +181,7 @@ struct CommentDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionButtonsView(tweet: comment)
+        TweetActionButtonsView(tweet: comment, isInDetailView: true)
             .padding(.leading, 48)
             .padding(.top, 8)
             .padding(.bottom, 4)

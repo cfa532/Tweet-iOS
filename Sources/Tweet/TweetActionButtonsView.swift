@@ -78,6 +78,7 @@ struct TweetActionButtonsView: View {
     @ObservedObject var tweet: Tweet
     var commentsVM: CommentsViewModel? = nil
     var onCommentTap: (() -> Void)? = nil
+    var isInDetailView: Bool = false  // NEW: Track if we're in TweetDetailView
     @State private var showCommentCompose = false
     @State private var showLoginSheet = false
     @State private var showToast = false
@@ -616,10 +617,21 @@ struct TweetActionButtonsView: View {
         let mediaID = extractMediaID(from: url)
         print("DEBUG: [SHARE] Extracted mediaID: \(mediaID)")
         
+        // Determine the cache key to use based on context
+        // When in TweetDetailView, the player is cached with "tweetDetail_\(mid)" key
+        let cacheKey: String
+        if isInDetailView {
+            cacheKey = "tweetDetail_\(mediaID)"
+            print("DEBUG: [SHARE] In TweetDetailView context, using cache key: \(cacheKey)")
+        } else {
+            cacheKey = mediaID
+            print("DEBUG: [SHARE] In feed/grid context, using cache key: \(cacheKey)")
+        }
+        
         // For HLS videos, try to use cached player first
         if isHLS {
-            print("DEBUG: [SHARE] HLS video detected, checking for cached player...")
-            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID),
+            print("DEBUG: [SHARE] HLS video detected, checking for cached player with key: \(cacheKey)...")
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: cacheKey),
                let playerItem = cachedPlayer.currentItem {
                 print("DEBUG: [SHARE] Found cached player for HLS video")
                 
@@ -657,9 +669,9 @@ struct TweetActionButtonsView: View {
         }
         
         // For regular videos, try to use cached player first to get current position
-        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID),
+        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: cacheKey),
            let playerItem = cachedPlayer.currentItem {
-            print("DEBUG: [SHARE] Found cached player for regular video")
+            print("DEBUG: [SHARE] Found cached player for regular video with key: \(cacheKey)")
             
             let currentTime = CMTimeGetSeconds(playerItem.currentTime())
             print("DEBUG: [SHARE] Current playback position: \(String(format: "%.2f", currentTime))s")
