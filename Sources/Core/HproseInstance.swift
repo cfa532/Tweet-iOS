@@ -2493,17 +2493,15 @@ final class HproseInstance: ObservableObject {
             let sizeThresholdMB = 50.0
             
             if fileSizeMB < sizeThresholdMB {
-                print("Video upload: Regular IPFS upload (file size \(String(format: "%.1f", fileSizeMB))MB < \(Int(sizeThresholdMB))MB)")
-                let result = try await uploadRegularFile(
+                print("Video upload: Sub-50MB path – converting to MP4 before IPFS upload (\(String(format: "%.1f", fileSizeMB))MB)")
+                return try await uploadVideoWithMp4Fallback(
                     data: data,
-                    typeIdentifier: typeIdentifier,
                     fileName: fileName,
                     referenceId: referenceId,
-                    mediaType: .video,
                     appUser: appUser,
-                    appId: appId
+                    appId: appId,
+                    progressCallback: progressCallback
                 )
-                return (result, nil)
             }
             
             let cloudPort = appUser.cloudDrivePort

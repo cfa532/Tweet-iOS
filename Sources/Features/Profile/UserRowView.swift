@@ -21,6 +21,9 @@ struct UserRowView: View {
     @State private var loadFailed: Bool = false
     @State private var loadingTask: Task<Void, Never>?
     @State private var currentCancellationToken: UUID
+    @State private var showToast: Bool = false
+    @State private var toastMessage: String = ""
+    @State private var toastType: ToastView.ToastType = .error
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     // MARK: - Initialization
@@ -117,9 +120,10 @@ struct UserRowView: View {
                             cooldownDuration: 0.5,
                             enableVibration: false
                         ) {
+                            // Toggle optimistically first
+                            isFollowing.toggle()
                             Task {
-                                await onFollowToggle(user)
-                                isFollowing.toggle()
+                                await handleToggleFollowing(for: user, onFollowToggle: onFollowToggle)
                             }
                         } label: {
                             Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
@@ -146,6 +150,16 @@ struct UserRowView: View {
             Divider()
                 .padding(.horizontal, 8)
         }
+        .overlay(
+            VStack {
+                Spacer()
+                if showToast {
+                    ToastView(message: toastMessage, type: toastType)
+                        .padding(.bottom, 20)
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: showToast)
+        )
         .onAppear {
             loadUser()
         }
@@ -159,6 +173,84 @@ struct UserRowView: View {
                 loadingTask?.cancel()
                 currentCancellationToken = newToken
             }
+        }
+    }
+    
+    private func handleToggleFollowing(for user: User, onFollowToggle: ((User) async -> Void)?) async {
+        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid) {
+            // Update the isFollowing state based on the result
+            await MainActor.run {
+                isFollowing = ret
+            }
+            
+            // Update app user's followingList based on the result
+            if ret {
+                // User is now following - add to followingList
+                if hproseInstance.appUser.followingList == nil {
+                    hproseInstance.appUser.followingList = []
+                }
+                if !hproseInstance.appUser.followingList!.contains(user.mid) {
+                    hproseInstance.appUser.followingList!.append(user.mid)
+                }
+            } else {
+                // User is no longer following - remove from followingList
+                hproseInstance.appUser.followingList?.removeAll { $0 == user.mid }
+            }
+            
+            // Update the followed user's fansList and counts on main thread
+            await MainActor.run {
+                if ret {
+                    // User is now following - add app user to followed user's fansList
+                    if user.fansList == nil {
+                        user.fansList = []
+                    }
+                    if !user.fansList!.contains(hproseInstance.appUser.mid) {
+                        user.fansList!.append(hproseInstance.appUser.mid)
+                    }
+                    // Increment the followed user's followers count
+                    user.followersCount = (user.followersCount ?? 0) + 1
+                    
+                    // Fetch and add recent tweets from newly followed user to main feed
+                    Task {
+                        await FollowingsTweetViewModel.shared.addTweetsFromNewlyFollowedUser(user)
+                    }
+                } else {
+                    // User is no longer following - remove app user from followed user's fansList
+                    user.fansList?.removeAll { $0 == hproseInstance.appUser.mid }
+                    // Decrement the followed user's followers count
+                    user.followersCount = max(0, (user.followersCount ?? 0) - 1)
+                    
+                    // Remove unfollowed user's tweets from main feed
+                    FollowingsTweetViewModel.shared.removeTweetsFromUser(user.mid)
+                }
+                
+                // Update app user's following count
+                if ret {
+                    // User is now following - increment app user's following count
+                    hproseInstance.appUser.followingCount = (hproseInstance.appUser.followingCount ?? 0) + 1
+                } else {
+                    // User is no longer following - decrement app user's following count
+                    hproseInstance.appUser.followingCount = max(0, (hproseInstance.appUser.followingCount ?? 0) - 1)
+                }
+            }
+        } else {
+            // Revert the isFollowing state on failure
+            await MainActor.run {
+                isFollowing.toggle()
+            }
+            showToastMessage(NSLocalizedString("Failed to toggle following status", comment: "Profile action error"))
+        }
+    }
+    
+    private func showToastMessage(_ message: String) {
+        toastMessage = message
+        toastType = .error
+        showToast = true
+        
+        // Auto-hide toast after 3 seconds
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            showToast = false
         }
     }
     
