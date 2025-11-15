@@ -39,6 +39,7 @@ struct MediaCell: View, Equatable {
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
     let visibleTweetId: String? // The ID of the visible tweet in feed (for retweets)
+    private let externalShouldLoadVideo: Bool
     
     @State private var image: UIImage?
     @State private var isLoading = false
@@ -58,7 +59,8 @@ struct MediaCell: View, Equatable {
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
         self.visibleTweetId = visibleTweetId
-        self.shouldLoadVideo = shouldLoadVideo
+        self.externalShouldLoadVideo = shouldLoadVideo
+        self._shouldLoadVideo = State(initialValue: shouldLoadVideo)
         self.onVideoFinished = onVideoFinished
         self.showMuteButton = showMuteButton
         self._isVisible = State(initialValue: isVisible)
@@ -186,6 +188,11 @@ struct MediaCell: View, Equatable {
             // Handle visibility changes - image loading is now handled in onAppear
             // This prevents conflicts with the onAppear block
         }
+        .onChange(of: externalShouldLoadVideo) { _, newValue in
+            if shouldLoadVideo != newValue {
+                shouldLoadVideo = newValue
+            }
+        }
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Restore video state when app becomes active
@@ -289,7 +296,7 @@ struct MediaCell: View, Equatable {
         return lhs.parentTweet.mid == rhs.parentTweet.mid &&
         lhs.attachmentIndex == rhs.attachmentIndex &&
         lhs.aspectRatio == rhs.aspectRatio &&
-        lhs.shouldLoadVideo == rhs.shouldLoadVideo &&
+        lhs.externalShouldLoadVideo == rhs.externalShouldLoadVideo &&
         lhs.showMuteButton == rhs.showMuteButton
     }
     

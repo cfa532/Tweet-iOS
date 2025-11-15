@@ -354,15 +354,34 @@ final class HproseInstance: ObservableObject {
                             
                             // Fetch followings and blacklist in background (non-blocking)
                             print("🔄 [INIT] Fetching followings and blacklist in background...")
-                            Task.detached(priority: .background) {
-                                let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                            let userSnapshot = user
+                            Task(priority: .background) { [weak self] in
+                                guard let strongSelf = self else { return }
+                                
+                                // Use a fresh client instance to avoid sharing mutable state across threads
+                                func fetchList(_ entry: UserContentType, fallback: [String]) async -> [String] {
+                                    do {
+                                        return try await strongSelf.getListByType(
+                                            userId: userSnapshot.mid,
+                                            baseUrl: userSnapshot.baseUrl,
+                                            entry: entry
+                                        )
+                                    } catch {
+                                        print("⚠️ [INIT] Failed to fetch \(entry) list: \(error)")
+                                        return fallback
+                                    }
+                                }
+                                
+                                let followings = await fetchList(.FOLLOWING, fallback: Gadget.getAlphaIds())
                                 print("✅ [INIT] Followings fetched: \(followings.count)")
-                                let blackList = (try? await self.getListByType(user: user, entry: .BLACK_LIST)) ?? []
+                                
+                                let blackList = await fetchList(.BLACK_LIST, fallback: [])
                                 print("✅ [INIT] Blacklist fetched: \(blackList.count)")
+                                
                                 await MainActor.run {
-                                    user.followingList = followings
-                                    user.userBlackList = blackList
-                                    self.printAppUserContent("After background data loaded")
+                                    userSnapshot.followingList = followings
+                                    userSnapshot.userBlackList = blackList
+                                    strongSelf.printAppUserContent("After background data loaded")
                                 }
                             }
                         } else {
@@ -1384,14 +1403,36 @@ final class HproseInstance: ObservableObject {
         user: User,
         entry: UserContentType
     ) async throws -> [String] {
-        let params = [
-            "aid": appId,
-            "ver": "last",
-            "userid": user.mid,
-        ]
         guard let client = user.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
+        return try performListRequest(client: client, userId: user.mid, entry: entry)
+    }
+    
+    private func getListByType(
+        userId: MimeiId,
+        baseUrl: URL?,
+        entry: UserContentType
+    ) async throws -> [String] {
+        guard let baseUrl = baseUrl else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Base URL missing for user", comment: "Missing base URL error")])
+        }
+        let client = HproseHttpClient()
+        client.timeout = 300000
+        client.uri = "\(baseUrl)/webapi/"
+        return try performListRequest(client: client, userId: userId, entry: entry)
+    }
+    
+    private func performListRequest(
+        client: HproseClient,
+        userId: MimeiId,
+        entry: UserContentType
+    ) throws -> [String] {
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "userid": userId,
+        ]
         
         let rawResponse = client.invoke("runMApp", withArgs: [entry.rawValue, params])
         
