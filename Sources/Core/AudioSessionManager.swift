@@ -99,8 +99,6 @@ class AudioSessionManager {
                 let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
                 if options.contains(.shouldResume) {
                     print("DEBUG: [AudioSessionManager] Audio session can resume")
-                    NotificationCenter.default.post(name: .resumeAllVideos, object: nil)
-                    print("DEBUG: [AudioSessionManager] Posted resumeAllVideos notification")
                 }
             }
             

@@ -280,19 +280,7 @@ struct UserRowView: View {
                     
                     // The user singleton will be automatically updated by fetchUser's background task
                     // @ObservedObject will cause view to refresh when singleton's @Published properties change
-                    let sanitizedUsername = fetchedUser.username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    guard !sanitizedUsername.isEmpty else {
-                        print("⚠️ [UserRowView] Invalid user (missing username) for ID: \(userId) - hiding row")
-                        await MainActor.run {
-                            guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
-                            self.loadFailed = true
-                            self.isLoading = false
-                            self.onLoadFailed?(userId)
-                        }
-                        return
-                    }
-                    
-                    print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid), username: \(sanitizedUsername)")
+                    print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid), username: \(fetchedUser.username ?? "nil")")
                     await MainActor.run {
                         // Check if task was cancelled before updating UI
                         guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }

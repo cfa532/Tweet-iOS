@@ -81,8 +81,6 @@ struct MediaBrowserView: View {
             }
             .onDisappear {
                 FullScreenVideoManager.shared.clearSingletonPlayer()
-                NotificationCenter.default.post(name: .resumeAllVideos, object: nil)
-                print("DEBUG: [MediaBrowserView] Posted resumeAllVideos notification")
             }
     }
     

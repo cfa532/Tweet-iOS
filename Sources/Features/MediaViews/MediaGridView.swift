@@ -545,45 +545,6 @@ struct MediaGridView: View {
             shouldLoadVideo = false
             videoManager.stopSequentialPlayback()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .resumeAllVideos)) { _ in
-            guard isVisible else { return }
-            
-            // Rebuild sequential playback so VideoManager knows which video should resume
-            let videoMids = attachments.enumerated().compactMap { index, attachment in
-                if attachment.type == .video || attachment.type == .hls_video {
-                    return attachment.mid
-                }
-                return nil
-            }
-            
-            videoManager.stopSequentialPlayback()
-            if videoMids.count > 1 {
-                videoManager.setupSequentialPlayback(for: videoMids)
-                print("DEBUG: [MediaGridView] ResumeAllVideos - restarted sequential playback for \(videoMids.count) videos")
-            } else if videoMids.count == 1 {
-                let wasEmpty = videoManager.videoMids.isEmpty
-                let isNewSequence = videoManager.videoMids != videoMids && !wasEmpty
-                videoManager.videoMids = videoMids
-                videoManager.isSequentialPlaybackEnabled = false
-                videoManager.currentVideoIndex = 0
-                
-                if isNewSequence {
-                    print("DEBUG: [MediaGridView] ResumeAllVideos - reset single video playback for \(videoMids[0])")
-                }
-            }
-            
-            // Re-evaluate whether this tweet should load videos
-            let hasMedia = attachments.contains(where: { $0.type == .video || $0.type == .hls_video || $0.type == .audio })
-            if hasMedia {
-                let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
-                if shouldLoadVideo != shouldLoad {
-                    shouldLoadVideo = shouldLoad
-                } else if shouldLoad {
-                    // Force trigger for stuck states
-                    shouldLoadVideo = true
-                }
-            }
-        }
     }
 }
 
