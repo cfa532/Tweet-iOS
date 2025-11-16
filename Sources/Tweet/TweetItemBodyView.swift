@@ -28,6 +28,36 @@ struct TweetItemBodyView: View {
         return max(10, screenWidth - 32)
     }()
 
+    /// Caption text for a single-video media grid: prefers tweet title, falls back to video file name (without extension)
+    private func singleVideoCaption(for attachments: [MimeiFileType]) -> String? {
+        guard attachments.count == 1 else { return nil }
+        let attachment = attachments[0]
+        
+        // Only show caption for video / HLS video
+        guard attachment.type == .video || attachment.type == .hls_video else { return nil }
+        
+        // Prefer tweet title if available
+        if let rawTitle = tweet.title?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawTitle.isEmpty {
+            return rawTitle
+        }
+        
+        // Fallback to file name without extension
+        if let rawFileName = attachment.fileName?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawFileName.isEmpty {
+            let components = rawFileName.split(separator: ".")
+            if components.count > 1 {
+                return components.dropLast().joined(separator: ".")
+            } else {
+                return rawFileName
+            }
+        }
+        
+        return nil
+    }
+
     private func handleGuestAction() {
         if hproseInstance.appUser.isGuest {
             showLoginSheet = true
@@ -65,6 +95,15 @@ struct TweetItemBodyView: View {
                     .clipped()
                     .cornerRadius(8)
                     .id("\(tweet.mid)_grid")
+                
+                if let caption = singleVideoCaption(for: attachments) {
+                    Text(caption)
+                        .font(.footnote)
+                        .foregroundColor(.primary.opacity(0.6))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
         .sheet(isPresented: $showLoginSheet) {
