@@ -30,6 +30,7 @@ struct MediaBrowserView: View {
     @State private var isImageZoomed = false // Track if current image is zoomed
     @State private var isTransitioning = false // Track transition animation
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
+    @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     private var attachments: [MimeiFileType] {
         return currentTweet.attachments ?? []
     }
@@ -72,6 +73,18 @@ struct MediaBrowserView: View {
                 dismiss: { dismiss() },
                 startControlsTimer: startControlsTimer,
                 resetControlsTimer: resetControlsTimer,
+                onShareVisibilityChange: { isVisible in
+                    DispatchQueue.main.async {
+                        isShareSheetVisible = isVisible
+                        if isVisible {
+                            showControls = true
+                            controlsTimer?.invalidate()
+                            controlsTimer = nil
+                        } else {
+                            startControlsTimer()
+                        }
+                    }
+                },
                 loadImageIfNeededClosure: { attachment, index in
                     loadImageIfNeeded(for: attachment, at: index)
                 }
@@ -169,6 +182,7 @@ struct MediaBrowserView: View {
         let dismiss: () -> Void
         let startControlsTimer: () -> Void
         let resetControlsTimer: () -> Void
+        let onShareVisibilityChange: (Bool) -> Void
         let loadImageIfNeededClosure: (MimeiFileType, Int) -> Void
         
         var body: some View {
@@ -205,7 +219,7 @@ struct MediaBrowserView: View {
                         cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
                     }
                     
-                    // Close button overlay
+                    // Close button + tweet actions overlay
                     if showControls {
                         VStack {
                             HStack {
@@ -220,6 +234,21 @@ struct MediaBrowserView: View {
                                 Spacer()
                             }
                             Spacer()
+                            HStack {
+                                TweetActionButtonsView(
+                                    tweet: currentTweet,
+                                    isInDetailView: true,
+                                    isFullScreen: true,
+                                    onShareVisibilityChange: { isVisible in
+                                        // Forward share visibility changes to outer view
+                                        onShareVisibilityChange(isVisible)
+                                    }
+                                )
+                                .environment(\.colorScheme, .dark)
+                                .tint(.white)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 60)
                         }
                         .transition(.opacity)
                     }
@@ -338,7 +367,13 @@ struct MediaBrowserView: View {
                 tweetId: currentTweet.mid,
                 videoIndex: index,
                 mediaType: attachment.type,
-                aspectRatio: attachment.aspectRatio
+                aspectRatio: attachment.aspectRatio,
+                onUserInteraction: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showControls = true
+                    }
+                    resetControlsTimer()
+                }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
@@ -387,10 +422,19 @@ struct MediaBrowserView: View {
     
     private func startControlsTimer() {
         controlsTimer?.invalidate()
+        
+        // Don't auto-hide controls while share sheet is visible
+        if isShareSheetVisible {
+            return
+        }
+        
         controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
             // Hide close button for ALL content types after 3 seconds
-            withAnimation(.easeInOut(duration: 0.3)) {
-                showControls = false
+            // but only if share sheet isn't visible anymore
+            if !isShareSheetVisible {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    showControls = false
+                }
             }
         }
     }
@@ -753,6 +797,7 @@ struct SingletonVideoPlayerView: View {
     let videoIndex: Int
     let mediaType: MediaType
     let aspectRatio: Float?
+    let onUserInteraction: () -> Void
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
     
@@ -762,6 +807,12 @@ struct SingletonVideoPlayerView: View {
                 // Show player
                 SimplerAVPlayerViewController(player: player, aspectRatio: aspectRatio)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            onUserInteraction()
+                        }
+                    )
             } else {
                 // Loading placeholder
                 ZStack {

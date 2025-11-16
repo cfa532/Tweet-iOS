@@ -79,6 +79,8 @@ struct TweetActionButtonsView: View {
     var commentsVM: CommentsViewModel? = nil
     var onCommentTap: (() -> Void)? = nil
     var isInDetailView: Bool = false  // NEW: Track if we're in TweetDetailView
+    var isFullScreen: Bool = false    // NEW: Track if we're in fullscreen player
+    var onShareVisibilityChange: ((Bool) -> Void)? = nil
     @State private var showCommentCompose = false
     @State private var showLoginSheet = false
     @State private var showToast = false
@@ -130,30 +132,7 @@ struct TweetActionButtonsView: View {
     
     var body: some View {
         HStack(spacing: 0) {
-            // Comment button
-            DebounceButton(
-                cooldownDuration: 0.3,
-                enableAnimation: true,
-                enableVibration: false
-            ) {
-                if hproseInstance.appUser.isGuest {
-                    handleGuestAction()
-                } else {
-                    onCommentTap?() ?? { showCommentCompose = true }()
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "bubble.left")
-                        .frame(width: 20)
-                    if let count = tweet.commentCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
-                }
-                .frame(width: 48, alignment: .leading)
-            }
-            Spacer(minLength: 12)
-            // Retweet button
+            // Retweet / forward button
             DebounceButton(
                 cooldownDuration: 0.5,
                 enableAnimation: true,
@@ -418,8 +397,10 @@ struct TweetActionButtonsView: View {
             attachmentPreviewImage = nil
             isPreparingShare = false
             print("DEBUG: [SHARE] Sheet dismissed, state cleared")
+            onShareVisibilityChange?(false)
         }) { sheetData in
             let _ = print("DEBUG: [SHARE] Sheet presenting with \(sheetData.items.count) items")
+            onShareVisibilityChange?(true)
             return ZStack {
                 ShareSheet(activityItems: sheetData.items)
                 
@@ -616,6 +597,29 @@ struct TweetActionButtonsView: View {
         // Extract mediaID from URL
         let mediaID = extractMediaID(from: url)
         print("DEBUG: [SHARE] Extracted mediaID: \(mediaID)")
+        
+        // If we're in fullscreen, try to use the fullscreen singleton player first
+        if isFullScreen,
+           let fullPlayer = FullScreenVideoManager.shared.singletonPlayer,
+           let fullItem = fullPlayer.currentItem {
+            print("DEBUG: [SHARE] Fullscreen context detected, trying singleton player for preview")
+            let duration = try? await fullItem.asset.load(.duration)
+            if let duration = duration {
+                let durationSeconds = CMTimeGetSeconds(duration)
+                let currentTime = CMTimeGetSeconds(fullItem.currentTime())
+                print("DEBUG: [SHARE] Fullscreen player duration: \(durationSeconds)s, currentTime: \(currentTime)s")
+                
+                if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                    let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                    print("DEBUG: [SHARE] Capturing fullscreen frame at \(captureTime)s")
+                    if let image = await captureFrameFromPlayer(fullPlayer, at: captureTime) {
+                        let elapsed = Date().timeIntervalSince(startTime)
+                        print("DEBUG: [SHARE] Fullscreen preview generated from singleton player in \(elapsed)s")
+                        return image
+                    }
+                }
+            }
+        }
         
         // Determine the cache key to use based on context
         // When in TweetDetailView, the player is cached with "tweetDetail_\(mid)" key
