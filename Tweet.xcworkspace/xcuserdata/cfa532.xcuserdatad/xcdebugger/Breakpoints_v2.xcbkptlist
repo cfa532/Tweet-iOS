@@ -61,50 +61,6 @@
             endingLineNumber = "332"
             landmarkName = "body"
             landmarkType = "24">
-            <Locations>
-               <Location
-                  uuid = "C0350A9F-0A31-45CB-A2FA-FA904FF89AC3 - 67bebbc8bc2fa0ad"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(1) suspend resume partial function for closure #1 () async -&gt; () in closure #7 @Sendable () async -&gt; () in Tweet.ProfileView.body.getter : some"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Features/Profile/ProfileView.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "332"
-                  endingLineNumber = "332">
-               </Location>
-               <Location
-                  uuid = "C0350A9F-0A31-45CB-A2FA-FA904FF89AC3 - f560e735c93b46ac"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(2) suspend resume partial function for closure #1 () async -&gt; () in closure #7 @Sendable () async -&gt; () in Tweet.ProfileView.body.getter : some"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Features/Profile/ProfileView.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "332"
-                  endingLineNumber = "332">
-               </Location>
-               <Location
-                  uuid = "C0350A9F-0A31-45CB-A2FA-FA904FF89AC3 - 9660ee64c5f56d95"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(3) await resume partial function for closure #1 () async -&gt; () in closure #7 @Sendable () async -&gt; () in Tweet.ProfileView.body.getter : some"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Features/Profile/ProfileView.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "332"
-                  endingLineNumber = "332">
-               </Location>
-            </Locations>
          </BreakpointContent>
       </BreakpointProxy>
       <BreakpointProxy

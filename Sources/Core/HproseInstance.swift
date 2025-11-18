@@ -1314,6 +1314,15 @@ final class HproseInstance: ObservableObject {
     /// Resyncs a user from the backend and returns the updated user object
     func resyncUser(userId: String) async throws -> User {
         return try await withRetry {
+            // Get the user instance first to access their baseUrl
+            let user = User.getInstance(mid: userId)
+            
+            // If user doesn't have a baseUrl, fetch it first
+            if user.baseUrl == nil {
+                print("DEBUG: [resyncUser] User \(userId) has no baseUrl, fetching user first to resolve IP")
+                _ = try await fetchUser(userId, baseUrl: "")
+            }
+            
             let entry = "resync_user"
             let params = [
                 "aid": appId,
@@ -1321,16 +1330,47 @@ final class HproseInstance: ObservableObject {
                 "userid": userId
             ]
             
-            guard let client = appUser.hproseClient else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+            // Use the target user's hproseClient (with their baseUrl) instead of appUser's
+            guard let client = user.hproseClient else {
+                // Fallback to appUser's client if target user's client is not available
+                print("DEBUG: [resyncUser] User \(userId) has no hproseClient, falling back to appUser's client")
+                guard let fallbackClient = appUser.hproseClient else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+                }
+                // Use fallback client but log the issue
+                print("DEBUG: [resyncUser] Using appUser's client for user \(userId) - this may use wrong baseUrl")
+                guard let userData = fallbackClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+                }
+                
+                // Update user properties from the response
+                await MainActor.run {
+                    user.name = userData["name"] as? String
+                    user.username = userData["username"] as? String
+                    user.email = userData["email"] as? String
+                    user.profile = userData["profile"] as? String
+                    user.avatar = userData["avatar"] as? String
+                    user.tweetCount = userData["tweetCount"] as? Int
+                    user.followingCount = userData["followingCount"] as? Int
+                    user.followersCount = userData["followersCount"] as? Int
+                    user.bookmarksCount = userData["bookmarksCount"] as? Int
+                    user.favoritesCount = userData["favoritesCount"] as? Int
+                    user.commentsCount = userData["commentsCount"] as? Int
+                    
+                    // Update cloudDrivePort if provided
+                    if let cloudDrivePort = userData["cloudDrivePort"] as? Int {
+                        user.cloudDrivePort = cloudDrivePort
+                    }
+                }
+                TweetCacheManager.shared.saveUser(user)
+                return user
             }
+            
+            print("DEBUG: [resyncUser] Using user's own hproseClient with baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(userId)")
             
             guard let userData = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
-            
-            // Get or create the user instance directly
-            let user = User.getInstance(mid: userId)
             
             // Update user properties from the response
             await MainActor.run {
