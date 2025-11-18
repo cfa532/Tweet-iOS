@@ -165,15 +165,6 @@ struct TweetApp: App {
                     print("[TweetApp] Received notification to open chat with: \(senderId)")
                 }
             }
-            .alert(NSLocalizedString("Error", comment: "Error alert title"), isPresented: .constant(appState.error != nil)) {
-                Button(NSLocalizedString("OK", comment: "OK button")) {
-                    appState.error = nil
-                }
-            } message: {
-                if let error = appState.error {
-                    Text(ErrorMessageHelper.userFriendlyMessage(from: error))
-                }
-            }
         }
     }
 } 
