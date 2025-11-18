@@ -27,7 +27,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4722"
             endingLineNumber = "4722"
-            landmarkName = "scheduleCommentUpload(comment:to:itemData:isQuoting:)"
+            landmarkName = "resumeVideoJobPolling(pendingUpload:jobId:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -43,7 +43,131 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4736"
             endingLineNumber = "4736"
-            landmarkName = "togglePinnedTweet(tweetId:)"
+            landmarkName = "resumeVideoJobPolling(pendingUpload:jobId:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "C0350A9F-0A31-45CB-A2FA-FA904FF89AC3"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Features/Profile/ProfileView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "332"
+            endingLineNumber = "332"
+            landmarkName = "body"
+            landmarkType = "24">
+            <Locations>
+               <Location
+                  uuid = "C0350A9F-0A31-45CB-A2FA-FA904FF89AC3 - 67bebbc8bc2fa0ad"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(1) suspend resume partial function for closure #1 () async -&gt; () in closure #7 @Sendable () async -&gt; () in Tweet.ProfileView.body.getter : some"
+                  moduleName = "Tweet.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Features/Profile/ProfileView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "332"
+                  endingLineNumber = "332">
+               </Location>
+               <Location
+                  uuid = "C0350A9F-0A31-45CB-A2FA-FA904FF89AC3 - f560e735c93b46ac"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(2) suspend resume partial function for closure #1 () async -&gt; () in closure #7 @Sendable () async -&gt; () in Tweet.ProfileView.body.getter : some"
+                  moduleName = "Tweet.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Features/Profile/ProfileView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "332"
+                  endingLineNumber = "332">
+               </Location>
+               <Location
+                  uuid = "C0350A9F-0A31-45CB-A2FA-FA904FF89AC3 - 9660ee64c5f56d95"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(3) await resume partial function for closure #1 () async -&gt; () in closure #7 @Sendable () async -&gt; () in Tweet.ProfileView.body.getter : some"
+                  moduleName = "Tweet.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Features/Profile/ProfileView.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "332"
+                  endingLineNumber = "332">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "D73ED260-6BBD-468B-9F5D-D26A87560C50"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Features/Profile/ProfileView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "339"
+            endingLineNumber = "339"
+            landmarkName = "body"
+            landmarkType = "24">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "6301FA4D-F836-4B70-9D59-EA482DBAFE0B"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Core/HproseInstance.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "1288"
+            endingLineNumber = "1288"
+            landmarkName = "updateUserFromServerInternal(_:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "2EC51771-B357-4E5B-B7BE-9C3715CA53DD"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Core/HproseInstance.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "1293"
+            endingLineNumber = "1293"
+            landmarkName = "updateUserFromServerInternal(_:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "36D865D4-8F29-4A0D-9639-DC6CF607922D"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "Sources/Core/HproseInstance.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "1297"
+            endingLineNumber = "1297"
+            landmarkName = "updateUserFromServerInternal(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

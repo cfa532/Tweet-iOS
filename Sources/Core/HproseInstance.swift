@@ -1021,6 +1021,12 @@ final class HproseInstance: ObservableObject {
                 lastError = error
                 print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 failed for userId: \(userId): \(error)")
                 
+                // Check if this is a redirect loop error (code -2) - don't retry in this case
+                if let nsError = error as NSError?, nsError.code == -2 {
+                    print("DEBUG: [updateUserFromServer] Redirect loop detected, stopping retries for userId: \(userId)")
+                    throw error
+                }
+                
                 if attempt < 3 {
                     await handleRetryRecovery(for: user)
                 }
@@ -1178,6 +1184,27 @@ final class HproseInstance: ObservableObject {
         
         // Check for IP address response first (user not found on this node)
         if let ipAddress = response as? String, !ipAddress.isEmpty {
+            // Check if we're being redirected to the same IP we're already on (redirect loop)
+            // Normalize both IPs for comparison (remove http:// prefix, ensure format consistency)
+            let normalizedRedirectIp: String
+            if ipAddress.hasPrefix("http://") {
+                normalizedRedirectIp = String(ipAddress.dropFirst(7))
+            } else if ipAddress.hasPrefix("http") {
+                normalizedRedirectIp = String(ipAddress.dropFirst(4))
+            } else {
+                normalizedRedirectIp = ipAddress
+            }
+            
+            let currentBaseUrlString = user.baseUrl?.absoluteString ?? ""
+            let normalizedCurrentIp = currentBaseUrlString.hasPrefix("http://") ? String(currentBaseUrlString.dropFirst(7)) : currentBaseUrlString
+            
+            // Compare normalized IPs (should match if redirecting to same server)
+            if normalizedCurrentIp == normalizedRedirectIp {
+                // Redirect loop detected - being redirected to the same IP we're already on
+                print("DEBUG: [updateUserFromServer] Redirect loop detected for \(user.mid) - redirected to same IP: \(ipAddress) (current: \(currentBaseUrlString))")
+                throw NSError(domain: "HproseClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Redirect loop detected - redirected to same IP: \(ipAddress)"])
+            }
+            
             print("DEBUG: [updateUserFromServer] \(user.mid) not found on current node, redirecting to IP: \(ipAddress)")
             // the user is not found on this node, a provider IP of the user is returned.
             // point server to this new IP.
@@ -1217,6 +1244,22 @@ final class HproseInstance: ObservableObject {
                     throw error  // Re-throw to trigger retry logic
                 }
             } else if let newIpAddress = newResponse as? String {
+                // Second redirect returned - check if it's the same IP (redirect loop)
+                let newNormalizedIp: String
+                if newIpAddress.hasPrefix("http://") {
+                    newNormalizedIp = String(newIpAddress.dropFirst(7))
+                } else if newIpAddress.hasPrefix("http") {
+                    newNormalizedIp = String(newIpAddress.dropFirst(4))
+                } else {
+                    newNormalizedIp = newIpAddress
+                }
+                
+                // Compare with the redirect IP we just tried
+                if newNormalizedIp == normalizedRedirectIp {
+                    // Redirect loop - same IP returned twice
+                    print("DEBUG: [updateUserFromServer] Redirect loop detected for \(user.mid) - redirected server returned same IP: \(newIpAddress) (same as first redirect: \(ipAddress))")
+                    throw NSError(domain: "HproseClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Redirect loop detected - redirected server returned same IP: \(newIpAddress)"])
+                }
                 // Second redirect returned - user not found on this server either
                 print("DEBUG: [updateUserFromServer] \(user.mid) not found on redirected IP: \(newIpAddress)")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "userid not found after redirect - second IP returned: \(newIpAddress)"])
