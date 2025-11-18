@@ -804,6 +804,9 @@ final class HproseInstance: ObservableObject {
             // Fall through to updateUserFromServer to resolve IP
         }
         
+        // Track if we resolved a new IP that should be used for server fetch
+        var ipResolved = false
+        
         if hasExpired {
             print("DEBUG: [fetchUser] Cache expired for userId: \(userId), refreshing provider IP")
             do {
@@ -814,6 +817,7 @@ final class HproseInstance: ObservableObject {
                             cachedUser.baseUrl = resolvedUrl
                         }
                         effectiveBaseUrl = resolvedUrlString
+                        ipResolved = true
                         print("DEBUG: [fetchUser] ✅ Updated baseUrl after cache expiry to \(resolvedUrlString) for userId: \(userId)")
                     } else {
                         print("DEBUG: [fetchUser] Unable to construct URL from provider IP \(providerIP) for userId: \(userId)")
@@ -890,21 +894,37 @@ final class HproseInstance: ObservableObject {
                     print("DEBUG: [fetchUser] Failed to get provider IP for userId: \(userId)")
                     return cachedUser
                 }
+                let resolvedUrlString = providerIP.hasPrefix("http") ? providerIP : "http://\(providerIP)"
                 await MainActor.run {
-                    cachedUser.baseUrl = URL(string: "http://\(providerIP)")
+                    cachedUser.baseUrl = URL(string: resolvedUrlString)
                     print("DEBUG: [fetchUser] ✅ Resolved baseUrl for userId: \(userId) to \(providerIP)")
                 }
-                return cachedUser
+                effectiveBaseUrl = resolvedUrlString
+                ipResolved = true
+                // Don't return early - fall through to try fetching with new IP if app is initialized or if we need to
+                // Only return early if app is not initialized and we don't want to fetch yet
+                if !isInitializationComplete {
+                    print("DEBUG: [fetchUser] App not initialized, returning cached user with newly resolved IP for userId: \(userId)")
+                    return cachedUser
+                }
+                // Fall through to updateUserFromServer below
             } catch {
                 print("DEBUG: [fetchUser] Error resolving baseUrl for userId: \(userId): \(error)")
                 return cachedUser
             }
         }
         
-        // If app is not initialized, return cached users (with valid baseUrl from above)
+        // If app is not initialized, but we resolved a new IP, still try to fetch with the new IP
+        // Otherwise return cached user (with valid baseUrl from above)
         if !isInitializationComplete {
-            print("DEBUG: [fetchUser] App not initialized, returning cached user for userId: \(userId)")
-            return cachedUser
+            if ipResolved && !effectiveBaseUrl.isEmpty {
+                // We resolved a new IP, so fetch with it even if app is not initialized
+                print("DEBUG: [fetchUser] App not initialized but IP resolved, fetching with new IP for userId: \(userId)")
+                // Fall through to updateUserFromServer below
+            } else {
+                print("DEBUG: [fetchUser] App not initialized, returning cached user for userId: \(userId)")
+                return cachedUser
+            }
         }
         
         // Step 2: Fetch from server with retry logic. No instance available in memory or cache.

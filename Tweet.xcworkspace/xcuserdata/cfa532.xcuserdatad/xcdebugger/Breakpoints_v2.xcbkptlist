@@ -27,8 +27,8 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4722"
             endingLineNumber = "4722"
-            landmarkName = "HproseInstance"
-            landmarkType = "3">
+            landmarkName = "scheduleCommentUpload(comment:to:itemData:isQuoting:)"
+            landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
       <BreakpointProxy
@@ -43,7 +43,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4736"
             endingLineNumber = "4736"
-            landmarkName = "getPinnedTweets(user:)"
+            landmarkName = "togglePinnedTweet(tweetId:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

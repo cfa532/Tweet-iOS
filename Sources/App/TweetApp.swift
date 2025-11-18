@@ -57,9 +57,15 @@ class AppState: ObservableObject {
                     ImageCacheManager.shared.cleanupOldCache()
                 }
             } catch {
+                // Even if initAppEntry fails, mark initialization as complete
+                // so the app can still function and fetch users from server
                 await MainActor.run {
                     self.error = error
+                    // Mark HproseInstance initialization as complete even on failure
+                    // This allows user fetches to proceed with resolved IPs
+                    HproseInstance.shared.markInitializationComplete()
                 }
+                print("DEBUG: [AppState] initAppEntry failed but marking initialization complete: \(error)")
             }
         }
     }
