@@ -20,6 +20,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var timestamp: Date
     @Published var lastLogin: Date?
     @Published var cloudDrivePort: Int = 0
+    @Published var shareDomainOverride: String?
     
     @Published var tweetCount: Int? {
         didSet {
@@ -281,6 +282,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         email: String? = nil,
         profile: String? = nil,
         cloudDrivePort: Int = 0,
+        shareDomainOverride: String? = nil,
         hostIds: [MimeiId]? = nil,
         publicKey: String? = nil,
         hasAcceptedTerms: Bool = false
@@ -296,6 +298,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.timestamp = Date.now
         self.lastLogin = Date.now
         self.cloudDrivePort = cloudDrivePort
+        self.shareDomainOverride = shareDomainOverride
         self.tweetCount = nil
         self.followingCount = nil
         self.followersCount = nil
@@ -410,6 +413,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.timestamp = user.timestamp
             instance.lastLogin = user.lastLogin
             instance.cloudDrivePort = user.cloudDrivePort
+            instance.shareDomainOverride = user.shareDomainOverride
             instance.hostIds = user.hostIds
             
             // Only update baseUrl/writableUrl if the new value is non-nil
@@ -453,6 +457,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.timestamp = user.timestamp
                 instance.lastLogin = user.lastLogin
                 instance.cloudDrivePort = user.cloudDrivePort
+                instance.shareDomainOverride = user.shareDomainOverride
                 instance.hostIds = user.hostIds
                 
                 // Only update baseUrl/writableUrl if the new value is non-nil
@@ -491,7 +496,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // CodingKeys to handle @Published properties
     enum CodingKeys: String, CodingKey {
-        case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile, timestamp, lastLogin, cloudDrivePort
+        case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile, timestamp, lastLogin, cloudDrivePort, shareDomainOverride
         case tweetCount, followingCount, followersCount, bookmarksCount, favoritesCount, commentsCount
         case hostIds, publicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets, userBlackList
     }
@@ -512,6 +517,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date.now
         lastLogin = try container.decodeIfPresent(Date.self, forKey: .lastLogin)
         cloudDrivePort = try container.decodeIfPresent(Int.self, forKey: .cloudDrivePort) ?? 0
+        shareDomainOverride = try container.decodeIfPresent(String.self, forKey: .shareDomainOverride)
         
         tweetCount = try container.decodeIfPresent(Int.self, forKey: .tweetCount)
         followingCount = try container.decodeIfPresent(Int.self, forKey: .followingCount)
@@ -552,6 +558,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         try container.encode(timestamp, forKey: .timestamp)
         try container.encodeIfPresent(lastLogin, forKey: .lastLogin)
         try container.encode(cloudDrivePort, forKey: .cloudDrivePort)
+        try container.encodeIfPresent(shareDomainOverride, forKey: .shareDomainOverride)
         
         try container.encodeIfPresent(tweetCount, forKey: .tweetCount)
         try container.encodeIfPresent(followingCount, forKey: .followingCount)

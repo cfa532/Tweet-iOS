@@ -18,7 +18,13 @@ final class HproseInstance: ObservableObject {
     
     /// The domain to use for sharing links
     var domainToShare: String {
-        get { _domainToShare }
+        get {
+            if let override = appUser.shareDomainOverride?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !override.isEmpty {
+                return override
+            }
+            return _domainToShare
+        }
         set { _domainToShare = newValue }
     }
     
@@ -4795,11 +4801,20 @@ final class HproseInstance: ObservableObject {
         alias: String? = nil,
         profile: String? = nil,
         hostId: String? = nil,
-        cloudDrivePort: Int = 0
+        cloudDrivePort: Int = 0,
+        shareDomainOverride: String? = nil
     ) async throws -> Bool {
-        print("DEBUG: updateUserCore called with - alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort)")
+        print("DEBUG: updateUserCore called with - alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort), shareDomainOverride: \(shareDomainOverride ?? "nil")")
         
-        let updatedUser = User(mid: appUser.mid, name: alias, password: password, profile: profile, cloudDrivePort: cloudDrivePort)
+        let sanitizedDomain = shareDomainOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let updatedUser = User(
+            mid: appUser.mid,
+            name: alias,
+            password: password,
+            profile: profile,
+            cloudDrivePort: cloudDrivePort,
+            shareDomainOverride: sanitizedDomain?.isEmpty == true ? nil : sanitizedDomain
+        )
         if let hostId = hostId, !hostId.isEmpty {
             updatedUser.hostIds = [hostId]
         }
@@ -4839,6 +4854,11 @@ final class HproseInstance: ObservableObject {
                     }
                     // CRITICAL: Update cloudDrivePort
                     self.appUser.cloudDrivePort = cloudDrivePort
+                    if let sanitizedDomain = sanitizedDomain, !sanitizedDomain.isEmpty {
+                        self.appUser.shareDomainOverride = sanitizedDomain
+                    } else {
+                        self.appUser.shareDomainOverride = nil
+                    }
                     print("DEBUG: updateUserCore - updated in-memory appUser, cloudDrivePort: \(cloudDrivePort)")
                 }
                 

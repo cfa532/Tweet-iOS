@@ -84,6 +84,7 @@
 "Profile" = "プロフィール";
 "Host ID (optional)" = "ホストID（任意）";
 "Cloud Drive Port" = "クラウドドライブポート";
+"Share Domain (optional)" = "共有ドメイン（任意）";
 "Register" = "登録";
 "Cancel" = "キャンセル";
 "Uploading..." = "アップロード中...";

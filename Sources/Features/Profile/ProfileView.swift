@@ -219,13 +219,18 @@ struct ProfileView: View {
         .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
         .sheet(isPresented: $showEditSheet) {
             ProfileEditView(
-                onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
+                onSubmit: { username, password, alias, profile, hostId, cloudDrivePort, shareDomainOverride in
                     // Set submission state
                     isSubmittingProfile = true
-                    print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort)")
+                    print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort), shareDomainOverride: \(shareDomainOverride ?? "nil")")
                     
                     let success = try await hproseInstance.updateUserCore(
-                        password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort
+                        password: password,
+                        alias: alias,
+                        profile: profile,
+                        hostId: hostId,
+                        cloudDrivePort: cloudDrivePort,
+                        shareDomainOverride: shareDomainOverride
                     )
                     print("DEBUG: Profile update result: \(success)")
                     
@@ -245,6 +250,15 @@ struct ProfileView: View {
                         }
                         hproseInstance.appUser.cloudDrivePort = cloudDrivePort
                         print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
+                        
+                        let sanitizedDomain = shareDomainOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let domain = sanitizedDomain, !domain.isEmpty {
+                            hproseInstance.appUser.shareDomainOverride = domain
+                            print("DEBUG: Updated shareDomainOverride to: \(domain)")
+                        } else {
+                            hproseInstance.appUser.shareDomainOverride = nil
+                            print("DEBUG: Cleared shareDomainOverride")
+                        }
                         
                         // Clear user cache to ensure fresh data is loaded on next app launch
                         TweetCacheManager.shared.deleteUser(mid: hproseInstance.appUser.mid)

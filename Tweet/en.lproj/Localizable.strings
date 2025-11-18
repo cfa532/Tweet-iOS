@@ -87,6 +87,7 @@
 "Profile" = "Profile";
 "Host ID (optional)" = "Host ID (optional)";
 "Cloud Drive Port" = "Cloud Drive Port";
+"Share Domain (optional)" = "Share Domain (optional)";
 "Register" = "Register";
 "Cancel" = "Cancel";
 "Uploading..." = "Uploading...";
