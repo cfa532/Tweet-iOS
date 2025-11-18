@@ -824,6 +824,19 @@ struct ProfileView: View {
                     )
                 }
             )
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showTweetList = false
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text(NSLocalizedString("Back", comment: "Back button"))
+                        }
+                    }
+                }
+            }
         } else {
             TweetListView(
                 title: "Favorites",
@@ -856,6 +869,19 @@ struct ProfileView: View {
                     )
                 }
             )
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showTweetList = false
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text(NSLocalizedString("Back", comment: "Back button"))
+                        }
+                    }
+                }
+            }
         }
     }
 }
