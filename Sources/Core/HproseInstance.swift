@@ -84,7 +84,7 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    var appId: String = Constants.GUEST_ID      // placeholder mimei id (internal for TweetUploadManager access)
+    var appId: String = AppConfig.appId      // Initialize with AppConfig value, will be updated during initAppEntry() if server provides different value
     var preferenceHelper: PreferenceHelper?
     
     // MARK: - Upload Management
@@ -317,7 +317,13 @@ final class HproseInstance: ObservableObject {
             do {
                 let html = try await fetchHTML(from: url)
                 let paramData = Gadget.shared.extractParamMap(from: html)
-                appId = paramData["mid"] as? String ?? ""
+                // Update appId from server if provided, otherwise keep AppConfig value
+                if let serverAppId = paramData["mid"] as? String, !serverAppId.isEmpty {
+                    appId = serverAppId
+                    print("DEBUG: [HproseInstance] Updated appId from server: \(appId)")
+                } else {
+                    print("DEBUG: [HproseInstance] Server did not provide appId, keeping AppConfig value: \(appId)")
+                }
                 guard let addrs = paramData["addrs"] as? String else { continue }
                 if lastInitializationAddresses != addrs {
                     print("DEBUG: [HproseInstance] App addresses resolved: \(addrs)")
