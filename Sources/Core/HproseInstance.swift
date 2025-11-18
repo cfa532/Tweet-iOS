@@ -1184,10 +1184,13 @@ final class HproseInstance: ObservableObject {
                         // Restore the redirected baseUrl after User.from() potentially overwrote it
                         updatedUser.baseUrl = redirectedBaseUrl
                         
-                        print("DEBUG: [updateUserFromServer] After User.from: name=\(updatedUser.name ?? "nil"), username=\(updatedUser.username ?? "nil"), mid=\(updatedUser.mid)")
-                        
-                        // Save the user with the correct redirected IP to cache
-                        TweetCacheManager.shared.saveUser(updatedUser)
+                    print("DEBUG: [updateUserFromServer] After User.from: name=\(updatedUser.name ?? "nil"), username=\(updatedUser.username ?? "nil"), mid=\(updatedUser.mid)")
+                    
+                    // Update the singleton instance so @ObservedObject views update
+                    User.updateUserInstance(with: updatedUser)
+                    
+                    // Save the user with the correct redirected IP to cache
+                    TweetCacheManager.shared.saveUser(updatedUser)
                     }
                 } catch {
                     print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
@@ -1211,6 +1214,9 @@ final class HproseInstance: ObservableObject {
                     updatedUser.baseUrl = user.baseUrl
                     
                     print("DEBUG: [updateUserFromServer] After User.from: name=\(updatedUser.name ?? "nil"), username=\(updatedUser.username ?? "nil"), mid=\(updatedUser.mid)")
+                    
+                    // Update the singleton instance so @ObservedObject views update
+                    User.updateUserInstance(with: updatedUser)
                     
                     // Save the user to cache
                     TweetCacheManager.shared.saveUser(updatedUser)
