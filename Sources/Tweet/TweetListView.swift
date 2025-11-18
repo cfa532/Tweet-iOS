@@ -320,9 +320,11 @@ struct TweetListView<RowView: View>: View {
                     let tweetIds = tweets.map { $0.mid }
                     videoLoadingManager.updateTweetList(tweetIds)
                     
-                    // Mark as loaded immediately after cache load for instant UX
+                    // Don't mark as loaded yet - wait for server fetch to complete
+                    // This prevents "No tweet yet" from showing prematurely if cached tweets
+                    // are filtered out (e.g., pinned tweets) before server fetch completes
                     isLoading = false
-                    initialLoadComplete = true
+                    initialLoadComplete = false  // Keep false until server fetch completes
                 } else {
                     // No cached content - show loading spinner and wait for server
                     isLoading = true
@@ -332,11 +334,10 @@ struct TweetListView<RowView: View>: View {
             
             // Step 2: Load from server to get the most up-to-date data
             if hasCachedContent {
-                // If we have cache, load server data in background (non-blocking)
-                Task.detached(priority: .background) {
-                    await self.loadFromServer(page: page, pageSize: self.pageSize) { _ in
-                        // Server load completion handled separately
-                    }
+                // If we have cache, load server data but wait for it to complete
+                // before marking as loaded (to prevent premature empty state)
+                await loadFromServer(page: page, pageSize: pageSize) { _ in
+                    // Server load completed - initialLoadComplete will be set in loadFromServer
                 }
             } else {
                 // No cache - wait for server load to complete before marking as loaded
@@ -541,22 +542,33 @@ struct TweetListView<RowView: View>: View {
                     videoLoadingManager.updateTweetList(tweetIds)
                     
                     currentPage = page
+                    
+                    // Mark initial load as complete for page 0 only if we got valid tweets
+                    if page == 0 {
+                        isLoading = false
+                        initialLoadComplete = true
+                    }
                 } else if tweetsFromServer.count < pageSize {
                     hasMoreTweets = false
+                    // Server returned fewer than pageSize tweets (or empty), so no more pages
                     // Update VideoLoadingManager even when no tweets
-                    if page == 0 && tweets.isEmpty {
-                        videoLoadingManager.updateTweetList([])
+                    if page == 0 {
+                        if tweets.isEmpty {
+                            videoLoadingManager.updateTweetList([])
+                            // Only mark as complete if we have no tweets at all (no cache, no server)
+                            isLoading = false
+                            initialLoadComplete = true
+                        } else {
+                            // We have cached tweets, so mark as complete (server confirmed no more pages)
+                            isLoading = false
+                            initialLoadComplete = true
+                        }
                     }
                 } else {
                     // All tweets are nil but we got a full page, continue to next page
                     currentPage = page
+                    // Don't mark as complete yet - keep trying next pages
                     // Don't call loadMoreTweets recursively here, let the normal flow continue
-                }
-                
-                // Mark initial load as complete for page 0
-                if page == 0 {
-                    isLoading = false
-                    initialLoadComplete = true
                 }
                 
                 // Clear scroll anchor after a brief delay to allow layout to settle
@@ -642,8 +654,9 @@ struct TweetListContentView<RowView: View>: View {
                 header()
             }
             
-            // Show loading state only if we don't have any tweets yet
-            if isLoading && tweets.compactMap({ $0 }).isEmpty {
+            // Show loading state if we don't have tweets and haven't completed loading
+            // This covers both: actively loading (isLoading=true) OR waiting for initial load to start (!initialLoadComplete)
+            if tweets.compactMap({ $0 }).isEmpty && (isLoading || !initialLoadComplete) {
                 VStack(spacing: 16) {
                     ProgressView()
                         .scaleEffect(1.2)
@@ -655,7 +668,7 @@ struct TweetListContentView<RowView: View>: View {
                 .padding()
                 .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             } else if initialLoadComplete && tweets.compactMap({ $0 }).isEmpty {
-                // Show empty state when loading is complete but no tweets
+                // Show empty state ONLY when loading is actually complete AND there are no tweets
                 VStack(spacing: 16) {
                     Image(systemName: "tray")
                         .font(.system(size: 48))
