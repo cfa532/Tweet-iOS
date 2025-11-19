@@ -407,19 +407,32 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     private func compressImageToSize(_ image: UIImage, maxSize: Int) -> Data {
+        // First, strip alpha channel if image is opaque to avoid ImageIO warnings
+        let opaqueImage: UIImage
+        if image.cgImage?.alphaInfo == .none || image.cgImage?.alphaInfo == .noneSkipLast || image.cgImage?.alphaInfo == .noneSkipFirst {
+            // Image is already opaque, use as-is
+            opaqueImage = image
+        } else {
+            // Re-render without alpha channel to ensure opaque format
+            UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+            opaqueImage = UIGraphicsGetImageFromCurrentImageContext() ?? image
+            UIGraphicsEndImageContext()
+        }
+        
         var compression: CGFloat = 1.0
         
-        // Try to get initial JPEG data
-        guard var data = image.jpegData(compressionQuality: compression) else {
+        // Try to get initial JPEG data (JPEG doesn't support alpha, so this will be opaque)
+        guard var data = opaqueImage.jpegData(compressionQuality: compression) else {
             print("DEBUG: [ImageCacheManager] Failed to create JPEG data from image")
-            // Fallback to PNG if JPEG fails
-            return image.pngData() ?? Data()
+            // Fallback to PNG if JPEG fails, but PNG should also be without alpha now
+            return opaqueImage.pngData() ?? Data()
         }
         
         // Reduce quality until size is under maxSize
         while data.count > maxSize && compression > 0.1 {
             compression -= 0.1
-            guard let newData = image.jpegData(compressionQuality: compression) else {
+            guard let newData = opaqueImage.jpegData(compressionQuality: compression) else {
                 print("DEBUG: [ImageCacheManager] Failed to create JPEG data with compression \(compression)")
                 break
             }
@@ -430,12 +443,13 @@ class ImageCacheManager: @unchecked Sendable {
         if data.count > maxSize {
             let scale = sqrt(Double(maxSize) / Double(data.count))
             let newSize = CGSize(
-                width: image.size.width * scale,
-                height: image.size.height * scale
+                width: opaqueImage.size.width * scale,
+                height: opaqueImage.size.height * scale
             )
             
-            UIGraphicsBeginImageContextWithOptions(newSize, false, 1.0)
-            image.draw(in: CGRect(origin: .zero, size: newSize))
+            // Use opaque: true to ensure no alpha channel
+            UIGraphicsBeginImageContextWithOptions(newSize, true, 1.0)
+            opaqueImage.draw(in: CGRect(origin: .zero, size: newSize))
             let resizedImage = UIGraphicsGetImageFromCurrentImageContext()
             UIGraphicsEndImageContext()
             
