@@ -27,7 +27,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4722"
             endingLineNumber = "4722"
-            landmarkName = "handleCompletedVideoJob(pendingUpload:cid:)"
+            landmarkName = "resumeVideoJobPolling(pendingUpload:jobId:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -43,7 +43,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4736"
             endingLineNumber = "4736"
-            landmarkName = "handleCompletedVideoJob(pendingUpload:cid:)"
+            landmarkName = "resumeVideoJobPolling(pendingUpload:jobId:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -139,8 +139,8 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "5033"
             endingLineNumber = "5033"
-            landmarkName = "HproseInstance"
-            landmarkType = "3">
+            landmarkName = "setUserAvatar(user:avatar:)"
+            landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>
