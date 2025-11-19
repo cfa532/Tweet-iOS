@@ -107,11 +107,14 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
             Task {
+                // After login, appUser and baseUrl are already populated by login() method
+                // No need to call initialize() or clear cache - login() already handles everything
+                // Just mark initialization as complete if not already done
                 await MainActor.run {
-                    TweetCacheManager.shared.clearAllCache()
-                    print("DEBUG: Cleared all cache on user login")
+                    if !HproseInstance.shared.isAppInitialized {
+                        HproseInstance.shared.markInitializationComplete()
+                    }
                 }
-                try await HproseInstance.shared.initialize()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in

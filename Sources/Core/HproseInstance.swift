@@ -336,13 +336,23 @@ final class HproseInstance: ObservableObject {
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     
                     if !appUser.isGuest {
-                        // Try to fetch user with empty baseUrl to force IP resolution
-                        let user = try await fetchUser(appUser.mid, baseUrl: "")
+                        // Use appUser's existing baseUrl if available (e.g., after login), otherwise force IP resolution
+                        let effectiveBaseUrl = await MainActor.run {
+                            appUser.baseUrl?.absoluteString ?? ""
+                        }
+                        let user = try await fetchUser(appUser.mid, baseUrl: effectiveBaseUrl)
                         print("✅ [INIT] appUser data fetched: \(String(describing: user))")
                         
                         if let user = user {
                             // Valid login user is found, use its provider IP as base.
-                            HproseInstance.baseUrl = URL(string: user.baseUrl?.absoluteString ?? "")!
+                            // If user doesn't have a baseUrl, fall back to firstIp
+                            if let userBaseUrlString = user.baseUrl?.absoluteString, !userBaseUrlString.isEmpty, let userBaseUrl = URL(string: userBaseUrlString) {
+                                HproseInstance.baseUrl = userBaseUrl
+                            } else {
+                                // User doesn't have a valid baseUrl, use the resolved firstIp
+                                print("DEBUG: [initAppEntry] User has no baseUrl, using resolved IP: \(firstIp)")
+                                HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
+                            }
                             client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                             
                             // CRITICAL: Set user.baseUrl on MainActor to avoid publishing warnings
@@ -357,7 +367,7 @@ final class HproseInstance: ObservableObject {
                                 User.updateUserInstance(with: user)
                                 _appUser = User.getInstance(mid: user.mid)
                             }
-                            print("✅ [INIT] App initialized with real IP: \(user.baseUrl!)")
+                            print("✅ [INIT] App initialized with real IP: \(HproseInstance.baseUrl.absoluteString)")
                             
                             // Notify UI that app is ready (tweets can now render with real IP)
                             await MainActor.run {
@@ -693,6 +703,12 @@ final class HproseInstance: ObservableObject {
         authorId: String,
         nodeUrl: String? = nil
     ) async throws -> Tweet? {
+        // Check if tweet is blacklisted before attempting fetch
+        if blackList.isBlacklisted(tweetId) {
+            print("DEBUG: [getTweet] tweetId \(tweetId) is blacklisted, returning cached tweet only")
+            return await TweetCacheManager.shared.fetchTweet(mid: tweetId)
+        }
+        
         if let cached = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
             return cached
         }
@@ -725,11 +741,21 @@ final class HproseInstance: ObservableObject {
                 // Update cached data for main feed
                 TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
                 
+                // Record success if tweet was successfully fetched
+                blackList.recordSuccess(tweetId)
+                
                 return tweet
             } catch {
                 print("Error processing tweet: \(error)")
+                // Record failure for tweet processing error
+                blackList.recordFailure(tweetId)
+                throw error
             }
         }
+        
+        // Tweet not found - record failure to blacklist candidates
+        print("DEBUG: [refreshTweet] Tweet not found for tweetId: \(tweetId), recording failure")
+        blackList.recordFailure(tweetId)
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Tweet not found", comment: "Tweet lookup error")])
     }
     
@@ -4085,6 +4111,24 @@ final class HproseInstance: ObservableObject {
     /// Process BlackList candidates (move eligible ones to blacklist)
     func processBlackListCandidates() {
         blackList.processCandidates()
+    }
+    
+    /// Start periodic processing of blacklist candidates
+    /// Checks every hour if candidates should be moved to blacklist (14+ failures over 1+ week)
+    func startPeriodicBlackListProcessing() {
+        Task.detached(priority: .background) { [weak self] in
+            guard let self = self else { return }
+            
+            print("DEBUG: [HproseInstance] Started periodic blacklist candidate processing (every hour)")
+            
+            while true {
+                // Wait 1 hour
+                try? await Task.sleep(nanoseconds: 60 * 60 * 1_000_000_000)
+                
+                // Process candidates - move eligible ones to blacklist
+                self.blackList.processCandidates()
+            }
+        }
     }
     
     /// Get BlackList statistics for debugging/monitoring

@@ -49,6 +49,9 @@ class AppState: ObservableObject {
                 // Start periodic appUser refresh every 30 minutes
                 HproseInstance.shared.startPeriodicAppUserRefresh()
                 
+                // Start periodic blacklist candidate processing every hour
+                HproseInstance.shared.startPeriodicBlackListProcessing()
+                
                 // Cleanup caches after a delay
                 Task.detached(priority: .background) {
                     // Wait 30 seconds after app initialization
