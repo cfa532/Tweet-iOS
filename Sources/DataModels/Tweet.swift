@@ -5,7 +5,9 @@ class Tweet: Identifiable, Codable, ObservableObject {
     private static var instances: [MimeiId: Tweet] = [:]
     private static let instanceLock = NSLock()
     
-    private static func getInstance(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), title: String? = nil,
+    /// Get or create a Tweet singleton instance
+    /// Always use this instead of direct Tweet() initialization to ensure singleton pattern
+    static func getInstance(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), title: String? = nil,
                           originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, author: User? = nil,
                           favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
                           commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,

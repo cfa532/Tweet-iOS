@@ -380,14 +380,15 @@ struct ReplyEditorView: View {
             return
         }
         
-        // Create comment tweet
-        let comment = Tweet(
+        // Create comment tweet using singleton
+        let comment = Tweet.getInstance(
             mid: UUID().uuidString, // Temporary ID, will be replaced by server
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(),
             originalTweetId: isQuoting ? parentTweet.mid : nil,
-            originalAuthorId: isQuoting ? parentTweet.authorId : nil
+            originalAuthorId: isQuoting ? parentTweet.authorId : nil,
+            author: hproseInstance.appUser
         )
         
         do {

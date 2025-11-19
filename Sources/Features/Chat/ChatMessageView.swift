@@ -420,17 +420,24 @@ struct ChatImageThumbnail: View {
     }
     
     private func createMockTweet(for attachment: MimeiFileType) -> Tweet {
-        // Create a minimal Tweet object for MediaBrowserView
-        let mockAuthor = User(
-            mid: isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? ""),
-            baseUrl: baseUrl,
-            name: isFromCurrentUser ? HproseInstance.shared.appUser.name : (senderUser?.name ?? ""),
-            avatar: isFromCurrentUser ? HproseInstance.shared.appUser.avatar : (senderUser?.avatar ?? "")
-        )
+        // Create a minimal Tweet object for MediaBrowserView using singletons
+        let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? "")
+        let mockAuthor = User.getInstance(mid: authorId)
+        // Update author properties if needed
+        if mockAuthor.baseUrl != baseUrl {
+            mockAuthor.baseUrl = baseUrl
+        }
+        if isFromCurrentUser {
+            mockAuthor.name = HproseInstance.shared.appUser.name
+            mockAuthor.avatar = HproseInstance.shared.appUser.avatar
+        } else if let senderUser = senderUser {
+            mockAuthor.name = senderUser.name
+            mockAuthor.avatar = senderUser.avatar
+        }
         
-        return Tweet(
+        return Tweet.getInstance(
             mid: MimeiId("chat_message_\(attachment.mid)"),
-            authorId: MimeiId(isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? "")),
+            authorId: MimeiId(authorId),
             content: "",
             timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
             author: mockAuthor,
@@ -487,11 +494,14 @@ struct ChatVideoPlayer: View {
                     // Resume playing when returning from fullscreen
                     isPlaying = true
                 }) {
-                    // Create a temporary tweet-like structure for the video
-                    let tempTweet = Tweet(
+                    // Create a temporary tweet-like structure for the video using singleton
+                    let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? Constants.GUEST_ID)
+                    let videoAuthor = User.getInstance(mid: authorId)
+                    let tempTweet = Tweet.getInstance(
                         mid: "chat_video_\(attachment.mid)",
-                        authorId: isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? Constants.GUEST_ID),
+                        authorId: authorId,
                         content: "",
+                        author: videoAuthor,
                         attachments: [attachment]
                     )
                     

@@ -200,12 +200,13 @@ struct ComposeTweetView: View {
             return
         }
         
-        // Create tweet object
-        let tweet = Tweet(
+        // Create tweet object using singleton
+        let tweet = Tweet.getInstance(
             mid: Constants.GUEST_ID,        // placeholder Mimei Id
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
+            author: hproseInstance.appUser,
             attachments: nil,
             isPrivate: isPrivate
         )

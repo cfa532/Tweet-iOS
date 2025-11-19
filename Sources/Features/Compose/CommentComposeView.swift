@@ -269,11 +269,12 @@ struct CommentComposeView: View {
         
         // Create comment object WITHOUT originalTweetId/originalAuthorId
         // Those will be set in TweetUploadManager if isQuoting is true
-        let comment = Tweet(
+        let comment = Tweet.getInstance(
             mid: UUID().uuidString,
             authorId: hproseInstance.appUser.mid,
             content: trimmedText,
             timestamp: Date(),
+            author: hproseInstance.appUser,
             attachments: nil
         )
         

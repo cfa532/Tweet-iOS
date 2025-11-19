@@ -913,8 +913,15 @@ final class HproseInstance: ObservableObject {
             // Retries: force fresh IP resolution (handled in updateUserFromServer)
             let user = try await updateUserFromServer(userId, baseUrl: effectiveBaseUrl)
             // Successfully fetched user - remove from blacklist candidates if it was there
-            if user != nil {
+            if let user = user {
                 blackList.recordSuccess(userId)
+                // User singleton's @Published properties are updated via User.updateUserInstance
+                // Views observing the User singleton will update automatically - no need to iterate all tweets
+                // Only update tweets that have nil author (not yet loaded) - but this should be handled lazily by TweetItemView
+                // Post notification for any views that want to explicitly refresh
+                await MainActor.run {
+                    NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": userId, "user": user])
+                }
             }
             return user
         } catch {
@@ -975,8 +982,8 @@ final class HproseInstance: ObservableObject {
         var lastError: Error?
         
         // Check if user has valid cached baseUrl and is not expired (only checked on first attempt)
-        let hasExpired = try? await user.hasExpired() ?? true
-        let userHasValidBaseUrl = user.baseUrl != nil && !(hasExpired ?? true)
+        let hasExpired = await user.hasExpired()
+        let userHasValidBaseUrl = user.baseUrl != nil && !hasExpired
         
         for attempt in 1...3 {
             do {
@@ -1909,11 +1916,12 @@ final class HproseInstance: ObservableObject {
     func retweet(_ tweet: Tweet) async throws -> Tweet? {
         if let retweet = try await uploadTweet(
             await MainActor.run {
-                Tweet(
+                Tweet.getInstance(
                     mid: Constants.GUEST_ID,
                     authorId: appUser.mid,
                     originalTweetId: tweet.mid,
-                    originalAuthorId: tweet.authorId
+                    originalAuthorId: tweet.authorId,
+                    author: appUser
                 )
             }
         ) {
@@ -2140,19 +2148,18 @@ final class HproseInstance: ObservableObject {
             if let retweetId = response["retweetid"] as? String, !retweetId.isEmpty {
                 print("[HproseInstance] Retweet ID received: \(retweetId)")
                 
-                // Create a new tweet with the comment's content and original tweet ID
-                let newTweet = Tweet(
+                // Create a new tweet with the comment's content and original tweet ID using singleton
+                // Register it in the singleton cache (even though we return the original comment)
+                _ = Tweet.getInstance(
                     mid: retweetId,
                     authorId: appUser.mid,
                     content: comment.content,
                     timestamp: comment.timestamp,
                     originalTweetId: tweet.mid,
                     originalAuthorId: tweet.authorId,
+                    author: appUser,
                     attachments: comment.attachments
                 )
-                
-                // Set the author
-                newTweet.author = appUser
                 
                 // For comments, we should NOT post newTweetCreated notification
                 // Comments should only appear in comment sections, not in the main feed

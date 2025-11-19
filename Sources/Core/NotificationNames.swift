@@ -9,6 +9,8 @@ extension Notification.Name {
     static let userDidLogout = Notification.Name("UserDidLogout")
     /// Posted when app user is ready (guest or logged-in)
     static let appUserReady = Notification.Name("AppUserReady")
+    /// Posted when a user is fetched/updated from server (userId in userInfo)
+    static let userDidUpdate = Notification.Name("UserDidUpdate")
     
     // MARK: - Tweet Related
     /// Posted when a new tweet is created

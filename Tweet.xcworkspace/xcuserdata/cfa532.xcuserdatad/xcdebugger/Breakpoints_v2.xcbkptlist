@@ -27,7 +27,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4722"
             endingLineNumber = "4722"
-            landmarkName = "resumeVideoJobPolling(pendingUpload:jobId:)"
+            landmarkName = "handleCompletedVideoJob(pendingUpload:cid:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

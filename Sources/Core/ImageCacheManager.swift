@@ -409,7 +409,8 @@ class ImageCacheManager: @unchecked Sendable {
     private func compressImageToSize(_ image: UIImage, maxSize: Int) -> Data {
         // First, strip alpha channel if image is opaque to avoid ImageIO warnings
         let opaqueImage: UIImage
-        if image.cgImage?.alphaInfo == .none || image.cgImage?.alphaInfo == .noneSkipLast || image.cgImage?.alphaInfo == .noneSkipFirst {
+        if let alphaInfo = image.cgImage?.alphaInfo,
+           alphaInfo == .none || alphaInfo == .noneSkipLast || alphaInfo == .noneSkipFirst {
             // Image is already opaque, use as-is
             opaqueImage = image
         } else {
