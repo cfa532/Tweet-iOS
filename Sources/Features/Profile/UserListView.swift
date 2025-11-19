@@ -1,5 +1,11 @@
 import SwiftUI
 
+// Navigation destination identifier (like Android's NavTweet.Following/Following)
+struct UserListDestination: Hashable {
+    let userId: String
+    let listType: UserListType
+}
+
 @available(iOS 16.0, *)
 struct UserListView: View {
     // MARK: - Properties

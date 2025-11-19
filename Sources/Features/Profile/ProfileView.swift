@@ -9,10 +9,10 @@ struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     
     /// Navigation state
-    @State private var showUserList = false
     @State private var showTweetList = false
     @State private var selectedTweetForNavigation: Tweet? = nil
     @State private var selectedUserForNavigation: User? = nil
+    @State private var userListDestination: UserListDestination? = nil
     
     @State private var userListType: UserListType = .FOLLOWER
     @State private var tweetListType: TweetListType = .BOOKMARKS
@@ -99,11 +99,13 @@ struct ProfileView: View {
                                 user: user,
                                 onFollowersTap: {
                                     userListType = .FOLLOWER
-                                    showUserList = true
+                                    userListDestination = UserListDestination(userId: user.mid, listType: .FOLLOWER)
+                                    navigationPath.append(userListDestination!)
                                 },
                                 onFollowingTap: {
                                     userListType = .FOLLOWING
-                                    showUserList = true
+                                    userListDestination = UserListDestination(userId: user.mid, listType: .FOLLOWING)
+                                    navigationPath.append(userListDestination!)
                                 },
                                 onBookmarksTap: {
                                     tweetListType = .BOOKMARKS
@@ -349,33 +351,36 @@ struct ProfileView: View {
                 }
             }
         }
-        .navigationDestination(isPresented: $showUserList) {
+        .navigationDestination(for: UserListDestination.self) { destination in
             let displayName = if let name = user.name, !name.isEmpty {
                 name
             } else {
                 user.username ?? "No One"
             }
             UserListView(
-                title: userListType == .FOLLOWER ? "Fans@\(displayName)" : "Followings@\(displayName)",
+                title: destination.listType == .FOLLOWER ? "Fans@\(displayName)" : "Followings@\(displayName)",
                 userFetcher: { page, size in
                     // Only fetch all IDs once when page is 0
                     if page == 0 {
-                        let entry: UserContentType = userListType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
-                        let ids = try await hproseInstance.getListByType(user: user, entry: entry)
+                        let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                        // Get the user instance from destination.userId
+                        let targetUser = User.getInstance(mid: destination.userId)
+                        let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
                         // Update user properties on main thread to avoid publishing changes from background thread
                         await MainActor.run {
-                            if userListType == .FOLLOWER {
-                                user.fansList = ids
+                            if destination.listType == .FOLLOWER {
+                                targetUser.fansList = ids
                             } else {
-                                user.followingList = ids
+                                targetUser.followingList = ids
                             }
                         }
                         return ids
                     } else {
-                        return if userListType == .FOLLOWER {
-                            user.fansList ?? []
+                        let targetUser = User.getInstance(mid: destination.userId)
+                        return if destination.listType == .FOLLOWER {
+                            targetUser.fansList ?? []
                         } else {
-                            user.followingList ?? []
+                            targetUser.followingList ?? []
                         }
                     }
                 },
