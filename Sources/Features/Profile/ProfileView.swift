@@ -11,6 +11,7 @@ struct ProfileView: View {
     /// Navigation state
     @State private var showTweetList = false
     @State private var selectedTweetForNavigation: Tweet? = nil
+    @State private var selectedTweetFromBookmarksFavorites: Tweet? = nil // Separate state for tweets from bookmarks/favorites
     @State private var selectedUserForNavigation: User? = nil
     @State private var userListDestination: UserListDestination? = nil
     
@@ -395,18 +396,6 @@ struct ProfileView: View {
         .navigationDestination(isPresented: $showTweetList) {
             print("🔵 [ProfileView] navigationDestination(showTweetList) TRIGGERED - type: \(tweetListType), user: \(user.username ?? "nil")")
             return bookmarksOrFavoritesListView()
-                .onAppear {
-                    print("🔵 [ProfileView] Bookmarks/Favorites list appeared - type: \(tweetListType), user: \(user.username ?? "nil")")
-                    // Clear tweets when view appears to ensure fresh data
-                    if tweetListType == .BOOKMARKS {
-                        bookmarksTweets.removeAll()
-                    } else {
-                        favoritesTweets.removeAll()
-                    }
-                }
-                .onDisappear {
-                    print("🔵 [ProfileView] Bookmarks/Favorites list disappeared - type: \(tweetListType)")
-                }
         }
         .navigationDestination(item: $selectedTweetForNavigation) { tweet in
             // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
@@ -838,11 +827,21 @@ struct ProfileView: View {
                             selectedUserForNavigation = tappedUser
                         },
                         onTap: { selectedTweet in
-                            selectedTweetForNavigation = selectedTweet
+                            selectedTweetFromBookmarksFavorites = selectedTweet
                         }
                     )
                 }
             )
+            .navigationDestination(item: $selectedTweetFromBookmarksFavorites) { tweet in
+                // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
+                if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
+                    // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
+                    CommentDetailViewWithParent(comment: tweet)
+                } else {
+                    // This is a regular tweet or quote tweet, show TweetDetailView
+                    TweetDetailView(tweet: tweet)
+                }
+            }
             .navigationBarBackButtonHidden(true)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -883,11 +882,21 @@ struct ProfileView: View {
                             selectedUserForNavigation = tappedUser
                         },
                         onTap: { selectedTweet in
-                            selectedTweetForNavigation = selectedTweet
+                            selectedTweetFromBookmarksFavorites = selectedTweet
                         }
                     )
                 }
             )
+            .navigationDestination(item: $selectedTweetFromBookmarksFavorites) { tweet in
+                // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
+                if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
+                    // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
+                    CommentDetailViewWithParent(comment: tweet)
+                } else {
+                    // This is a regular tweet or quote tweet, show TweetDetailView
+                    TweetDetailView(tweet: tweet)
+                }
+            }
             .navigationBarBackButtonHidden(true)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
