@@ -130,19 +130,24 @@ struct UserListView: View {
                 // Deduplicate user IDs
                 let uniqueUserIds = Array(Set(allIds))
                 
+                // Filter out blacklisted user IDs
+                let filteredUserIds = uniqueUserIds.filter { userId in
+                    !BlackList.shared.isBlacklisted(userId)
+                }
+                
                 await MainActor.run {
                     // Check if task was cancelled before updating UI
                     guard !Task.isCancelled else { return }
-                    allUserIds = uniqueUserIds
+                    allUserIds = filteredUserIds
                     // Start with empty displayed list for sequential loading
                     displayedUserIds = []
                     currentLoadIndex = 0
-                    hasMoreUsers = uniqueUserIds.count > 0
+                    hasMoreUsers = filteredUserIds.count > 0
                     isLoading = false
                 }
                 
                 // Start loading first batch
-                await loadBatch(Array(uniqueUserIds.prefix(pageSize)))
+                await loadBatch(Array(filteredUserIds.prefix(pageSize)))
             } catch is CancellationError {
                 print("DEBUG: [UserListView] Refresh cancelled")
             } catch {
