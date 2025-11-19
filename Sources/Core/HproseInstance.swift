@@ -1007,40 +1007,30 @@ final class HproseInstance: ObservableObject {
         // Custom retry logic with baseUrl handling
         var lastError: Error?
         
-        // Check if user has valid cached baseUrl and is not expired (only checked on first attempt)
+        // Check if user has a baseUrl (even if cache expired, e.g., alphaId user)
         let hasExpired = await user.hasExpired()
-        let userHasValidBaseUrl = user.baseUrl != nil && !hasExpired
+        let userHasBaseUrl = user.baseUrl != nil && !(user.baseUrl?.absoluteString.isEmpty ?? true)
         
         for attempt in 1...3 {
             do {
-                // First attempt: Use user's cached baseUrl if not expired, otherwise resolve IP
+                // First attempt: Use user's existing baseUrl if available, otherwise resolve IP
                 // Retry attempts: Always force fresh IP resolution
                 if attempt == 1 {
-                    if userHasValidBaseUrl, let userBaseUrl = user.baseUrl?.absoluteString, !userBaseUrl.isEmpty {
-                        // User has valid (not expired) cached baseUrl - use it
-                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Using user's cached baseUrl (not expired): \(userBaseUrl) for userId: \(userId)")
-                        let normalizedBase = try normalizedBaseURL(from: userBaseUrl, context: "cached baseUrl for \(userId)")
+                    if userHasBaseUrl, let userBaseUrl = user.baseUrl?.absoluteString {
+                        // User has a baseUrl (even if cache expired) - use it to avoid false redirect loop detection
+                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Using user's existing baseUrl: \(userBaseUrl) for userId: \(userId) (hasExpired: \(hasExpired))")
+                        let normalizedBase = try normalizedBaseURL(from: userBaseUrl, context: "existing baseUrl for \(userId)")
                         await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "attempt \(attempt)")
                     } else {
-                        // User is expired or has no baseUrl - resolve IP using userId
+                        // User has no baseUrl - resolve IP using userId
                         let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
-                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - User expired or no baseUrl, resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl)")
+                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - No baseUrl, resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl)")
                         guard let providerIP = try await self.getProviderIP(userId) else {
                             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
                         }
                         
-                        // Check if resolved IP is the same as current IP (redirect loop prevention)
-                        // Only check if current IP exists - if it's nil/empty, this is first resolution, not a loop
-                        if let currentBaseUrlString = user.baseUrl?.absoluteString, !currentBaseUrlString.isEmpty {
-                            let normalizedProviderIp = providerIP.hasPrefix("http://") ? String(providerIP.dropFirst(7)) : (providerIP.hasPrefix("http") ? String(providerIP.dropFirst(4)) : providerIP)
-                            let normalizedCurrentIp = currentBaseUrlString.hasPrefix("http://") ? String(currentBaseUrlString.dropFirst(7)) : currentBaseUrlString
-                            
-                            if normalizedProviderIp == normalizedCurrentIp {
-                                print("DEBUG: [updateUserFromServer] Redirect loop detected on first attempt - resolved IP (\(providerIP)) same as current IP (\(currentBaseUrlString))")
-                                throw NSError(domain: "HproseClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Redirect loop detected - resolved IP same as current IP: \(providerIP)"])
-                            }
-                        }
-                        
+                        // On first attempt with no existing baseUrl, always accept the resolved IP
+                        // Redirect loop detection only applies on retries when we already have a baseUrl
                         let normalizedBase = try normalizedBaseURL(from: providerIP, context: "provider IP for \(userId)")
                         await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "provider IP attempt \(attempt)")
                     }
