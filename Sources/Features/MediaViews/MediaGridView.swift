@@ -72,7 +72,7 @@ struct MediaGridView: View {
     }
     
     private func onVideoFinished() {
-        videoManager.onVideoFinished()
+        videoManager.onVideoFinished(tweetId: parentTweet.mid)
     }
     
     var body: some View {
@@ -471,10 +471,14 @@ struct MediaGridView: View {
             }
             
             // Always stop any existing playback first to handle reuse scenarios
+            // But save current index before stopping if we're just disappearing temporarily
+            if videoManager.isSequentialPlaybackEnabled && videoManager.currentVideoIndex >= 0 {
+                videoManager.saveCurrentIndex(for: parentTweet.mid)
+            }
             videoManager.stopSequentialPlayback()
             
             if videoMids.count > 1 {
-                videoManager.setupSequentialPlayback(for: videoMids)
+                videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
                 print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
             } else if videoMids.count == 1 {
                 // For single videos, set up the video MID but don't enable sequential playback
@@ -513,6 +517,11 @@ struct MediaGridView: View {
         .onDisappear {
             // Mark the grid as not visible
             isVisible = false
+            
+            // Save current video index before stopping (for persistence)
+            if videoManager.isSequentialPlaybackEnabled && videoManager.currentVideoIndex >= 0 {
+                videoManager.saveCurrentIndex(for: parentTweet.mid)
+            }
             
             // TIMER DISABLED - no timer to invalidate
             shouldLoadVideo = false
