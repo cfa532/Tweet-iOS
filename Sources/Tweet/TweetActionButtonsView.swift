@@ -457,7 +457,13 @@ struct TweetActionButtonsView: View {
             items.append(CustomShareImage(image: previewImage))
             print("DEBUG: [SHARE] Added CustomShareImage to share items")
         } else {
-            print("DEBUG: [SHARE] No preview image to share")
+            // No attachment preview - use app icon as default
+            if let appIcon = UIImage(named: "ic_splash") {
+                items.append(CustomShareImage(image: appIcon))
+                print("DEBUG: [SHARE] Added app icon as default image (no attachments)")
+            } else {
+                print("DEBUG: [SHARE] No preview image to share and app icon not found")
+            }
         }
         return items
     }
@@ -1135,8 +1141,10 @@ class CustomShareItem: NSObject, UIActivityItemSource {
             metadata.imageProvider = NSItemProvider(object: previewImage)
             print("DEBUG: [SHARE] Link metadata created with preview image")
         } else if let appIcon = UIImage(named: "ic_splash") {
+            // No attachments - use app icon as default
             metadata.iconProvider = NSItemProvider(object: appIcon)
-            print("DEBUG: [SHARE] Link metadata created with app icon fallback")
+            metadata.imageProvider = NSItemProvider(object: appIcon)
+            print("DEBUG: [SHARE] Link metadata created with app icon fallback (no attachments)")
         }
         
         return metadata

@@ -248,6 +248,10 @@ struct SimpleVideoPlayer: View {
             .onReceive(MuteState.shared.$isMuted) { globalMuteState in handleGlobalMuteChange(globalMuteState: globalMuteState) }
             .onChange(of: currentAutoPlay) { _, shouldAutoPlay in handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay) }
             .onChange(of: isVisible) { _, visible in handleVisibilityChange(visible: visible) }
+            // Observe VideoManager's currentVideoIndex changes for sequential playback
+            .modifier(VideoManagerObserverModifier(videoManager: videoManager, mid: mid, mode: mode) { shouldAutoPlay in
+                handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay)
+            })
             .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
             .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
             .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
@@ -2216,6 +2220,12 @@ struct SimpleVideoPlayer: View {
                 }
             }
         } else {
+            // autoPlay is false - pause this video if it's playing (for sequential playback)
+            if mode == .mediaCell, let player = player, player.rate > 0 {
+                print("DEBUG: [VIDEO PLAYBACK] Pausing video \(mid) because autoPlay became false (sequential playback)")
+                player.pause()
+                playbackState = .paused
+            }
         }
     }
     
@@ -2599,6 +2609,29 @@ struct AVPlayerLayerView: UIViewRepresentable {
         
         var playerLayer: AVPlayerLayer {
             return layer as! AVPlayerLayer
+        }
+    }
+}
+
+// MARK: - VideoManager Observer Modifier
+struct VideoManagerObserverModifier: ViewModifier {
+    let videoManager: VideoManager?
+    let mid: String
+    let mode: Mode
+    let onVideoIndexChanged: (Bool) -> Void
+    
+    func body(content: Content) -> some View {
+        if let videoManager = videoManager {
+            content
+                .onReceive(videoManager.$currentVideoIndex) { _ in
+                    // When currentVideoIndex changes, re-evaluate autoPlay state
+                    if mode == .mediaCell {
+                        let shouldAutoPlay = videoManager.shouldPlayVideo(for: mid)
+                        onVideoIndexChanged(shouldAutoPlay)
+                    }
+                }
+        } else {
+            content
         }
     }
 }
