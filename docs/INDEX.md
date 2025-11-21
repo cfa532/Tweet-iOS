@@ -41,6 +41,7 @@
 ### Recent Critical Fixes
 | Document | Description | Date |
 |----------|-------------|------|
+| [**fixes/CACHE_KEY_MIGRATION_DEC_2025.md**](./fixes/CACHE_KEY_MIGRATION_DEC_2025.md) | Cache key migration from "main_feed" to appUser.mid with persistence across logouts | Dec 2025 |
 | [**fixes/SHARING_SYSTEM_ENHANCEMENT_NOV_14_2025.md**](./fixes/SHARING_SYSTEM_ENHANCEMENT_NOV_14_2025.md) | Context-aware sharing: IP-based URLs for Vue HashHistory, accurate video screenshots from detail view | Nov 14, 2025 |
 | [**fixes/CACHED_TWEETS_BLOCKING_FIX.md**](./fixes/CACHED_TWEETS_BLOCKING_FIX.md) | **CURRENT PRODUCTION**: Non-blocking renders, eliminated 34 lines of baseUrl workaround code | Oct 22, 2025 |
 | [**fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md**](./fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md) | Code cleanup: removed complex baseUrl assignment system | Oct 22, 2025 |
