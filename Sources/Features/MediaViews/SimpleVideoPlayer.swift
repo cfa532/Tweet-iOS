@@ -634,8 +634,12 @@ struct SimpleVideoPlayer: View {
                 setupPlayer()
             } else {
                 // SANITY CHECK: Run when becoming visible to catch broken players
-                if isPlayerBroken() {
-                    print("⚠️ [VIDEO VISIBILITY] Sanity check failed - player is broken, recreating for \(mid)")
+                // Check if player or currentItem is missing first (common after long background)
+                let playerIsMissing = player == nil || player?.currentItem == nil
+                let playerIsBroken = !playerIsMissing && isPlayerBroken()
+                
+                if playerIsMissing || playerIsBroken {
+                    print("⚠️ [VIDEO VISIBILITY] Sanity check failed - player is \(playerIsMissing ? "missing" : "broken"), recreating for \(mid)")
                     SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
                     player = nil
                     loadingState = .idle
@@ -855,6 +859,39 @@ struct SimpleVideoPlayer: View {
         
         // APP BACKGROUND or non-MediaCell: Gentle recovery (only recreate if broken)
         
+        // CRITICAL: Check if player or currentItem is missing first (common after long background)
+        // After clearVideoPlayersForBackgroundRecovery(), currentItem is set to nil
+        let playerIsMissing = player == nil || player?.currentItem == nil
+        
+        if playerIsMissing {
+            print("⚠️ [VIDEO RECOVERY] Player or currentItem missing after background, recreating")
+            player = nil
+            loadingState = .idle
+            playbackState = .notStarted
+            
+            if shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser {
+                setupPlayer()
+                
+                // Wait for player to be ready before reattaching
+                Task { @MainActor in
+                    var attempts = 0
+                    while player == nil && !loadingState.hasFailed && attempts < 50 {
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                        attempts += 1
+                    }
+                    
+                    if player != nil {
+                        // Reattach player after successful recreation
+                        self.isPlayerDetached = false
+                        print("✅ [VIDEO RECOVERY] Player recreated and reattached")
+                    } else {
+                        print("⚠️ [VIDEO RECOVERY] Failed to recreate player")
+                    }
+                }
+            }
+            return
+        }
+        
         // Gentle recovery: only recreate if actually broken
         if isPlayerBroken() {
             print("⚠️ [VIDEO RECOVERY] Player is broken, recreating")
@@ -890,7 +927,14 @@ struct SimpleVideoPlayer: View {
         
         // Ensure player is in valid state
         guard let player = player, let playerItem = player.currentItem else {
-            print("⚠️ [VIDEO RECOVERY] Player or item missing, cannot reattach")
+            print("⚠️ [VIDEO RECOVERY] Player or item missing in healthy path, recreating")
+            // This shouldn't happen if checks above are correct, but be safe and recreate
+            self.player = nil
+            loadingState = .idle
+            playbackState = .notStarted
+            if shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser {
+                setupPlayer()
+            }
             return
         }
         

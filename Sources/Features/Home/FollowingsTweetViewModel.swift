@@ -69,10 +69,11 @@ class FollowingsTweetViewModel: ObservableObject {
                 tweets.mergeTweetsSmoothly(filteredTweets)
             }
             
-            // Cache tweets if shouldCache is true - use "main_feed" as special user ID for main feed cache
+            // Cache tweets if shouldCache is true - use appUser.mid as cache key to persist across logouts
             if shouldCache {
+                let cacheKey = hproseInstance.appUser.mid
                 for tweet in serverTweets.compactMap({ $0 }) {
-                    TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
+                    TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
                 }
             }
             if page == 0 {
@@ -110,7 +111,7 @@ class FollowingsTweetViewModel: ObservableObject {
                 tweets.mergeTweets([tweet])
                 
                 // Cache the new tweet so it persists across app restarts
-                TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
+                TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
             }
         }
     }
@@ -131,7 +132,7 @@ class FollowingsTweetViewModel: ObservableObject {
         tweets.removeAll { $0.authorId == userId }
         
         // Remove from local cache
-        TweetCacheManager.shared.deleteTweetsFromUser(userId: userId, cacheKey: "main_feed")
+        TweetCacheManager.shared.deleteTweetsFromUser(userId: userId, cacheKey: hproseInstance.appUser.mid)
     }
     
     // Fetch and add recent tweets from a newly followed user
@@ -158,8 +159,9 @@ class FollowingsTweetViewModel: ObservableObject {
                 }
                 
                 // Cache the tweets to main feed
+                let cacheKey = hproseInstance.appUser.mid
                 for tweet in validTweets {
-                    TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
+                    TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
                 }
                 
                 print("[FollowingsTweetViewModel] Added and cached \(validTweets.count) tweets from newly followed user")
@@ -177,8 +179,7 @@ class FollowingsTweetViewModel: ObservableObject {
     // Method to clear tweets when user logs in/out
     func clearTweets() {
         tweets.removeAll()
-        // Clear main feed cache when user logs in/out
-        TweetCacheManager.shared.clearCacheForUser(userId: "main_feed")
+        // Don't clear cache on logout - cache persists per user and is cleared periodically or manually
     }
     
     // Method to load page 0 tweets when app user is ready

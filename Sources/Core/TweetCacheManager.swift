@@ -303,17 +303,13 @@ extension TweetCacheManager {
     }
 
     /// Update a tweet using unified cache strategy:
-    /// - AppUser's public tweets → "main_feed" cache (appear in feed and profile)
+    /// - AppUser's public tweets → appUser.mid cache (appear in feed and profile, persists across logouts)
     /// - AppUser's private tweets → appUser.mid cache only (profile-only visibility)
-    /// - Other users' tweets → "main_feed" cache
+    /// - Other users' tweets → appUser.mid cache (persists across logouts)
     func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
-        if tweet.authorId == appUserId && tweet.isPrivate == true {
-            // AppUser's private tweet - save only to profile cache
-            saveTweet(tweet, userId: appUserId)
-        } else {
-            // Public tweet (any user) or other users' tweets - save to main_feed
-            saveTweet(tweet, userId: "main_feed")
-        }
+        // All tweets go to appUser.mid cache to persist across logouts
+        // Cache is cleared periodically or manually by user, not on logout
+        saveTweet(tweet, userId: appUserId)
     }
 
     func deleteExpiredTweets() {

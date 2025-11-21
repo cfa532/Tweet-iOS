@@ -66,17 +66,8 @@ class ProfileTweetsViewModel: ObservableObject {
             // Cache tweets only if it's the appUser's profile
             if shouldCache && user.mid == hproseInstance.appUser.mid {
                 for tweet in filteredTweets.compactMap({ $0 }) {
-                    // Cache strategy:
-                    // - Public tweets → "main_feed" cache (they appear in feed anyway)
-                    // - Private tweets → appUser.mid cache only (profile-only visibility)
-                    if tweet.isPrivate == true {
-                        // Private tweet - save only to profile cache
-                        TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
-                        print("DEBUG: [ProfileTweetsViewModel] Cached private tweet to profile only: \(tweet.mid)")
-                    } else {
-                        // Public tweet - save to main_feed (unified cache)
-                        TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
-                    }
+                    // Cache strategy: all tweets go to appUser.mid cache (persists across logouts)
+                    TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
                 }
             }
             
@@ -98,15 +89,8 @@ class ProfileTweetsViewModel: ObservableObject {
                 
                 // Cache the new tweet if it's the appUser's profile
                 if user.mid == hproseInstance.appUser.mid {
-                    // Cache strategy:
-                    // - Public tweets → "main_feed" cache (they appear in feed anyway)
-                    // - Private tweets → appUser.mid cache only (profile-only visibility)
-                    if tweet.isPrivate == true {
-                        TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
-                        print("DEBUG: [ProfileTweetsViewModel] Cached private tweet to profile only: \(tweet.mid)")
-                    } else {
-                        TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
-                    }
+                    // Cache strategy: all tweets go to appUser.mid cache (persists across logouts)
+                    TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
                 }
             } else {
                 print("DEBUG: [ProfileTweetsViewModel] Skipping pinned tweet: \(tweet.mid)")
@@ -193,16 +177,12 @@ struct ProfileTweetsSection<Header: View>: View {
                 if isFromCache {
                     // Fetch from cache for profile tweets (only if it's the appUser's profile)
                     if user.mid == hproseInstance.appUser.mid {
-                        // Load from both caches and merge:
-                        // 1. Main feed cache (public tweets)
-                        // 2. Profile cache (private tweets)
-                        let mainFeedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-                            for: "main_feed", page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
-                        let privateTweets = await TweetCacheManager.shared.fetchCachedTweets(
-                            for: user.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
+                        // Load from appUser.mid cache (contains both public and private tweets, persists across logouts)
+                        let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+                            for: hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
                         
-                        // Merge and filter to show only appUser's tweets
-                        var allTweets = (mainFeedTweets + privateTweets).compactMap { $0 }
+                        // Filter to show only appUser's tweets
+                        var allTweets = cachedTweets.compactMap { $0 }
                         allTweets = allTweets.filter { $0.authorId == user.mid }
                         
                         // Remove duplicates and sort by timestamp

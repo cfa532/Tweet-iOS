@@ -15,9 +15,9 @@ struct FollowingsTweetView: View {
                 let startTime = Date()
                 if isFromCache {
                     print("📋 [CACHE LOAD] Fetching page \(page) from cache")
-                    // Use "main_feed" as special user ID for main feed cache to separate from profile browsing
+                    // Use appUser.mid as cache key for main feed to persist across logouts
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-                        for: "main_feed", page: page, pageSize: size, currentUserId: viewModel.hproseInstance.appUser.mid)
+                        for: viewModel.hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: viewModel.hproseInstance.appUser.mid)
                     
                     let elapsed = Date().timeIntervalSince(startTime) * 1000
                     let validCount = cachedTweets.compactMap{$0}.count

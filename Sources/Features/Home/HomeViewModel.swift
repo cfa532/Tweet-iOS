@@ -119,9 +119,9 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
             Task {
+                // Don't clear cache on logout - cache persists per user and is cleared periodically or manually
                 await MainActor.run {
-                    TweetCacheManager.shared.clearAllCache()
-                    print("DEBUG: Cleared all cache on user logout")
+                    print("DEBUG: Cache persists across logout - cleared periodically or manually by user")
                 }
                 try await HproseInstance.shared.initialize()
             }

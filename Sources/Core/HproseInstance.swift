@@ -1520,8 +1520,8 @@ final class HproseInstance: ObservableObject {
     func logout() async {
         preferenceHelper?.setUserId(nil as String?)
         
-        // Clear all caches on signout - includes private tweets and all media
-        TweetCacheManager.shared.clearCacheOnSignout()
+        // Don't clear tweet cache on logout - cache persists per user and is cleared periodically or manually
+        // Clear chat cache on signout
         ChatCacheManager.shared.clearAllCache()
         
         // Clear all video cache files from disk
