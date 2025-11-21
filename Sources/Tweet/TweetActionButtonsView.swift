@@ -132,6 +132,29 @@ struct TweetActionButtonsView: View {
     
     var body: some View {
         HStack(spacing: 0) {
+            // Comment button
+            DebounceButton(
+                cooldownDuration: 0.3,
+                enableAnimation: true,
+                enableVibration: false
+            ) {
+                if hproseInstance.appUser.isGuest {
+                    handleGuestAction()
+                } else {
+                    onCommentTap?() ?? { showCommentCompose = true }()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "bubble.left")
+                        .frame(width: 20)
+                    if let count = tweet.commentCount, count > 0 {
+                        Text("\(count)")
+                            .frame(minWidth: 20, alignment: .leading)
+                    }
+                }
+                .frame(width: 48, alignment: .leading)
+            }
+            Spacer(minLength: 12)
             // Retweet / forward button
             DebounceButton(
                 cooldownDuration: 0.5,
