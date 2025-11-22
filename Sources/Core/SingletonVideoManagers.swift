@@ -692,7 +692,11 @@ class DetailVideoManager: NSObject, ObservableObject {
         // Get the cache key before clearing the reference
         let cacheKey = currentVideoMid.map { "tweetDetail_\($0)" }
         
+        // CRITICAL: Replace currentItem with nil to completely stop playback
+        // Just calling pause() is not enough - AVPlayerViewController can restart it
         currentPlayer?.pause()
+        currentPlayer?.replaceCurrentItem(with: nil)
+        print("DEBUG: [DetailVideoManager] Replaced player item with nil to stop playback")
         currentPlayer = nil
         currentVideoMid = nil
         isPlaying = false

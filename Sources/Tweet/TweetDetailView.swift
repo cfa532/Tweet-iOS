@@ -297,6 +297,7 @@ struct TweetDetailView: View {
     // Scroll detection state for top navigation bar
     @State private var isTopNavigationVisible = true
     @State private var previousScrollOffset: CGFloat = 0
+    @State private var cleanupTask: Task<Void, Never>? // Delayed cleanup task
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
@@ -481,9 +482,14 @@ struct TweetDetailView: View {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
             
-            // Stop video player if there is one
+            // Stop video player immediately
+            // The .task defer block will also clean up when the view is permanently dismissed
             DetailVideoManager.shared.clearCurrentVideo()
-            print("DEBUG: [TweetDetailView] Stopped video player")
+            print("DEBUG: [TweetDetailView] Stopped video player immediately in onDisappear")
+            
+            // Cancel any pending cleanup task
+            cleanupTask?.cancel()
+            cleanupTask = nil
             
             // Reset top navigation visibility when view disappears
             withAnimation(.easeInOut(duration: 0.3)) {
