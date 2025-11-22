@@ -687,10 +687,23 @@ class DetailVideoManager: NSObject, ObservableObject {
             videoCompletionObserver = nil
         }
         
+        // Get the cache key before clearing the reference
+        let cacheKey = currentVideoMid.map { "tweetDetail_\($0)" }
+        
         currentPlayer?.pause()
         currentPlayer = nil
         currentVideoMid = nil
         isPlaying = false
+        
+        // CRITICAL FIX: Remove the player from SharedAssetCache
+        // This ensures complete isolation. Since MediaCell uses a different cache key,
+        // removing the "tweetDetail_" prefixed key won't affect MediaCell.
+        if let key = cacheKey {
+            Task { @MainActor in
+                SharedAssetCache.shared.removeInvalidPlayer(for: key)
+                print("DEBUG: [DetailVideoManager] Removed player from SharedAssetCache with key: \(key)")
+            }
+        }
         
         // Deactivate audio session when video is cleared
         AudioSessionManager.shared.deactivateForVideoPlayback()

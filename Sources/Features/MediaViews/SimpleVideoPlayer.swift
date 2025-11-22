@@ -390,8 +390,10 @@ struct SimpleVideoPlayer: View {
         // Remove observers to prevent memory leaks
         removePlayerObservers()
 
-        // Cache the current video state
-        if let player = player {
+        // Cache the current video state (MediaCell only, NOT TweetDetail or MediaBrowser)
+        // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
+        // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
+        if mode == .mediaCell, let player = player {
             // For MediaCell mode, save the current global mute state
             // For detail/fullscreen modes, we need to track the original global mute state
             let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
@@ -679,7 +681,9 @@ struct SimpleVideoPlayer: View {
         } else {
             // When becoming invisible, cache state but don't pause here
             // (pause is handled in onDisappear to avoid conflicts)
-            if let player = player {
+            // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
+            // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
+            if mode == .mediaCell, let player = player {
                 // For MediaCell mode, save the current global mute state
                 // For detail/fullscreen modes, we need to track the original global mute state
                 let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
@@ -1445,7 +1449,9 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // NORMAL FLOW: Check VideoStateCache for shared player (MediaCell/MediaBrowser)
+        // NORMAL FLOW: Check VideoStateCache for shared player (MediaCell can read/write, MediaBrowser can only read)
+        // MediaBrowser can read from VideoStateCache for performance (reuse MediaCell's player), but won't write to it
+        // TweetDetail has its own path above and doesn't use VideoStateCache at all
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
             NSLog("DEBUG: [VIDEO CACHE] ✅ Found shared player for \(mid) in \(mode) mode")
             
@@ -1801,20 +1807,24 @@ struct SimpleVideoPlayer: View {
         self.representableId += 1 // Force VideoPlayerRepresentable to recreate
         self.viewConfigTimestamp = Date().timeIntervalSince1970 // Force unique view ID
         
-        // Cache player state in VideoStateCache for sharing (using time observer for deferred caching when ready)
-        // For now, just note if player is ready
-        if let playerItem = player.currentItem, playerItem.status == .readyToPlay, !playerItem.loadedTimeRanges.isEmpty {
-            let currentTime = player.currentTime()
-            let wasPlaying = player.rate > 0
-            VideoStateCache.shared.cacheVideoState(
-                for: mid,
-                player: player,
-                time: currentTime,
-                wasPlaying: wasPlaying,
-                originalMuteState: player.isMuted
-            )
-            NSLog("DEBUG: [VIDEO CONFIGURE] ✅ Cached READY player with buffered data in VideoStateCache for \(mid)")
+        // Cache player state in VideoStateCache for sharing (MediaCell only, NOT TweetDetail or MediaBrowser)
+        // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
+        // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
+        if mode == .mediaCell {
+            if let playerItem = player.currentItem, playerItem.status == .readyToPlay, !playerItem.loadedTimeRanges.isEmpty {
+                let currentTime = player.currentTime()
+                let wasPlaying = player.rate > 0
+                VideoStateCache.shared.cacheVideoState(
+                    for: mid,
+                    player: player,
+                    time: currentTime,
+                    wasPlaying: wasPlaying,
+                    originalMuteState: player.isMuted
+                )
+                NSLog("DEBUG: [VIDEO CONFIGURE] ✅ Cached READY player with buffered data in VideoStateCache for \(mid)")
+            }
         } else {
+            NSLog("DEBUG: [VIDEO CONFIGURE] Skipping VideoStateCache for TweetDetail mode (uses DetailVideoManager singleton)")
         }
         
         
@@ -2440,14 +2450,18 @@ struct SimpleVideoPlayer: View {
         
         print("DEBUG: [VIDEO BACKGROUND] Caching state for \(mid) - wasPlaying: \(wasPlaying), time: \(CMTimeGetSeconds(currentTime))")
         
-        // Cache the state for restoration
-        VideoStateCache.shared.cacheVideoState(
-            for: mid,
-            player: player,
-            time: currentTime,
-            wasPlaying: wasPlaying,
-            originalMuteState: mode == .mediaCell ? isMuted : MuteState.shared.isMuted
-        )
+        // Cache the state for restoration (MediaCell only, NOT TweetDetail or MediaBrowser)
+        // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
+        // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
+        if mode == .mediaCell {
+            VideoStateCache.shared.cacheVideoState(
+                for: mid,
+                player: player,
+                time: currentTime,
+                wasPlaying: wasPlaying,
+                originalMuteState: isMuted
+            )
+        }
         
         // Pause the player but keep it attached
         player.pause()
@@ -2464,14 +2478,18 @@ struct SimpleVideoPlayer: View {
         let wasPlaying = player.rate > 0
         let currentTime = player.currentTime()
         
-        // Cache the state for restoration
-        VideoStateCache.shared.cacheVideoState(
-            for: mid,
-            player: player,
-            time: currentTime,
-            wasPlaying: wasPlaying,
-            originalMuteState: mode == .mediaCell ? isMuted : MuteState.shared.isMuted
-        )
+        // Cache the state for restoration (MediaCell only, NOT TweetDetail or MediaBrowser)
+        // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
+        // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
+        if mode == .mediaCell {
+            VideoStateCache.shared.cacheVideoState(
+                for: mid,
+                player: player,
+                time: currentTime,
+                wasPlaying: wasPlaying,
+                originalMuteState: isMuted
+            )
+        }
         
         // Pause the player first
         player.pause()
