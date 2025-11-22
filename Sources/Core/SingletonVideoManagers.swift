@@ -592,6 +592,7 @@ class DetailVideoManager: NSObject, ObservableObject {
     @Published var isPlaying = false
     
     private var videoCompletionObserver: NSObjectProtocol?
+    private var hasKVOObserver = false // Track if KVO observer was added
     
     /// Setup audio interruption notifications to handle incoming calls
     private func setupAudioInterruptionNotifications() {
@@ -604,9 +605,10 @@ class DetailVideoManager: NSObject, ObservableObject {
         if currentVideoMid != mid {
             currentPlayer?.pause()
             
-            // Remove KVO observer from previous player item
-            if let player = currentPlayer, let playerItem = player.currentItem {
+            // Remove KVO observer from previous player item (only if it was added)
+            if hasKVOObserver, let player = currentPlayer, let playerItem = player.currentItem {
                 playerItem.removeObserver(self, forKeyPath: "status")
+                hasKVOObserver = false
             }
             
             // Remove video completion observer from previous video
@@ -642,6 +644,7 @@ class DetailVideoManager: NSObject, ObservableObject {
                     if let playerItem = self.currentPlayer?.currentItem {
                         // Add KVO observer for player item status
                         playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
+                        self.hasKVOObserver = true
                         
                         // Add video completion observer
                         self.setupVideoCompletionObserver(playerItem)
@@ -672,9 +675,10 @@ class DetailVideoManager: NSObject, ObservableObject {
     
     /// Clear current video
     func clearCurrentVideo() {
-        // Remove KVO observer before clearing
-        if let player = currentPlayer, let playerItem = player.currentItem {
+        // Remove KVO observer before clearing (only if it was added)
+        if hasKVOObserver, let player = currentPlayer, let playerItem = player.currentItem {
             playerItem.removeObserver(self, forKeyPath: "status")
+            hasKVOObserver = false
         }
         
         // Remove video completion observer
@@ -891,8 +895,9 @@ class DetailVideoManager: NSObject, ObservableObject {
             NSLog("DEBUG: [DetailVideoManager] Layer 2 (Security): Player is broken - clearing to force recreation")
             
             // Clear broken player completely
-            if let playerItem = player.currentItem {
+            if hasKVOObserver, let playerItem = player.currentItem {
                 playerItem.removeObserver(self, forKeyPath: "status")
+                hasKVOObserver = false
             }
             if let observer = videoCompletionObserver {
                 NotificationCenter.default.removeObserver(observer)

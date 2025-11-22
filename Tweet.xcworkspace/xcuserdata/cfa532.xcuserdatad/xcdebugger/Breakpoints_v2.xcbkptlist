@@ -27,7 +27,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4722"
             endingLineNumber = "4722"
-            landmarkName = "checkVideoJobStatus(jobId:baseURL:)"
+            landmarkName = "parseVideoStatusResponse(responseData:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -91,7 +91,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1288"
             endingLineNumber = "1288"
-            landmarkName = "updateUserFromServerInternal(_:)"
+            landmarkName = "isServerHealthy(_:logFailures:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -107,7 +107,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1293"
             endingLineNumber = "1293"
-            landmarkName = "updateUserFromServerInternal(_:)"
+            landmarkName = "isServerHealthy(_:logFailures:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -123,7 +123,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1297"
             endingLineNumber = "1297"
-            landmarkName = "updateUserFromServerInternal(_:)"
+            landmarkName = "isServerHealthy(_:logFailures:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

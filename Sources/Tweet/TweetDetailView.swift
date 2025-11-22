@@ -472,16 +472,6 @@ struct TweetDetailView: View {
             isTopNavigationVisible = true
             print("DEBUG: [TweetDetailView] View appeared, top navigation set to visible")
         }
-        .onDisappear {
-            // Reset top navigation visibility when view disappears
-            withAnimation(.easeInOut(duration: 0.3)) {
-                isTopNavigationVisible = true
-            }
-            // Clean up timer
-            scrollEndTimer?.invalidate()
-            scrollEndTimer = nil
-            print("DEBUG: [TweetDetailView] View disappeared, top navigation reset to visible")
-        }
         .onChange(of: originalTweet) { _, _ in
             // Clear cache when originalTweet changes
             cachedDisplayTweet = nil
@@ -490,6 +480,19 @@ struct TweetDetailView: View {
         .onDisappear {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
+            
+            // Stop video player if there is one
+            DetailVideoManager.shared.clearCurrentVideo()
+            print("DEBUG: [TweetDetailView] Stopped video player")
+            
+            // Reset top navigation visibility when view disappears
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isTopNavigationVisible = true
+            }
+            
+            // Clean up timer
+            scrollEndTimer?.invalidate()
+            scrollEndTimer = nil
             
             refreshTimer?.invalidate()
             refreshTimer = nil
@@ -514,9 +517,8 @@ struct TweetDetailView: View {
             // Keep singleton alive while view exists
             defer {
                 // This runs when task is cancelled (view dismissed)
-                DetailVideoManager.shared.currentPlayer?.pause()
-                DetailVideoManager.shared.currentPlayer = nil
-                DetailVideoManager.shared.currentVideoMid = nil
+                // Use clearCurrentVideo() for proper cleanup (removes observers, deactivates audio session)
+                DetailVideoManager.shared.clearCurrentVideo()
                 print("DEBUG: [TweetDetailView] Task cancelled - cleaned up singleton")
             }
             
