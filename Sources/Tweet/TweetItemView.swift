@@ -127,11 +127,19 @@ struct TweetItemView: View, Equatable {
             
             // Load author if not already loaded
             if tweet.author == nil {
-                // No author at all - create placeholder and fetch in background
+                // No author at all - try to load from cache first, then fetch in background
+                let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
                 await MainActor.run {
-                    tweet.author = User.getInstance(mid: tweet.authorId)
+                    if cachedAuthor.username != nil {
+                        // Use cached user as placeholder until refresh succeeds
+                        tweet.author = cachedAuthor
+                        print("⚡ [RENDER] Tweet rendering with cached author (@\(cachedAuthor.username ?? "?")), fetching in background")
+                    } else {
+                        // No cached user, use skeleton as last resort
+                        tweet.author = User.getInstance(mid: tweet.authorId)
+                        print("⚡ [RENDER] Tweet rendering with placeholder (no author), fetching in background")
+                    }
                 }
-                print("⚡ [RENDER] Tweet rendering with placeholder (no author), fetching in background")
                 Task.detached(priority: .background) {
                     _ = try? await hproseInstance.fetchUser(tweet.authorId)
                 }
