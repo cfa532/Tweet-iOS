@@ -337,8 +337,10 @@ class FullScreenVideoManager: ObservableObject {
         
         print("DEBUG: [FullScreenVideoManager] Cleared video content (player instance retained)")
         
-        // Restore ambient audio session when leaving fullscreen playback
-        AudioSessionManager.shared.deactivateForVideoPlayback()
+        // Do NOT deactivate audio session here
+        // Deactivating (setting to .ambient) can interrupt MediaCell playback if it has already resumed
+        // Let the next video player or the system handle audio session state
+        // AudioSessionManager.shared.deactivateForVideoPlayback()
     }
     
     /// Pause current playback

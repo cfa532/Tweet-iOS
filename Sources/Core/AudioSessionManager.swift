@@ -58,17 +58,26 @@ class AudioSessionManager {
     }
     
     /// Deactivate audio session when video playback stops
+    /// NOTE: Does NOT call setActive(false) to avoid interrupting MediaCell playback
+    /// Only changes category back to .ambient while keeping session active
     func deactivateForVideoPlayback() {
         do {
             let audioSession = AVAudioSession.sharedInstance()
             
-            try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
-            // Restore ambient category so other parts of the app continue respecting the mute switch
-            try audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+            // CRITICAL: Do NOT call setActive(false) as it pauses all players including MediaCell
+            // Instead, just change category back to .ambient while keeping session active
+            // This allows MediaCell (muted videos) to continue playing seamlessly
+            if audioSession.category != .ambient ||
+                audioSession.mode != .default ||
+                !audioSession.categoryOptions.contains(.mixWithOthers) {
+                try audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+            }
+            // Keep session active - don't deactivate it
+            // try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
             isUsingPlaybackCategory = false
-            print("DEBUG: [AudioSessionManager] Audio session deactivated and restored to ambient")
+            print("DEBUG: [AudioSessionManager] Audio session restored to ambient (kept active for MediaCell)")
         } catch {
-            print("DEBUG: [AudioSessionManager] Failed to deactivate audio session: \(error)")
+            print("DEBUG: [AudioSessionManager] Failed to restore audio session: \(error)")
         }
     }
     

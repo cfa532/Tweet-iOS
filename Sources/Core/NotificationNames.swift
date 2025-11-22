@@ -92,6 +92,8 @@ extension Notification.Name {
     // MARK: - Video Related
     /// Posted to stop all videos in the tweet list when entering full screen
     static let stopAllVideos = Notification.Name("StopAllVideos")
+    /// Posted to resume MediaCell videos when exiting fullscreen
+    static let resumeMediaCellVideos = Notification.Name("ResumeMediaCellVideos")
     /// Posted to force video layer refresh after screen lock recovery
     static let videoLayerRefresh = Notification.Name("VideoLayerRefresh")
     

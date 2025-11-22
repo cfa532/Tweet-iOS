@@ -551,6 +551,8 @@ struct MediaGridView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
+            // Only stop videos for audio interruptions (like incoming calls)
+            // When entering fullscreen, the video pauses itself, so we don't need to stop all videos
             shouldLoadVideo = false
             videoManager.stopSequentialPlayback()
         }

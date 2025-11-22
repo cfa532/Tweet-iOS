@@ -316,15 +316,17 @@ struct MediaBrowserView: View {
                 UIApplication.shared.isIdleTimerDisabled = true
                 startControlsTimer()
                 
-                // Stop all videos in the tweet list when entering full screen
-                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
-                print("DEBUG: [MediaBrowserView] Posted stopAllVideos notification")
+                // Don't stop all videos - only the video entering fullscreen will pause itself
+                // This allows other videos to continue playing
                 
                 previousIndex = currentIndex
             }
             .onDisappear {
                 isVisible = false
                 UIApplication.shared.isIdleTimerDisabled = false
+                
+                // Don't resume all videos - each video will resume automatically when it becomes visible
+                // This allows videos that were already playing to continue, and only the exiting video to resume if needed
                 
                 // Clean up all image states to free memory
                 cleanupImageStates(attachments: attachments, imageStates: $imageStates, baseUrl: baseUrl)
