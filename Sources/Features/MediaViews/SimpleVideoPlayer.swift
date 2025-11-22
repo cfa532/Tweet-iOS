@@ -404,16 +404,28 @@ struct SimpleVideoPlayer: View {
             )
         }
         
-        // Pause player when view disappears, but keep it alive in VideoStateCache for sharing
+        // CRITICAL: Always pause player when view disappears
         // MediaCell and MediaBrowser share the same player instance via VideoStateCache
         if mode == .mediaCell {
             player?.pause()
+            // Ensure muteState is correct when pausing MediaCell
+            if let player = player {
+                player.isMuted = MuteState.shared.isMuted
+                NSLog("🔇 [PLAYER MUTE] handleOnDisappear - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+            }
         } else if mode == .mediaBrowser {
-            // Exiting fullscreen - pause but keep player alive for MediaCell to reuse
+            // Exiting fullscreen - ALWAYS pause and restore mute state for MediaCell reuse
             player?.pause()
+            if let player = player {
+                // Restore mute state to global state before returning to MediaCell
+                player.isMuted = MuteState.shared.isMuted
+                NSLog("🔇 [PLAYER MUTE] handleOnDisappear - Restored global mute state after exiting fullscreen: \(MuteState.shared.isMuted) for \(mid)")
+            }
         } else if mode == .tweetDetail {
-            // TweetDetail: DO ABSOLUTELY NOTHING
-            // Singleton player lives in DetailVideoManager, view recreation shouldn't affect it
+            // TweetDetail: Pause singleton player when view disappears
+            // The task defer in TweetDetailView also handles cleanup, but we should pause here too
+            DetailVideoManager.shared.currentPlayer?.pause()
+            NSLog("DEBUG: [VIDEO DISAPPEAR] TweetDetail view disappeared - paused singleton player for \(mid)")
         }
     }
     
@@ -469,6 +481,10 @@ struct SimpleVideoPlayer: View {
             
             // Resume playback using proper completion handler instead of arbitrary delay
             if wasPlaying {
+                // CRITICAL: Always ensure muteState is correct before resuming playback in MediaCell
+                player.isMuted = MuteState.shared.isMuted
+                NSLog("🔇 [PLAYER MUTE] handleModeChange - Applied global mute state before resuming MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+                
                 // Seek to current position with completion handler to ensure layer is ready
                 player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
                     guard finished else { return }
@@ -563,6 +579,8 @@ struct SimpleVideoPlayer: View {
                             
                             // Auto-play fullscreen videos if not already playing
                             if player?.rate == 0 {
+                                // For fullscreen mode, always unmute
+                                player?.isMuted = false
                                 NSLog("▶️ [VIDEO VISIBILITY] Starting fullscreen playback for \(mid)")
                                 player?.play()
                                 playbackState = .playing
@@ -615,6 +633,12 @@ struct SimpleVideoPlayer: View {
                     
                     // Check if should auto-play
                     if currentAutoPlay && player.rate == 0 {
+                        // CRITICAL: Always ensure muteState is correct before playing
+                        // For MediaCell, always respect global muteState
+                        if mode == .mediaCell {
+                            player.isMuted = MuteState.shared.isMuted
+                            NSLog("🔇 [PLAYER MUTE] handleVisibilityChange - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+                        }
                         print("▶️ [VIDEO VISIBILITY] Starting playback for visible ready video: \(mid)")
                         player.play()
                         playbackState = .playing
@@ -836,6 +860,11 @@ struct SimpleVideoPlayer: View {
                 
                 // Restore position and autoplay for visible video
                 if let player = player {
+                    // CRITICAL: Always ensure muteState is correct before playing
+                    if self.mode == .mediaCell {
+                        player.isMuted = MuteState.shared.isMuted
+                        NSLog("🔇 [PLAYER MUTE] recoverFromBackground - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                    }
                     print("DEBUG: [VIDEO RECOVERY] Player ready, restoring position and autoplaying")
                     player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
                         if finished {
@@ -970,6 +999,11 @@ struct SimpleVideoPlayer: View {
             
             let shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
             if shouldResume {
+                // CRITICAL: Always ensure muteState is correct before playing
+                if mode == .mediaCell {
+                    player.isMuted = MuteState.shared.isMuted
+                    NSLog("🔇 [PLAYER MUTE] recoverFromBackground - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+                }
                 player.play()
                 playbackState = .playing
             }
@@ -1049,6 +1083,11 @@ struct SimpleVideoPlayer: View {
             if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
                 let shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
                 if shouldResume && player?.rate == 0 {
+                    // CRITICAL: Always ensure muteState is correct before playing
+                    if mode == .mediaCell, let player = player {
+                        player.isMuted = MuteState.shared.isMuted
+                        NSLog("🔇 [PLAYER MUTE] handleVideoInfrastructureRestarted - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+                    }
                     player?.play()
                     playbackState = .playing
                 }
@@ -1328,6 +1367,8 @@ struct SimpleVideoPlayer: View {
                 
                 // Resume if paused
                 if existingPlayer.rate == 0 {
+                    // For tweetDetail mode, always unmute
+                    existingPlayer.isMuted = false
                     existingPlayer.play()
                 }
                 return
@@ -1611,6 +1652,11 @@ struct SimpleVideoPlayer: View {
                 if finished {
                     // Resume playback if VideoManager approves
                     if cachedState.wasPlaying && self.isVisible && self.currentAutoPlay && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
+                        // CRITICAL: Always ensure muteState is correct before playing in MediaCell
+                        if self.mode == .mediaCell {
+                            cachedState.player.isMuted = MuteState.shared.isMuted
+                            NSLog("🔇 [PLAYER MUTE] restoreFromCache - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                        }
                         cachedState.player.play()
                         NSLog("DEBUG: [VIDEO CACHE] ✅ Resumed playback from cache for \(self.mid) - VideoManager approved")
                     }
@@ -2238,6 +2284,13 @@ struct SimpleVideoPlayer: View {
         if mode == .mediaCell && playbackState.hasFinished {
             return
         }
+            
+            // CRITICAL: Always ensure muteState is correct before playing
+            // For MediaCell, always respect global muteState
+            if mode == .mediaCell, let player = player {
+                player.isMuted = MuteState.shared.isMuted
+                NSLog("🔇 [PLAYER MUTE] checkPlaybackConditions - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+            }
             
             // Always ensure video is reset to beginning if it has finished playing
             if playbackState.hasFinished || isVideoAtEnd(player!) {
