@@ -271,27 +271,24 @@ struct UserRowView: View {
                 }
                 
                 print("DEBUG: [UserRowView] Loading user with ID: \(userId)")
-                if let fetchedUser = try await hproseInstance.fetchUser(userId) {
-                    // Check if task should be cancelled before processing
-                    guard taskCancellationToken == currentCancellationToken else {
-                        print("DEBUG: [UserRowView] Task cancelled during processing for user \(userId)")
-                        return
-                    }
-                    
-                    // The user singleton will be automatically updated by fetchUser's background task
-                    // @ObservedObject will cause view to refresh when singleton's @Published properties change
-                    let sanitizedUsername = fetchedUser.username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    guard !sanitizedUsername.isEmpty else {
-                        print("⚠️ [UserRowView] Invalid user (missing username) for ID: \(userId) - hiding row")
-                        await MainActor.run {
-                            guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
-                            self.loadFailed = true
-                            self.isLoading = false
-                            self.onLoadFailed?(userId)
-                        }
-                        return
-                    }
-                    
+                // Keep spinner showing while fetchUser is in progress (includes retries)
+                // fetchUser will retry up to 3 times before returning skeleton on failure
+                let fetchedUser = try await hproseInstance.fetchUser(userId)
+                
+                // Check if task should be cancelled before processing
+                guard taskCancellationToken == currentCancellationToken else {
+                    print("DEBUG: [UserRowView] Task cancelled during processing for user \(userId)")
+                    return
+                }
+                
+                // The user singleton will be automatically updated by fetchUser's background task
+                // @ObservedObject will cause view to refresh when singleton's @Published properties change
+                let sanitizedUsername = fetchedUser?.username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                
+                // Only remove user row if fetchUser failed after retries (returns skeleton with no username)
+                // Otherwise keep showing spinner until valid user is loaded
+                if let fetchedUser = fetchedUser, !sanitizedUsername.isEmpty {
+                    // Valid user loaded - hide spinner and show user
                     print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid), username: \(sanitizedUsername)")
                     await MainActor.run {
                         // Check if task was cancelled before updating UI
@@ -300,26 +297,28 @@ struct UserRowView: View {
                         self.isLoading = false
                     }
                 } else {
-                    print("DEBUG: [UserRowView] No user found for ID: \(userId)")
+                    // fetchUser returned skeleton (no username) after all retries failed
+                    // Remove the user row to indicate failure
+                    print("⚠️ [UserRowView] fetchUser failed after retries for ID: \(userId) - removing row")
                     await MainActor.run {
-                        // Check if task was cancelled before updating UI
                         guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
                         self.loadFailed = true
                         self.isLoading = false
-                        // Notify parent that this user failed to load
                         self.onLoadFailed?(userId)
                     }
                 }
             } catch is CancellationError {
                 print("DEBUG: [UserRowView] Loading cancelled for user \(userId)")
             } catch {
-                print("DEBUG: [UserRowView] Error loading user \(userId): \(error)")
+                // fetchUser threw error after all retries failed
+                // Remove the user row to indicate failure
+                print("DEBUG: [UserRowView] Error loading user \(userId) after retries: \(error)")
                 await MainActor.run {
                     // Check if task was cancelled before updating UI
                     guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
                     self.loadFailed = true
                     self.isLoading = false
-                    // Notify parent that this user failed to load
+                    // Notify parent that this user failed to load after retries
                     self.onLoadFailed?(userId)
                 }
             }
