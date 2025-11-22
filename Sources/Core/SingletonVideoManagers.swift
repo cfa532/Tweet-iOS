@@ -706,7 +706,7 @@ class DetailVideoManager: NSObject, ObservableObject {
                 print("DEBUG: [DetailVideoManager] Removed player from SharedAssetCache with key: \(key)")
             }
         }
-        
+        // AudioSessionManager.shared.deactivateForVideoPlayback()
         // Do NOT deactivate audio session here
         // Deactivating (setting to .ambient) can interrupt MediaCell playback if it has already resumed
         // Let the next video player or the system handle audio session state
