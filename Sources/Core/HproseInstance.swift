@@ -544,9 +544,18 @@ final class HproseInstance: ObservableObject {
             if let dict = originalTweetDict {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                    if let author = try? await fetchUser(originalTweet.authorId) {
+                    // Fetch the author - fetchUser returns singleton, which will be updated by background Task if needed
+                    // The singleton reference will see updates when updateUserFromServer completes
+                    do {
+                        let author = try await fetchUser(originalTweet.authorId)
                         await MainActor.run {
                             originalTweet.author = author  // Set on main thread since author is @Published
+                        }
+                    } catch {
+                        print("⚠️ [fetchTweetFeed] Failed to fetch original author \(originalTweet.authorId) for tweet \(originalTweet.mid): \(error)")
+                        // Even on error, set the singleton so UI has a reference that will update when fetch completes
+                        await MainActor.run {
+                            originalTweet.author = User.getInstance(mid: originalTweet.authorId)
                         }
                     }
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
@@ -653,9 +662,19 @@ final class HproseInstance: ObservableObject {
             if let dict = originalTweetDict {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                    let author = try? await fetchUser(originalTweet.authorId)
-                    await MainActor.run {
-                        originalTweet.author = author
+                    // Fetch the author - fetchUser returns singleton, which will be updated by background Task if needed
+                    // The singleton reference will see updates when updateUserFromServer completes
+                    do {
+                        let author = try await fetchUser(originalTweet.authorId)
+                        await MainActor.run {
+                            originalTweet.author = author
+                        }
+                    } catch {
+                        print("⚠️ [fetchUserTweets] Failed to fetch original author \(originalTweet.authorId) for tweet \(originalTweet.mid): \(error)")
+                        // Even on error, set the singleton so UI has a reference that will update when fetch completes
+                        await MainActor.run {
+                            originalTweet.author = User.getInstance(mid: originalTweet.authorId)
+                        }
                     }
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
                     // This prevents original tweets from appearing in main feed when their author is different
@@ -844,13 +863,14 @@ final class HproseInstance: ObservableObject {
         print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
         
         // If current object is invalid (nil username), return cached value and update in background
+        // The cachedUser is a singleton, so when updateUserFromServer updates it, all references will see the update
         if cachedUser.username == nil {
             // Update in background coroutine
             Task {
                 do {
                     // Background update: use cached baseUrl first, retries will force IP re-resolution
-                    if (try await self.updateUserFromServer(userId, baseUrl: effectiveBaseUrl)) != nil {
-                        print("DEBUG: [fetchUser] Background update completed for userId: \(userId)")
+                    if let updatedUser = try await self.updateUserFromServer(userId, baseUrl: effectiveBaseUrl) {
+                        print("DEBUG: [fetchUser] Background update completed for userId: \(userId), username: \(updatedUser.username ?? "nil")")
                     }
                 } catch {
                     print("DEBUG: [fetchUser] Background update failed for userId: \(userId): \(error)")
