@@ -1019,8 +1019,10 @@ final class HproseInstance: ObservableObject {
         let hasExpired = await user.hasExpired()
         let userHasBaseUrl = user.baseUrl != nil && !(user.baseUrl?.absoluteString.isEmpty ?? true)
         
-        // If baseUrl parameter is empty, force fresh IP resolution even on first attempt
-        let forceFreshIP = baseUrl.isEmpty
+        // Force fresh IP resolution if:
+        // 1. baseUrl parameter is empty (explicit force refresh)
+        // 2. User cache has expired (baseUrl is also considered expired when user is expired)
+        let forceFreshIP = baseUrl.isEmpty || hasExpired
         
         for attempt in 1...3 {
             do {
@@ -1033,9 +1035,16 @@ final class HproseInstance: ObservableObject {
                         let normalizedBase = try normalizedBaseURL(from: userBaseUrl, context: "existing baseUrl for \(userId)")
                         await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "attempt \(attempt)")
                     } else {
-                        // Force fresh IP resolution: either baseUrl param is empty, or user has no baseUrl
+                        // Force fresh IP resolution: either baseUrl param is empty, user is expired, or user has no baseUrl
                         let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
-                        let reason = forceFreshIP ? "forcing fresh IP resolution (baseUrl param empty)" : "no baseUrl"
+                        let reason: String
+                        if baseUrl.isEmpty {
+                            reason = "forcing fresh IP resolution (baseUrl param empty)"
+                        } else if hasExpired {
+                            reason = "forcing fresh IP resolution (user cache expired, baseUrl also considered expired)"
+                        } else {
+                            reason = "no baseUrl"
+                        }
                         print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl), reason: \(reason)")
                         guard let providerIP = try await self.getProviderIP(userId) else {
                             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
