@@ -2016,11 +2016,16 @@ final class HproseInstance: ObservableObject {
     }
     
     func retweet(_ tweet: Tweet) async throws -> Tweet? {
+        // Create a unique temporary ID for this retweet to avoid singleton collisions
+        // Multiple rapid retweets would otherwise share the same GUEST_ID singleton
+        let temporaryId = "TEMP_RETWEET_\(UUID().uuidString)"
+        print("🔄 [HproseInstance.retweet] Creating retweet with temporary ID: \(temporaryId) for original tweet: \(tweet.mid)")
+        
         // Upload the retweet
         guard let retweet = try await uploadTweet(
             await MainActor.run {
                 Tweet.getInstance(
-                    mid: Constants.GUEST_ID,
+                    mid: temporaryId,
                     authorId: appUser.mid,
                     originalTweetId: tweet.mid,
                     originalAuthorId: tweet.authorId,
@@ -2043,6 +2048,12 @@ final class HproseInstance: ObservableObject {
         // The retweet will also be cached via .newTweetCreated notification in handleNewTweet,
         // but we cache it here explicitly to ensure it's saved
         TweetCacheManager.shared.saveTweet(retweet, userId: appUser.mid)
+        
+        // Clean up the temporary tweet instance to prevent memory leaks
+        if temporaryId != retweet.mid {
+            Tweet.clearInstance(mid: temporaryId)
+            print("🧹 [HproseInstance.retweet] Cleaned up temporary tweet instance: \(temporaryId)")
+        }
         
         return retweet
     }

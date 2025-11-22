@@ -112,14 +112,29 @@ struct TweetActionButtonsView: View {
         }
     }
     
-    private func retweet(_ tweet: Tweet) async throws {
+    private func retweet(tweetId: String, authorId: String) async throws {
+        // Get the tweet instance at execution time to ensure we have the correct one
+        guard let tweet = Tweet.getInstance(for: tweetId) else {
+            print("❌ [Retweet] Tweet instance not found for ID: \(tweetId)")
+            throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tweet not found"])
+        }
+        
+        // Verify tweet identity matches
+        guard tweet.mid == tweetId && tweet.authorId == authorId else {
+            print("❌ [Retweet] Tweet identity mismatch! Expected: \(tweetId)/\(authorId), Got: \(tweet.mid)/\(tweet.authorId)")
+            throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tweet identity mismatch"])
+        }
+        
         // Save original count for rollback
         let originalCount = tweet.retweetCount ?? 0
+        
+        print("🔄 [Retweet] Starting retweet for tweet: \(tweet.mid), current count: \(originalCount)")
         
         do {
             // Optimistic UI update - increment retweet count immediately on MainActor
             await MainActor.run {
                 tweet.retweetCount = originalCount + 1
+                print("🔄 [Retweet] Optimistically incremented count to: \(tweet.retweetCount ?? 0) for tweet: \(tweet.mid)")
             }
             
             // Upload the retweet and update count (matches Android flow)
@@ -127,17 +142,22 @@ struct TweetActionButtonsView: View {
             // 1. Upload retweet
             // 2. Update retweet count of original tweet
             // 3. Cache the updated original tweet
+            print("🔄 [Retweet] Calling hproseInstance.retweet for tweet: \(tweet.mid)")
             guard let retweet = try await hproseInstance.retweet(tweet) else {
                 // Retweet upload failed - rollback on MainActor
+                print("❌ [Retweet] Upload failed for tweet: \(tweet.mid), rolling back")
                 await MainActor.run {
                     tweet.retweetCount = originalCount
                 }
                 throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload retweet"])
             }
             
-            // Verify we got a valid retweet ID from server (not GUEST_ID placeholder)
+            print("✅ [Retweet] Retweet created with ID: \(retweet.mid) for original tweet: \(tweet.mid)")
+            
+            // Verify we got a valid retweet ID from server (not a temporary ID)
             // Only post notification if server actually created a retweet with valid ID
-            guard retweet.mid != Constants.GUEST_ID, !retweet.mid.isEmpty else {
+            guard !retweet.mid.isEmpty && !retweet.mid.hasPrefix("TEMP_") else {
+                print("❌ [Retweet] Invalid retweet ID from server for tweet: \(tweet.mid)")
                 await MainActor.run {
                     tweet.retweetCount = originalCount
                 }
@@ -146,15 +166,16 @@ struct TweetActionButtonsView: View {
             
             // Post notification only after confirmed successful retweet creation with valid ID
             // The original tweet's retweet count has already been updated and cached by HproseInstance.retweet()
+            print("✅ [Retweet] Posting notification for new tweet created: \(retweet.mid)")
             NotificationCenter.default.post(name: .newTweetCreated,
                                             object: nil,
                                             userInfo: ["tweet": retweet])
         } catch {
             // Rollback on retweet creation failure on MainActor
+            print("❌ [Retweet] Retweet failed for tweet: \(tweet.mid), error: \(error), rolling back count from \(tweet.retweetCount ?? 0) to \(originalCount)")
             await MainActor.run {
                 tweet.retweetCount = originalCount
             }
-            print("❌ [Retweet] Retweet failed: \(error)")
             throw error
         }
     }
@@ -177,37 +198,6 @@ struct TweetActionButtonsView: View {
                     Image(systemName: "bubble.left")
                         .frame(width: 20)
                     if let count = tweet.commentCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
-                }
-                .frame(width: 48, alignment: .leading)
-            }
-            Spacer(minLength: 12)
-            // Retweet / forward button
-            DebounceButton(
-                cooldownDuration: 0.5,
-                enableAnimation: true,
-                enableVibration: false
-            ) {
-                if hproseInstance.appUser.isGuest {
-                    handleGuestAction()
-                } else {
-                    // Capture the tweet value at button press time to avoid closure capture issues
-                    let tweetToRetweet = tweet
-                    Task {
-                        do {
-                            try await retweet(tweetToRetweet)
-                        } catch {
-                            print("reTweet failed. \(tweetToRetweet)")
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.2.squarepath")
-                        .frame(width: 20)
-                    if let count = tweet.retweetCount, count > 0 {
                         Text("\(count)")
                             .frame(minWidth: 20, alignment: .leading)
                     }
@@ -384,6 +374,45 @@ struct TweetActionButtonsView: View {
                     Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
                         .frame(width: 20)
                     if let count = tweet.bookmarkCount, count > 0 {
+                        Text("\(count)")
+                            .frame(minWidth: 20, alignment: .leading)
+                    }
+                }
+                .frame(width: 48, alignment: .leading)
+            }
+            Spacer(minLength: 12)
+            // Retweet / forward button
+            DebounceButton(
+                cooldownDuration: 0.5,
+                enableAnimation: true,
+                enableVibration: false
+            ) {
+                if hproseInstance.appUser.isGuest {
+                    handleGuestAction()
+                } else {
+                    // Capture immutable values (not object references) at button press time
+                    // This prevents any issues with singleton pattern or view reuse
+                    let tweetId = tweet.mid
+                    let authorId = tweet.authorId
+                    
+                    print("🔵 [Retweet Button] Button pressed for tweet: \(tweetId), author: \(authorId)")
+                    
+                    Task {
+                        print("🔄 [Retweet Task] Starting async task for tweet: \(tweetId), author: \(authorId)")
+                        
+                        do {
+                            // Pass immutable values, not the tweet object
+                            try await retweet(tweetId: tweetId, authorId: authorId)
+                        } catch {
+                            print("❌ [Retweet] Retweet failed for tweet: \(tweetId)")
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.2.squarepath")
+                        .frame(width: 20)
+                    if let count = tweet.retweetCount, count > 0 {
                         Text("\(count)")
                             .frame(minWidth: 20, alignment: .leading)
                     }
