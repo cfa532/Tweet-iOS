@@ -705,8 +705,10 @@ class DetailVideoManager: NSObject, ObservableObject {
             }
         }
         
-        // Deactivate audio session when video is cleared
-        AudioSessionManager.shared.deactivateForVideoPlayback()
+        // Do NOT deactivate audio session here
+        // Deactivating (setting to .ambient) can interrupt MediaCell playback if it has already resumed
+        // Let the next video player or the system handle audio session state
+        // AudioSessionManager.shared.deactivateForVideoPlayback()
         
     }
     
