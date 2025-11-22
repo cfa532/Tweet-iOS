@@ -884,21 +884,11 @@ final class HproseInstance: ObservableObject {
         
         print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
         
-        // If current object is invalid (nil username), return cached value and update in background
-        // The cachedUser is a singleton, so when updateUserFromServer updates it, all references will see the update
+        // If current object is invalid (nil username), fetch synchronously with retries
+        // This ensures the spinner stays visible in UserRowView until all retries complete
         if cachedUser.username == nil {
-            // Update in background coroutine
-            Task {
-                do {
-                    // Background update: use cached baseUrl first, retries will force IP re-resolution
-                    if let updatedUser = try await self.updateUserFromServer(userId, baseUrl: effectiveBaseUrl) {
-                        print("DEBUG: [fetchUser] Background update completed for userId: \(userId), username: \(updatedUser.username ?? "nil")")
-                    }
-                } catch {
-                    print("DEBUG: [fetchUser] Background update failed for userId: \(userId): \(error)")
-                }
-            }
-            return cachedUser
+            print("DEBUG: [fetchUser] User has nil username, fetching synchronously with retries for userId: \(userId)")
+            // Fall through to synchronous fetch with retries at line 990
         }
         
         // CRITICAL: If cached user has nil baseUrl, ALWAYS resolve it (even if app not initialized)

@@ -117,8 +117,10 @@ struct TweetActionButtonsView: View {
         let originalCount = tweet.retweetCount ?? 0
         
         do {
-            // Optimistic UI update - increment retweet count immediately
-            tweet.retweetCount = originalCount + 1
+            // Optimistic UI update - increment retweet count immediately on MainActor
+            await MainActor.run {
+                tweet.retweetCount = originalCount + 1
+            }
             
             // Upload the retweet and update count (matches Android flow)
             // HproseInstance.retweet() now handles:
@@ -126,15 +128,19 @@ struct TweetActionButtonsView: View {
             // 2. Update retweet count of original tweet
             // 3. Cache the updated original tweet
             guard let retweet = try await hproseInstance.retweet(tweet) else {
-                // Retweet upload failed - rollback
-                tweet.retweetCount = originalCount
+                // Retweet upload failed - rollback on MainActor
+                await MainActor.run {
+                    tweet.retweetCount = originalCount
+                }
                 throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload retweet"])
             }
             
             // Verify we got a valid retweet ID from server (not GUEST_ID placeholder)
             // Only post notification if server actually created a retweet with valid ID
             guard retweet.mid != Constants.GUEST_ID, !retweet.mid.isEmpty else {
-                tweet.retweetCount = originalCount
+                await MainActor.run {
+                    tweet.retweetCount = originalCount
+                }
                 throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid retweet ID from server"])
             }
             
@@ -144,8 +150,10 @@ struct TweetActionButtonsView: View {
                                             object: nil,
                                             userInfo: ["tweet": retweet])
         } catch {
-            // Rollback on retweet creation failure
-            tweet.retweetCount = originalCount
+            // Rollback on retweet creation failure on MainActor
+            await MainActor.run {
+                tweet.retweetCount = originalCount
+            }
             print("❌ [Retweet] Retweet failed: \(error)")
             throw error
         }
@@ -185,11 +193,13 @@ struct TweetActionButtonsView: View {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
+                    // Capture the tweet value at button press time to avoid closure capture issues
+                    let tweetToRetweet = tweet
                     Task {
                         do {
-                            try await retweet(tweet)
+                            try await retweet(tweetToRetweet)
                         } catch {
-                            print("reTweet failed. \(tweet)")
+                            print("reTweet failed. \(tweetToRetweet)")
                         }
                     }
                 }
