@@ -435,25 +435,42 @@ func updateUserFromServer(_ userId: String) async throws -> User? {
     return user
 }
 
-// 4. Checking Cache Validity
+// 4. Checking Cache Validity and Fetching User
 func fetchUser(_ userId: String) async throws -> User? {
     let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+    let hasExpired = await cachedUser.hasExpired()
     
-    // Return cached user only if:
+    // Return cached user immediately if:
     // 1. Valid username exists
     // 2. Cache hasn't expired (< 30 minutes)
     // 3. IP address is resolved (baseUrl != nil)
-    if cachedUser.username != nil && !cachedUser.hasExpired && cachedUser.baseUrl != nil {
+    if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil {
+        return cachedUser
+    }
+    
+    // If cached user has no username, return it and update in background
+    // This ensures UI shows cached data (even if expired) as placeholder
+    if cachedUser.username == nil {
+        // Start background update
+        Task {
+            _ = try? await updateUserFromServer(userId, baseUrl: baseUrl)
+        }
         return cachedUser
     }
     
     // Re-resolve if baseUrl is nil (loaded from disk)
     if cachedUser.username != nil && cachedUser.baseUrl == nil {
-        // Fall through to updateUserFromServer
+        // Fall through to updateUserFromServer to resolve IP
     }
     
     // Update from server
-    return try await updateUserFromServer(userId)
+    do {
+        return try await updateUserFromServer(userId, baseUrl: baseUrl)
+    } catch {
+        // Server fetch failed - return skeleton to indicate error
+        // This signals to UI that something is wrong, rather than showing stale cached data
+        return User.getInstance(mid: userId)
+    }
 }
 ```
 
@@ -465,6 +482,11 @@ App Start
 Load User from Core Data (baseUrl = nil, writableUrl = nil)
   ↓
 Memory Instance (baseUrl = nil preserved, not overwritten)
+  ↓
+Load Cached Tweets
+  ├─ Load author from Core Data cache (even if expired)
+  ├─ Use cached user as placeholder
+  └─ UI renders immediately with cached data ✅
   ↓
 First API Call Needs User
   ↓
@@ -488,7 +510,27 @@ updateUserFromServer() → Calls getProviderIP()
 Get Fresh IP: 192.168.1.20 (if changed) ✅
   ↓
 Update Memory & Core Data → New 30-minute window
+  ↓
+If Server Fetch Fails
+  ↓
+Return Skeleton User (indicates error) ⚠️
+  ↓
+UI shows skeleton instead of stale cached data
 ```
+
+### User Placeholder Strategy
+
+When loading tweets, the system uses this priority:
+
+1. **Cached User (Expired or Not)** - Used as placeholder when loading from cache
+   - Provides immediate UI feedback
+   - Background refresh updates the data
+   - Even expired cache is better than no data
+
+2. **Skeleton User** - Only when server fetch fails
+   - Indicates to UI that something is wrong
+   - Prevents showing stale cached data after error
+   - Clear visual signal that user data couldn't be loaded
 
 ### User Data Encoding/Decoding
 

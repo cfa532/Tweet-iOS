@@ -468,22 +468,16 @@ final class HproseInstance: ObservableObject {
                     let comment = try await MainActor.run {
                         return try Tweet.from(dict: dict)
                     }
-                    // Try to fetch user, fall back to cached user if fetch fails
+                    // Try to fetch user, fall back to skeleton if fetch fails
                     if let author = try? await fetchUser(comment.authorId) {
                         await MainActor.run {
                             comment.author = author
                         }
                     } else {
-                        // Fetch failed, try to get cached user as placeholder
-                        let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: comment.authorId)
+                        // Server fetch failed - use skeleton to indicate error
                         await MainActor.run {
-                            if cachedAuthor.username != nil {
-                                comment.author = cachedAuthor
-                                print("⚠️ [fetchComments] Using cached author as placeholder for \(comment.authorId)")
-                            } else {
-                                comment.author = User.getInstance(mid: comment.authorId)
-                                print("⚠️ [fetchComments] No cached author, using skeleton for \(comment.authorId)")
-                            }
+                            comment.author = User.getInstance(mid: comment.authorId)
+                            print("⚠️ [fetchComments] Server fetch failed, using skeleton for \(comment.authorId) to indicate error")
                         }
                     }
                     commentsWithAuthors.append(comment)
@@ -570,19 +564,10 @@ final class HproseInstance: ObservableObject {
                         }
                     } catch {
                         print("⚠️ [fetchTweetFeed] Failed to fetch original author \(originalTweet.authorId) for tweet \(originalTweet.mid): \(error)")
-                        // Try to get cached user first (even if expired) as placeholder
-                        // Only fall back to skeleton if no cached user exists
-                        let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: originalTweet.authorId)
+                        // Server fetch failed - use skeleton to indicate error
                         await MainActor.run {
-                            if cachedAuthor.username != nil {
-                                // Use cached user as placeholder until refresh succeeds
-                                originalTweet.author = cachedAuthor
-                                print("⚠️ [fetchTweetFeed] Using cached author as placeholder for \(originalTweet.authorId)")
-                            } else {
-                                // No cached user, use skeleton as last resort
-                                originalTweet.author = User.getInstance(mid: originalTweet.authorId)
-                                print("⚠️ [fetchTweetFeed] No cached author, using skeleton for \(originalTweet.authorId)")
-                            }
+                            originalTweet.author = User.getInstance(mid: originalTweet.authorId)
+                            print("⚠️ [fetchTweetFeed] Server fetch failed, using skeleton for \(originalTweet.authorId) to indicate error")
                         }
                     }
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
@@ -608,19 +593,10 @@ final class HproseInstance: ObservableObject {
                         }
                     } catch {
                         print("⚠️ [fetchTweetFeed] Failed to fetch author \(tweet.authorId) for tweet \(tweet.mid): \(error)")
-                        // Try to get cached user first (even if expired) as placeholder
-                        // Only fall back to skeleton if no cached user exists
-                        let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
+                        // Server fetch failed - use skeleton to indicate error
                         await MainActor.run {
-                            if cachedAuthor.username != nil {
-                                // Use cached user as placeholder until refresh succeeds
-                                tweet.author = cachedAuthor
-                                print("⚠️ [fetchTweetFeed] Using cached author as placeholder for \(tweet.authorId)")
-                            } else {
-                                // No cached user, use skeleton as last resort
-                                tweet.author = User.getInstance(mid: tweet.authorId)
-                                print("⚠️ [fetchTweetFeed] No cached author, using skeleton for \(tweet.authorId)")
-                            }
+                            tweet.author = User.getInstance(mid: tweet.authorId)
+                            print("⚠️ [fetchTweetFeed] Server fetch failed, using skeleton for \(tweet.authorId) to indicate error")
                         }
                     }
                     
@@ -716,19 +692,10 @@ final class HproseInstance: ObservableObject {
                         }
                     } catch {
                         print("⚠️ [fetchUserTweets] Failed to fetch original author \(originalTweet.authorId) for tweet \(originalTweet.mid): \(error)")
-                        // Try to get cached user first (even if expired) as placeholder
-                        // Only fall back to skeleton if no cached user exists
-                        let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: originalTweet.authorId)
+                        // Server fetch failed - use skeleton to indicate error
                         await MainActor.run {
-                            if cachedAuthor.username != nil {
-                                // Use cached user as placeholder until refresh succeeds
-                                originalTweet.author = cachedAuthor
-                                print("⚠️ [fetchUserTweets] Using cached author as placeholder for \(originalTweet.authorId)")
-                            } else {
-                                // No cached user, use skeleton as last resort
-                                originalTweet.author = User.getInstance(mid: originalTweet.authorId)
-                                print("⚠️ [fetchUserTweets] No cached author, using skeleton for \(originalTweet.authorId)")
-                            }
+                            originalTweet.author = User.getInstance(mid: originalTweet.authorId)
+                            print("⚠️ [fetchUserTweets] Server fetch failed, using skeleton for \(originalTweet.authorId) to indicate error")
                         }
                     }
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
@@ -1042,17 +1009,9 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [fetchUser] All retries failed for userId: \(userId), adding to blacklist")
             blackList.recordFailure(userId)
             
-            // Return cached user as placeholder (even if expired) instead of nil
-            // This ensures UI shows cached data until a valid user is refreshed from server
-            // Only fall back to skeleton if there's truly no cached user
-            // Reuse the cachedUser we already fetched at the beginning of this function
-            if cachedUser.username != nil {
-                print("DEBUG: [fetchUser] Returning cached user as placeholder for userId: \(userId) after fetch failure")
-                return cachedUser
-            }
-            
-            // No cached user available, return skeleton only as last resort
-            print("DEBUG: [fetchUser] No cached user available for userId: \(userId), returning skeleton")
+            // Return skeleton instead of cached user when server fetch fails
+            // This indicates to the UI that something is wrong and the user data couldn't be fetched
+            print("DEBUG: [fetchUser] Server fetch failed for userId: \(userId), returning skeleton to indicate error")
             return User.getInstance(mid: userId)
         }
     }
