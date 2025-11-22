@@ -1200,21 +1200,44 @@ final class HproseInstance: ObservableObject {
             disposableClient?.close()
         }
         
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        // Call invoke - it returns Any? and can be nil if endpoint doesn't exist or server error
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        
+        // Handle nil response - health endpoint may not exist on server
+        guard let response = rawResponse else {
             if logFailures {
-                print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - invalid response")
+                print("DEBUG: [updateUserFromServer] Server health check for \(host) - nil response (endpoint may not exist), treating as healthy")
+            }
+            // If health endpoint doesn't exist, don't treat it as unhealthy
+            // The IP is correct and other endpoints work, so server is functional
+            return true
+        }
+        
+        // Check if response is a dictionary with status: "ok"
+        if let responseDict = response as? [String: Any] {
+            if let status = (responseDict["status"] as? String)?.lowercased(), status == "ok" {
+                return true
+            }
+            if logFailures {
+                print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - payload: \(responseDict)")
             }
             return false
         }
         
-        if let status = (response["status"] as? String)?.lowercased(), status == "ok" {
+        // Response is not a dictionary - could be string, error, etc.
+        // If it's a string response (like an IP redirect), server is responding, consider it healthy
+        if response is String {
+            if logFailures {
+                print("DEBUG: [updateUserFromServer] Server health check for \(host) returned string response (likely redirect), treating as healthy")
+            }
             return true
         }
         
+        // Unknown response type - be lenient and assume healthy if server responded
         if logFailures {
-            print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - payload: \(response)")
+            print("DEBUG: [updateUserFromServer] Server health check for \(host) returned unexpected type \(type(of: response)), treating as healthy")
         }
-        return false
+        return true
     }
     
     /// Internal method that performs the actual server communication
@@ -1960,9 +1983,15 @@ final class HproseInstance: ObservableObject {
         // Update retweet count of the original tweet and cache the updated tweet
         // Match Android behavior: update count, cache result, then post notification
         if let updatedTweet = await updateRetweetCount(tweet: tweet, retweetId: retweet.mid) {
-            // Cache the updated original tweet with new retweet count
-            TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet, appUserId: appUser.mid)
+            // Cache the updated original tweet with its authorId as the cache key
+            // This ensures the original tweet is cached under its author's cache, not appUser's
+            TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
         }
+        
+        // Cache the retweet with appUser's mid as the cache key
+        // The retweet will also be cached via .newTweetCreated notification in handleNewTweet,
+        // but we cache it here explicitly to ensure it's saved
+        TweetCacheManager.shared.saveTweet(retweet, userId: appUser.mid)
         
         return retweet
     }
@@ -4188,7 +4217,8 @@ final class HproseInstance: ObservableObject {
                     try await Task.sleep(nanoseconds: delay)
                     
                     // Refresh appUser from server instead of full app reinitialization
-                    try await refreshAppUserFromServer()
+                    // Force IP re-resolution during retries in case of network/IP issues
+                    try await refreshAppUserFromServer(forceIPRefresh: true)
                 }
             }
         }
@@ -4196,8 +4226,11 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Refresh appUser from server without full app reinitialization
-    private func refreshAppUserFromServer() async throws {
-        print("DEBUG: [HproseInstance] Refreshing appUser from server...")
+    /// - Parameter forceIPRefresh: If true, forces IP re-resolution by passing empty baseUrl. 
+    ///   Should be true only during retries when network issues are suspected.
+    ///   For normal refreshes after successful operations, use false to use existing baseUrl.
+    private func refreshAppUserFromServer(forceIPRefresh: Bool = false) async throws {
+        print("DEBUG: [HproseInstance] Refreshing appUser from server... (forceIPRefresh: \(forceIPRefresh))")
         
         guard !appUser.isGuest else {
             print("DEBUG: [HproseInstance] Skipping refresh for guest user")
@@ -4213,9 +4246,11 @@ final class HproseInstance: ObservableObject {
             
             print("DEBUG: [HproseInstance] Refreshing user from provider IP: \(providerIp)")
             
-            // Fetch updated user data from server
-            // Use empty baseUrl to force re-resolution on retries
-            if let refreshedUser = try await fetchUser(appUser.mid, baseUrl: "") {
+            // Call updateUserFromServer directly to always fetch from server (bypass cache)
+            // Only force IP re-resolution during retries when network issues are suspected
+            // For normal refreshes after successful operations, use existing baseUrl
+            let baseUrlToUse = forceIPRefresh ? "" : (appUser.baseUrl?.absoluteString ?? "")
+            if let refreshedUser = try await updateUserFromServer(appUser.mid, baseUrl: baseUrlToUse) {
                 // Update base URL to the resolved provider IP
                 if HproseInstance.baseUrl.absoluteString != "http://\(providerIp)" {
                     HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!

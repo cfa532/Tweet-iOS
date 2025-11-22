@@ -262,7 +262,8 @@ struct TweetMenu: View {
                     let currentCount = originalTweet.retweetCount ?? 0
                     originalTweet.retweetCount = max(0, currentCount - 1)
                     if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false) {
-                        TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet, appUserId: hproseInstance.appUser.mid)
+                        // Cache the updated original tweet with its authorId as the cache key
+                        TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
                     }
                 }
             } else {

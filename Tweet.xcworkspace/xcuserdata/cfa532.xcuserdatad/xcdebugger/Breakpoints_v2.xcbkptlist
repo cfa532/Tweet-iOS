@@ -139,7 +139,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "5033"
             endingLineNumber = "5033"
-            landmarkName = "updateUserCore(password:alias:profile:hostId:cloudDrivePort:shareDomainOverride:)"
+            landmarkName = "registerUser(username:password:alias:profile:hostId:cloudDrivePort:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

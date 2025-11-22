@@ -221,6 +221,12 @@ extension TweetCacheManager {
         }
     }
 
+    /// Fetch a tweet by its mid (tweet ID) from cache
+    /// IMPORTANT: Searches across ALL user caches, not just a specific user's cache
+    /// This is necessary because:
+    /// - Original tweets are cached under their authorId
+    /// - Retweets are cached under appUser.mid
+    /// - When we only have a tweet mid, we don't know which user's cache it's in
     func fetchTweet(mid: String) async -> Tweet? {
         return await withCheckedContinuation { continuation in
             // First check in-memory singleton
@@ -231,6 +237,7 @@ extension TweetCacheManager {
             }
             
             // Otherwise, load from Core Data cache
+            // Search by tid (tweet ID) across ALL caches, not filtered by userId
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                 request.predicate = NSPredicate(format: "tid == %@", mid)
