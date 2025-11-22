@@ -206,11 +206,11 @@ class TweetUploadManager {
                                 if let quoteTweet = try await hproseInstance.uploadTweet(newComment) {
                                     print("✅ [Quote Tweet] Quote tweet posted successfully! ID: \(quoteTweet.mid)")
                                     // Update retweet count on the original tweet
-                                    do {
-                                        try await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: quoteTweet.mid, direction: true)
+                                    if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: quoteTweet.mid, direction: true) {
+                                        TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet, appUserId: hproseInstance.appUser.mid)
                                         print("✅ [Quote Tweet] Updated retweet count for original tweet")
-                                    } catch {
-                                        print("⚠️ [Quote Tweet] Failed to update retweet count: \(error)")
+                                    } else {
+                                        print("⚠️ [Quote Tweet] Failed to update retweet count")
                                     }
                                 } else {
                                     print("❌ [Quote Tweet] Failed to post quote tweet")
@@ -974,11 +974,11 @@ extension TweetUploadManager {
                     if let quoteTweet = try await hproseInstance.uploadTweet(newComment) {
                         print("✅ [Quote Tweet] Quote tweet posted successfully! ID: \(quoteTweet.mid)")
                         // Update retweet count on the original tweet
-                        do {
-                            try await hproseInstance.updateRetweetCount(tweet: parentTweet, retweetId: quoteTweet.mid, direction: true)
+                        if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: parentTweet, retweetId: quoteTweet.mid, direction: true) {
+                            TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet, appUserId: hproseInstance.appUser.mid)
                             print("✅ [Quote Tweet] Updated retweet count for original tweet")
-                        } catch {
-                            print("⚠️ [Quote Tweet] Failed to update retweet count: \(error)")
+                        } else {
+                            print("⚠️ [Quote Tweet] Failed to update retweet count")
                         }
                     } else {
                         print("❌ [Quote Tweet] Failed to post quote tweet")

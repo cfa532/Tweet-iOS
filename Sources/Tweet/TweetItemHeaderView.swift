@@ -261,7 +261,9 @@ struct TweetMenu: View {
                     // originalTweet is loaded in cache, which is visible to user.
                     let currentCount = originalTweet.retweetCount ?? 0
                     originalTweet.retweetCount = max(0, currentCount - 1)
-                    try? await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false)
+                    if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false) {
+                        TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet, appUserId: hproseInstance.appUser.mid)
+                    }
                 }
             } else {
                 print("DEBUG: [TweetItemHeaderView] deleteTweet returned nil for: \(tweet.mid)")

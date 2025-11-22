@@ -336,11 +336,9 @@ final class HproseInstance: ObservableObject {
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     
                     if !appUser.isGuest {
-                        // Use appUser's existing baseUrl if available (e.g., after login), otherwise force IP resolution
-                        let effectiveBaseUrl = await MainActor.run {
-                            appUser.baseUrl?.absoluteString ?? ""
-                        }
-                        let user = try await fetchUser(appUser.mid, baseUrl: effectiveBaseUrl)
+                        // Always force refresh of appUser's baseURL on app start to ensure we have the latest IP
+                        // Pass empty string to force IP re-resolution and bypass cache
+                        let user = try await fetchUser(appUser.mid, baseUrl: "")
                         print("✅ [INIT] appUser data fetched: \(String(describing: user))")
                         
                         if let user = user {
@@ -367,6 +365,9 @@ final class HproseInstance: ObservableObject {
                                 User.updateUserInstance(with: user)
                                 _appUser = User.getInstance(mid: user.mid)
                             }
+                            
+                            // Ensure the refreshed user with updated baseURL is saved to cache
+                            TweetCacheManager.shared.saveUser(user)
                             print("✅ [INIT] App initialized with real IP: \(HproseInstance.baseUrl.absoluteString)")
                             
                             // Notify UI that app is ready (tweets can now render with real IP)
@@ -920,12 +921,18 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        // If app is not initialized, but we resolved a new IP, still try to fetch with the new IP
+        // If app is not initialized, but we resolved a new IP OR baseUrl param is empty (forcing refresh), still try to fetch
         // Otherwise return cached user (with valid baseUrl from above)
         if !isInitializationComplete {
+            // Force refresh if baseUrl parameter is empty (e.g., during app init)
+            let shouldForceRefresh = baseUrl.isEmpty
             if ipResolved && !effectiveBaseUrl.isEmpty {
                 // We resolved a new IP, so fetch with it even if app is not initialized
                 print("DEBUG: [fetchUser] App not initialized but IP resolved, fetching with new IP for userId: \(userId)")
+                // Fall through to updateUserFromServer below
+            } else if shouldForceRefresh {
+                // baseUrl parameter is empty, force refresh even if app is not initialized
+                print("DEBUG: [fetchUser] App not initialized but baseUrl param is empty, forcing refresh for userId: \(userId)")
                 // Fall through to updateUserFromServer below
             } else {
                 print("DEBUG: [fetchUser] App not initialized, returning cached user for userId: \(userId)")
@@ -935,9 +942,10 @@ final class HproseInstance: ObservableObject {
         
         // Step 2: Fetch from server with retry logic. No instance available in memory or cache.
         do {
-            // First attempt: use provided baseUrl (might be cached/valid)
-            // Retries: force fresh IP resolution (handled in updateUserFromServer)
-            let user = try await updateUserFromServer(userId, baseUrl: effectiveBaseUrl)
+            // Pass the original baseUrl parameter to updateUserFromServer to preserve caller's intent
+            // If baseUrl is empty, updateUserFromServer will force fresh IP resolution on first attempt
+            // If baseUrl is not empty, updateUserFromServer will use it on first attempt
+            let user = try await updateUserFromServer(userId, baseUrl: baseUrl)
             // Successfully fetched user - remove from blacklist candidates if it was there
             if let user = user {
                 blackList.recordSuccess(userId)
@@ -1011,25 +1019,29 @@ final class HproseInstance: ObservableObject {
         let hasExpired = await user.hasExpired()
         let userHasBaseUrl = user.baseUrl != nil && !(user.baseUrl?.absoluteString.isEmpty ?? true)
         
+        // If baseUrl parameter is empty, force fresh IP resolution even on first attempt
+        let forceFreshIP = baseUrl.isEmpty
+        
         for attempt in 1...3 {
             do {
-                // First attempt: Use user's existing baseUrl if available, otherwise resolve IP
+                // First attempt: Use user's existing baseUrl if available AND not forcing fresh IP, otherwise resolve IP
                 // Retry attempts: Always force fresh IP resolution
                 if attempt == 1 {
-                    if userHasBaseUrl, let userBaseUrl = user.baseUrl?.absoluteString {
-                        // User has a baseUrl (even if cache expired) - use it to avoid false redirect loop detection
+                    if !forceFreshIP && userHasBaseUrl, let userBaseUrl = user.baseUrl?.absoluteString {
+                        // User has a baseUrl and we're not forcing refresh - use it to avoid false redirect loop detection
                         print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Using user's existing baseUrl: \(userBaseUrl) for userId: \(userId) (hasExpired: \(hasExpired))")
                         let normalizedBase = try normalizedBaseURL(from: userBaseUrl, context: "existing baseUrl for \(userId)")
                         await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "attempt \(attempt)")
                     } else {
-                        // User has no baseUrl - resolve IP using userId
+                        // Force fresh IP resolution: either baseUrl param is empty, or user has no baseUrl
                         let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
-                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - No baseUrl, resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl)")
+                        let reason = forceFreshIP ? "forcing fresh IP resolution (baseUrl param empty)" : "no baseUrl"
+                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl), reason: \(reason)")
                         guard let providerIP = try await self.getProviderIP(userId) else {
                             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
                         }
                         
-                        // On first attempt with no existing baseUrl, always accept the resolved IP
+                        // On first attempt with forced refresh or no existing baseUrl, always accept the resolved IP
                         // Redirect loop detection only applies on retries when we already have a baseUrl
                         let normalizedBase = try normalizedBaseURL(from: providerIP, context: "provider IP for \(userId)")
                         await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "provider IP attempt \(attempt)")
@@ -1930,7 +1942,8 @@ final class HproseInstance: ObservableObject {
     }
     
     func retweet(_ tweet: Tweet) async throws -> Tweet? {
-        if let retweet = try await uploadTweet(
+        // Upload the retweet
+        guard let retweet = try await uploadTweet(
             await MainActor.run {
                 Tweet.getInstance(
                     mid: Constants.GUEST_ID,
@@ -1940,10 +1953,18 @@ final class HproseInstance: ObservableObject {
                     author: appUser
                 )
             }
-        ) {
-            return retweet
+        ) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Retweet upload failed", comment: "Retweet error")])
         }
-        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Retweet upload failed", comment: "Retweet error")])
+        
+        // Update retweet count of the original tweet and cache the updated tweet
+        // Match Android behavior: update count, cache result, then post notification
+        if let updatedTweet = await updateRetweetCount(tweet: tweet, retweetId: retweet.mid) {
+            // Cache the updated original tweet with new retweet count
+            TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet, appUserId: appUser.mid)
+        }
+        
+        return retweet
     }
     
     /**
@@ -1953,11 +1974,15 @@ final class HproseInstance: ObservableObject {
      * @param direction to indicate increase or decrease retweet count.
      * @return updated original tweet.
      * */
+    /// Update retweet count of the original tweet
+    /// Returns the updated tweet from server, or nil if update fails
+    /// Matches Android behavior: returns nil on error instead of throwing
+    /// Uses the original tweet's author's client (like Android) to ensure we're calling the correct server
     func updateRetweetCount(
         tweet: Tweet,
         retweetId: String,
         direction: Bool = true   // add/remove retweet
-    ) async throws {
+    ) async -> Tweet? {
         let entry = direction ? "retweet_added" : "retweet_removed"
         let params = [
             "aid": appId,
@@ -1967,15 +1992,30 @@ final class HproseInstance: ObservableObject {
             "tweetid": tweet.mid,
             "authorid": tweet.authorId,
         ]
-        guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        
+        // Match Android: use original tweet's author's client, fallback to appUser's client
+        let client = tweet.author?.hproseClient ?? appUser.hproseClient
+        
+        guard let client = client else {
+            print("⚠️ [updateRetweetCount] Client not initialized")
+            return nil
         }
-        if let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] {
-            try await MainActor.run { try tweet.update(from: tweetDict) }
-            // Cache the updated tweet for main feed
-            TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
-        } else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
+        
+        guard let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+            print("⚠️ [updateRetweetCount] Nil response from server")
+            return nil
+        }
+        
+        do {
+            // Update the tweet from server response
+            try await MainActor.run {
+                try tweet.update(from: tweetDict)
+            }
+            // Return the updated tweet (same instance, updated in place)
+            return tweet
+        } catch {
+            print("⚠️ [updateRetweetCount] Failed to update tweet from server response: \(error)")
+            return nil
         }
     }
     

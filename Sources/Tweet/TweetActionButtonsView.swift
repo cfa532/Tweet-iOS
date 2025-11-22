@@ -113,20 +113,41 @@ struct TweetActionButtonsView: View {
     }
     
     private func retweet(_ tweet: Tweet) async throws {
+        // Save original count for rollback
+        let originalCount = tweet.retweetCount ?? 0
+        
         do {
-            let currentCount = tweet.retweetCount ?? 0
-            tweet.retweetCount = currentCount + 1
-
-            if let retweet = try await hproseInstance.retweet(tweet) {
-                NotificationCenter.default.post(name: .newTweetCreated,
-                                                object: nil,
-                                                userInfo: ["tweet": retweet])
-                // Update retweet count of the original tweet in backend.
-                // tweet, the original tweet now, is updated in the following function.
-                try? await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: retweet.mid)
+            // Optimistic UI update - increment retweet count immediately
+            tweet.retweetCount = originalCount + 1
+            
+            // Upload the retweet and update count (matches Android flow)
+            // HproseInstance.retweet() now handles:
+            // 1. Upload retweet
+            // 2. Update retweet count of original tweet
+            // 3. Cache the updated original tweet
+            guard let retweet = try await hproseInstance.retweet(tweet) else {
+                // Retweet upload failed - rollback
+                tweet.retweetCount = originalCount
+                throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload retweet"])
             }
+            
+            // Verify we got a valid retweet ID from server (not GUEST_ID placeholder)
+            // Only post notification if server actually created a retweet with valid ID
+            guard retweet.mid != Constants.GUEST_ID, !retweet.mid.isEmpty else {
+                tweet.retweetCount = originalCount
+                throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid retweet ID from server"])
+            }
+            
+            // Post notification only after confirmed successful retweet creation with valid ID
+            // The original tweet's retweet count has already been updated and cached by HproseInstance.retweet()
+            NotificationCenter.default.post(name: .newTweetCreated,
+                                            object: nil,
+                                            userInfo: ["tweet": retweet])
         } catch {
-            print("Retweet failed in FollowingsTweetView")
+            // Rollback on retweet creation failure
+            tweet.retweetCount = originalCount
+            print("❌ [Retweet] Retweet failed: \(error)")
+            throw error
         }
     }
     
