@@ -886,14 +886,32 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // APP BACKGROUND or non-MediaCell: Gentle recovery (only recreate if broken)
+        // APP BACKGROUND or non-MediaCell: More aggressive recovery for short backgrounds
+        // After clearVideoPlayersForBackgroundRecovery(), currentItem is set to nil
+        // We need to be more aggressive to ensure all videos recover properly
         
-        // CRITICAL: Check if player or currentItem is missing first (common after long background)
+        // CRITICAL: Check if player or currentItem is missing first (common after background)
         // After clearVideoPlayersForBackgroundRecovery(), currentItem is set to nil
         let playerIsMissing = player == nil || player?.currentItem == nil
         
-        if playerIsMissing {
-            print("⚠️ [VIDEO RECOVERY] Player or currentItem missing after background, recreating")
+        // For MediaCell with app background, be more aggressive - always recreate if player exists but currentItem is nil
+        // This handles the case where clearVideoPlayersForBackgroundRecovery() was called
+        let shouldForceRecreate = mode == .mediaCell && player != nil && player?.currentItem == nil
+        
+        if playerIsMissing || shouldForceRecreate {
+            print("⚠️ [VIDEO RECOVERY] Player or currentItem missing after background (playerIsMissing: \(playerIsMissing), shouldForceRecreate: \(shouldForceRecreate)), recreating for \(mid)")
+            
+            // Clean up observers
+            if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
+                observerPlayer.removeTimeObserver(observer)
+            }
+            timeObserver = nil
+            timeObserverPlayer = nil
+            
+            // Remove from SharedAssetCache to force fresh creation
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            
+            player?.pause()
             player = nil
             loadingState = .idle
             playbackState = .notStarted
@@ -912,9 +930,11 @@ struct SimpleVideoPlayer: View {
                     if player != nil {
                         // Reattach player after successful recreation
                         self.isPlayerDetached = false
-                        print("✅ [VIDEO RECOVERY] Player recreated and reattached")
+                        // Force view refresh
+                        self.representableId += 1
+                        print("✅ [VIDEO RECOVERY] Player recreated and reattached for \(self.mid)")
                     } else {
-                        print("⚠️ [VIDEO RECOVERY] Failed to recreate player")
+                        print("⚠️ [VIDEO RECOVERY] Failed to recreate player for \(self.mid)")
                     }
                 }
             }
@@ -923,7 +943,18 @@ struct SimpleVideoPlayer: View {
         
         // Gentle recovery: only recreate if actually broken
         if isPlayerBroken() {
-            print("⚠️ [VIDEO RECOVERY] Player is broken, recreating")
+            print("⚠️ [VIDEO RECOVERY] Player is broken, recreating for \(mid)")
+            
+            // Clean up observers
+            if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
+                observerPlayer.removeTimeObserver(observer)
+            }
+            timeObserver = nil
+            timeObserverPlayer = nil
+            
+            // Remove from SharedAssetCache
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            
             player = nil
             loadingState = .idle
             playbackState = .notStarted
@@ -942,9 +973,11 @@ struct SimpleVideoPlayer: View {
                     if player != nil {
                         // Reattach player after successful recreation
                         self.isPlayerDetached = false
-                        print("✅ [VIDEO RECOVERY] Player recreated and reattached")
+                        // Force view refresh
+                        self.representableId += 1
+                        print("✅ [VIDEO RECOVERY] Player recreated and reattached for \(self.mid)")
                     } else {
-                        print("⚠️ [VIDEO RECOVERY] Failed to recreate player")
+                        print("⚠️ [VIDEO RECOVERY] Failed to recreate player for \(self.mid)")
                     }
                 }
             }
@@ -1017,21 +1050,26 @@ struct SimpleVideoPlayer: View {
     private func handleVideoInfrastructureRestarted() {
         print("DEBUG: [VIDEO INFRA RESTART] Video infrastructure restarted for \(mid), mode: \(mode), shouldLoadVideo: \(shouldLoadVideo)")
         
-        // BULLETPROOF: For MediaCell, ALWAYS recreate if video was previously loaded
-        // This handles the case where AppDelegate cleared players before this notification
+        // BULLETPROOF: For MediaCell, ALWAYS recreate if player exists OR currentItem is nil
+        // This handles the case where AppDelegate cleared players (currentItem set to nil) before this notification
         if mode == .mediaCell {
-            // Check if player exists OR if video was previously loaded (check if in cache)
+            // Check if player exists OR if currentItem is nil (cleared by clearVideoPlayersForBackgroundRecovery)
             let hadPlayer = player != nil
+            let currentItemIsNil = player?.currentItem == nil
             let wasInCache = VideoStateCache.shared.getCachedState(for: mid) != nil
             
-            if hadPlayer || wasInCache {
-                print("DEBUG: [VIDEO INFRA RESTART] MediaCell - FORCE recreating player (hadPlayer: \(hadPlayer), wasInCache: \(wasInCache))")
+            // Force recreate if: player exists, OR currentItem is nil (was cleared), OR was in cache
+            if hadPlayer || currentItemIsNil || wasInCache {
+                print("DEBUG: [VIDEO INFRA RESTART] MediaCell - FORCE recreating player (hadPlayer: \(hadPlayer), currentItemIsNil: \(currentItemIsNil), wasInCache: \(wasInCache))")
                 
                 if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
                     observerPlayer.removeTimeObserver(observer)
                 }
                 timeObserver = nil
                 timeObserverPlayer = nil
+                
+                // Remove from SharedAssetCache to force fresh creation
+                SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
                 
                 player?.pause()
                 player = nil
@@ -1885,6 +1923,11 @@ struct SimpleVideoPlayer: View {
                 NSLog("✅ [PLAYBACK RESUME] Data available, resuming playback for \(mid) (buffered: \(bufferedText)s)")
                 DispatchQueue.main.async {
                     if resumePlayer.rate == 0 {
+                        // CRITICAL: Always ensure muteState is correct before playing in MediaCell
+                        if self.mode == .mediaCell {
+                            resumePlayer.isMuted = MuteState.shared.isMuted
+                            NSLog("🔇 [PLAYER MUTE] Playback resume - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                        }
                         resumePlayer.play()
                         NSLog("🔄 [PLAYBACK RESUME] Manually triggered play() for \(mid)")
                     } else {
@@ -1941,6 +1984,11 @@ struct SimpleVideoPlayer: View {
                     }
                     
                     if shouldAutoPlay {
+                        // CRITICAL: Always ensure muteState is correct before playing in MediaCell
+                        if self.mode == .mediaCell {
+                            player.isMuted = MuteState.shared.isMuted
+                            NSLog("🔇 [PLAYER MUTE] KVO status ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                        }
                         // Start playing automatically
                         player.play()
                         NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (buffered: \(hasBufferedData))")
@@ -1974,6 +2022,11 @@ struct SimpleVideoPlayer: View {
                         
                         // Force player to render first frame by calling play() then checking if we should pause
                         if player.rate == 0 {
+                            // CRITICAL: Always ensure muteState is correct before playing in MediaCell
+                            if self.mode == .mediaCell {
+                                player.isMuted = MuteState.shared.isMuted
+                                NSLog("🔇 [PLAYER MUTE] First frame render - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                            }
                             player.play()
                             NSLog("▶️ [FIRST FRAME] Triggered play() to render first frame for \(mid)")
                             
@@ -2013,6 +2066,11 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 if shouldAutoPlay {
+                    // CRITICAL: Always ensure muteState is correct before playing in MediaCell
+                    if self.mode == .mediaCell {
+                        player.isMuted = MuteState.shared.isMuted
+                        NSLog("🔇 [PLAYER MUTE] Initial check ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                    }
                     player.play()
                     NSLog("▶️ [VIDEO SETUP] Already ready - auto-playing \(mid) (buffered: \(hasBufferedData))")
                 } else {
@@ -2561,6 +2619,8 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                             
                             // Use DispatchQueue to ensure this happens after view is fully set up
                             DispatchQueue.main.async {
+                                // For fullscreen/detail modes (AVPlayerViewController), always unmute
+                                player.isMuted = false
                                 player.play()
                             }
                         } else if playerItem.status == .unknown {
@@ -2626,7 +2686,8 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                         if hasBufferedData {
                             applyAutomaticWaiting(for: player)
                             
-                            // Play immediately
+                            // Play immediately - for fullscreen/detail modes (AVPlayerViewController), always unmute
+                            player.isMuted = false
                             player.play()
                         } else {
                             // No buffered data - need to load

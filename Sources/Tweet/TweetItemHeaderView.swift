@@ -123,7 +123,8 @@ struct TweetMenu: View {
                                     tweet.isPrivate = newPrivacyStatus
                                     
                                     // Update Core Data cache with the new privacy status
-                                    TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: hproseInstance.appUser.mid)
+                                    // Cache under the tweet's authorId, not appUser.mid
+                                    TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
                                     
                                     // Send notification to update tweet list views
                                     // Send tweetId for removal (handles both private->public and public->private)

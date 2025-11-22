@@ -539,7 +539,7 @@ final class HproseInstance: ObservableObject {
             print("[fetchTweetFeed] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
         }
         
-        // Cache original tweets first
+        // Cache original tweets first - cache under their authorId, not appUser.mid
         for originalTweetDict in originalTweetsData {
             if let dict = originalTweetDict {
                 do {
@@ -549,8 +549,10 @@ final class HproseInstance: ObservableObject {
                             originalTweet.author = author  // Set on main thread since author is @Published
                         }
                     }
-                    TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: appUser.mid)
-                    print("[fetchTweetFeed] Cached original tweet: \(originalTweet.mid)")
+                    // CRITICAL: Cache original tweet under its authorId, not appUser.mid
+                    // This prevents original tweets from appearing in main feed when their author is different
+                    TweetCacheManager.shared.saveTweet(originalTweet, userId: originalTweet.authorId)
+                    print("[fetchTweetFeed] Cached original tweet: \(originalTweet.mid) under authorId: \(originalTweet.authorId)")
                 } catch {
                     print("[fetchTweetFeed] Error caching original tweet: \(error)")
                 }
@@ -645,21 +647,22 @@ final class HproseInstance: ObservableObject {
         print("[fetchUserTweet] Fetching tweets for user: \(user.mid), page: \(pageNumber), size: \(pageSize)")
         print("[fetchUserTweet] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
         
-        // Cache original tweets first (only if the user is appUser)
-        if user.mid == appUser.mid {
-            for originalTweetDict in originalTweetsData {
-                if let dict = originalTweetDict {
-                    do {
-                        let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                        let author = try? await fetchUser(originalTweet.authorId)
-                        await MainActor.run {
-                            originalTweet.author = author
-                        }
-                        TweetCacheManager.shared.updateTweetInAppUserCaches(originalTweet, appUserId: appUser.mid)
-                        print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid)")
-                    } catch {
-                        print("[fetchUserTweet] Error caching original tweet: \(error)")
+        // Cache original tweets first - cache under their authorId, not appUser.mid
+        // This applies to all users, not just appUser, to ensure consistent caching
+        for originalTweetDict in originalTweetsData {
+            if let dict = originalTweetDict {
+                do {
+                    let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
+                    let author = try? await fetchUser(originalTweet.authorId)
+                    await MainActor.run {
+                        originalTweet.author = author
                     }
+                    // CRITICAL: Cache original tweet under its authorId, not appUser.mid
+                    // This prevents original tweets from appearing in main feed when their author is different
+                    TweetCacheManager.shared.saveTweet(originalTweet, userId: originalTweet.authorId)
+                    print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid) under authorId: \(originalTweet.authorId)")
+                } catch {
+                    print("[fetchUserTweet] Error caching original tweet: \(error)")
                 }
             }
         }
@@ -739,8 +742,9 @@ final class HproseInstance: ObservableObject {
                     }
                 }
                 
-                // Update cached data for main feed
-                TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
+                // Cache the tweet under its authorId, not appUser.mid
+                // This ensures original tweets are cached under their author, not the current user
+                TweetCacheManager.shared.saveTweet(tweet, userId: authorId)
                 
                 // Record success if tweet was successfully fetched
                 blackList.recordSuccess(tweetId)
@@ -1922,8 +1926,9 @@ final class HproseInstance: ObservableObject {
             // Parse updated tweet
             if let tweetDict = response["tweet"] as? [String: Any] {
                 updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                // Cache the updated tweet for main feed
-                TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet!, appUserId: appUser.mid)
+                // Cache the updated tweet under its authorId, not appUser.mid
+                // This ensures original tweets are cached under their author, not the current user
+                TweetCacheManager.shared.saveTweet(updatedTweet!, userId: updatedTweet!.authorId)
             }
             
             return (updatedTweet, updatedUser)
@@ -1965,8 +1970,9 @@ final class HproseInstance: ObservableObject {
             // Parse updated tweet
             if let tweetDict = response["tweet"] as? [String: Any] {
                 updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                // Cache the updated tweet for main feed
-                TweetCacheManager.shared.updateTweetInAppUserCaches(updatedTweet!, appUserId: appUser.mid)
+                // Cache the updated tweet under its authorId, not appUser.mid
+                // This ensures original tweets are cached under their author, not the current user
+                TweetCacheManager.shared.saveTweet(updatedTweet!, userId: updatedTweet!.authorId)
             }
             
             return (updatedTweet, updatedUser)
@@ -2235,8 +2241,9 @@ final class HproseInstance: ObservableObject {
                 comment.author = appUser
                 tweet.commentCount = count
             }
-            // Cache the updated tweet for main feed
-            TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
+            // Cache the updated tweet under its authorId, not appUser.mid
+            // This ensures original tweets are cached under their author, not the current user
+            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
             
             // Check if retweetid is present and create a new tweet
             if let retweetId = response["retweetid"] as? String, !retweetId.isEmpty {
