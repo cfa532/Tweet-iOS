@@ -900,18 +900,14 @@ id decode(NSData *data, NSArray *args, HproseClientContext *context) {
                         @catch (id e) {}
                     }
                 }
-                if (cb != nil) {
-                    cb(nil);
-                }
+                cb(nil);
                 topic = nil;
             }
         };
         [topic.callbacks addObject:callback];
         allTopics[name][clientId] = topic;
         @try {
-            if (cb != nil) {
-                cb(nil);
-            }
+            cb(nil);
         }
         @catch (NSException *exception) {
             topic = nil;
