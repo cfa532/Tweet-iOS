@@ -164,15 +164,21 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     
                     SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
                     
+                    // Show loading indicator (non-blocking - allows user to scroll)
                     showLoadingOverlay()
-                    Thread.sleep(forTimeInterval: 0.05)
                     
-                    restartVideoInfrastructure()
-                    
-                    hideLoadingOverlay()
-                    
-                    NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
-                    print("[AppDelegate] Posted videoInfrastructureRestarted notification for long screen lock")
+                    // Restart infrastructure asynchronously (non-blocking)
+                    Task.detached(priority: .userInitiated) {
+                        // Restart server in background
+                        await self.restartVideoInfrastructureAsync()
+                        
+                        // Hide loading indicator and notify videos when ready
+                        await MainActor.run {
+                            self.hideLoadingOverlay()
+                            NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                            print("[AppDelegate] Posted videoInfrastructureRestarted notification for long screen lock")
+                        }
+                    }
                 } else {
                     // SHORT screen lock (<5min) - gentle refresh, keep players intact
                     print("[AppDelegate] Short screen lock (\(Int(timeInactive))s) - gentle refresh (keeping players)")
@@ -190,15 +196,21 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         print("[AppDelegate] Server killed during screen lock, restarting...")
                         SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
                         
+                        // Show loading indicator (non-blocking)
                         showLoadingOverlay()
-                        Thread.sleep(forTimeInterval: 0.05)
                         
-                        LocalHTTPServer.shared.startAndWait()
-                        
-                        hideLoadingOverlay()
-                        print("[AppDelegate] Server restarted after screen lock")
-                        
-                        NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                        // Restart server asynchronously (non-blocking)
+                        Task.detached(priority: .userInitiated) {
+                            // Restart server in background
+                            LocalHTTPServer.shared.startAndWait()
+                            
+                            // Hide loading indicator and notify videos when ready
+                            await MainActor.run {
+                                self.hideLoadingOverlay()
+                                NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                                print("[AppDelegate] Server restarted after screen lock")
+                            }
+                        }
                     }
                 }
             }
@@ -244,21 +256,26 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             // CRITICAL: Use DURATION-based recovery, not isRunning check
             // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
             if timeInBackground > 300 {  // 5 minutes
-                // LONG background - ALWAYS do full restart with BLOCKING
+                // LONG background - ALWAYS do full restart
                 // Even if isRunning=true, the listener may be suspended and unresponsive
                 NSLog("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - forcing full restart")
                 
-                // Show loading indicator and wait for it to render
+                // Show loading indicator (non-blocking - allows user to scroll)
                 showLoadingOverlay()
-                Thread.sleep(forTimeInterval: 0.1) // Give UI time to render
                 
-                // Restart infrastructure - this is synchronous and blocks until complete
-                restartVideoInfrastructure()
-                
-                // Hide loading indicator
-                hideLoadingOverlay()
-                
-                NSLog("✅ [AppDelegate] Server fully restarted - videos ready")
+                // Restart infrastructure asynchronously (non-blocking)
+                // Videos will show loading state until server is ready, but UI remains interactive
+                Task.detached(priority: .userInitiated) {
+                    // Restart server in background
+                    await self.restartVideoInfrastructureAsync()
+                    
+                    // Hide loading indicator and notify videos when ready
+                    await MainActor.run {
+                        self.hideLoadingOverlay()
+                        NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
+                        NSLog("✅ [AppDelegate] Server fully restarted - videos ready")
+                    }
+                }
             } else {
                 // SHORT background (<5min) - simple approach: always clear and let videos recreate
                 NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - clearing players for clean state")
@@ -323,12 +340,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
     }
     
+    /// Synchronous restart (for cases where blocking is acceptable)
     private func restartVideoInfrastructure() {
         print("[AppDelegate] Restarting video infrastructure after long background")
         
         // CRITICAL: Clear ALL video players FIRST to release their URLs
         // This prevents players from trying to use old port numbers after server restart
-        // Note: We're already on main thread (called from willEnterForeground), so just call directly
         SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
         
         // DON'T clear VideoStateCache - it stores playback position/state
@@ -345,6 +362,33 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         LocalHTTPServer.shared.startAndWait()
         
         print("[AppDelegate] Video infrastructure restart complete")
+    }
+    
+    /// Async restart (non-blocking - allows UI to remain interactive)
+    private func restartVideoInfrastructureAsync() async {
+        print("[AppDelegate] Restarting video infrastructure asynchronously (non-blocking)")
+        
+        // CRITICAL: Clear ALL video players FIRST to release their URLs
+        await MainActor.run {
+            SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+        }
+        
+        // DON'T clear VideoStateCache - it stores playback position/state
+        // Preserving it allows videos to resume from where they left off after reload
+        
+        // Reset LocalHTTPServer connection pool
+        LocalHTTPServer.shared.resetConnectionPool()
+        
+        // Stop the server completely and wait for cleanup (non-blocking)
+        LocalHTTPServer.shared.stop()
+        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s - non-blocking sleep
+        
+        // Restart the server - wait until ready (still blocks but in background task)
+        // Note: startAndWait() uses semaphore which blocks, but we're in a background task
+        // so main thread remains responsive
+        LocalHTTPServer.shared.startAndWait()
+        
+        print("[AppDelegate] Video infrastructure restart complete (async)")
     }
     
     // MARK: - Notification Permission
