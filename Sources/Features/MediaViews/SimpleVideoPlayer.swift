@@ -1081,6 +1081,9 @@ struct SimpleVideoPlayer: View {
                 playbackState = .notStarted
                 
                 // Always recreate - even if currently offscreen, so it's ready when scrolled back
+                // CRITICAL: Always call setupPlayer() for MediaCell (old working behavior)
+                // Note: setupPlayer() internally checks shouldLoadVideo and returns early if false,
+                // so for visible videos (shouldLoadVideo=true) it will load, for offscreen it will just reset state
                 setupPlayer()
                 
                 // CRITICAL: Force view layer to recreate for on-screen videos

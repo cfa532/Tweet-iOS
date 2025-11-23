@@ -219,6 +219,7 @@ struct TweetActionButtonsView: View {
                         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
                         let originalFavoriteCount = tweet.favoriteCount ?? 0
                         let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
+                        let originalFavorites = tweet.favorites // Save original favorites array
                         
                         // Optimistic UI update - only after debounce check passes
                         var newFavorites = tweet.favorites ?? [false, false, false]
@@ -262,7 +263,7 @@ struct TweetActionButtonsView: View {
                         } catch {
                             // Rollback optimistic updates on failure
                             await MainActor.run {
-                                self.tweet.favorites = tweet.favorites
+                                self.tweet.favorites = originalFavorites
                                 self.tweet.favoriteCount = originalFavoriteCount
                                 hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
                             }
@@ -307,6 +308,7 @@ struct TweetActionButtonsView: View {
                         let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
                         let originalBookmarkCount = tweet.bookmarkCount ?? 0
                         let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
+                        let originalFavorites = tweet.favorites // Save original favorites array
                         
                         // Optimistic UI update - only after debounce check passes
                         var newFavorites = tweet.favorites ?? [false, false, false]
@@ -350,7 +352,7 @@ struct TweetActionButtonsView: View {
                         } catch {
                             // Rollback optimistic updates on failure
                             await MainActor.run {
-                                self.tweet.favorites = tweet.favorites
+                                self.tweet.favorites = originalFavorites
                                 self.tweet.bookmarkCount = originalBookmarkCount
                                 hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount
                             }
