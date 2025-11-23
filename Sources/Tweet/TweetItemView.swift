@@ -226,9 +226,17 @@ struct TweetItemView: View, Equatable {
                             Image(systemName: "arrow.2.squarepath")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text(String(format: NSLocalizedString("Forwarded by %@", comment: "Tweet forwarded by user"), tweet.author?.name ?? tweet.author?.username ?? ""))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            if let author = tweet.author, author.mid == hproseInstance.appUser.mid {
+                                // If the forwarder is the appUser, show "Forwarded by you"
+                                Text(NSLocalizedString("Forwarded by you", comment: "Tweet forwarded by appUser"))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                // Otherwise, show "Forwarded by [username]"
+                                Text(String(format: NSLocalizedString("Forwarded by %@", comment: "Tweet forwarded by user"), tweet.author?.name ?? tweet.author?.username ?? ""))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                         .padding(.top, -8)
                         

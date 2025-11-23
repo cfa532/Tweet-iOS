@@ -130,6 +130,7 @@
 // MARK: - Tweet Actions
 "Show more" = "Show more";
 "Forwarded by %@" = "Forwarded by %@";
+"Forwarded by you" = "Forwarded by you";
 "Quote Tweet" = "Quote Tweet";
 
 // MARK: - Media
