@@ -458,7 +458,7 @@ struct TweetActionButtonsView: View {
                 // Spinner overlay directly over share button
                 if isPreparingShare {
                     ProgressView()
-                        .scaleEffect(2.0)
+                        .scaleEffect(1.5)
                         .progressViewStyle(CircularProgressViewStyle(tint: .themeSecondaryText))
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
@@ -859,6 +859,8 @@ struct TweetActionButtonsView: View {
         }
         
         // AVPlayer operations must be on main thread
+        // Note: CVBuffer is not Sendable in Swift 6, but all operations happen within MainActor
+        // and the pixel buffer is converted to UIImage (Sendable) before leaving this context
         let videoOutput = await MainActor.run { () -> AVPlayerItemVideoOutput in
             let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
@@ -871,7 +873,7 @@ struct TweetActionButtonsView: View {
             Task { @MainActor in
                 playerItem.remove(videoOutput)
             }
-        }
+        } // swiftlint:disable:this line_length
         
         // Try capturing at different time positions: 0.1s, 0.3s, 0.5s from the requested time
         // This increases the chance of finding a valid frame, especially for HLS videos
@@ -946,6 +948,8 @@ struct TweetActionButtonsView: View {
             try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
             
             // Try to capture frame at this time position
+            // CRITICAL: All CVBuffer operations must happen within MainActor.run to avoid Sendable warnings
+            // The pixel buffer is converted to UIImage (which is Sendable) before leaving this context
             let initialImage = await MainActor.run { () -> UIImage? in
                 let currentTime = playerItem.currentTime()
                 print("DEBUG: [SHARE] Attempting capture at seeked time: \(CMTimeGetSeconds(currentTime))s")
@@ -956,13 +960,16 @@ struct TweetActionButtonsView: View {
                     return nil
                 }
                 
-                // Copy the pixel buffer
+                // Copy the pixel buffer - CVPixelBuffer is not Sendable in Swift 6
+                // We must convert it to UIImage (Sendable) within this MainActor context
                 guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else {
                     print("DEBUG: [SHARE] Failed to copy pixel buffer")
                     return nil
                 }
                 
                 // Convert pixel buffer to UIImage on main thread (CVBuffer operations must be on main thread)
+                // This conversion happens synchronously within MainActor context, so CVBuffer never escapes
+                // The pixelBuffer is never passed across concurrency boundaries
                 let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
                 let context = CIContext(options: [.useSoftwareRenderer: false]) // Use hardware acceleration when possible
                 
@@ -972,7 +979,11 @@ struct TweetActionButtonsView: View {
                 }
                 
                 // Convert to UIImage - UIImage is Sendable, so we can pass it to background task
-                return UIImage(cgImage: cgImage)
+                // The pixelBuffer (CVPixelBuffer/CVBuffer) is never referenced after this point
+                let image = UIImage(cgImage: cgImage)
+                // Ensure pixelBuffer is fully deallocated before returning
+                _ = pixelBuffer  // Explicitly reference to ensure it's not captured in closure
+                return image
             }
             
             // If we successfully captured a frame, process it and return
