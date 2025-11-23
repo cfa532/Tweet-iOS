@@ -89,7 +89,7 @@ struct TweetActionButtonsView: View {
     @State private var attachmentPreviewImage: UIImage? = nil
     @State private var isPreparingShare = false
     @State private var shareSheetItems: ShareSheetData? = nil
-    @State private var hasPreloadedPreview = false
+    // Removed: @State private var hasPreloadedPreview = false - no longer needed since preloading is disabled
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     private func handleGuestAction() {
@@ -98,19 +98,9 @@ struct TweetActionButtonsView: View {
         }
     }
     
-    private func preloadAttachmentPreview() {
-        guard !hasPreloadedPreview else { return }
-        hasPreloadedPreview = true
-        
-        Task {
-            print("DEBUG: [SHARE] Preloading attachment preview in background")
-            let preview = await loadAttachmentPreviewImage()
-            await MainActor.run {
-                attachmentPreviewImage = preview
-                print("DEBUG: [SHARE] Background preview preloaded: \(preview != nil ? "YES" : "NO")")
-            }
-        }
-    }
+    // DISABLED: Preload function removed - causes UI freezing when many video tweets are visible
+    // Preview is now generated on-demand only when user taps the share button
+    // private func preloadAttachmentPreview() { ... }
     
     private func retweet(tweetId: String, authorId: String) async throws {
         // Get the tweet instance at execution time to ensure we have the correct one
@@ -525,8 +515,9 @@ struct TweetActionButtonsView: View {
             .animation(.easeInOut(duration: 0.3), value: showToast)
         )
         .onAppear {
-            // Preload attachment preview in background when view appears
-            preloadAttachmentPreview()
+            // DISABLED: Preload attachment preview causes UI freezing when many video tweets are visible
+            // Preview will be generated on-demand when share button is tapped instead
+            // preloadAttachmentPreview()
         }
     }
 
@@ -852,68 +843,80 @@ struct TweetActionButtonsView: View {
             return nil
         }
         
-        // Create video output to extract frames
-        let videoOutput = AVPlayerItemVideoOutput(pixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-        ])
+        // AVPlayer operations must be on main thread
+        let videoOutput = await MainActor.run { () -> AVPlayerItemVideoOutput in
+            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ])
+            playerItem.add(output)
+            return output
+        }
         
-        // Add output to player item
-        playerItem.add(videoOutput)
         defer {
-            playerItem.remove(videoOutput)
+            Task { @MainActor in
+                playerItem.remove(videoOutput)
+            }
         }
         
-        // Seek to the desired time
+        // Seek to the desired time with reasonable tolerance (not zero) to avoid freezing
+        // Use tolerance to make seeking faster while still being accurate enough for preview
         let targetTime = CMTime(seconds: seconds, preferredTimescale: 600)
-        await player.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        let tolerance = CMTime(seconds: 0.1, preferredTimescale: 600) // 0.1s tolerance for faster seeking
         
-        // Wait a bit for the seek to complete and frame to be ready
-        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-        
-        // Get the current time after seek
-        let currentTime = playerItem.currentTime()
-        print("DEBUG: [SHARE] Player seeked to: \(CMTimeGetSeconds(currentTime))s")
-        
-        // Check if we have a pixel buffer at this time
-        guard videoOutput.hasNewPixelBuffer(forItemTime: currentTime) else {
-            print("DEBUG: [SHARE] No pixel buffer available at current time")
-            return nil
+        await MainActor.run {
+            player.seek(to: targetTime, toleranceBefore: tolerance, toleranceAfter: tolerance)
         }
         
-        // Copy the pixel buffer
-        guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else {
+        // Wait a bit for the seek to complete (reduced from 0.1s)
+        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+        
+        // Get pixel buffer after seek (must be on main thread)
+        let pixelBuffer = await MainActor.run { () -> CVPixelBuffer? in
+            let currentTime = playerItem.currentTime()
+            print("DEBUG: [SHARE] Player seeked to: \(CMTimeGetSeconds(currentTime))s")
+            
+            // Check if we have a pixel buffer at this time
+            guard videoOutput.hasNewPixelBuffer(forItemTime: currentTime) else {
+                print("DEBUG: [SHARE] No pixel buffer available at current time")
+                return nil
+            }
+            
+            // Copy the pixel buffer
+            return videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil)
+        }
+        
+        guard let pixelBuffer = pixelBuffer else {
             print("DEBUG: [SHARE] Failed to copy pixel buffer")
             return nil
         }
         
-        // Convert pixel buffer to UIImage without alpha channel
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let context = CIContext()
-        
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
-            print("DEBUG: [SHARE] Failed to create CGImage from pixel buffer")
-            return nil
-        }
-        
-        // Convert to UIImage and remove alpha channel to avoid iOS warning
-        let image = UIImage(cgImage: cgImage)
-        
-        // Re-render without alpha channel
-        UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
-        image.draw(in: CGRect(origin: .zero, size: image.size))
-        let imageWithoutAlpha = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        
-        guard let cleanImage = imageWithoutAlpha else {
-            print("DEBUG: [SHARE] Failed to remove alpha channel, using original")
-            return cropToCenter(image: image, targetSize: 270)
-        }
-        
-        // Crop to center and resize to 270x270
-        let croppedImage = cropToCenter(image: cleanImage, targetSize: 270)
-        
-        print("DEBUG: [SHARE] Successfully captured and cropped frame from player to 270x270")
-        return croppedImage
+        // CRITICAL: Move heavy image processing to background thread to prevent UI freeze
+        return await Task.detached(priority: .userInitiated) { [pixelBuffer] in
+            // Convert pixel buffer to UIImage without alpha channel (off main thread)
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let context = CIContext(options: [.useSoftwareRenderer: false]) // Use hardware acceleration when possible
+            
+            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+                print("DEBUG: [SHARE] Failed to create CGImage from pixel buffer")
+                return nil
+            }
+            
+            // Convert to UIImage
+            let image = UIImage(cgImage: cgImage)
+            
+            // Re-render without alpha channel (off main thread using UIGraphicsImageRenderer for better performance)
+            let renderer = UIGraphicsImageRenderer(size: image.size)
+            let cleanImage = renderer.image { _ in
+                image.draw(in: CGRect(origin: .zero, size: image.size))
+            }
+            
+            // Crop to center and resize to 270x270 (off main thread)
+            // cropToCenter is pure image processing - safe to call off main thread
+            let croppedImage = cropToCenter(image: cleanImage, targetSize: 270)
+            
+            print("DEBUG: [SHARE] Successfully captured and cropped frame from player to 270x270")
+            return croppedImage
+        }.value
     }
     
     private func captureFrame(from asset: AVAsset, at seconds: Double) async throws -> UIImage {
