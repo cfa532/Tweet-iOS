@@ -413,45 +413,55 @@ struct TweetActionButtonsView: View {
             }
             // Share button
             Spacer(minLength: 16)
-            DebounceButton(
-                cooldownDuration: 0.3,
-                enableAnimation: true,
-                enableVibration: false
-            ) {
-                Task {
-                    print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
+            ZStack {
+                DebounceButton(
+                    cooldownDuration: 0.3,
+                    enableAnimation: true,
+                    enableVibration: false
+                ) {
+                    // Show spinner immediately when button is tapped (synchronous on main thread)
+                    isPreparingShare = true
                     
-                    // If we don't have a preloaded preview, generate it now
-                    if attachmentPreviewImage == nil {
-                        print("DEBUG: [SHARE] No preloaded preview, generating now...")
+                    Task {
+                        print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
                         
-                        await MainActor.run {
-                            isPreparingShare = true
+                        // If we don't have a preloaded preview, generate it now
+                        if attachmentPreviewImage == nil {
+                            print("DEBUG: [SHARE] No preloaded preview, generating now...")
+                            
+                            // Generate preview (will return quickly if it fails or succeeds)
+                            let preview = await loadAttachmentPreviewImage()
+                            
+                            await MainActor.run {
+                                attachmentPreviewImage = preview
+                                print("DEBUG: [SHARE] Preview image generated: \(preview != nil ? "YES" : "NO")")
+                            }
+                        } else {
+                            print("DEBUG: [SHARE] Using preloaded preview")
                         }
                         
-                        // Generate preview (will return quickly if it fails or succeeds)
-                        let preview = await loadAttachmentPreviewImage()
-                        
+                        // Open sheet with preview (if available)
                         await MainActor.run {
-                            attachmentPreviewImage = preview
-                            print("DEBUG: [SHARE] Preview image generated: \(preview != nil ? "YES" : "NO")")
+                            let items = shareActivityItems()
+                            print("DEBUG: [SHARE] Opening sheet with items, count: \(items.count)")
+                            shareSheetItems = ShareSheetData(items: items)
+                            // Don't hide spinner here - wait for sheet to actually appear
                         }
-                    } else {
-                        print("DEBUG: [SHARE] Using preloaded preview")
                     }
-                    
-                    // Open sheet with preview (if available)
-                    await MainActor.run {
-                        let items = shareActivityItems()
-                        print("DEBUG: [SHARE] Opening sheet with items, count: \(items.count)")
-                        shareSheetItems = ShareSheetData(items: items)
-                        isPreparingShare = false
-                    }
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .frame(width: 20)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .opacity(isPreparingShare ? 0.3 : 1.0)
                 }
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .frame(width: 20)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                
+                // Spinner overlay directly over share button
+                if isPreparingShare {
+                    ProgressView()
+                        .scaleEffect(2.0)
+                        .progressViewStyle(CircularProgressViewStyle(tint: .themeSecondaryText))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
         }
         .foregroundColor(.themeSecondaryText)
@@ -497,6 +507,11 @@ struct TweetActionButtonsView: View {
                     .background(Color.black.opacity(0.7))
                     .cornerRadius(16)
                 }
+            }
+            .onAppear {
+                // Hide spinner only when share sheet actually appears
+                isPreparingShare = false
+                print("DEBUG: [SHARE] Share sheet appeared, hiding spinner")
             }
         }
         .sheet(isPresented: $showLoginSheet) {
@@ -858,70 +873,135 @@ struct TweetActionButtonsView: View {
             }
         }
         
-        // Seek to the desired time with reasonable tolerance (not zero) to avoid freezing
-        // Use tolerance to make seeking faster while still being accurate enough for preview
-        let targetTime = CMTime(seconds: seconds, preferredTimescale: 600)
-        let tolerance = CMTime(seconds: 0.1, preferredTimescale: 600) // 0.1s tolerance for faster seeking
+        // Try capturing at different time positions: 0.1s, 0.3s, 0.5s from the requested time
+        // This increases the chance of finding a valid frame, especially for HLS videos
+        let retryTimes = [0.1, 0.3, 0.5]
         
-        await MainActor.run {
-            player.seek(to: targetTime, toleranceBefore: tolerance, toleranceAfter: tolerance)
+        for retryOffset in retryTimes {
+            let targetTime = seconds + retryOffset
+            print("DEBUG: [SHARE] Attempting capture at \(targetTime)s (offset: \(retryOffset)s)")
+            
+            let tolerance = CMTime(seconds: 0.1, preferredTimescale: 600) // 0.1s tolerance for faster seeking
+            let targetCMTime = CMTime(seconds: targetTime, preferredTimescale: 600)
+            
+            // CRITICAL: Wait for seek to complete using completion handler
+            // This is especially important for HLS videos where segments need to load
+            let seekCompleted = await MainActor.run { () -> Task<Bool, Never> in
+                return Task {
+                    await withCheckedContinuation { continuation in
+                        player.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
+                            continuation.resume(returning: finished)
+                        }
+                    }
+                }
+            }
+            
+            let didSeek = await seekCompleted.value
+            guard didSeek else {
+                print("DEBUG: [SHARE] Seek failed at \(targetTime)s, trying next position...")
+                continue
+            }
+            
+            print("DEBUG: [SHARE] Seek completed to \(targetTime)s, waiting for segment to load...")
+            
+            // Wait for segment to load at this time position
+            var attempts = 0
+            let maxAttempts = 50 // 5 seconds total (50 * 0.1s)
+            var hasDataAtTime = false
+            
+            while attempts < maxAttempts {
+                hasDataAtTime = await MainActor.run { () -> Bool in
+                    let currentTime = playerItem.currentTime()
+                    let loadedRanges = playerItem.loadedTimeRanges
+                    
+                    // Check if current time is within any loaded range
+                    for timeRangeValue in loadedRanges {
+                        let range = timeRangeValue.timeRangeValue
+                        let start = range.start
+                        let end = CMTimeAdd(start, range.duration)
+                        // Check if currentTime is within [start, end)
+                        if CMTimeCompare(currentTime, start) >= 0 && CMTimeCompare(currentTime, end) < 0 {
+                            return true
+                        }
+                    }
+                    return false
+                }
+                
+                if hasDataAtTime {
+                    print("DEBUG: [SHARE] Segment loaded at \(targetTime)s after \(attempts) attempts")
+                    break
+                }
+                
+                // Wait 0.1s before checking again
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                attempts += 1
+            }
+            
+            if !hasDataAtTime {
+                print("DEBUG: [SHARE] Timeout waiting for segment at \(targetTime)s, trying next position...")
+                continue
+            }
+            
+            // Additional wait after segment is loaded to ensure pixel buffer is ready
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+            
+            // Try to capture frame at this time position
+            let initialImage = await MainActor.run { () -> UIImage? in
+                let currentTime = playerItem.currentTime()
+                print("DEBUG: [SHARE] Attempting capture at seeked time: \(CMTimeGetSeconds(currentTime))s")
+                
+                // Check if we have a pixel buffer at this time
+                guard videoOutput.hasNewPixelBuffer(forItemTime: currentTime) else {
+                    print("DEBUG: [SHARE] No pixel buffer available at current time")
+                    return nil
+                }
+                
+                // Copy the pixel buffer
+                guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else {
+                    print("DEBUG: [SHARE] Failed to copy pixel buffer")
+                    return nil
+                }
+                
+                // Convert pixel buffer to UIImage on main thread (CVBuffer operations must be on main thread)
+                let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                let context = CIContext(options: [.useSoftwareRenderer: false]) // Use hardware acceleration when possible
+                
+                guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+                    print("DEBUG: [SHARE] Failed to create CGImage from pixel buffer")
+                    return nil
+                }
+                
+                // Convert to UIImage - UIImage is Sendable, so we can pass it to background task
+                return UIImage(cgImage: cgImage)
+            }
+            
+            // If we successfully captured a frame, process it and return
+            if let initialImage = initialImage {
+                print("DEBUG: [SHARE] Successfully captured frame at \(targetTime)s (offset: \(retryOffset)s)")
+                
+                // CRITICAL: Move heavy image processing to background thread to prevent UI freeze
+                // UIImage is Sendable, so safe to pass to detached task
+                return await Task.detached(priority: .userInitiated) { [initialImage] in
+                    // Re-render without alpha channel (off main thread using UIGraphicsImageRenderer for better performance)
+                    let renderer = UIGraphicsImageRenderer(size: initialImage.size)
+                    let cleanImage = renderer.image { _ in
+                        initialImage.draw(in: CGRect(origin: .zero, size: initialImage.size))
+                    }
+                    
+                    // Crop to center and resize to 270x270 (off main thread)
+                    // cropToCenter is pure image processing - safe to call off main thread
+                    let croppedImage = cropToCenter(image: cleanImage, targetSize: 270)
+                    
+                    print("DEBUG: [SHARE] Successfully captured and cropped frame from player to 270x270")
+                    return croppedImage
+                }.value
+            } else {
+                print("DEBUG: [SHARE] Failed to capture at \(targetTime)s, trying next position...")
+            }
         }
         
-        // Wait a bit for the seek to complete (reduced from 0.1s)
-        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-        
-        // Get pixel buffer and convert to UIImage on main thread (CVBuffer is not Sendable)
-        // Then move image processing to background thread
-        let initialImage = await MainActor.run { () -> UIImage? in
-            let currentTime = playerItem.currentTime()
-            print("DEBUG: [SHARE] Player seeked to: \(CMTimeGetSeconds(currentTime))s")
-            
-            // Check if we have a pixel buffer at this time
-            guard videoOutput.hasNewPixelBuffer(forItemTime: currentTime) else {
-                print("DEBUG: [SHARE] No pixel buffer available at current time")
-                return nil
-            }
-            
-            // Copy the pixel buffer
-            guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else {
-                print("DEBUG: [SHARE] Failed to copy pixel buffer")
-                return nil
-            }
-            
-            // Convert pixel buffer to UIImage on main thread (CVBuffer operations must be on main thread)
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-            let context = CIContext(options: [.useSoftwareRenderer: false]) // Use hardware acceleration when possible
-            
-            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
-                print("DEBUG: [SHARE] Failed to create CGImage from pixel buffer")
-                return nil
-            }
-            
-            // Convert to UIImage - UIImage is Sendable, so we can pass it to background task
-            return UIImage(cgImage: cgImage)
-        }
-        
-        guard let initialImage = initialImage else {
-            print("DEBUG: [SHARE] Failed to create initial image from pixel buffer")
-            return nil
-        }
-        
-        // CRITICAL: Move heavy image processing to background thread to prevent UI freeze
-        // UIImage is Sendable, so safe to pass to detached task
-        return await Task.detached(priority: .userInitiated) { [initialImage] in
-            // Re-render without alpha channel (off main thread using UIGraphicsImageRenderer for better performance)
-            let renderer = UIGraphicsImageRenderer(size: initialImage.size)
-            let cleanImage = renderer.image { _ in
-                initialImage.draw(in: CGRect(origin: .zero, size: initialImage.size))
-            }
-            
-            // Crop to center and resize to 270x270 (off main thread)
-            // cropToCenter is pure image processing - safe to call off main thread
-            let croppedImage = cropToCenter(image: cleanImage, targetSize: 270)
-            
-            print("DEBUG: [SHARE] Successfully captured and cropped frame from player to 270x270")
-            return croppedImage
-        }.value
+        print("DEBUG: [SHARE] Failed to capture frame at all retry positions (0.1s, 0.3s, 0.5s)")
+        return nil
     }
     
     private func captureFrame(from asset: AVAsset, at seconds: Double) async throws -> UIImage {
