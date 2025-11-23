@@ -8,7 +8,14 @@ December 2025 (Updated to user-specific cache with persistence)
 
 Implemented a **unified cache strategy** that eliminates duplication and properly handles private tweets while ensuring data consistency across main feed and profile views.
 
-**Latest Update (December 2025):** Cache key changed from `"main_feed"` to `appUser.mid` to enable user-specific caching that persists across logouts. Cache is no longer cleared on logout, providing faster re-login experience. Cache is cleared periodically (2 weeks) or manually by user.
+**Latest Update (January 2026):** Implemented dual-strategy caching:
+- **Main Feed**: All tweets cached under `appUser.mid` for efficient aggregate loading
+- **Profile View**: Tweets cached under their `authorId` for author-specific loading
+- **Single Tweet**: Cached under `authorId` for consistency
+
+This balances performance (fast main feed loading) with flexibility (author-specific caching for profiles). Cache persists across logouts and is cleared periodically (2 weeks) or manually by user.
+
+**Previous Update (December 2025):** Cache key changed from `"main_feed"` to `appUser.mid` to enable user-specific caching that persists across logouts.
 
 ## Previous Architecture (Problems)
 
@@ -30,10 +37,29 @@ Profile View:
 
 ## New Architecture (Solution)
 
-### User-Specific Cache with Persistence (Current - December 2025)
+### Dual-Strategy Cache (Current - January 2026)
 
 ```
 Cache Structure:
+  Main Feed (appUser.mid cache):
+    - All tweets visible in main feed cached under appUser.mid
+    - Aggregates tweets from multiple authors
+    - Efficient single-cache loading for main feed
+    - Used for main feed and appUser's profile (with filtering)
+  
+  Profile (authorId cache):
+    - Tweets cached under their author's ID (authorId)
+    - Author-specific cache for profile views
+    - Direct lookup without filtering needed
+    - Used for other users' profiles
+  
+  Persistence:
+    - Cache persists across logout/login cycles
+    - Cleared periodically (2 weeks) or manually by user
+```
+
+**Previous Strategy (December 2025):**
+```
   appUser.mid cache:
     - All tweets visible to current user (following feed, public, private)
     - User-specific cache key (each user has separate cache)
@@ -53,12 +79,30 @@ Cache Structure:
 
 ## Implementation Details
 
-### Caching Logic (TweetCacheManager.swift) - Current
+### Caching Logic - Current (January 2026)
 
+**Main Feed:**
+```swift
+// In HproseInstance.fetchTweetFeed()
+TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+```
+
+**Profile View:**
+```swift
+// In HproseInstance.fetchUserTweets()
+TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+```
+
+**Single Tweet:**
+```swift
+// In HproseInstance.getTweet()
+TweetCacheManager.shared.saveTweet(tweet, userId: authorId)
+```
+
+**Update Method:**
 ```swift
 func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
-    // All tweets go to appUser.mid cache to persist across logouts
-    // Cache is cleared periodically or manually by user, not on logout
+    // Cache main feed tweets under appUser.mid
     saveTweet(tweet, userId: appUserId)
 }
 ```
@@ -76,36 +120,39 @@ func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
 }
 ```
 
-### Profile Loading Logic (ProfileTweetsSection.swift) - Current
+### Cache Loading Logic - Current (January 2026)
 
+**Main Feed:**
 ```swift
-if isFromCache {
-    if user.mid == hproseInstance.appUser.mid {
-        // Load from appUser.mid cache (all tweets, persists across logouts)
-        let cachedTweets = await fetchCachedTweets(
-            for: hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
-        
-        // Filter to show only appUser's tweets
-        var filteredTweets = cachedTweets.compactMap { $0 }
-        filteredTweets = filteredTweets.filter { $0.authorId == user.mid }
-        
-        // Deduplicate and apply pagination
-        var uniqueTweets: [Tweet] = []
-        var seenIds = Set<String>()
-        for tweet in filteredTweets.sorted(by: { $0.timestamp > $1.timestamp }) {
-            if !seenIds.contains(tweet.mid) {
-                uniqueTweets.append(tweet)
-                seenIds.insert(tweet.mid)
-            }
-        }
-        
-        // Apply pagination
-        let start = Int(page * size)
-        let end = min(start + Int(size), uniqueTweets.count)
-        let paginated = start < uniqueTweets.count ? Array(uniqueTweets[start..<end]) : []
-        return paginated.map { $0 as Tweet? }
-    }
+// In FollowingsTweetView.swift
+let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+    for: viewModel.hproseInstance.appUser.mid, 
+    page: page, 
+    pageSize: size, 
+    currentUserId: viewModel.hproseInstance.appUser.mid)
+```
+
+**Profile Loading (TweetCacheManager.fetchCachedTweets):**
+```swift
+// For appUser's profile: Use mainfeed cache with filtering
+if let currentUserId = currentUserId, userId == currentUserId {
+    cacheKey = currentUserId  // appUser.mid
+    shouldFilterByAuthorId = true  // Filter to show only appUser's tweets
+} else {
+    // For other users' profiles: Use their authorId cache
+    cacheKey = userId  // equals authorId
+    shouldFilterByAuthorId = false
 }
+```
+
+**Profile View:**
+```swift
+// In ProfileTweetsSection.swift
+let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+    for: user.mid,  // userId for profile (equals authorId)
+    page: page, 
+    pageSize: size, 
+    currentUserId: hproseInstance.appUser.mid)
 ```
 
 **Previous Implementation (October 2025):**
@@ -125,16 +172,16 @@ if isFromCache {
 }
 ```
 
-### Profile Caching Logic (ProfileTweetsSection.swift) - Current
+### Profile Caching Logic - Current (January 2026)
 
 ```swift
-if shouldCache && user.mid == hproseInstance.appUser.mid {
-    for tweet in filteredTweets.compactMap({ $0 }) {
-        // All tweets (public and private) go to appUser.mid cache
-        TweetCacheManager.shared.saveTweet(tweet, userId: user.mid)
-    }
+// Profile tweets are cached under their authorId
+for tweet in filteredTweets.compactMap({ $0 }) {
+    TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
 }
 ```
+
+**Note:** Profile tweets use `authorId` as cache key, which equals `userId` for profile view. This enables direct author-based cache lookup without filtering.
 
 **Previous Implementation (October 2025):**
 ```swift
@@ -244,32 +291,37 @@ if shouldCache && user.mid == hproseInstance.appUser.mid {
 
 ## Cache Distribution
 
-### Main Feed Cache ("main_feed")
+### Main Feed Cache (appUser.mid)
 ```
 Contents:
-  - Following user A's public tweets
-  - Following user B's public tweets
-  - AppUser's public tweets ← Unified!
-  - ...
+  - All tweets visible in main feed (from multiple authors)
+  - Aggregated cache for efficient main feed loading
 
 Used By:
   - FollowingTweetView (main feed)
-  - ProfileView (for public tweets)
+  - ProfileView (appUser's profile, with filtering)
+
+Cache Key:
+  - appUser.mid
 
 Privacy Level:
-  - Public only
+  - Public tweets only (private filtered out during loading)
 ```
 
-### Profile Private Cache (appUser.mid)
+### Profile Cache (authorId)
 ```
 Contents:
-  - AppUser's private tweets ONLY
+  - Tweets from a specific author
+  - Author-specific cache for profile views
 
 Used By:
-  - ProfileView (merged with main_feed)
+  - ProfileView (other users' profiles)
+
+Cache Key:
+  - tweet.authorId (equals userId for profile view)
 
 Privacy Level:
-  - Private only
+  - Author's tweets (public and private, filtered by visibility rules)
 ```
 
 ## Testing Scenarios

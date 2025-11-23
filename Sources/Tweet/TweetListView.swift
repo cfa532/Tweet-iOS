@@ -11,13 +11,12 @@ struct TweetListNotification {
 struct TweetListView<RowView: View>: View {
     // MARK: - Properties
     let title: String
-    let tweetFetcher: @Sendable (UInt, UInt, Bool, Bool) async throws -> [Tweet?]
+    let tweetFetcher: @Sendable (UInt, UInt, Bool) async throws -> [Tweet?]
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     let header: (() -> AnyView)?
     let notifications: [TweetListNotification]
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
-    let shouldCacheServerTweets: Bool
     private let pageSize: UInt = 10
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -129,9 +128,8 @@ struct TweetListView<RowView: View>: View {
     init(
         title: String,
         tweets: Binding<[Tweet]>,
-        tweetFetcher: @escaping @Sendable (UInt, UInt, Bool, Bool) async throws -> [Tweet?],
+        tweetFetcher: @escaping @Sendable (UInt, UInt, Bool) async throws -> [Tweet?],
         showTitle: Bool = true,
-        shouldCacheServerTweets: Bool = false,
         notifications: [TweetListNotification]? = nil,
         onScroll: ((CGFloat, CGFloat) -> Void)? = nil,  // (offset, delta)
         header: (() -> AnyView)? = nil,
@@ -141,7 +139,6 @@ struct TweetListView<RowView: View>: View {
         self._tweets = tweets
         self.tweetFetcher = tweetFetcher
         self.showTitle = showTitle
-        self.shouldCacheServerTweets = shouldCacheServerTweets
         self.onScroll = onScroll
         self.header = header
         // Default: listen for newTweetCreated and insert at top
@@ -304,8 +301,8 @@ struct TweetListView<RowView: View>: View {
         let page: UInt = 0
 
         do {
-            // Step 1: Load from cache first for instant UX (always try cache)
-            let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
+                // Step 1: Load from cache first for instant UX (always try cache)
+                let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
             let validCachedTweets = tweetsFromCache.compactMap { $0 }
             
             let hasCachedContent = !validCachedTweets.isEmpty
@@ -372,7 +369,7 @@ struct TweetListView<RowView: View>: View {
         
         do {
             // Always load fresh data from server for refresh
-            let freshTweets = try await tweetFetcher(0, pageSize, false, shouldCacheServerTweets)
+            let freshTweets = try await tweetFetcher(0, pageSize, false)
             let validTweets = freshTweets.compactMap { $0 }
             let hasValidTweet = !validTweets.isEmpty
             
@@ -458,7 +455,7 @@ struct TweetListView<RowView: View>: View {
             
             do {
                 // Step 1: Load from cache first for instant UX
-                let tweetsFromCache = try await tweetFetcher(page, pageSize, true, false)
+                let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
                 
                 // Calculate elapsed time
                 let elapsedTime = Date().timeIntervalSince(startTime)
@@ -510,7 +507,7 @@ struct TweetListView<RowView: View>: View {
     // MARK: - Server Loading (No Retry)
     private func loadFromServer(page: UInt, pageSize: UInt, completion: @escaping (Bool) -> Void) async {
         do {
-            let tweetsFromServer = try await tweetFetcher(page, pageSize, false, shouldCacheServerTweets)
+            let tweetsFromServer = try await tweetFetcher(page, pageSize, false)
             let validServerTweets = tweetsFromServer.compactMap { $0 }
             let hasValidTweet = !validServerTweets.isEmpty
             

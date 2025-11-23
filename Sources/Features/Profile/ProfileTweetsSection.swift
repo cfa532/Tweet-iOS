@@ -36,7 +36,7 @@ class ProfileTweetsViewModel: ObservableObject {
         pinnedTweetIds = newPinnedTweetIds
     }
     
-    func fetchTweets(page: UInt, pageSize: UInt, shouldCache: Bool = false) async throws -> [Tweet?] {
+    func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
         do {
             let serverTweets = try await hproseInstance.fetchUserTweets(
                 user: user,
@@ -63,12 +63,9 @@ class ProfileTweetsViewModel: ObservableObject {
                 tweets.mergeTweets(filteredTweets.compactMap{ $0 })
             }
             
-            // Cache tweets only if it's the appUser's profile
-            if shouldCache && user.mid == hproseInstance.appUser.mid {
-                for tweet in filteredTweets.compactMap({ $0 }) {
-                    // Cache strategy: all tweets go to appUser.mid cache (persists across logouts)
-                    TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
-                }
+            // Cache profile tweets under their authorId (which is user.mid for profile view)
+            for tweet in filteredTweets.compactMap({ $0 }) {
+                TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
             }
             
             return filteredTweets
@@ -87,11 +84,8 @@ class ProfileTweetsViewModel: ObservableObject {
                 // Use mergeTweets to maintain proper chronological ordering
                 tweets.mergeTweets([tweet])
                 
-                // Cache the new tweet if it's the appUser's profile
-                if user.mid == hproseInstance.appUser.mid {
-                    // Cache strategy: all tweets go to appUser.mid cache (persists across logouts)
-                    TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
-                }
+                // Cache new tweets in profile under their authorId
+                TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
             } else {
                 print("DEBUG: [ProfileTweetsViewModel] Skipping pinned tweet: \(tweet.mid)")
             }
@@ -173,43 +167,20 @@ struct ProfileTweetsSection<Header: View>: View {
             TweetListView<TweetItemView>(
             title: "",
             tweets: $viewModel.tweets,
-            tweetFetcher: { page, size, isFromCache, shouldCache in
+            tweetFetcher: { page, size, isFromCache in
                 if isFromCache {
-                    // Fetch from cache for profile tweets (only if it's the appUser's profile)
-                    if user.mid == hproseInstance.appUser.mid {
-                        // Load from appUser.mid cache (contains both public and private tweets, persists across logouts)
-                        let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-                            for: hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid)
-                        
-                        // Filter to show only appUser's tweets
-                        var allTweets = cachedTweets.compactMap { $0 }
-                        allTweets = allTweets.filter { $0.authorId == user.mid }
-                        
-                        // Remove duplicates and sort by timestamp
-                        var uniqueTweets: [Tweet] = []
-                        var seenIds = Set<String>()
-                        for tweet in allTweets.sorted(by: { $0.timestamp > $1.timestamp }) {
-                            if !seenIds.contains(tweet.mid) {
-                                uniqueTweets.append(tweet)
-                                seenIds.insert(tweet.mid)
-                            }
-                        }
-                        
-                        // Apply pagination manually
-                        let start = Int(page * size)
-                        let end = min(start + Int(size), uniqueTweets.count)
-                        let paginated = start < uniqueTweets.count ? Array(uniqueTweets[start..<end]) : []
-                        
-                        return paginated.map { $0 as Tweet? }
-                    } else {
-                        // Don't cache other users' tweets
-                        return []
-                    }
+                    // Fetch from cache for profile tweets - always filter by authorId
+                    // This ensures we only show tweets from the profile user, even if cache contains
+                    // tweets from multiple authors (e.g., from main feed)
+                    let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+                        for: user.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid, isProfileView: true)
+                    
+                    return cachedTweets
                 } else {
-                    return try await viewModel.fetchTweets(page: page, pageSize: size, shouldCache: shouldCache)
+                    return try await viewModel.fetchTweets(page: page, pageSize: size)
                 }
             },
-            showTitle: false, shouldCacheServerTweets: true,  // Enable caching for appUser's profile
+            showTitle: false,
             notifications: [
                 TweetListNotification(
                     name: .newTweetCreated,

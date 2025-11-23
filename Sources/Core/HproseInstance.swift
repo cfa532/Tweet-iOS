@@ -606,8 +606,8 @@ final class HproseInstance: ObservableObject {
                         continue
                     }
                     
-                    // Save tweet back to cache
-                    TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
+                    // Cache main feed tweets under appUser.mid for efficient main feed loading
+                    TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
                     tweets.append(tweet)
                 } catch {
                     print("[fetchTweetFeed] Error processing tweet: \(error)")
@@ -724,10 +724,8 @@ final class HproseInstance: ObservableObject {
                         continue
                     }
                     
-                    // Cache tweets only if the user is appUser
-                    if user.mid == appUser.mid {
-                        TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: appUser.mid)
-                    }
+                    // Cache tweet under its authorId
+                    TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
                     tweets.append(tweet)
                 } catch {
                     print("[fetchUserTweet] Error processing tweet: \(error)")
@@ -2044,10 +2042,11 @@ final class HproseInstance: ObservableObject {
             TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
         }
         
-        // Cache the retweet with appUser's mid as the cache key
+        // Cache the retweet by its authorId (matches Android behavior)
+        // For retweets, authorId equals appUser.mid, so this is consistent with mainfeed caching
         // The retweet will also be cached via .newTweetCreated notification in handleNewTweet,
         // but we cache it here explicitly to ensure it's saved
-        TweetCacheManager.shared.saveTweet(retweet, userId: appUser.mid)
+        TweetCacheManager.shared.saveTweet(retweet, userId: retweet.authorId)
         
         // Clean up the temporary tweet instance to prevent memory leaks
         if temporaryId != retweet.mid {

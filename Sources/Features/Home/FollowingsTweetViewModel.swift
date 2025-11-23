@@ -23,7 +23,7 @@ class FollowingsTweetViewModel: ObservableObject {
         self.hproseInstance = hproseInstance
     }
     
-    func fetchTweets(page: UInt, pageSize: UInt, shouldCache: Bool = true) async -> [Tweet?] {
+    func fetchTweets(page: UInt, pageSize: UInt) async -> [Tweet?] {
         let startTime = Date()
         print("🌐 [SERVER FETCH] fetchTweets START - page: \(page), pageSize: \(pageSize)")
         
@@ -69,12 +69,10 @@ class FollowingsTweetViewModel: ObservableObject {
                 tweets.mergeTweetsSmoothly(filteredTweets)
             }
             
-            // Cache tweets if shouldCache is true - use appUser.mid as cache key to persist across logouts
-            if shouldCache {
-                let cacheKey = hproseInstance.appUser.mid
-                for tweet in serverTweets.compactMap({ $0 }) {
-                    TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
-                }
+            // Cache main feed tweets under appUser.mid for efficient loading
+            let cacheKey = hproseInstance.appUser.mid
+            for tweet in serverTweets.compactMap({ $0 }) {
+                TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
             }
             if page == 0 {
                 // only check for new tweets from followings on initial load.
@@ -110,7 +108,7 @@ class FollowingsTweetViewModel: ObservableObject {
                 // For new tweets, use mergeTweets (with sorting) since they should appear at the top
                 tweets.mergeTweets([tweet])
                 
-                // Cache the new tweet so it persists across app restarts
+                // Cache new tweets in main feed under appUser.mid
                 TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
             }
         }
@@ -158,7 +156,7 @@ class FollowingsTweetViewModel: ObservableObject {
                     tweets.mergeTweets(validTweets)
                 }
                 
-                // Cache the tweets to main feed
+                // Cache newly followed user's tweets under appUser.mid for main feed
                 let cacheKey = hproseInstance.appUser.mid
                 for tweet in validTweets {
                     TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
@@ -185,7 +183,7 @@ class FollowingsTweetViewModel: ObservableObject {
     // Method to load page 0 tweets when app user is ready
     func loadPage0Tweets() async {
         print("[FollowingsTweetViewModel] Loading page 0 tweets for user: \(hproseInstance.appUser.mid)")
-        let serverTweets = await fetchTweets(page: 0, pageSize: 20, shouldCache: true)
+        let serverTweets = await fetchTweets(page: 0, pageSize: 20)
         print("[FollowingsTweetViewModel] Loaded \(serverTweets.compactMap { $0 }.count) tweets")
     }
 }

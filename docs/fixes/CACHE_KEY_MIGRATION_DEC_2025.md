@@ -160,3 +160,63 @@ func logout() async {
 - New tweets are cached to `appUser.mid` immediately
 - No manual migration needed - transparent transition
 - Users logging back in will see their cached tweets from previous sessions
+
+---
+
+## Update: Dual-Strategy Cache (January 2026)
+
+### Context-Based Caching Strategy
+
+The cache strategy was refined to use a **dual-strategy approach** based on context:
+
+**Main Feed:**
+- **Cache Key**: `appUser.mid`
+- All tweets in main feed cached under `appUser.mid`
+- Efficient single-cache lookup for aggregate main feed
+- Used by main feed and appUser's profile (with filtering)
+
+**Profile View:**
+- **Cache Key**: `tweet.authorId`
+- Tweets cached under their author's ID
+- Author-specific cache for direct profile lookup
+- Used by other users' profiles
+
+**Single Tweet:**
+- **Cache Key**: `authorId`
+- Consistent with profile caching strategy
+
+**Benefits:**
+- ✅ **Performance**: Main feed uses single cache lookup (appUser.mid) for all tweets
+- ✅ **Flexibility**: Profile uses author-specific cache (authorId) for direct lookup
+- ✅ **Efficiency**: No unnecessary filtering for main feed, direct lookup for profiles
+- ✅ **Consistency**: Single tweet strategy matches profile strategy (authorId)
+
+**Implementation:**
+
+```swift
+// Main feed: Cache under appUser.mid
+TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+
+// Profile: Cache under authorId
+TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+
+// Single tweet: Cache under authorId
+TweetCacheManager.shared.saveTweet(tweet, userId: authorId)
+```
+
+**Cache Loading:**
+
+```swift
+// Main feed: Load from appUser.mid
+fetchCachedTweets(for: appUser.mid, ...)
+
+// AppUser's profile: Load from appUser.mid with filtering
+fetchCachedTweets(for: appUser.mid, currentUserId: appUser.mid)
+// Automatically filters to show only appUser's tweets
+
+// Other user's profile: Load from userId (authorId)
+fetchCachedTweets(for: userId, ...)
+// Direct lookup from author's cache
+```
+
+**Note:** See `docs/TWEET_CACHE_STRATEGY.md` for complete documentation.

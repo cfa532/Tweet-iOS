@@ -169,20 +169,34 @@ final class TweetCacheManager: @unchecked Sendable {
 
 // MARK: - Tweet Caching
 extension TweetCacheManager {
-    func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil) async -> [Tweet?] {
+    func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil, isProfileView: Bool = false) async -> [Tweet?] {
         return await withCheckedContinuation { continuation in
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                
+                // For profile views: load from userId cache and filter by authorId
+                // For main feed: load from userId (appUser.mid) cache, no authorId filtering
+                let shouldFilterByAuthorId = isProfileView
+                
+                // Always load from userId cache (which equals authorId for profile views)
                 request.predicate = NSPredicate(format: "uid == %@", userId)
                 request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+                // Fetch more tweets if filtering by authorId (to account for filtering)
+                let fetchLimit = shouldFilterByAuthorId ? Int(pageSize * 3) : Int(pageSize)
+                request.fetchLimit = fetchLimit
                 request.fetchOffset = Int(page * pageSize)
-                request.fetchLimit = Int(pageSize)
                 
                 if let cdTweets = try? self.context.fetch(request) {
                     var tweets: [Tweet?] = []
                     for cdTweet in cdTweets {
                         do {
                             let tweet = try Tweet.from(cdTweet: cdTweet)
+                            
+                            // For profile views, always filter to only include tweets authored by the profile user
+                            // This ensures we only show that user's tweets, even if cache contains tweets from other authors
+                            if shouldFilterByAuthorId && tweet.authorId != userId {
+                                continue // Skip tweets from other authors
+                            }
                             
                             // Load author from cache (Core Data) if available, otherwise use singleton
                             // This ensures cached user data is used as placeholder until refreshed from server
@@ -213,19 +227,30 @@ extension TweetCacheManager {
                                 continue
                             }
                             
-                            // Filter out ALL private tweets in main feed (regardless of author)
+                            // Filter private tweets:
+                            // - Main feed: Always filter out private tweets (show all tweets, but no private ones)
+                            // - Profile view: Only show private tweets if appUser is viewing their own profile
                             if tweet.isPrivate == true {
-                                tweets.append(nil)
-                                continue
+                                if shouldFilterByAuthorId && currentUserId != nil && userId == currentUserId {
+                                    // Profile view: Allow private tweets only if viewing own profile (appUser == visited user)
+                                    tweets.append(tweet)
+                                } else {
+                                    // Main feed or viewing other user's profile: Filter out private tweets
+                                    continue
+                                }
+                            } else {
+                                // Public tweet: Always include
+                                tweets.append(tweet)
                             }
-                            tweets.append(tweet)
                         } catch {
                             print("Error processing tweet: \(error)")
                             tweets.append(nil)
                         }
                     }
                     
-                    continuation.resume(returning: tweets)
+                    // Filtered results - limit to pageSize
+                    let limitedTweets = Array(tweets.prefix(Int(pageSize)))
+                    continuation.resume(returning: limitedTweets)
                 } else {
                     continuation.resume(returning: [])
                 }
@@ -333,13 +358,11 @@ extension TweetCacheManager {
         }
     }
 
-    /// Update a tweet using unified cache strategy:
-    /// - AppUser's public tweets → appUser.mid cache (appear in feed and profile, persists across logouts)
-    /// - AppUser's private tweets → appUser.mid cache only (profile-only visibility)
-    /// - Other users' tweets → appUser.mid cache (persists across logouts)
+    /// Update a tweet in cache for main feed.
+    /// Main feed tweets are cached under appUser.mid for efficient loading.
+    /// Profile tweets should use saveTweet directly with their authorId.
     func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
-        // All tweets go to appUser.mid cache to persist across logouts
-        // Cache is cleared periodically or manually by user, not on logout
+        // Cache main feed tweets under appUser.mid
         saveTweet(tweet, userId: appUserId)
     }
 
