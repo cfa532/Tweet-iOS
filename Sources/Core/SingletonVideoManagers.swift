@@ -138,8 +138,12 @@ class FullScreenVideoManager: ObservableObject {
                 await MainActor.run {
                     print("ERROR: [FullScreenVideoManager] Failed to load video: \(error)")
                     // Clear broken player state to show loading placeholder instead of broken icon
+                    // CRITICAL: Clear ALL state variables consistently with recovery cleanup (lines 488-490)
                     self.singletonPlayer = nil
                     self.currentVideoMid = nil
+                    self.currentTweetId = nil
+                    self.currentSourceTweetId = nil
+                    self.currentVideoIndex = 0
                     self.isPlaying = false
                 }
             }
