@@ -392,28 +392,43 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// Async restart (non-blocking - allows UI to remain interactive)
     private func restartVideoInfrastructureAsync() async {
         print("[AppDelegate] Restarting video infrastructure asynchronously (non-blocking)")
+        let startTime = Date()
         
-        // CRITICAL: Clear ALL video players FIRST to release their URLs
-        await MainActor.run {
+        // CRITICAL: Clear ALL video players FIRST to release their URLs (async for speed)
+        // Run clearing in parallel with server operations
+        let clearTask = Task.detached(priority: .userInitiated) { @MainActor in
             SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
         }
         
         // DON'T clear VideoStateCache - it stores playback position/state
         // Preserving it allows videos to resume from where they left off after reload
         
-        // Reset LocalHTTPServer connection pool
+        // Reset LocalHTTPServer connection pool (fast operation)
         LocalHTTPServer.shared.resetConnectionPool()
         
-        // Stop the server completely and wait for cleanup (non-blocking)
-        LocalHTTPServer.shared.stop()
-        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s - non-blocking sleep
+        // OPTIMIZATION: Only stop if server is running, skip stop if already stopped
+        // This avoids unnecessary wait if server was already stopped
+        let needsStop = LocalHTTPServer.shared.isRunning
+        if needsStop {
+            LocalHTTPServer.shared.stop()
+            // Reduced wait time - stop() is async and usually completes quickly
+            // Server stop just cancels the listener, which is fast
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s instead of 0.5s
+        }
         
-        // Restart the server - wait until ready (still blocks but in background task)
-        // Note: startAndWait() uses semaphore which blocks, but we're in a background task
-        // so main thread remains responsive
-        LocalHTTPServer.shared.startAndWait()
+        // Wait for player clearing to complete (runs in parallel)
+        await clearTask.value
         
-        print("[AppDelegate] Video infrastructure restart complete (async)")
+        // Restart the server - use faster method if possible
+        // OPTIMIZATION: If server is already running (rare), skip restart
+        if !LocalHTTPServer.shared.isRunning {
+            LocalHTTPServer.shared.startAndWait()
+        } else {
+            print("[AppDelegate] Server already running - skipping restart")
+        }
+        
+        let elapsed = Date().timeIntervalSince(startTime)
+        print("[AppDelegate] Video infrastructure restart complete (async) in \(String(format: "%.2f", elapsed))s")
     }
     
     // MARK: - Notification Permission

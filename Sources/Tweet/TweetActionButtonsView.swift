@@ -870,8 +870,9 @@ struct TweetActionButtonsView: View {
         // Wait a bit for the seek to complete (reduced from 0.1s)
         try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
         
-        // Get pixel buffer after seek (must be on main thread)
-        let pixelBuffer = await MainActor.run { () -> CVPixelBuffer? in
+        // Get pixel buffer and convert to UIImage on main thread (CVBuffer is not Sendable)
+        // Then move image processing to background thread
+        let initialImage = await MainActor.run { () -> UIImage? in
             let currentTime = playerItem.currentTime()
             print("DEBUG: [SHARE] Player seeked to: \(CMTimeGetSeconds(currentTime))s")
             
@@ -882,17 +883,12 @@ struct TweetActionButtonsView: View {
             }
             
             // Copy the pixel buffer
-            return videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil)
-        }
-        
-        guard let pixelBuffer = pixelBuffer else {
-            print("DEBUG: [SHARE] Failed to copy pixel buffer")
-            return nil
-        }
-        
-        // CRITICAL: Move heavy image processing to background thread to prevent UI freeze
-        return await Task.detached(priority: .userInitiated) { [pixelBuffer] in
-            // Convert pixel buffer to UIImage without alpha channel (off main thread)
+            guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else {
+                print("DEBUG: [SHARE] Failed to copy pixel buffer")
+                return nil
+            }
+            
+            // Convert pixel buffer to UIImage on main thread (CVBuffer operations must be on main thread)
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
             let context = CIContext(options: [.useSoftwareRenderer: false]) // Use hardware acceleration when possible
             
@@ -901,13 +897,22 @@ struct TweetActionButtonsView: View {
                 return nil
             }
             
-            // Convert to UIImage
-            let image = UIImage(cgImage: cgImage)
-            
+            // Convert to UIImage - UIImage is Sendable, so we can pass it to background task
+            return UIImage(cgImage: cgImage)
+        }
+        
+        guard let initialImage = initialImage else {
+            print("DEBUG: [SHARE] Failed to create initial image from pixel buffer")
+            return nil
+        }
+        
+        // CRITICAL: Move heavy image processing to background thread to prevent UI freeze
+        // UIImage is Sendable, so safe to pass to detached task
+        return await Task.detached(priority: .userInitiated) { [initialImage] in
             // Re-render without alpha channel (off main thread using UIGraphicsImageRenderer for better performance)
-            let renderer = UIGraphicsImageRenderer(size: image.size)
+            let renderer = UIGraphicsImageRenderer(size: initialImage.size)
             let cleanImage = renderer.image { _ in
-                image.draw(in: CGRect(origin: .zero, size: image.size))
+                initialImage.draw(in: CGRect(origin: .zero, size: initialImage.size))
             }
             
             // Crop to center and resize to 270x270 (off main thread)
@@ -978,7 +983,8 @@ struct TweetActionButtonsView: View {
         return croppedImage
     }
     
-    private func cropToCenter(image: UIImage, targetSize: CGFloat = 270) -> UIImage {
+    // Mark as nonisolated since this is pure image processing - safe to call from any thread
+    nonisolated private func cropToCenter(image: UIImage, targetSize: CGFloat = 270) -> UIImage {
         let size = image.size
         let scale = image.scale
         

@@ -406,9 +406,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                 return
             }
             
-            // Wait for any stop operation
-            while self.isStopping {
+            // Wait for any stop operation (reduced wait time for faster recovery)
+            var stopWaitCount = 0
+            while self.isStopping && stopWaitCount < 20 { // Max 1 second (20 * 0.05s)
                 Thread.sleep(forTimeInterval: 0.05)
+                stopWaitCount += 1
+            }
+            if self.isStopping {
+                print("[LocalHTTPServer] Stop operation still in progress, proceeding anyway")
             }
             
             if self.isRunning {
@@ -422,11 +427,12 @@ public class LocalHTTPServer: @unchecked Sendable {
             semaphore.signal()
         }
         
-        // Wait up to 5 seconds for server to start
-        let result = semaphore.wait(timeout: .now() + .seconds(5))
+        // OPTIMIZATION: Reduced timeout from 5s to 2s for faster recovery
+        // Server start is usually very fast (<100ms), 2s is plenty
+        let result = semaphore.wait(timeout: .now() + .seconds(2))
         
         if result == .timedOut {
-            print("[LocalHTTPServer] ❌ startAndWait() TIMEOUT after 5s!")
+            print("[LocalHTTPServer] ❌ startAndWait() TIMEOUT after 2s!")
         } else if didStart {
             print("[LocalHTTPServer] ✅ startAndWait() SUCCESS - Server ready on port \(port)")
         } else {
@@ -474,8 +480,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                 self.isRunning = false
                 self.isStarting = false
                 
-                // Give iOS time to actually release the port (important!)
-                Thread.sleep(forTimeInterval: 0.2)
+                // OPTIMIZATION: Reduced wait time for faster recovery
+                // Port release is usually fast - 0.1s is typically enough
+                Thread.sleep(forTimeInterval: 0.1)
                 
                 self.isStopping = false
                 NSLog("DEBUG: [LocalHTTPServer] Port \(self.port) released (waited for OS cleanup)")
