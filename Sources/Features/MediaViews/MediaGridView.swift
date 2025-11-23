@@ -12,6 +12,7 @@ struct MediaGridView: View {
     let parentTweet: Tweet
     let attachments: [MimeiFileType]
     let visibleTweetId: String? // The ID of the visible tweet in feed (for retweets)
+    let isEmbedded: Bool // Flag to indicate this is an embedded tweet (prevents video loading)
     let maxImages: Int = 4
     @State private var shouldLoadVideo = true
     @State private var videoLoadTimer: Timer?
@@ -23,10 +24,11 @@ struct MediaGridView: View {
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
     private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32)
     
-    init(parentTweet: Tweet, attachments: [MimeiFileType], visibleTweetId: String? = nil) {
+    init(parentTweet: Tweet, attachments: [MimeiFileType], visibleTweetId: String? = nil, isEmbedded: Bool = false) {
         self.parentTweet = parentTweet
         self.attachments = attachments
         self.visibleTweetId = visibleTweetId
+        self.isEmbedded = isEmbedded
     }
     
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
@@ -502,15 +504,21 @@ struct MediaGridView: View {
             let hasMedia = hasVideos || hasAudio
             
             if hasMedia {
-                
-                // Register this tweet as containing media (videos or audio)
-                // This is important for tweets with multiple attachments to be tracked
-                videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
-                
-                // Check if this tweet should load media based on VideoLoadingManager
-                let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
-                if shouldLoadVideo != shouldLoad {
-                    shouldLoadVideo = shouldLoad
+                // CRITICAL: Disable video loading for embedded tweets to prevent layout instability
+                // Embedded tweets are small and loading multiple videos simultaneously causes layout shifts
+                if isEmbedded {
+                    shouldLoadVideo = false
+                    print("DEBUG: [MediaGridView] Embedded tweet detected - disabling video loading for \(parentTweet.mid)")
+                } else {
+                    // Register this tweet as containing media (videos or audio)
+                    // This is important for tweets with multiple attachments to be tracked
+                    videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
+                    
+                    // Check if this tweet should load media based on VideoLoadingManager
+                    let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
+                    if shouldLoadVideo != shouldLoad {
+                        shouldLoadVideo = shouldLoad
+                    }
                 }
             }
         }

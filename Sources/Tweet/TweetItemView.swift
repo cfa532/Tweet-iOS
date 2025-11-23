@@ -268,11 +268,13 @@ struct TweetItemView: View, Equatable {
                             .padding(.top, -12)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
+                        // NOTE: Videos in embedded tweets are disabled to prevent layout instability
                         EmbeddedTweetView(
                             tweet: originalTweet,
                             isPinned: isPinned,
                             onTap: onTap, // Pass onTap directly (nil when using NavigationLink)
-                            backgroundColor: Color(.systemGray4).opacity(0.6)
+                            backgroundColor: Color(.systemGray4).opacity(0.6),
+                            isEmbedded: true
                         )
                         .cornerRadius(8)
                         .padding(.leading, -4)
@@ -344,6 +346,7 @@ struct EmbeddedTweetView: View, Equatable {
     var isPinned: Bool = false
     var onTap: ((Tweet) -> Void)? = nil
     var backgroundColor: Color = Color(.systemBackground)
+    var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
@@ -400,7 +403,7 @@ struct EmbeddedTweetView: View, Equatable {
                 }
                 .padding(.top, 0)
                 
-                TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
+                TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid, isEmbedded: isEmbedded)
                 .padding(.top, 0)
             }
         }
@@ -412,6 +415,7 @@ struct EmbeddedTweetView: View, Equatable {
     static func == (lhs: EmbeddedTweetView, rhs: EmbeddedTweetView) -> Bool {
         return lhs.tweet.mid == rhs.tweet.mid &&
                lhs.isPinned == rhs.isPinned &&
-               lhs.backgroundColor == rhs.backgroundColor
+               lhs.backgroundColor == rhs.backgroundColor &&
+               lhs.isEmbedded == rhs.isEmbedded
     }
 }

@@ -85,13 +85,14 @@ class VideoLoadingManager: ObservableObject {
     /// Note: Despite the method name, this handles all media types (video, audio, etc.)
     func shouldLoadVideos(for tweetId: String) -> Bool {
         
-        // CRITICAL: Check if this tweet is the original tweet of a currently visible retweet
-        // This ensures videos in original tweets load immediately when their retweet is visible
-        let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
-        if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing loading")
-            return true
-        }
+        // DISABLED: Original tweets of retweets no longer load automatically to prevent layout instability
+        // Videos in embedded tweets cause layout shifts when multiple retweets with videos are visible
+        // Users can still tap to view videos in fullscreen if they want to watch them
+        // let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
+        // if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
+        //     print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing loading")
+        //     return true
+        // }
         
         guard let index = allTweetIds.firstIndex(of: tweetId) else { 
             print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) not found in allTweetIds - denying loading")
@@ -104,10 +105,21 @@ class VideoLoadingManager: ObservableObject {
             return true
         }
         
-        // SECOND PRIORITY: Check if tweet has cached content - if so, always allow loading regardless of performance constraints
+        // Calculate distance first to prevent loading tweets above current position
+        let distance = index - currentVisibleTweetIndex
+        
+        // CRITICAL: Never load videos for tweets above current position (scrolling up stability)
+        // This prevents layout instability when scrolling up past previously viewed tweets
+        if distance < 0 {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is above current position (distance: \(distance)), denying loading for scroll stability")
+            return false
+        }
+        
+        // SECOND PRIORITY: Check if tweet has cached content - but only for tweets at or near current position
+        // This allows fast loading of nearby cached content without causing layout shifts from distant tweets
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: tweetId)
-        if hasCachedContent {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content, allowing loading")
+        if hasCachedContent && distance <= preloadCount {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content and is within preload range, allowing loading")
             return true
         }
         
@@ -124,19 +136,18 @@ class VideoLoadingManager: ObservableObject {
         }
         
         // Only load videos for current visible tweet and next few tweets (NOT past tweets)
-        let distance = index - currentVisibleTweetIndex
         return distance >= 0 && distance <= preloadCount
     }
     
     /// Check if a tweet should preload videos/audio
     /// Note: Despite the method name, this handles all media types (video, audio, etc.)
     func shouldPreloadVideos(for tweetId: String) -> Bool {
-        // CRITICAL: Check if this tweet is the original tweet of a currently visible retweet
-        let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
-        if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing preloading")
-            return true
-        }
+        // DISABLED: Original tweets of retweets no longer preload automatically to prevent layout instability
+        // let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
+        // if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
+        //     print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing preloading")
+        //     return true
+        // }
         
         guard let index = allTweetIds.firstIndex(of: tweetId) else { return false }
         
@@ -149,10 +160,20 @@ class VideoLoadingManager: ObservableObject {
             return true
         }
         
-        // SECOND PRIORITY: Check if tweet has cached content - if so, allow preloading regardless of performance constraints
+        // Calculate distance first to prevent preloading tweets above current position
+        let distance = index - currentVisibleTweetIndex
+        
+        // CRITICAL: Never preload videos for tweets above current position (scrolling up stability)
+        // This prevents layout instability when scrolling up past previously viewed tweets
+        if distance <= 0 {
+            return false
+        }
+        
+        // SECOND PRIORITY: Check if tweet has cached content - but only for tweets ahead of current position
+        // This allows fast preloading of nearby cached content without causing layout shifts
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: tweetId)
-        if hasCachedContent {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content, allowing preloading")
+        if hasCachedContent && distance <= preloadCount {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content and is within preload range, allowing preloading")
             return true
         }
         
@@ -161,8 +182,7 @@ class VideoLoadingManager: ObservableObject {
             return false
         }
         
-        // Preload if tweet is within the next 2 tweets (reduced from 3)
-        let distance = index - currentVisibleTweetIndex
+        // Preload if tweet is within the next few tweets (ahead of current position only)
         return distance > 0 && distance <= preloadCount
     }
     
