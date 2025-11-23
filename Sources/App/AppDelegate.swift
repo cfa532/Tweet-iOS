@@ -12,6 +12,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     // Loading overlay window for server restart
     private var loadingWindow: UIWindow?
     
+    // Track if app has finished launching to distinguish startup from background recovery
+    private var hasFinishedLaunching = false
+    
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Configure FFmpegKit to suppress verbose logs (only show errors)
         // AV_LOG_ERROR = 16 - only show fatal errors, suppress INFO/WARNING/DEBUG
@@ -42,6 +45,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         Task {
             await requestNotificationPermission()
         }
+        
+        // CRITICAL: Clear any stale background timestamp from previous session
+        // This ensures we can distinguish app startup from returning from background
+        UserDefaults.standard.removeObject(forKey: "lastBackgroundTimestamp")
+        
+        // Mark that app has finished launching
+        hasFinishedLaunching = true
         
         return true
     }
@@ -242,6 +252,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppWillEnterForeground() {
         NSLog("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND =====")
         
+        // CRITICAL: Skip recovery routine on app startup - server is already started in didFinishLaunchingWithOptions
+        // willEnterForeground can be called immediately after launch, so check if we've finished launching
+        if !hasFinishedLaunching {
+            NSLog("🚀 [AppDelegate] App still launching - skipping recovery (server starting in didFinishLaunching)")
+            return
+        }
+        
         // Proactively refresh appUser's IP address when returning from background
         // This ensures we don't use stale IPs if the server changed while app was suspended
         Task {
@@ -299,8 +316,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 NotificationCenter.default.post(name: .videoInfrastructureRestarted, object: nil)
             }
         } else {
-            NSLog("⚠️ [AppDelegate] No background timestamp, starting server")
-            LocalHTTPServer.shared.start()
+            // No background timestamp - this means app was just launched or killed
+            // Server should already be started in didFinishLaunchingWithOptions
+            // Just ensure it's running, but don't do full recovery
+            NSLog("🚀 [AppDelegate] App startup or crash recovery - ensuring server is running")
+            if !LocalHTTPServer.shared.isRunning {
+                // Fast non-blocking start for app startup
+                LocalHTTPServer.shared.start()
+            } else {
+                NSLog("✅ [AppDelegate] Server already running - no recovery needed")
+            }
         }
         
         // Foreground handling is now done by SimpleVideoPlayer's notification observers
