@@ -353,13 +353,8 @@ struct ProfileView: View {
             }
         }
         .navigationDestination(for: UserListDestination.self) { destination in
-            let displayName = if let name = user.name, !name.isEmpty {
-                name
-            } else {
-                user.username ?? "No One"
-            }
             UserListView(
-                title: destination.listType == .FOLLOWER ? "Fans@\(displayName)" : "Followings@\(displayName)",
+                title: userListTitle(for: destination),
                 userFetcher: { page, size in
                     // Only fetch all IDs once when page is 0
                     if page == 0 {
@@ -798,11 +793,35 @@ struct ProfileView: View {
         }
     }
     
+    // MARK: - Helper Methods
+    private func userListTitle(for destination: UserListDestination) -> String {
+        let isDestinationAppUser = destination.userId == hproseInstance.appUser.mid
+        if isDestinationAppUser {
+            return destination.listType == .FOLLOWER 
+                ? NSLocalizedString("Your Fans", comment: "Your fans title")
+                : NSLocalizedString("Your Followings", comment: "Your followings title")
+        } else {
+            let targetUser = User.getInstance(mid: destination.userId)
+            let displayName: String
+            if let name = targetUser.name, !name.isEmpty {
+                displayName = name
+            } else if let username = targetUser.username {
+                displayName = username
+            } else {
+                displayName = NSLocalizedString("Noone", comment: "No one")
+            }
+            let titleKey = destination.listType == .FOLLOWER ? "Fans@%@" : "Followings@%@"
+            return String(format: NSLocalizedString(titleKey, comment: "User list title"), displayName)
+        }
+    }
+    
     @ViewBuilder
     private func bookmarksOrFavoritesListView() -> some View {
         if tweetListType == .BOOKMARKS {
             TweetListView(
-                title: "Bookmarks",
+                title: isAppUser 
+                    ? NSLocalizedString("Your Bookmarks", comment: "Your bookmarks title")
+                    : NSLocalizedString("Bookmarks", comment: "Bookmarks title"),
                 tweets: $bookmarksTweets,
                 tweetFetcher: { page, size, isFromCache in
                     print("DEBUG: [ProfileView] Fetching bookmarks - page: \(page), size: \(size), isFromCache: \(isFromCache)")
@@ -856,7 +875,9 @@ struct ProfileView: View {
             }
         } else {
             TweetListView(
-                title: "Favorites",
+                title: isAppUser 
+                    ? NSLocalizedString("Your Favorites", comment: "Your favorites title")
+                    : NSLocalizedString("Favorites", comment: "Favorites title"),
                 tweets: $favoritesTweets,
                 tweetFetcher: { page, size, isFromCache in
                     print("DEBUG: [ProfileView] Fetching favorites - page: \(page), size: \(size), isFromCache: \(isFromCache)")

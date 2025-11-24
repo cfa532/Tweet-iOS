@@ -114,6 +114,12 @@
 "Pinned" = "置顶";
 "username" = "用户名";
 "Noone" = "无";
+"Fans@%@" = "%@的粉丝";
+"Followings@%@" = "%@的关注";
+"Your Fans" = "你的粉丝";
+"Your Followings" = "你的关注";
+"Your Bookmarks" = "你的书签";
+"Your Favorites" = "你的收藏";
 
 // MARK: - Tweet Actions
 "Show more" = "显示更多";

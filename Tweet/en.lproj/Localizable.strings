@@ -126,6 +126,12 @@
 "Pinned" = "Pinned";
 "username" = "username";
 "Noone" = "Noone";
+"Fans@%@" = "Fans@%@";
+"Followings@%@" = "Followings@%@";
+"Your Fans" = "Your Fans";
+"Your Followings" = "Your Followings";
+"Your Bookmarks" = "Your Bookmarks";
+"Your Favorites" = "Your Favorites";
 
 // MARK: - Tweet Actions
 "Show more" = "Show more";

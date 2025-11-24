@@ -111,6 +111,12 @@
 "Pinned" = "ピン留め";
 "username" = "ユーザー名";
 "Noone" = "なし";
+"Fans@%@" = "%@のフォロワー";
+"Followings@%@" = "%@のフォロー中";
+"Your Fans" = "あなたのフォロワー";
+"Your Followings" = "あなたのフォロー中";
+"Your Bookmarks" = "あなたのブックマーク";
+"Your Favorites" = "あなたのお気に入り";
 
 // MARK: - Tweet Actions
 "Show more" = "もっと見る";
