@@ -283,6 +283,13 @@ extension TweetUploadManager {
             }
             return
         }
+
+        if retryCount > 0 {
+            await forceRefreshBaseUrlForRetry(
+                userId: hproseInstance.appUser.mid,
+                context: "tweet upload"
+            )
+        }
         
         // Save pending upload to disk
         let pendingUpload = PendingTweetUpload(tweet: tweet, itemData: itemData, retryCount: retryCount, videoJobId: videoJobId)
@@ -920,6 +927,16 @@ extension TweetUploadManager {
     ) async {
         guard let hproseInstance = hproseInstance else { return }
         
+        if retryCount > 0 {
+            let targetUserId: String? = parentTweet.authorId.isEmpty
+                ? parentTweet.author?.mid
+                : parentTweet.authorId
+            await forceRefreshBaseUrlForRetry(
+                userId: targetUserId,
+                context: "comment upload"
+            )
+        }
+        
         print("📝 [Comment Submit] Submitting comment with \(completedCIDs.count) completed video job(s), retry: \(retryCount)")
         
         // Build final attachments using completed job CIDs
@@ -1009,6 +1026,21 @@ extension TweetUploadManager {
                 print("❌ [Comment Submit] Max retries reached")
                 await showFailureToast(message: NSLocalizedString("Failed to post comment after retries", comment: "Error"))
             }
+        }
+    }
+
+    private func forceRefreshBaseUrlForRetry(userId: String?, context: String) async {
+        guard let userId = userId,
+              !userId.isEmpty,
+              let hproseInstance = hproseInstance else {
+            return
+        }
+        
+        do {
+            _ = try await hproseInstance.fetchUser(userId, baseUrl: "")
+            print("DEBUG: [Upload Retry] Forced baseUrl refresh for user \(userId) during \(context)")
+        } catch {
+            print("DEBUG: [Upload Retry] Failed to refresh baseUrl for user \(userId) during \(context): \(error)")
         }
     }
     
