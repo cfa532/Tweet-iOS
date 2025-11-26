@@ -625,6 +625,60 @@ private func processNextPendingAvatar() {
 
 ---
 
+## App User Avatar In-Memory Bitmap (Direct Link)
+
+**Problem Solved:** Toolbar/profile avatars for the logged-in user were previously tied to `ImageCacheManager`, so they could render stale images until disk cache eviction or re-login.
+
+**Solution:** Route the app user's avatar through a dedicated direct-download pipeline that stores the bitmap in process memory for the entire app session. All `Avatar` instances that receive `appUser` reuse the same bitmap without touching disk caches.
+
+### Key Components
+
+- `AppUserAvatarImageView` (inside `Avatar.swift`): Specialized rendering path for `user.mid == appUser.mid`.
+- `AppUserAvatarMemoryCache`: Lightweight singleton that holds one `UIImage` + URL string in RAM.
+- Ephemeral `URLSession`: `URLCache` disabled and request policy `reloadIgnoringLocalCacheData` to avoid stale responses.
+- Fallback asset: `tweet_icon` used whenever the direct link fails.
+
+### Flow
+
+```
+AppUser avatar requested anywhere (header, profile, TweetItem, compose)
+        ↓
+Avatar.swift detects user.mid == appUser.mid
+        ↓
+AppUserAvatarMemoryCache.image(for: user.avatarUrl)
+    ✓ Hit → return UIImage immediately (no network, no disk)
+    ✗ Miss → download directly via ephemeral URLSession
+        ↓
+Store bitmap + URL in AppUserAvatarMemoryCache
+        ↓
+Render Image(uiImage:) in every consuming view
+        ↓
+On .avatarDidChange notification or avatarUrl mutation:
+    - AppUserAvatarMemoryCache.clear()
+    - Force reload from new URL (fresh bitmap)
+```
+
+### Implementation Highlights
+
+```swift
+if !forceReload,
+   let cached = AppUserAvatarMemoryCache.shared.image(for: user.avatarUrl) {
+    image = cached
+    return
+}
+
+let (data, response) = try await session.data(for: request)
+guard let image = UIImage(data: data) else { throw AvatarError.invalidData }
+
+AppUserAvatarMemoryCache.shared.store(image, for: urlString)
+```
+
+- The cache is intentionally tiny (single entry) to guarantee the bitmap remains in memory but never grows unbounded.
+- Notifications (`.avatarDidChange`) guarantee invalidation when the user uploads a new avatar, so the direct download path always reflects the freshest asset.
+- Other users' avatars still use the shared `ImageCacheManager` + disk caches; only the app user leverages the in-memory bitmap pipeline.
+
+---
+
 ## Best Practices
 
 ### 1. Always Use Stable Cache Keys
