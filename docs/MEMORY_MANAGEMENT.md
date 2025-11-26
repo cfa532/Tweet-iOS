@@ -625,57 +625,33 @@ private func processNextPendingAvatar() {
 
 ---
 
-## App User Avatar In-Memory Bitmap (Direct Link)
+## Avatar Loading Strategy
 
-**Problem Solved:** Toolbar/profile avatars for the logged-in user were previously tied to `ImageCacheManager`, so they could render stale images until disk cache eviction or re-login.
+**All avatars (including appUser) use the same caching mechanism** via `ImageCacheManager` for consistent behavior and optimal performance. The only exception is the full-size avatar view, which uses direct URL loading to always show the latest image.
 
-**Solution:** Route the app user's avatar through a dedicated direct-download pipeline that stores the bitmap in process memory for the entire app session. All `Avatar` instances that receive `appUser` reuse the same bitmap without touching disk caches.
+### Standard Avatar Loading (All Users)
 
-### Key Components
+All avatars in tweets, toolbars, and profile views use the unified `AvatarImageView` component which:
+- Checks `ImageCacheManager` memory cache first (instant)
+- Falls back to disk cache if available (fast)
+- Downloads from network if cache miss (with deduplication)
+- Uses stable cache keys based on `user.avatar` MimeiId
 
-- `AppUserAvatarImageView` (inside `Avatar.swift`): Specialized rendering path for `user.mid == appUser.mid`.
-- `AppUserAvatarMemoryCache`: Lightweight singleton that holds one `UIImage` + URL string in RAM.
-- Ephemeral `URLSession`: `URLCache` disabled and request policy `reloadIgnoringLocalCacheData` to avoid stale responses.
-- Fallback asset: `tweet_icon` used whenever the direct link fails.
+### Full-Size Avatar View (Direct URL)
 
-### Flow
-
-```
-AppUser avatar requested anywhere (header, profile, TweetItem, compose)
-        ↓
-Avatar.swift detects user.mid == appUser.mid
-        ↓
-AppUserAvatarMemoryCache.image(for: user.avatarUrl)
-    ✓ Hit → return UIImage immediately (no network, no disk)
-    ✗ Miss → download directly via ephemeral URLSession
-        ↓
-Store bitmap + URL in AppUserAvatarMemoryCache
-        ↓
-Render Image(uiImage:) in every consuming view
-        ↓
-On .avatarDidChange notification or avatarUrl mutation:
-    - AppUserAvatarMemoryCache.clear()
-    - Force reload from new URL (fresh bitmap)
-```
-
-### Implementation Highlights
+`AvatarFullScreenView` uses **direct URL loading** that bypasses cache to ensure users always see the latest avatar when viewing full-size:
 
 ```swift
-if !forceReload,
-   let cached = AppUserAvatarMemoryCache.shared.image(for: user.avatarUrl) {
-    image = cached
-    return
-}
-
-let (data, response) = try await session.data(for: request)
-guard let image = UIImage(data: data) else { throw AvatarError.invalidData }
-
-AppUserAvatarMemoryCache.shared.store(image, for: urlString)
+var request = URLRequest(url: url)
+request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+let (data, response) = try await URLSession.shared.data(for: request)
 ```
 
-- The cache is intentionally tiny (single entry) to guarantee the bitmap remains in memory but never grows unbounded.
-- Notifications (`.avatarDidChange`) guarantee invalidation when the user uploads a new avatar, so the direct download path always reflects the freshest asset.
-- Other users' avatars still use the shared `ImageCacheManager` + disk caches; only the app user leverages the in-memory bitmap pipeline.
+**Why direct loading for full-size only:**
+- Full-size view is explicitly opened by user (intentional action)
+- Users expect to see the absolute latest avatar when viewing full-size
+- Small avatars in lists benefit from caching for performance
+- Full-size view is infrequent, so bypassing cache has minimal impact
 
 ---
 

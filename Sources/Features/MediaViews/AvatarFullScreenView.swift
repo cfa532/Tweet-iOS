@@ -1,5 +1,4 @@
 import SwiftUI
-import SDWebImageSwiftUI
 
 struct AvatarFullScreenView: View {
     let user: User
@@ -106,28 +105,38 @@ struct AvatarFullScreenView: View {
     }
     
     private func loadAvatarImageIfNeeded(url: URL) {
-        // IMPORTANT: Use user's avatar MimeiId as cache key (stable identifier)
-        // NOT the URL which can change when baseUrl changes
+        // Show compressed image as placeholder first (from cache)
         let cacheKey = user.avatar ?? url.lastPathComponent
         let avatarAttachment = MimeiFileType(
             mid: cacheKey,
             mediaType: .image
         )
         
-        // Show compressed image as placeholder first
         if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
             imageState = .placeholder(compressedImage)
         } else {
             imageState = .loading
         }
         
-        // Load original image from backend
+        // Load original image directly from URL (bypass cache for full-size view)
         Task {
-            if let originalImage = await ImageCacheManager.shared.loadOriginalImage(from: url, for: avatarAttachment, baseUrl: baseUrl) {
-                await MainActor.run {
-                    imageState = .loaded(originalImage)
+            do {
+                var request = URLRequest(url: url)
+                request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                request.timeoutInterval = 15
+                
+                let (data, response) = try await URLSession.shared.data(for: request)
+                
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode),
+                      let image = UIImage(data: data) else {
+                    throw URLError(.badServerResponse)
                 }
-            } else {
+                
+                await MainActor.run {
+                    imageState = .loaded(image)
+                }
+            } catch {
                 await MainActor.run {
                     imageState = .error
                 }

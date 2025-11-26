@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import UIKit
 
 struct Avatar: View {
     @ObservedObject var user: User
@@ -21,32 +20,6 @@ struct Avatar: View {
     }
     
     var body: some View {
-        if user.mid == HproseInstance.shared.appUser.mid {
-            AppUserAvatarImageView(user: user, size: size)
-                .id("appUser-\(user.mid)")
-        } else {
-            RegularAvatarImageView(
-                user: user,
-                size: size,
-                cachedImage: $cachedImage,
-                isLoading: $isLoading,
-                loadFailed: $loadFailed
-            )
-            .id(user.mid)
-        }
-    }
-}
-
-// MARK: - Regular User Avatar
-
-private struct RegularAvatarImageView: View {
-    @ObservedObject var user: User
-    let size: CGFloat
-    @Binding var cachedImage: UIImage?
-    @Binding var isLoading: Bool
-    @Binding var loadFailed: Bool
-    
-    var body: some View {
         Group {
             if let avatarUrl = user.avatarUrl {
                 Group {
@@ -55,9 +28,18 @@ private struct RegularAvatarImageView: View {
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                     } else if loadFailed {
-                        defaultAvatar
+                        // Load failed/timed out - show default avatar
+                        Image("manyone")
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .colorMultiply(Color.gray.opacity(0.3))
                     } else if isLoading {
-                        loadingPlaceholder
+                        Color.gray
+                            .overlay(
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .tint(.white)
+                            )
                     } else {
                         Color.gray
                             .onAppear {
@@ -68,58 +50,77 @@ private struct RegularAvatarImageView: View {
                 .frame(width: size, height: size)
                 .clipShape(Circle())
                 .onAppear {
+                    // Try to load from cache first when view appears
                     if cachedImage == nil && !loadFailed {
                         loadAvatar(from: avatarUrl)
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .avatarDidChange)) { notification in
+                    // Only reload for this specific user, and only if not already loading
                     guard let userId = notification.userInfo?["userId"] as? String,
                           userId == user.mid,
                           !isLoading else { return }
+                    
+                    // Clear cached state and reload (loadAvatar will manage isLoading flag)
                     cachedImage = nil
                     loadFailed = false
+                    
                     if let avatarUrl = user.avatarUrl {
                         loadAvatar(from: avatarUrl)
                     }
                 }
             } else {
-                defaultAvatar
+                Image("manyone")
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size, height: size)
+                    .colorMultiply(Color.gray.opacity(0.3))
+                    .clipShape(Circle())
             }
         }
-    }
-    
-    private var defaultAvatar: some View {
-        Image("manyone")
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .frame(width: size, height: size)
-            .colorMultiply(Color.gray.opacity(0.3))
-            .clipShape(Circle())
-    }
-    
-    private var loadingPlaceholder: some View {
-        Color.gray
-            .overlay(
-                ProgressView()
-                    .scaleEffect(0.6)
-                    .tint(.white)
-            )
+        .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
+            // When user is updated (e.g., baseUrl resolved), reload avatar if avatarUrl is now available
+            guard let userId = notification.userInfo?["userId"] as? String,
+                  userId == user.mid,
+                  !isLoading,
+                  let avatarUrl = user.avatarUrl,
+                  cachedImage == nil else { return }
+            
+            // baseUrl was resolved, avatarUrl is now available - start loading
+            loadFailed = false
+            loadAvatar(from: avatarUrl)
+        }
+        .id(user.mid) // Stable ID - notification handles avatar changes
     }
     
     private func loadAvatar(from urlString: String) {
-        guard !isLoading else { return }
         
+        guard !isLoading else { 
+            return 
+        }
+        
+        // IMPORTANT: Use user's avatar MimeiId as the cache key (stable identifier)
+        // NOT the URL which can change when baseUrl changes
         let cacheKey = user.avatar ?? (URL(string: urlString)?.lastPathComponent ?? urlString)
-        let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
+        
+        // Create a MimeiFileType with the user's avatar MimeiId so caching works correctly
+        let avatarAttachment = MimeiFileType(
+            mid: cacheKey,
+            mediaType: .image
+        )
+        
         let baseUrl = user.baseUrl ?? HproseInstance.baseUrl
         
+        // Check cache first
         if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
             cachedImage = cached
             return
         }
         
+        // Load from network using regular image loading (no special avatar treatment)
         isLoading = true
         Task {
+            // Use standard image loading with deduplication
             guard let url = URL(string: urlString) else {
                 await MainActor.run {
                     loadFailed = true
@@ -135,154 +136,11 @@ private struct RegularAvatarImageView: View {
                     cachedImage = image
                     loadFailed = false
                 } else {
+                    // Load failure - mark as failed to show default avatar
                     loadFailed = true
                 }
                 isLoading = false
             }
-        }
-    }
-}
-
-// MARK: - App User Avatar (Direct Link + In-Memory Bitmap)
-
-private struct AppUserAvatarImageView: View {
-    @ObservedObject var user: User
-    let size: CGFloat
-    
-    @State private var image: UIImage?
-    @State private var isLoading = false
-    @State private var loadFailed = false
-    
-    private static let session: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.urlCache = nil
-        configuration.timeoutIntervalForRequest = 15
-        configuration.timeoutIntervalForResource = 15
-        return URLSession(configuration: configuration)
-    }()
-    
-    var body: some View {
-        Group {
-            if let image = image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else if loadFailed || user.avatarUrl == nil {
-                defaultIcon
-            } else {
-                Color.gray.opacity(0.2)
-                    .overlay(
-                        ProgressView()
-                            .scaleEffect(0.6)
-                            .tint(.white)
-                    )
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
-        .onAppear {
-            loadAvatar(forceReload: false)
-        }
-        .onChange(of: user.avatarUrl) { _, _ in
-            resetAndReload()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .avatarDidChange)) { notification in
-            guard let userId = notification.userInfo?["userId"] as? String,
-                  userId == user.mid else { return }
-            resetAndReload()
-        }
-    }
-    
-    private var defaultIcon: some View {
-        Image("tweet_icon")
-            .resizable()
-            .scaledToFill()
-    }
-    
-    private func resetAndReload() {
-        AppUserAvatarMemoryCache.shared.clear()
-        image = nil
-        loadFailed = false
-        loadAvatar(forceReload: true)
-    }
-    
-    private func loadAvatar(forceReload: Bool) {
-        guard !isLoading else { return }
-        
-        if !forceReload, let cached = AppUserAvatarMemoryCache.shared.image(for: user.avatarUrl) {
-            image = cached
-            loadFailed = false
-            return
-        }
-        
-        guard let urlString = user.avatarUrl, let url = URL(string: urlString) else {
-            loadFailed = true
-            image = nil
-            return
-        }
-        
-        isLoading = true
-        Task {
-            var request = URLRequest(url: url)
-            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-            request.timeoutInterval = 15
-            
-            do {
-                let (data, response) = try await AppUserAvatarImageView.session.data(for: request)
-                
-                guard let httpResponse = response as? HTTPURLResponse,
-                      (200...299).contains(httpResponse.statusCode),
-                      let downloadedImage = UIImage(data: data) else {
-                    throw URLError(.badServerResponse)
-                }
-                
-                await MainActor.run {
-                    self.image = downloadedImage
-                    self.loadFailed = false
-                    AppUserAvatarMemoryCache.shared.store(downloadedImage, for: urlString)
-                }
-            } catch {
-                await MainActor.run {
-                    self.image = nil
-                    self.loadFailed = true
-                }
-            }
-            
-            await MainActor.run {
-                self.isLoading = false
-            }
-        }
-    }
-}
-
-private final class AppUserAvatarMemoryCache {
-    static let shared = AppUserAvatarMemoryCache()
-    
-    private var cachedImage: UIImage?
-    private var cachedUrl: String?
-    private let queue = DispatchQueue(label: "appUser.avatar.cache.queue")
-    
-    private init() {}
-    
-    func image(for url: String?) -> UIImage? {
-        queue.sync {
-            guard let cachedUrl, cachedUrl == url else { return nil }
-            return cachedImage
-        }
-    }
-    
-    func store(_ image: UIImage, for url: String?) {
-        queue.async {
-            self.cachedImage = image
-            self.cachedUrl = url
-        }
-    }
-    
-    func clear() {
-        queue.async {
-            self.cachedImage = nil
-            self.cachedUrl = nil
         }
     }
 }

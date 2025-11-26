@@ -104,6 +104,7 @@ final class HproseInstance: ObservableObject {
     
     private var lastInitializationAddresses: String?
     private var lastLoggedUpgradeDomain: String?
+    private var periodicRefreshTask: Task<Void, Never>?
     
     // MARK: - Helper Methods
     
@@ -4337,23 +4338,33 @@ final class HproseInstance: ObservableObject {
     
     /// Start periodic refresh of appUser every 30 minutes
     func startPeriodicAppUserRefresh() {
-        Task.detached(priority: .background) { [weak self] in
+        if periodicRefreshTask != nil {
+            return
+        }
+        
+        periodicRefreshTask = Task.detached(priority: .background) { [weak self] in
             guard let self = self else { return }
+            defer { self.periodicRefreshTask = nil }
             
             print("DEBUG: [HproseInstance] Started periodic appUser refresh (every 30 minutes)")
             
-            while true {
+            await self.runAppUserRefreshCycle(trigger: "initial")
+            
+            while !Task.isCancelled {
                 // Wait 30 minutes
                 try? await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000)
-                
-                // Refresh appUser from server
-                do {
-                    try await self.refreshAppUserFromServer()
-                } catch {
-                    print("DEBUG: [HproseInstance] Periodic refresh failed: \(error)")
-                    // Continue with next iteration even if this one failed
-                }
+                if Task.isCancelled { break }
+                await self.runAppUserRefreshCycle(trigger: "timer")
             }
+        }
+    }
+    
+    private func runAppUserRefreshCycle(trigger: String) async {
+        do {
+            try await self.refreshAppUserFromServer(forceIPRefresh: true)
+            print("DEBUG: [HproseInstance] Periodic appUser refresh succeeded (\(trigger))")
+        } catch {
+            print("DEBUG: [HproseInstance] Periodic appUser refresh failed (\(trigger)): \(error)")
         }
     }
     

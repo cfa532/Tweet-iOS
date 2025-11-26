@@ -26,6 +26,7 @@ struct ProfileView: View {
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isLoading = false
     @State private var didLoad = false
+    @State private var profileRefreshCounter = 0
     
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
@@ -304,45 +305,17 @@ struct ProfileView: View {
         .fullScreenCover(isPresented: $showChatScreen) {
             ChatScreen(receiptId: user.mid)
         }
-        .task {
-            if !didLoad {
-                isLoading = true
-                
-                // Fetch fresh user data from server
-                do {
-                    let refreshedUser = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
-                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server")
-                    
-                    // Save updated user to cache if fetch was successful
-                    if let refreshedUser = refreshedUser {
-                        TweetCacheManager.shared.saveUser(refreshedUser)
-                        print("DEBUG: [ProfileView] Saved fetched user to cache")
-                    }
-                } catch {
-                    print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): \(error)")
-                }
-                
-                // Refresh pinned tweets
-                await refreshPinnedTweets()
-                
-                isLoading = false
-                didLoad = true
-                
-                // Resync user data on server in background (long-running operation)
-                let userId = user.mid
-                Task.detached {
-                    do {
-                        let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
-                        print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
-                        
-                        // Save resynced user to cache
-                        TweetCacheManager.shared.saveUser(resyncedUser)
-                        print("DEBUG: [ProfileView] Saved resynced user to cache")
-                    } catch {
-                        print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
-                    }
-                }
+        .task(id: profileRefreshCounter) {
+            await refreshProfileData()
+        }
+        .onAppear {
+            if didLoad {
+                profileRefreshCounter += 1
             }
+        }
+        .onChange(of: user.mid) { _, _ in
+            didLoad = false
+            profileRefreshCounter += 1
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
             if let _ = notification.userInfo?["tweetId"] as? String,
@@ -658,6 +631,48 @@ struct ProfileView: View {
                 isFollowing.wrappedValue.toggle()
             }
             showToastMessage(NSLocalizedString("Failed to toggle following status", comment: "Profile action error"), type: .error)
+        }
+    }
+    
+    private func refreshProfileData() async {
+        await MainActor.run {
+            isLoading = true
+        }
+        
+        defer {
+            Task { @MainActor in
+                isLoading = false
+                didLoad = true
+            }
+        }
+        
+        // Fetch fresh user data from server
+        do {
+            let refreshedUser = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
+            print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server")
+            
+            if let refreshedUser = refreshedUser {
+                TweetCacheManager.shared.saveUser(refreshedUser)
+                print("DEBUG: [ProfileView] Saved fetched user to cache")
+            }
+        } catch {
+            print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): \(error)")
+        }
+        
+        await refreshPinnedTweets()
+        
+        // Resync user data on server in background (long-running operation)
+        let userId = user.mid
+        Task.detached {
+            do {
+                let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
+                print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
+                
+                TweetCacheManager.shared.saveUser(resyncedUser)
+                print("DEBUG: [ProfileView] Saved resynced user to cache")
+            } catch {
+                print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
+            }
         }
     }
     

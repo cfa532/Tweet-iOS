@@ -95,6 +95,27 @@ let user = try await fetchUser(userId)
 let user = try await fetchUser(userId, baseUrl: "")
 ```
 
+## 2025-11-26 Update — Ensuring the Refresh Actually Runs
+
+Two practical issues kept the above logic from firing reliably in the real app:
+
+1. **Periodic refresh never triggered.**
+   - The 30-minute loop only started when `initAppEntry()` succeeded, then immediately slept for 30 minutes.
+   - If initialization failed once (or if the app went to background before the first sleep finished) the refresh never happened.
+
+   **Fix:** The loop is now idempotent, starts for every session (even when initialization falls back to cached state), and performs an immediate refresh before entering the sleep cycle. The loop also forces `refreshAppUserFromServer(forceIPRefresh: true)` so the app user’s baseUrl always tracks the current provider IP.
+
+2. **Profile refresh ran only once per view lifetime.**
+   - `ProfileView` gated its `fetchUser(baseUrl: "")` call behind `didLoad`, so re-opening the same profile later reused stale data.
+
+   **Fix:** `ProfileView` now bumps a refresh counter every time it appears (and whenever the viewed user changes), which retriggers the exact same forced fetch each time the screen opens. Users now get the latest server IP every time they visit any profile, even if the cached entry hasn't expired yet.
+
+Together, these changes guarantee that:
+- The app user’s node IP is re-resolved at least once when the app starts and again every 30 minutes while the app is active.
+- Every explicit profile view performs a fresh `fetchUser(user.mid, baseUrl: "")`, so opening a profile immediately recovers from any mid-session IP change.
+
+These runtime guarantees close the gap between the theoretical strategy documented above and the actual behavior seen by end users.
+
 ## How It Works - Complete Flow
 
 ### Scenario 1: Fresh App Start

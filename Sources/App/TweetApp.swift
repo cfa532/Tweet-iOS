@@ -46,12 +46,6 @@ class AppState: ObservableObject {
                     FullScreenVideoManager.shared.initializePlayerEarly()
                 }
                 
-                // Start periodic appUser refresh every 30 minutes
-                HproseInstance.shared.startPeriodicAppUserRefresh()
-                
-                // Start periodic blacklist candidate processing every hour
-                HproseInstance.shared.startPeriodicBlackListProcessing()
-                
                 // Cleanup caches after a delay
                 Task.detached(priority: .background) {
                     // Wait 30 seconds after app initialization
@@ -70,6 +64,10 @@ class AppState: ObservableObject {
                 }
                 print("DEBUG: [AppState] initAppEntry failed but marking initialization complete: \(error)")
             }
+            
+            // Always start periodic tasks (idempotent inside HproseInstance)
+            HproseInstance.shared.startPeriodicAppUserRefresh()
+            HproseInstance.shared.startPeriodicBlackListProcessing()
         }
     }
 }
