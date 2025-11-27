@@ -19,13 +19,24 @@ final class HproseInstance: ObservableObject {
     /// The domain to use for sharing links
     var domainToShare: String {
         get {
+#if DEBUG
+            // Always share via the debug gateway to avoid polluting production links
+            return AppConfig.baseUrl
+#else
             if let override = appUser.domainToShare?.trimmingCharacters(in: .whitespacesAndNewlines),
                !override.isEmpty {
                 return override
             }
             return _domainToShare
+#endif
         }
-        set { _domainToShare = newValue }
+        set {
+#if DEBUG
+            _domainToShare = AppConfig.baseUrl
+#else
+            _domainToShare = newValue
+#endif
+        }
     }
     
     @Published private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)

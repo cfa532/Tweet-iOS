@@ -17,7 +17,7 @@ struct AppConfig {
     static let baseUrl: String = {
         switch BuildConfiguration.current {
         case .debug:
-            return "http://twbe.fireshare.us"
+            return "http://d2.fireshare.us"
         case .release:
             return "http://tweet.fireshare.us"
         }
