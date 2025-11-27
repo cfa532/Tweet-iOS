@@ -11,7 +11,7 @@ import PhotosUI
 @available(iOS 16.0, *)
 struct ProfileEditView: View {
     @Environment(\.dismiss) private var dismiss
-    var onSubmit: (String, String?, String?, String?, String?, Int, String?) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort, shareDomainOverride
+    var onSubmit: (String, String?, String?, String?, String?, Int, String?) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort, domainToShare
     var onSubmissionStateChange: ((Bool) -> Void)? = nil // Callback for submission state
     var onAvatarUploadStateChange: ((Bool) -> Void)? = nil // Callback for avatar upload state
     var onAvatarUploadSuccess: (() -> Void)? = nil // Callback for successful avatar upload
@@ -25,7 +25,7 @@ struct ProfileEditView: View {
     @State private var profile: String = ""
     @State private var hostId: String = ""
     @State private var cloudDrivePort: String = ""
-    @State private var shareDomainOverride: String = ""
+    @State private var domainToShare: String = ""
     @State private var errorMessage: String?
     @FocusState private var focusedField: Field?
     @State private var avatarId: String? = nil
@@ -217,7 +217,7 @@ struct ProfileEditView: View {
                 Text(LocalizedStringKey("Share Domain (optional)"))
                     .font(.caption)
                     .foregroundColor(.themeSecondaryText)
-                TextField("", text: $shareDomainOverride, prompt: Text(shareDomainPlaceholder))
+                TextField("", text: $domainToShare, prompt: Text(shareDomainPlaceholder))
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .keyboardType(.URL)
                     .autocorrectionDisabled(true)
@@ -271,7 +271,8 @@ struct ProfileEditView: View {
         .onChange(of: profile) { _, _ in checkForChanges() }
         .onChange(of: hostId) { _, _ in checkForChanges() }
         .onChange(of: cloudDrivePort) { _, _ in checkForChanges() }
-        .onChange(of: shareDomainOverride) { _, _ in checkForChanges() }
+        .onChange(of: domainToShare) { _, _ in checkForChanges() }
+        .interactiveDismissDisabled(hasUnsavedChanges)
         .confirmationDialog(
             NSLocalizedString("Unsaved Changes", comment: "Confirmation dialog title"),
             isPresented: $showExitConfirmation,
@@ -288,6 +289,7 @@ struct ProfileEditView: View {
     
     private var closeButton: some View {
         Button(NSLocalizedString("Close", comment: "Close button")) {
+            checkForChanges() // Ensure we have the latest change state
             if hasUnsavedChanges {
                 showExitConfirmation = true
             } else {
@@ -337,6 +339,12 @@ struct ProfileEditView: View {
         .onChange(of: showImageCropper) { _, newValue in
             NSLog("🔄 [Avatar] showImageCropper changed to: \(newValue)")
         }
+        .onChange(of: showExitConfirmation) { _, newValue in
+            // When confirmation dialog is dismissed without action, ensure we check changes again
+            if !newValue {
+                checkForChanges()
+            }
+        }
     }
     
     private func loadInitialData() {
@@ -347,7 +355,7 @@ struct ProfileEditView: View {
         hostId = appUser.hostIds?.first ?? ""
         avatarId = appUser.avatar
         cloudDrivePort = (appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort.description
-        shareDomainOverride = appUser.shareDomainOverride ?? ""
+        domainToShare = appUser.domainToShare ?? ""
         
         // Store initial values for change detection
         initialValues = [
@@ -356,7 +364,7 @@ struct ProfileEditView: View {
             "profile": profile,
             "hostId": hostId,
             "cloudDrivePort": cloudDrivePort,
-            "shareDomainOverride": shareDomainOverride
+            "domainToShare": domainToShare
         ]
     }
 
@@ -488,7 +496,7 @@ struct ProfileEditView: View {
                     portValue = Int(cloudDrivePort) ?? 0
                 }
                 
-                let trimmedShareDomain = shareDomainOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedShareDomain = domainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
                 let shareDomainValue = trimmedShareDomain.isEmpty ? nil : trimmedShareDomain
                 
                 try await onSubmit(
@@ -510,7 +518,7 @@ struct ProfileEditView: View {
                         "profile": profile,
                         "hostId": hostId,
                         "cloudDrivePort": cloudDrivePort,
-                        "shareDomainOverride": shareDomainValue ?? ""
+                        "domainToShare": shareDomainValue ?? ""
                     ]
                     
                     // Reset password fields since they were saved
@@ -525,7 +533,7 @@ struct ProfileEditView: View {
                     onSubmissionStateChange?(false)
                     
                     // Normalize share domain field to trimmed value
-                    shareDomainOverride = shareDomainValue ?? ""
+                    domainToShare = shareDomainValue ?? ""
                     
                     // Show success toast and close the screen
                     showToastMessage(NSLocalizedString("Profile updated successfully", comment: "Success message"), type: .success)
@@ -561,6 +569,12 @@ struct ProfileEditView: View {
     }
     
     private func checkForChanges() {
+        // Normalize domainToShare for comparison (trim whitespace, treat empty as nil)
+        let currentShareDomain = domainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
+        let initialShareDomain = (initialValues["domainToShare"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedCurrent = currentShareDomain.isEmpty ? "" : currentShareDomain
+        let normalizedInitial = initialShareDomain.isEmpty ? "" : initialShareDomain
+        
         // Check if any field has been modified from initial state
         let hasChanges = !password.isEmpty || 
                         !confirmPassword.isEmpty || 
@@ -568,7 +582,7 @@ struct ProfileEditView: View {
                         profile != initialValues["profile"] || 
                         hostId != initialValues["hostId"] || 
                         cloudDrivePort != initialValues["cloudDrivePort"] ||
-                        shareDomainOverride != initialValues["shareDomainOverride"]
+                        normalizedCurrent != normalizedInitial
         
         hasUnsavedChanges = hasChanges
     }
