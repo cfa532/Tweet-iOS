@@ -558,6 +558,10 @@ struct TweetDetailView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: UIScreen.main.bounds.width / aspect)
                 .background(Color.black)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    showBrowser = true
+                }
             }
         }
     }
