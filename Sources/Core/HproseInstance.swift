@@ -454,9 +454,31 @@ final class HproseInstance: ObservableObject {
             "pn": pageNumber,
             "ps": pageSize,
         ] as [String : Any]
-        guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        
+        // CRITICAL: Use the parent tweet's author's baseUrl to fetch comments
+        // Comments are stored on the tweet author's node, not the appUser's node
+        // Fetch author if not already loaded
+        let author: User
+        if let existingAuthor = parentTweet.author {
+            author = existingAuthor
+        } else {
+            // Fetch author to get their baseUrl
+            guard let fetchedAuthor = try? await fetchUser(parentTweet.authorId) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch author for comments", comment: "Author fetch error")])
+            }
+            author = fetchedAuthor
+            // Update parentTweet's author for future use
+            await MainActor.run {
+                parentTweet.author = author
+            }
         }
+        
+        // Use author's client - comments are on author's node
+        guard let client = author.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: \(author.baseUrl?.absoluteString ?? "nil")", comment: "Client initialization error")])
+        }
+        
+        print("DEBUG: [fetchComments] Using author's baseUrl (\(author.baseUrl?.absoluteString ?? "nil")) for tweet \(parentTweet.mid)")
         
         let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
         

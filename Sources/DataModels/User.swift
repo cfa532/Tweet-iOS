@@ -360,9 +360,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             decoder.dateDecodingStrategy = .millisecondsSince1970
             let decodedUser = try decoder.decode(User.self, from: jsonData)
             
-            // keep original baseUrl when updated by user dictionary from backend.
+            // CRITICAL: Always preserve the existing baseUrl from the singleton instance
+            // The backend may send a baseUrl from hostId[0], but we need the user's provider IP
+            // which is resolved via getProviderIP(user.mid), not from hostId
             let instance = getInstance(mid: decodedUser.mid)
-            decodedUser.baseUrl = instance.baseUrl
+            decodedUser.baseUrl = instance.baseUrl  // Preserve provider IP, ignore backend baseUrl
             decodedUser.writableUrl = instance.writableUrl
             
             updateUserInstance(with: decodedUser)
@@ -416,13 +418,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.domainToShare = user.domainToShare
             instance.hostIds = user.hostIds
             
-            // Only update baseUrl/writableUrl if the new value is non-nil
-            // This preserves memory-cached IPs when updating with partial data
-            // baseUrl: Now persisted, so will usually be non-nil
+            // CRITICAL: Never overwrite baseUrl from user parameter - it might be from hostId[0]
+            // baseUrl should only be set via getProviderIP(user.mid) in HproseInstance
+            // Preserve the existing baseUrl that was correctly resolved from provider IP
             // writableUrl: Not persisted, resolved fresh from hostIds
-            if let newBaseUrl = user.baseUrl {
-                instance.baseUrl = newBaseUrl
-            }
+            // Note: baseUrl is preserved above in User.from(dict:), so we don't overwrite it here
             if let newWritableUrl = user.writableUrl {
                 instance.writableUrl = newWritableUrl
             }
@@ -460,13 +460,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.domainToShare = user.domainToShare
                 instance.hostIds = user.hostIds
                 
-                // Only update baseUrl/writableUrl if the new value is non-nil
-                // This preserves memory-cached IPs when updating with partial data
-                // baseUrl: Now persisted, so will usually be non-nil
+                // CRITICAL: Never overwrite baseUrl from user parameter - it might be from hostId[0]
+                // baseUrl should only be set via getProviderIP(user.mid) in HproseInstance
+                // Preserve the existing baseUrl that was correctly resolved from provider IP
                 // writableUrl: Not persisted, resolved fresh from hostIds
-                if let newBaseUrl = user.baseUrl {
-                    instance.baseUrl = newBaseUrl
-                }
+                // Note: baseUrl is preserved above in User.from(dict:), so we don't overwrite it here
                 if let newWritableUrl = user.writableUrl {
                     instance.writableUrl = newWritableUrl
                 }
