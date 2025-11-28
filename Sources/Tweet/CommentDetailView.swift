@@ -245,6 +245,7 @@ struct CommentDetailView: View {
                     }
                 )
             ],
+            isEmbedded: true, // Embedded in CommentDetailView's ScrollView, avoid nested scrolling
             rowView: { reply in
                 CommentItemView(
                     parentTweet: comment,

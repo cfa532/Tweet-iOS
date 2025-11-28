@@ -22,6 +22,7 @@ struct CommentListView<RowView: View>: View {
     let showTitle: Bool
     let rowView: (Tweet) -> RowView
     let notifications: [CommentListNotification]
+    let isEmbedded: Bool // When true, don't use ScrollView (for nested scroll situations)
     private let pageSize: UInt = 20
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -47,6 +48,7 @@ struct CommentListView<RowView: View>: View {
         commentFetcher: @escaping @Sendable (UInt, UInt) async throws -> [Tweet?],
         showTitle: Bool = true,
         notifications: [CommentListNotification]? = nil,
+        isEmbedded: Bool = false,
         rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
@@ -54,6 +56,7 @@ struct CommentListView<RowView: View>: View {
         self.commentFetcher = commentFetcher
         self.showTitle = showTitle
         self.notifications = notifications ?? []
+        self.isEmbedded = isEmbedded
         self.rowView = rowView
     }
 
@@ -61,7 +64,8 @@ struct CommentListView<RowView: View>: View {
     var body: some View {
         ScrollViewReader { proxy in
             ZStack {
-                ScrollView {
+                if isEmbedded {
+                    // When embedded, don't use ScrollView to avoid nested scroll issues
                     CommentListContentView(
                         comments: $comments,
                         rowView: { comment in
@@ -73,6 +77,33 @@ struct CommentListView<RowView: View>: View {
                         initialLoadComplete: initialLoadComplete,
                         loadMoreComments: { loadMoreComments() }
                     )
+                } else {
+                    // Standalone mode: use ScrollView
+                    ScrollView {
+                        CommentListContentView(
+                            comments: $comments,
+                            rowView: { comment in
+                                rowView(comment)
+                            },
+                            hasMoreComments: hasMoreComments,
+                            isLoadingMore: isLoadingMore,
+                            isLoading: isLoading,
+                            initialLoadComplete: initialLoadComplete,
+                            loadMoreComments: { loadMoreComments() }
+                        )
+                    }
+                    .refreshable {
+                        let startTime = Date()
+                        await refreshComments()
+                        
+                        // Ensure pull-to-refresh spinner shows for at least 0.5 seconds
+                        let elapsedTime = Date().timeIntervalSince(startTime)
+                        let minimumDuration: TimeInterval = 0.5
+                        if elapsedTime < minimumDuration {
+                            let remainingTime = minimumDuration - elapsedTime
+                            try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
+                        }
+                    }
                 }
                 if showToast {
                     VStack {
@@ -82,18 +113,6 @@ struct CommentListView<RowView: View>: View {
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .animation(.easeInOut(duration: 0.3), value: showToast)
-                }
-            }
-            .refreshable {
-                let startTime = Date()
-                await refreshComments()
-                
-                // Ensure pull-to-refresh spinner shows for at least 0.5 seconds
-                let elapsedTime = Date().timeIntervalSince(startTime)
-                let minimumDuration: TimeInterval = 0.5
-                if elapsedTime < minimumDuration {
-                    let remainingTime = minimumDuration - elapsedTime
-                    try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
                 }
             }
             .task {
