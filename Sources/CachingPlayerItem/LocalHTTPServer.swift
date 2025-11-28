@@ -1693,7 +1693,14 @@ public class LocalHTTPServer: @unchecked Sendable {
             let headerData = buildHTTPHeaderData(statusCode: statusCode, headers: headers)
             connection.send(content: headerData, completion: .contentProcessed { [weak self] error in
                 if let error = error {
-                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to send headers: \(error.localizedDescription)")
+                    // Check if this is a normal cancellation (NWError 89 - Operation canceled)
+                    let nsError = error as NSError
+                    let isCancellation = nsError.domain == "Network.NWError" && nsError.code == 89
+                    
+                    if !isCancellation {
+                        // Only log non-cancellation errors
+                        NSLog("⚠️ [PROGRESSIVE CACHE] Failed to send headers: \(error.localizedDescription)")
+                    }
                     try? fileHandle.close()
                     return
                 }
@@ -1732,7 +1739,18 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             connection.send(content: chunk, completion: .contentProcessed { [weak self] error in
                 if let error = error {
-                    NSLog("⚠️ [PROGRESSIVE CACHE] Send error: \(error.localizedDescription)")
+                    // Check if this is a normal cancellation (NWError 89 - Operation canceled)
+                    // This is expected when AVPlayer cancels requests (e.g., after buffering enough or seeking)
+                    let nsError = error as NSError
+                    let isCancellation = nsError.domain == "Network.NWError" && nsError.code == 89
+                    
+                    if isCancellation {
+                        // Normal cancellation - don't log as warning, just close and return silently
+                        // AVPlayer often cancels requests when it has enough data or when seeking
+                    } else {
+                        // Actual error - log as warning
+                        NSLog("⚠️ [PROGRESSIVE CACHE] Send error: \(error.localizedDescription)")
+                    }
                     try? fileHandle.close()
                     completion?()
                     return

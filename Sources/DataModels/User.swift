@@ -344,13 +344,26 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     /// Update user instance with backend data. Keep current baseUrl
     static func from(dict: [String: Any]) throws -> User {
         do {
-            // Convert NSArray objects to proper JSON arrays
+            // Convert NSArray objects to proper JSON arrays and handle type conversions
             var sanitizedDict = dict
             for (key, value) in dict {
                 if let nsArray = value as? NSArray {
                     // Convert NSArray to Swift Array
                     let swiftArray = nsArray.compactMap { $0 as? String }
                     sanitizedDict[key] = swiftArray
+                } else if key == "cloudDrivePort" {
+                    // Handle cloudDrivePort: convert to Int from String, NSNumber, or Int
+                    if let number = value as? NSNumber {
+                        sanitizedDict[key] = number.intValue
+                    } else if let string = value as? String, let intValue = Int(string) {
+                        sanitizedDict[key] = intValue
+                    } else if value is Int {
+                        // Already Int, keep as is
+                        sanitizedDict[key] = value
+                    } else {
+                        // Invalid type, use 0 as default
+                        sanitizedDict[key] = 0
+                    }
                 } else if !JSONSerialization.isValidJSONObject([key: value]) {
                 }
             }

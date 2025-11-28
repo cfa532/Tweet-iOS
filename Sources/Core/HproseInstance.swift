@@ -5199,9 +5199,8 @@ final class HproseInstance: ObservableObject {
             let endIndex = userJsonString.index(domainRange.upperBound, offsetBy: 50, limitedBy: userJsonString.endIndex) ?? userJsonString.endIndex
             let snippet = String(userJsonString[startIndex..<endIndex])
             print("DEBUG: updateUserCore - JSON snippet around domainToShare: ...\(snippet)...")
-        } else {
-            print("DEBUG: updateUserCore - WARNING: domainToShare NOT FOUND in encoded JSON!")
         }
+        
         guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
             print("DEBUG: updateUserCore - failed to get response from server")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Profile update failed", comment: "Profile update error")])

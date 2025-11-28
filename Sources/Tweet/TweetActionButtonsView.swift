@@ -1209,7 +1209,12 @@ struct TweetActionButtonsView: View {
             urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"
         } else {
             // In feed/grid: use traditional format
-            var text = hproseInstance.domainToShare
+            // Ensure domainToShare has http:// protocol prefix if it doesn't already have a protocol
+            var domain = hproseInstance.domainToShare
+            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
+                domain = "http://" + domain
+            }
+            var text = domain
             text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
             urlText = text
         }
