@@ -156,71 +156,75 @@ struct DetailMediaCell: View {
                 switch attachment.type {
                 case .video, .hls_video:
                     // Show video with SimpleVideoPlayer in tweetDetail mode (shares player with grid, bypasses VideoManager)
-                    if shouldLoadVideo {
-                        SimpleVideoPlayer(
-                            url: url,
-                            mid: attachment.mid,
-                            parentTweetId: parentTweet.mid,
-                            isVisible: true,
-                            mediaType: attachment.type,
-                            autoPlay: true,
-                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showNativeControls: true,
-                            isMuted: false,
-                            mode: .tweetDetail
-                        )
-                    } else {
-                        // Show placeholder for videos that haven't been loaded yet
+                    // Videos already use .fit in tweetDetail mode, wrap in black background
+                    ZStack {
                         Color.black
-                            .overlay(
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(1.5)
+                        if shouldLoadVideo {
+                            SimpleVideoPlayer(
+                                url: url,
+                                mid: attachment.mid,
+                                parentTweetId: parentTweet.mid,
+                                isVisible: true,
+                                mediaType: attachment.type,
+                                autoPlay: true,
+                                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                                showNativeControls: true,
+                                isMuted: false,
+                                mode: .tweetDetail
                             )
+                        } else {
+                            // Show placeholder for videos that haven't been loaded yet
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.5)
+                        }
                     }
                 case .audio:
                     // Show audio player with SimpleAudioPlayer
                     SimpleAudioPlayer(url: url, autoPlay: false)
                         .environmentObject(MuteState.shared)
                 case .image:
-                    // Images still go to full-screen when tapped
-                    Group {
-                        if let image = image {
-                            Image(uiImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                        } else if loading {
-                            // Show cached placeholder while loading original image
-                            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-                                Image(uiImage: cachedImage)
+                    // Images: use .fit for landscape, .fill for portrait, with black background
+                    let isLandscape = CGFloat(aspectRatio) > 1.0
+                    ZStack {
+                        Color.black
+                        Group {
+                            if let image = image {
+                                Image(uiImage: image)
                                     .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .clipped()
-                                    .overlay(
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                            .scaleEffect(1.0)
-                                            .background(Color.black.opacity(0.3))
-                                            .clipShape(Circle())
-                                            .padding(),
-                                        alignment: .topTrailing
-                                    )
+                                    .aspectRatio(contentMode: isLandscape ? .fit : .fill)
+                                    .if(!isLandscape) { $0.clipped() }
+                            } else if loading {
+                                // Show cached placeholder while loading original image
+                                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                                    Image(uiImage: cachedImage)
+                                        .resizable()
+                                        .aspectRatio(contentMode: isLandscape ? .fit : .fill)
+                                        .if(!isLandscape) { $0.clipped() }
+                                        .overlay(
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                                .scaleEffect(1.0)
+                                                .background(Color.black.opacity(0.3))
+                                                .clipShape(Circle())
+                                                .padding(),
+                                            alignment: .topTrailing
+                                        )
+                                } else {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle())
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                }
                             } else {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .background(Color.gray.opacity(0.2))
-                            }
-                        } else {
-                            // Show cached placeholder if available, otherwise gray background
-                            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-                                Image(uiImage: cachedImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .clipped()
-                            } else {
-                                Color.gray.opacity(0.2)
+                                // Show cached placeholder if available, otherwise gray background
+                                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                                    Image(uiImage: cachedImage)
+                                        .resizable()
+                                        .aspectRatio(contentMode: isLandscape ? .fit : .fill)
+                                        .if(!isLandscape) { $0.clipped() }
+                                } else {
+                                    Color.gray.opacity(0.2)
+                                }
                             }
                         }
                     }
@@ -537,7 +541,8 @@ struct TweetDetailView: View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
-                let aspect = aspectRatio(for: attachments[selectedMediaIndex], at: selectedMediaIndex)
+                // Use a fixed height based on all attachments to prevent jumping
+                let fixedAspect = calculateFixedAspectRatio(for: attachments)
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
                         DetailMediaCell(
@@ -556,7 +561,7 @@ struct TweetDetailView: View {
                     // User swiped to new image - no aspect ratio loading needed
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: UIScreen.main.bounds.width / aspect)
+                .frame(height: UIScreen.main.bounds.width / fixedAspect)
                 .background(Color.black)
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -809,6 +814,41 @@ struct TweetDetailView: View {
             return CGFloat(attachment.aspectRatio ?? 1.0)
         }
         return 1.0 // Default aspect ratio
+    }
+    
+    /// Calculate a fixed aspect ratio for all attachments to prevent height jumping
+    /// Uses a smart approach: if all same orientation, use average; if mixed, use minimum aspect ratio
+    private func calculateFixedAspectRatio(for attachments: [MimeiFileType]) -> CGFloat {
+        guard !attachments.isEmpty else { return 1.0 }
+        
+        // Collect all aspect ratios
+        let aspectRatios = attachments.map { attachment -> CGFloat in
+            if attachment.type == .video || attachment.type == .hls_video {
+                return CGFloat(attachment.aspectRatio ?? (4.0/3.0))
+            } else if attachment.type == .image {
+                return CGFloat(attachment.aspectRatio ?? 1.0)
+            }
+            return 1.0
+        }
+        
+        // Separate portrait and landscape
+        let portraits = aspectRatios.filter { $0 < 1.0 }
+        let landscapes = aspectRatios.filter { $0 >= 1.0 }
+        
+        // If all are same orientation, use average
+        if portraits.isEmpty || landscapes.isEmpty {
+            let average = aspectRatios.reduce(0, +) / CGFloat(aspectRatios.count)
+            // Clamp to reasonable bounds (0.5 to 2.0)
+            return max(0.5, min(2.0, average))
+        }
+        
+        // Mixed orientations: use the minimum aspect ratio
+        // This ensures the container is tall enough for all content
+        // (minimum aspect ratio = tallest content = maximum height needed)
+        let minAspectRatio = aspectRatios.min() ?? 1.0
+        
+        // Clamp to reasonable bounds
+        return max(0.5, min(2.0, minAspectRatio))
     }
     
     
