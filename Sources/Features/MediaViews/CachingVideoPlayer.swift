@@ -286,18 +286,9 @@ struct CachingVideoPlayer: View {
                     // Set up video completion observer
                     self.setupVideoCompletionObserver(newPlayer)
                     
-                    // Check if video is at the end and restart if needed
+                    // Start playback if needed - don't automatically rewind
                     if self.autoPlay && self.isVisible {
-                        if self.isVideoAtEnd(newPlayer) {
-                            print("DEBUG: [CachingVideoPlayer] Video is at end, restarting from beginning for \(self.mid)")
-                            newPlayer.seek(to: .zero) { finished in
-                                if finished {
-                                    newPlayer.play()
-                                }
-                            }
-                        } else {
-                            newPlayer.play()
-                        }
+                        newPlayer.play()
                     }
                 }
             } catch {
@@ -351,22 +342,20 @@ struct CachingVideoPlayer: View {
             // Notify that video finished
             onVideoFinished?()
             
-            // Reset video to beginning
-            player.seek(to: .zero) { finished in
-                guard finished else { 
-                    print("DEBUG: [CachingVideoPlayer] Seek to zero failed for \(mid)")
-                    return 
-                }
-                
-                print("DEBUG: [CachingVideoPlayer] Successfully seeked to zero for \(mid)")
-                
-                // Auto-restart only if looping is enabled
-                if loopOnCompletion {
-                    print("DEBUG: [CachingVideoPlayer] Auto-restarting video (loop enabled) for \(mid)")
+            // Auto-restart only if looping is enabled
+            if loopOnCompletion {
+                print("DEBUG: [CachingVideoPlayer] Auto-restarting video (loop enabled) for \(mid)")
+                // Only rewind if looping
+                player.seek(to: .zero) { finished in
+                    guard finished else { 
+                        print("DEBUG: [CachingVideoPlayer] Seek to zero failed for \(mid)")
+                        return 
+                    }
+                    print("DEBUG: [CachingVideoPlayer] Successfully seeked to zero for \(mid)")
                     player.play()
-                } else {
-                    print("DEBUG: [CachingVideoPlayer] Video finished, not looping for \(mid)")
                 }
+            } else {
+                print("DEBUG: [CachingVideoPlayer] Video finished, not looping for \(mid)")
             }
         }
         

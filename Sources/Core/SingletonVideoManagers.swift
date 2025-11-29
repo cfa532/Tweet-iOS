@@ -853,18 +853,12 @@ class DetailVideoManager: NSObject, ObservableObject {
                 print("DEBUG: [DETAIL VIDEO MANAGER] Notification object: \(notification.object ?? "nil")")
                 print("DEBUG: [DETAIL VIDEO MANAGER] Player current item: \(player.currentItem?.description ?? "nil")")
                 
-                // Reset video to beginning (but don't auto-restart)
-                player.seek(to: .zero) { finished in
-                    guard finished else { 
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Seek to zero failed for \(currentMid ?? "unknown")")
-                        return 
-                    }
-                    Task { @MainActor [weak self] in
-                        guard let self = self else { return }
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Successfully seeked to zero for \(currentMid ?? "unknown")")
-                        print("DEBUG: [DETAIL VIDEO MANAGER] Video reset to beginning, ready to replay for \(currentMid ?? "unknown")")
-                        self.isPlaying = false
-                    }
+                // Just pause - no automatic rewind
+                // Will rewind when user tries to play
+                Task { @MainActor [weak self] in
+                    guard let self = self else { return }
+                    print("DEBUG: [DETAIL VIDEO MANAGER] Video finished for \(currentMid ?? "unknown") - paused, ready to replay")
+                    self.isPlaying = false
                 }
             }
         }

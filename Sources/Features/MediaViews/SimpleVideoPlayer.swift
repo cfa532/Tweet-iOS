@@ -1785,13 +1785,8 @@ struct SimpleVideoPlayer: View {
             setupTimeObserver(for: player)
         }
         
-        // Only reset player position to beginning for new players, not cached ones
-        // This prevents cached videos from losing their buffered segments
-        if !SharedAssetCache.shared.hasCachedContent(for: mid) {
-            player.seek(to: .zero)
-            NSLog("DEBUG: [VIDEO CONFIGURE] Reset player position to beginning for new player")
-        } else {
-        }
+        // Don't automatically rewind - let player start from its natural position
+        // Position will be checked when user tries to play if needed
         
         // CRITICAL: Always set up observers for the new player
         // Clear existing observers first, then set up for this player
@@ -2228,40 +2223,13 @@ struct SimpleVideoPlayer: View {
         print("DEBUG: [SimpleVideoPlayer] Video finished playing for \(mid)")
         resetProgressiveBufferTarget(for: player?.currentItem)
         
-        // For MediaCell mode, pause immediately then rewind after delay (don't auto-restart)
-        if mode == .mediaCell {
-            print("DEBUG: [SimpleVideoPlayer] MediaCell mode - pausing and rewinding to beginning for \(mid)")
-            player?.pause()
-            // Ensure mute state is correct (respect global mute state)
-            player?.isMuted = MuteState.shared.isMuted
-            // Delay 0.5s before rewinding to make it noticeable
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                self.player?.seek(to: .zero) { finished in
-                    if finished {
-                        self.playbackState = .finished
-                    }
-                }
-            }
-            onVideoFinished?()
-            return
-        }
+        // Just pause and mark as finished - no automatic rewind
+        player?.pause()
+        playbackState = .finished
         
-        // For fullscreen/detail modes, delay then rewind and auto-restart
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-            self.player?.seek(to: .zero) { finished in
-                guard finished else { return }
-                
-                if !self.disableAutoRestart {
-                    print("DEBUG: [SimpleVideoPlayer] Auto-restarting video for \(self.mid)")
-                    self.player?.play()
-                    self.playbackState = .playing
-                } else {
-                    print("DEBUG: [SimpleVideoPlayer] Video ready to replay for \(self.mid)")
-                    self.playbackState = .finished
-                }
-            }
+        // For MediaCell mode, ensure mute state is correct
+        if mode == .mediaCell {
+            player?.isMuted = MuteState.shared.isMuted
         }
         
         onVideoFinished?()
@@ -2351,11 +2319,6 @@ struct SimpleVideoPlayer: View {
             // Activate audio session for video playback
             AudioSessionManager.shared.activateForVideoPlayback()
             
-        // For MediaCell mode, don't auto-restart if video has finished
-        if mode == .mediaCell && playbackState.hasFinished {
-            return
-        }
-            
             // CRITICAL: Always ensure muteState is correct before playing
             // For MediaCell, always respect global muteState
             if mode == .mediaCell, let player = player {
@@ -2363,14 +2326,16 @@ struct SimpleVideoPlayer: View {
                 NSLog("🔇 [PLAYER MUTE] checkPlaybackConditions - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
             }
             
-            // Always ensure video is reset to beginning if it has finished playing
+            // Check if video is at end before playing - rewind if needed
             if playbackState.hasFinished || isVideoAtEnd(player!) {
                 player?.seek(to: .zero) { finished in
                     if finished {
                         self.playbackState = .notStarted
-                        // Only auto-play if not in MediaCell mode or if explicitly allowed
-                        if self.mode != .mediaCell {
-                            player?.play()
+                        // Play after rewinding
+                        if self.mode == .mediaBrowser {
+                            self.playbackState = .playing
+                        } else {
+                            self.player?.play()
                             self.playbackState = .playing
                         }
                     }
