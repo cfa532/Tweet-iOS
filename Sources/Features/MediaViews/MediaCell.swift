@@ -92,8 +92,11 @@ struct MediaCell: View, Equatable {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
-                    // Always show video player, no placeholder
+                    // MediaGrid allocates space that may differ from video's aspect ratio
+                    // Fill the allocated space completely, maintaining aspect ratio and clipping overflow
                     videoPlayerView(url: url)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
                 case .audio:
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
@@ -101,57 +104,58 @@ struct MediaCell: View, Equatable {
                             handleTap()
                         }
                 case .image:
-                    if let image = image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .clipped()
-                            .onTapGesture {
-                                handleTap()
+                    // MediaGrid allocates space that may differ from image's aspect ratio
+                    // Fill the allocated space completely, maintaining aspect ratio and clipping overflow
+                    ZStack {
+                        if let image = image {
+                            Image(uiImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } else if isLoading {
+                            // Show cached placeholder while loading original image
+                            if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                                Image(uiImage: cachedImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } else {
+                                // Reserve space with placeholder color - fill entire allocated space
+                                Color.gray.opacity(0.3)
                             }
-                    } else if isLoading {
-                        // Show cached placeholder while loading original image
-                        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-                            Image(uiImage: cachedImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .overlay(
-                                    ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                        .scaleEffect(0.8)
-                                        .background(Color.gray.opacity(0.3))
-                                        .clipShape(Circle())
-                                        .padding(4),
-                                    alignment: .topTrailing
-                                )
-                                .onTapGesture {
-                                    handleTap()
-                                }
                         } else {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                                .scaleEffect(1.2)
-                                .onTapGesture {
-                                    handleTap()
-                                }
+                            // Show cached placeholder if available, otherwise gray background
+                            if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                                Image(uiImage: cachedImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } else {
+                                // Reserve space with placeholder color - fill entire allocated space
+                                Color.gray.opacity(0.3)
+                            }
                         }
-                    } else {
-                        // Show cached placeholder if available, otherwise gray background
-                        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-                            Image(uiImage: cachedImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .onTapGesture {
-                                    handleTap()
-                                }
-                        } else {
-                            Color.gray.opacity(0.3)
-                                .onTapGesture {
-                                    handleTap()
-                                }
-                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .overlay(
+                        // Show loading indicator only when loading and no cached image
+                        Group {
+                            if isLoading, imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) == nil {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                                    .scaleEffect(1.2)
+                            } else if isLoading {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                                    .background(Color.gray.opacity(0.3))
+                                    .clipShape(Circle())
+                                    .padding(4)
+                            }
+                        },
+                        alignment: isLoading && imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) != nil ? .topTrailing : .center
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        handleTap()
                     }
                 default:
                     EmptyView()
