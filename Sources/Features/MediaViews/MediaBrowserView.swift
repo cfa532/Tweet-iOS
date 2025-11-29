@@ -367,6 +367,7 @@ struct MediaBrowserView: View {
                 url: url,
                 mid: attachment.mid,
                 tweetId: currentTweet.mid,
+                sourceTweetId: currentSourceTweetId,
                 videoIndex: index,
                 mediaType: attachment.type,
                 aspectRatio: attachment.aspectRatio,
@@ -796,12 +797,14 @@ struct SingletonVideoPlayerView: View {
     let url: URL
     let mid: String
     let tweetId: String
+    let sourceTweetId: String
     let videoIndex: Int
     let mediaType: MediaType
     let aspectRatio: Float?
     let onUserInteraction: () -> Void
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
+    @State private var hasAttemptedReload = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -816,12 +819,36 @@ struct SingletonVideoPlayerView: View {
                         }
                     )
             } else {
-                // Loading placeholder
+                // Loading placeholder or broken player - attempt to reload
                 ZStack {
                     Color.black
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.5)
+                }
+                .onAppear {
+                    // If player is nil or doesn't match current video, reload it
+                    if manager.singletonPlayer == nil || manager.currentVideoMid != mid {
+                        if !hasAttemptedReload {
+                            hasAttemptedReload = true
+                            print("DEBUG: [SingletonVideoPlayerView] Player missing or mismatched - reloading video for mid: \(mid)")
+                            // Reload the video
+                            manager.loadVideo(
+                                url: url,
+                                mid: mid,
+                                tweetId: tweetId,
+                                sourceTweetId: sourceTweetId,
+                                videoIndex: videoIndex,
+                                mediaType: mediaType
+                            )
+                        }
+                    }
+                }
+                .onChange(of: manager.currentVideoMid) { _, newMid in
+                    // Reset reload flag when video changes
+                    if newMid == mid {
+                        hasAttemptedReload = false
+                    }
                 }
             }
         }

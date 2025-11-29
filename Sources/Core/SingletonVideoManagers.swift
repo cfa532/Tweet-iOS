@@ -124,9 +124,13 @@ class FullScreenVideoManager: ObservableObject {
                     
                     // Check if player item is ready
                     if playerItem.status == .readyToPlay {
-                        print("DEBUG: [FullScreenVideoManager] Player item ready immediately, playing now")
-                        self.singletonPlayer?.play()
-                        self.isPlaying = true
+                        print("DEBUG: [FullScreenVideoManager] Player item ready immediately, checking position before playing")
+                        // Check position and rewind if at end before playing
+                        self.checkAndRewindIfAtEnd {
+                            self.singletonPlayer?.play()
+                            self.isPlaying = true
+                            print("DEBUG: [FullScreenVideoManager] Started playback after position check")
+                        }
                     } else {
                         print("DEBUG: [FullScreenVideoManager] Player item not ready yet (status: \(playerItem.status.rawValue)), will play when ready via AVPlayerViewController observer")
                         self.isPlaying = true // Mark as "should be playing"
@@ -271,10 +275,13 @@ class FullScreenVideoManager: ObservableObject {
         guard let currentSourceTweetId = currentSourceTweetId,
               let findNextVideo = findNextVideo else {
             print("DEBUG: [FullScreenVideoManager] No source tweet ID or search function, cannot advance")
+            // Don't rewind here - will check position when user tries to play
+            isPlaying = false
             return
         }
         
         print("DEBUG: [FullScreenVideoManager] Video finished for sourceTweet: \(currentSourceTweetId), videoIndex: \(currentVideoIndex)")
+        isPlaying = false
         
         // Use TweetListView's async search function to find next video
         // Pass sourceTweetId (visible tweet position in feed) not currentTweetId (could be original tweet)
@@ -286,10 +293,56 @@ class FullScreenVideoManager: ObservableObject {
                 }
             } else {
                 await MainActor.run {
-                    print("DEBUG: [FullScreenVideoManager] ❌ No more videos found in feed")
+                    print("DEBUG: [FullScreenVideoManager] ❌ No more videos found in feed - video will rewind when user tries to play")
+                    // Don't rewind here - will check position when user tries to play
                 }
             }
         }
+    }
+    
+    /// Check if video is at the end and rewind if needed before playing
+    private func checkAndRewindIfAtEnd(completion: @escaping () -> Void) {
+        guard let player = singletonPlayer, let playerItem = player.currentItem else {
+            completion()
+            return
+        }
+        
+        // Check if player is broken - if so, reload the video
+        if isPlayerBroken() {
+            print("DEBUG: [FullScreenVideoManager] Player is broken - clearing for recreation")
+            // Clear broken player so view can recreate it
+            singletonPlayer?.pause()
+            singletonPlayer = nil
+            isPlaying = false
+            // The view should detect nil player and reload
+            print("DEBUG: [FullScreenVideoManager] Cleared broken player - view should reload")
+            completion()
+            return
+        }
+        
+        // Check if video is at or near the end
+        let currentTime = player.currentTime()
+        let duration = playerItem.duration
+        
+        if duration.isValid && duration.seconds > 0 {
+            let timeRemaining = duration.seconds - currentTime.seconds
+            // If within 0.5 seconds of end, rewind to beginning
+            if timeRemaining <= 0.5 {
+                print("DEBUG: [FullScreenVideoManager] Video at end (\(String(format: "%.1f", timeRemaining))s remaining) - rewinding to beginning")
+                player.seek(to: .zero) { [weak self] finished in
+                    guard finished, let _ = self else {
+                        completion()
+                        return
+                    }
+                    print("DEBUG: [FullScreenVideoManager] Video rewound to beginning")
+                    completion()
+                }
+                return
+            }
+        }
+        
+        // Video is not at end, proceed with play
+        completion()
     }
     
     /// Navigate to next video (triggered by swipe up)
@@ -357,10 +410,20 @@ class FullScreenVideoManager: ObservableObject {
         isPlaying = false
     }
     
-    /// Resume playback
+    /// Resume playback (checks position and rewinds if at end)
     func play() {
-        singletonPlayer?.play()
-        isPlaying = true
+        guard singletonPlayer != nil else {
+            print("DEBUG: [FullScreenVideoManager] No player to play")
+            return
+        }
+        
+        // Check if video is at end and rewind if needed
+        checkAndRewindIfAtEnd { [weak self] in
+            guard let self = self, let player = self.singletonPlayer else { return }
+            player.play()
+            self.isPlaying = true
+            print("DEBUG: [FullScreenVideoManager] Started playback")
+        }
     }
     
     // MARK: - App Lifecycle
@@ -462,7 +525,39 @@ class FullScreenVideoManager: ObservableObject {
             print("DEBUG: [FullScreenVideoManager] Recovering from screen lock in didBecomeActive")
             recoverFromBackground()
         } else {
-            print("DEBUG: [FullScreenVideoManager] Already recovered in willEnterForeground, skipping")
+            print("DEBUG: [FullScreenVideoManager] Already recovered in willEnterForeground, checking for broken player")
+            // Even if we already recovered, check if player is broken (e.g., after video finished)
+            checkAndRecoverBrokenPlayer()
+        }
+    }
+    
+    /// Check and recover from broken player state (e.g., after video finished and app was idle)
+    private func checkAndRecoverBrokenPlayer() {
+        // Only check if we have a current video
+        guard currentVideoMid != nil else {
+            return
+        }
+        
+        // Check if player exists and is broken
+        if let player = singletonPlayer {
+            if isPlayerBroken() {
+                print("DEBUG: [FullScreenVideoManager] Player is broken after app became active - clearing for recreation")
+                // Clear broken player - view will reload it
+                if let observer = videoCompletionObserver {
+                    NotificationCenter.default.removeObserver(observer)
+                    videoCompletionObserver = nil
+                }
+                player.pause()
+                singletonPlayer = nil
+                isPlaying = false
+                // Keep currentVideoMid so view knows to reload
+            } else {
+                // Player is healthy - no need to rewind here
+                // Position will be checked when user tries to play
+            }
+        } else {
+            // Player is nil but we have a current video - view should reload it
+            print("DEBUG: [FullScreenVideoManager] Player is nil but video is current - view should reload")
         }
     }
     
@@ -537,9 +632,13 @@ class FullScreenVideoManager: ObservableObject {
                 
                 // Resume playback if it was playing before
                 if wasPlaying {
-                    print("DEBUG: [FullScreenVideoManager] Resuming playback")
-                    self.singletonPlayer?.play()
-                    self.isPlaying = true
+                    print("DEBUG: [FullScreenVideoManager] Resuming playback - checking position first")
+                    // Check position and rewind if at end before resuming
+                    self.checkAndRewindIfAtEnd {
+                        self.singletonPlayer?.play()
+                        self.isPlaying = true
+                        print("DEBUG: [FullScreenVideoManager] Resumed playback after position check")
+                    }
                 } else {
                     print("DEBUG: [FullScreenVideoManager] Not resuming (was paused)")
                 }
