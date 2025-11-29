@@ -258,11 +258,16 @@ struct MediaCell: View, Equatable {
     }
     
     private func loadImage() {
-        guard let url = attachment.getUrl(baseUrl) else { return }
+        guard let url = attachment.getUrl(baseUrl) else { 
+            // If no URL, ensure isLoading is false
+            isLoading = false
+            return 
+        }
         
         // First, try to get cached image immediately
         if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
             self.image = cachedImage
+            self.isLoading = false
             return
         }
         
@@ -276,8 +281,12 @@ struct MediaCell: View, Equatable {
             attachment: attachment,
             baseUrl: baseUrl
         ) { loadedImage in
-            self.image = loadedImage
-            self.isLoading = false
+            // Completion is already @MainActor, so state updates will happen on main thread
+            // Use Task to ensure SwiftUI view updates properly
+            Task { @MainActor in
+                self.image = loadedImage
+                self.isLoading = false
+            }
         }
     }
     

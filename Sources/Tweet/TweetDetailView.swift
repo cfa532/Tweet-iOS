@@ -271,8 +271,11 @@ struct DetailMediaCell: View {
             baseUrl: baseUrl
         ) { loadedImage in
             print("DEBUG: [TweetDetailView] Load completed for \(loadId), success: \(loadedImage != nil)")
-            self.image = loadedImage
-            self.loading = false
+            // Completion is already @MainActor, but use Task to ensure SwiftUI view updates properly
+            Task { @MainActor in
+                self.image = loadedImage
+                self.loading = false
+            }
         }
     }
     

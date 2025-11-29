@@ -292,6 +292,8 @@ class GlobalImageLoadManager: ObservableObject {
                     self.completedRequests.insert(request.id)
                     self.retryCounts.removeValue(forKey: request.id) // Clear retry count on success
                 } else {
+                    // Always call completion, even on failure, so UI can update isLoading state
+                    request.completion(nil)
                     self.handleLoadFailure(request)
                 }
                 self.activeLoads.removeValue(forKey: request.id)
