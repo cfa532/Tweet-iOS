@@ -92,10 +92,8 @@ struct MediaCell: View, Equatable {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
-                    // MediaGrid allocates space that may differ from video's aspect ratio
-                    // Fill the allocated space completely, maintaining aspect ratio and clipping overflow
+                    // MediaGrid already sets fixed frame - content should fill parent naturally
                     videoPlayerView(url: url)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
                 case .audio:
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
@@ -104,9 +102,9 @@ struct MediaCell: View, Equatable {
                             handleTap()
                         }
                 case .image:
-                    // MediaGrid allocates space that may differ from image's aspect ratio
-                    // Fill the allocated space completely, maintaining aspect ratio and clipping overflow
-                    ZStack {
+                    // MediaGrid already sets fixed frame - content should fill parent naturally
+                    // Use .fill to maintain aspect ratio and clip overflow
+                    Group {
                         if let image = image {
                             Image(uiImage: image)
                                 .resizable()
@@ -118,7 +116,7 @@ struct MediaCell: View, Equatable {
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
                             } else {
-                                // Reserve space with placeholder color - fill entire allocated space
+                                // Reserve space with placeholder color
                                 Color.gray.opacity(0.3)
                             }
                         } else {
@@ -128,12 +126,11 @@ struct MediaCell: View, Equatable {
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
                             } else {
-                                // Reserve space with placeholder color - fill entire allocated space
+                                // Reserve space with placeholder color
                                 Color.gray.opacity(0.3)
                             }
                         }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
                     .overlay(
                         // Show loading indicator only when loading and no cached image
