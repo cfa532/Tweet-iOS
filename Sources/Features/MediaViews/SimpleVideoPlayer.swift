@@ -2645,8 +2645,10 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                                 player.play()
                             }
                         } else if playerItem.status == .unknown {
-                            // Set buffering state while waiting
-                            context.coordinator.isBuffering = true
+                            // Set buffering state while waiting (defer to avoid state modification during view update)
+                            DispatchQueue.main.async {
+                                context.coordinator.isBuffering = true
+                            }
                             if mediaType == .video {
                                 playerItem.preferredForwardBufferDuration = max(
                                     playerItem.preferredForwardBufferDuration,
@@ -2712,7 +2714,9 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                             player.play()
                         } else {
                             // No buffered data - need to load
-                            context.coordinator.isBuffering = true
+                            DispatchQueue.main.async {
+                                context.coordinator.isBuffering = true
+                            }
                             let bufferTarget = mediaType == .video ? progressiveForwardBufferDuration : 15.0
                             playerItem.preferredForwardBufferDuration = max(playerItem.preferredForwardBufferDuration, bufferTarget)
                             player.preroll(atRate: 1.0) { success in
@@ -2724,8 +2728,10 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                             }
                         }
                     } else if playerItem.status == .unknown {
-                        // Show buffering while waiting
-                        context.coordinator.isBuffering = true
+                        // Show buffering while waiting (defer to avoid state modification during view update)
+                        DispatchQueue.main.async {
+                            context.coordinator.isBuffering = true
+                        }
                         if mediaType == .video {
                             playerItem.preferredForwardBufferDuration = max(
                                 playerItem.preferredForwardBufferDuration,

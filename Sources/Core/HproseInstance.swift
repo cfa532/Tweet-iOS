@@ -3000,6 +3000,7 @@ final class HproseInstance: ObservableObject {
                 VideoConversionService.shared.convertVideoToHLS(
                     inputURL: originalVideoURL,
                     outputDirectory: tempDir,
+                    fileSizeBytes: Int64(data.count),
                     aspectRatio: videoAspectRatio,
                     progressCallback: { progress in
                         DispatchQueue.main.async {
